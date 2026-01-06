@@ -85,15 +85,29 @@ class ClickHouseMetricsSink(BaseMetricsSink):
         if not migrations_dir.exists():
             return
 
-        for path in sorted(migrations_dir.glob("*.sql")):
-            sql = path.read_text(encoding="utf-8")
-            # Very small splitter: migrations are expected to contain only DDL.
-            for stmt in sql.split(";"):
-                stmt = stmt.strip()
-                if not stmt:
-                    continue
-                self.client.command(stmt)
-
+        for path in sorted(migrations_dir.glob("*")):
+            if path.suffix == ".sql":
+                sql = path.read_text(encoding="utf-8")
+                # Very small splitter: migrations are expected to contain only DDL.
+                for stmt in sql.split(";"):
+                    stmt = stmt.strip()
+                    if not stmt:
+                        continue
+                    self.client.command(stmt)
+            elif path.suffix == ".py":
+                # Execute python migration script
+                try:
+                    import importlib.util
+                    spec = importlib.util.spec_from_file_location(path.stem, path)
+                    if spec and spec.loader:
+                        module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(module)
+                        if hasattr(module, "upgrade"):
+                            logging.info(f"Applying python migration: {path.name}")
+                            module.upgrade(self.client)
+                except Exception as e:
+                    logger.error(f"Failed to apply python migration {path.name}: {e}")
+                    raise
     def ensure_schema(self) -> None:
         """Create ClickHouse tables via SQL migrations."""
         self._apply_sql_migrations()

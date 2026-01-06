@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS work_items (
     parent_id String,
     epic_id String,
     url String,
-    _mergestat_synced_at DateTime64(3)
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3)
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, work_item_id);
 
 CREATE TABLE IF NOT EXISTS work_item_transitions (
@@ -36,6 +36,6 @@ CREATE TABLE IF NOT EXISTS work_item_transitions (
     from_status_raw String,
     to_status_raw String,
     actor String,
-    _mergestat_synced_at DateTime64(3)
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3)
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, work_item_id, occurred_at);

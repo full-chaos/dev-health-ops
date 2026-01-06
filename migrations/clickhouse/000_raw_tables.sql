@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS repos (
     created_at DateTime64(3, 'UTC'),
     settings Nullable(String),
     tags Nullable(String),
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (id);
 
 CREATE TABLE IF NOT EXISTS git_files (
@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS git_files (
     path String,
     executable UInt8,
     contents Nullable(String),
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, path);
 
 CREATE TABLE IF NOT EXISTS git_commits (
@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS git_commits (
     committer_email Nullable(String),
     committer_when DateTime64(3, 'UTC'),
     parents UInt32,
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, hash);
 
 CREATE TABLE IF NOT EXISTS git_commit_stats (
@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS git_commit_stats (
     deletions Int32,
     old_file_mode String,
     new_file_mode String,
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, commit_hash, file_path);
 
 CREATE TABLE IF NOT EXISTS git_blame (
@@ -54,8 +54,8 @@ CREATE TABLE IF NOT EXISTS git_blame (
     author_when Nullable(DateTime64(3, 'UTC')),
     commit_hash Nullable(String),
     line Nullable(String),
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, path, line_no);
 
 CREATE TABLE IF NOT EXISTS git_pull_requests (
@@ -78,8 +78,8 @@ CREATE TABLE IF NOT EXISTS git_pull_requests (
     changes_requested_count UInt32 DEFAULT 0,
     reviews_count UInt32 DEFAULT 0,
     comments_count UInt32 DEFAULT 0,
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, number);
 
 CREATE TABLE IF NOT EXISTS git_pull_request_reviews (
@@ -89,8 +89,8 @@ CREATE TABLE IF NOT EXISTS git_pull_request_reviews (
     reviewer String,
     state String,
     submitted_at DateTime64(3, 'UTC'),
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, number, review_id);
 
 CREATE TABLE IF NOT EXISTS ci_pipeline_runs (
@@ -100,8 +100,8 @@ CREATE TABLE IF NOT EXISTS ci_pipeline_runs (
     queued_at Nullable(DateTime64(3, 'UTC')),
     started_at DateTime64(3, 'UTC'),
     finished_at Nullable(DateTime64(3, 'UTC')),
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, run_id);
 
 CREATE TABLE IF NOT EXISTS deployments (
@@ -114,8 +114,8 @@ CREATE TABLE IF NOT EXISTS deployments (
     deployed_at Nullable(DateTime64(3, 'UTC')),
     merged_at Nullable(DateTime64(3, 'UTC')),
     pull_request_number Nullable(UInt32),
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, deployment_id);
 
 CREATE TABLE IF NOT EXISTS incidents (
@@ -124,6 +124,6 @@ CREATE TABLE IF NOT EXISTS incidents (
     status Nullable(String),
     started_at DateTime64(3, 'UTC'),
     resolved_at Nullable(DateTime64(3, 'UTC')),
-    _mergestat_synced_at DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(_mergestat_synced_at)
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, incident_id);

@@ -10,3 +10,4 @@ __pycache__/**
 benchmark**
 demo-data**
 .flake8
+# **/.terraform*

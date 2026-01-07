@@ -126,6 +126,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                         if hasattr(module, "upgrade"):
+                            logger.info(f"Executing Python migration: {path.name}")
                             module.upgrade(self.client)
                 except Exception as e:
                     logger.error(f"Failed to apply python migration {path.name}: {e}")

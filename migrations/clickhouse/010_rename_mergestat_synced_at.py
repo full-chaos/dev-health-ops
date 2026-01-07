@@ -52,8 +52,9 @@ def upgrade(client):
             # Replace table name with table_new, handling optional db prefix
             # Regex matches: CREATE TABLE [IF NOT EXISTS] [db.]`?table`? ...
             # We rely on 'table' being the simple name from all_tables loop.
+            # Use re.escape on both pattern and replacement to prevent injection
             pattern = re.compile(rf"(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:[\w\d_]+\.)?`?){re.escape(table)}(`?\s|`?\()")
-            new_create_stmt = pattern.sub(rf"\1{table}_new\2", create_stmt, count=1)
+            new_create_stmt = pattern.sub(rf"\1{re.escape(table)}_new\2", create_stmt, count=1)
             
             if new_create_stmt == create_stmt:
                 logging.warning(f"Could not replace table name in create statement for {table}. Stmt: {create_stmt[:100]}...")

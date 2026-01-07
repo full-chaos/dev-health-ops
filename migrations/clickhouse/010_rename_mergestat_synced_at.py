@@ -81,9 +81,9 @@ def upgrade(client):
 
         except Exception as e:
             logging.error(f"Failed to migrate table {table}: {e}")
-            # Try cleanup
+            # Try cleanup; ignore cleanup errors but log them for visibility
             try:
                 client.command(f"DROP TABLE IF EXISTS {table}_new")
-            except:
-                pass
+            except Exception as cleanup_err:
+                logging.warning(f"Failed to clean up temporary table {table}_new: {cleanup_err}")
             raise e

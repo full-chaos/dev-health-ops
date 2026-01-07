@@ -86,4 +86,4 @@ def upgrade(client):
                 client.command(f"DROP TABLE IF EXISTS {table}_new")
             except Exception as cleanup_err:
                 logging.warning(f"Failed to clean up temporary table {table}_new: {cleanup_err}")
-            raise e
+            raise

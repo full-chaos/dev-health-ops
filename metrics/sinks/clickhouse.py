@@ -85,7 +85,30 @@ class ClickHouseMetricsSink(BaseMetricsSink):
         if not migrations_dir.exists():
             return
 
-        for path in sorted(migrations_dir.glob("*")):
+        # Ensure schema_migrations table exists
+        self.client.command(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (version String, applied_at DateTime64(3, 'UTC')) ENGINE = MergeTree() ORDER BY version"
+        )
+
+        # Get applied migrations
+        applied_result = self.client.query("SELECT version FROM schema_migrations")
+        applied_versions = set(
+            row[0] for row in (getattr(applied_result, "result_rows", []) or [])
+        )
+
+        # Collect all migration files
+        migration_files = sorted(
+            list(migrations_dir.glob("*.sql")) + list(migrations_dir.glob("*.py"))
+        )
+
+        for path in migration_files:
+            version = path.name
+            if version in applied_versions:
+                logger.info(f"Skipping already applied migration: {version}")
+                continue
+
+            logger.info(f"Applying migration: {version}")
+
             if path.suffix == ".sql":
                 sql = path.read_text(encoding="utf-8")
                 # Very small splitter: migrations are expected to contain only DDL.
@@ -103,11 +126,17 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                         if hasattr(module, "upgrade"):
-                            logging.info(f"Applying python migration: {path.name}")
+                            logger.info(f"Executing Python migration: {path.name}")
                             module.upgrade(self.client)
                 except Exception as e:
                     logger.error(f"Failed to apply python migration {path.name}: {e}")
                     raise
+
+            # Record migration as applied
+            self.client.command(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES ({version:String}, now())",
+                parameters={"version": version},
+            )
     def ensure_schema(self) -> None:
         """Create ClickHouse tables via SQL migrations."""
         self._apply_sql_migrations()

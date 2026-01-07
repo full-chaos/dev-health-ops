@@ -44,9 +44,9 @@ def upgrade(client):
 
             # Modify Create Statement
             # Replace table name with table_new, handling optional db prefix
-            # Regex matches: CREATE TABLE [IF NOT EXISTS] [db.]table ...
+            # Regex matches: CREATE TABLE [IF NOT EXISTS] [db.]`?table`? ...
             # We rely on 'table' being the simple name from all_tables loop.
-            pattern = re.compile(rf"(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:[\w\d_]+\.)?){table}(\s|`|\()")
+            pattern = re.compile(rf"(CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(?:[\w\d_]+\.)?`?){table}(`?\s|`?\()")
             new_create_stmt = pattern.sub(rf"\1{table}_new\2", create_stmt, count=1)
             
             if new_create_stmt == create_stmt:

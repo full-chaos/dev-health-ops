@@ -121,6 +121,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 # Execute python migration script
                 try:
                     import importlib.util
+
                     spec = importlib.util.spec_from_file_location(path.stem, path)
                     if spec and spec.loader:
                         module = importlib.util.module_from_spec(spec)
@@ -137,6 +138,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "INSERT INTO schema_migrations (version, applied_at) VALUES ({version:String}, now())",
                 parameters={"version": version},
             )
+
     def ensure_schema(self) -> None:
         """Create ClickHouse tables via SQL migrations."""
         self._apply_sql_migrations()
@@ -688,6 +690,156 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             ],
             rows,
         )
+
+    def write_work_items(self, work_items: Sequence[Any]) -> None:
+        """Write raw work items to the work_items table."""
+        if not work_items:
+            return
+
+        synced_at = datetime.now(timezone.utc)
+        rows = []
+
+        for item in work_items:
+            # Handle both dict and WorkItem objects
+            is_dict = isinstance(item, dict)
+            get = (
+                item.get
+                if is_dict
+                else lambda k, default=None, obj=item: getattr(obj, k, default)
+            )
+
+            repo_id_val = get("repo_id")
+            if repo_id_val:
+                if isinstance(repo_id_val, str):
+                    repo_id_val = uuid.UUID(repo_id_val)
+            else:
+                repo_id_val = uuid.UUID(int=0)
+
+            rows.append({
+                "repo_id": repo_id_val,
+                "work_item_id": str(get("work_item_id")),
+                "provider": str(get("provider")),
+                "title": str(get("title")),
+                "type": str(get("type")),
+                "status": str(get("status")),
+                "status_raw": str(get("status_raw") or ""),
+                "project_key": str(get("project_key") or ""),
+                "project_id": str(get("project_id") or ""),
+                "assignees": get("assignees") or [],
+                "reporter": str(get("reporter") or ""),
+                "created_at": _dt_to_clickhouse_datetime(get("created_at"))
+                if get("created_at")
+                else datetime.now(timezone.utc),
+                "updated_at": _dt_to_clickhouse_datetime(get("updated_at"))
+                if get("updated_at")
+                else datetime.now(timezone.utc),
+                "started_at": _dt_to_clickhouse_datetime(get("started_at"))
+                if get("started_at")
+                else None,
+                "completed_at": _dt_to_clickhouse_datetime(get("completed_at"))
+                if get("completed_at")
+                else None,
+                "closed_at": _dt_to_clickhouse_datetime(get("closed_at"))
+                if get("closed_at")
+                else None,
+                "labels": get("labels") or [],
+                "story_points": get("story_points")
+                if get("story_points") is not None
+                else None,
+                "sprint_id": str(get("sprint_id") or ""),
+                "sprint_name": str(get("sprint_name") or ""),
+                "parent_id": str(get("parent_id") or ""),
+                "epic_id": str(get("epic_id") or ""),
+                "url": str(get("url") or ""),
+                "last_synced": _dt_to_clickhouse_datetime(synced_at),
+            })
+
+        # Convert dict rows to matrix format for ClickHouse
+        column_names = [
+            "repo_id",
+            "work_item_id",
+            "provider",
+            "title",
+            "type",
+            "status",
+            "status_raw",
+            "project_key",
+            "project_id",
+            "assignees",
+            "reporter",
+            "created_at",
+            "updated_at",
+            "started_at",
+            "completed_at",
+            "closed_at",
+            "labels",
+            "story_points",
+            "sprint_id",
+            "sprint_name",
+            "parent_id",
+            "epic_id",
+            "url",
+            "last_synced",
+        ]
+        matrix = [[row[col] for col in column_names] for row in rows]
+
+        self.client.insert("work_items", matrix, column_names=column_names)
+
+    def write_work_item_transitions(self, transitions: Sequence[Any]) -> None:
+        """Write raw work item transitions to the work_item_transitions table."""
+        if not transitions:
+            return
+
+        synced_at = datetime.now(timezone.utc)
+        rows = []
+
+        for item in transitions:
+            # Handle both dict and WorkItemStatusTransition objects
+            is_dict = isinstance(item, dict)
+            get = (
+                item.get
+                if is_dict
+                else lambda k, default=None, obj=item: getattr(obj, k, default)
+            )
+
+            repo_id_val = get("repo_id")
+            if repo_id_val:
+                if isinstance(repo_id_val, str):
+                    repo_id_val = uuid.UUID(repo_id_val)
+            else:
+                repo_id_val = uuid.UUID(int=0)
+
+            rows.append({
+                "repo_id": repo_id_val,
+                "work_item_id": str(get("work_item_id")),
+                "occurred_at": _dt_to_clickhouse_datetime(get("occurred_at"))
+                if get("occurred_at")
+                else datetime.now(timezone.utc),
+                "provider": str(get("provider")),
+                "from_status": str(get("from_status")),
+                "to_status": str(get("to_status")),
+                "from_status_raw": str(get("from_status_raw") or ""),
+                "to_status_raw": str(get("to_status_raw") or ""),
+                "actor": str(get("actor") or ""),
+                "last_synced": _dt_to_clickhouse_datetime(synced_at),
+            })
+
+        # Convert dict rows to matrix format for ClickHouse
+        column_names = [
+            "repo_id",
+            "work_item_id",
+            "occurred_at",
+            "provider",
+            "from_status",
+            "to_status",
+            "from_status_raw",
+            "to_status_raw",
+            "actor",
+            "last_synced",
+        ]
+        matrix = [[row[col] for col in column_names] for row in rows]
+
+        self.client.insert("work_item_transitions", matrix, column_names=column_names)
 
     def _insert_rows(self, table: str, columns: List[str], rows: Sequence[Any]) -> None:
         matrix = []

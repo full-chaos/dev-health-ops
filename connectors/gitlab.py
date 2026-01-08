@@ -94,6 +94,7 @@ class GitLabConnector(GitConnector):
         private_token: Optional[str] = None,
         per_page: int = 100,
         max_workers: int = 4,
+        rest_timeout: int = 15,
     ):
         """
         Initialize GitLab connector.
@@ -102,13 +103,18 @@ class GitLabConnector(GitConnector):
         :param private_token: GitLab private token.
         :param per_page: Number of items per page for pagination.
         :param max_workers: Maximum concurrent workers for operations.
+        :param rest_timeout: REST API timeout in seconds.
         """
         super().__init__(per_page=per_page, max_workers=max_workers)
         self.url = url
         self.private_token = private_token
 
         # Initialize python-gitlab client
-        self.gitlab = gitlab.Gitlab(url=url, private_token=private_token)
+        self.gitlab = gitlab.Gitlab(
+            url=url,
+            private_token=private_token,
+            timeout=rest_timeout,
+        )
 
         # Authenticate if token provided
         if private_token:
@@ -122,6 +128,7 @@ class GitLabConnector(GitConnector):
         self.rest_client = GitLabRESTClient(
             base_url=api_url,
             private_token=private_token,
+            timeout=rest_timeout,
         )
 
     def _handle_gitlab_exception(self, e: Exception) -> None:
@@ -235,6 +242,14 @@ class GitLabConnector(GitConnector):
         """
         try:
             projects = []
+            logger.info(
+                "Listing GitLab projects (group=%s user=%s search=%s pattern=%s max=%s)",
+                group_name or group_id,
+                user_name,
+                search,
+                pattern,
+                max_projects,
+            )
 
             # Build common list parameters
             list_params = {"per_page": self.per_page, "get_all": (max_projects is None)}

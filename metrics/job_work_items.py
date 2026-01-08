@@ -275,6 +275,19 @@ def run_work_items_sync_job(
         if sprints:
             logger.info("Jira: extracted %d sprint records", len(sprints))
 
+        # Write raw work items and transitions to sinks
+        for s in sinks:
+            if hasattr(s, "write_work_items") and work_items:
+                logger.info(
+                    "Writing %d work items to %s", len(work_items), type(s).__name__
+                )
+                s.write_work_items(work_items)
+            if hasattr(s, "write_work_item_transitions") and transitions:
+                logger.info(
+                    "Writing %d transitions to %s", len(transitions), type(s).__name__
+                )
+                s.write_work_item_transitions(transitions)
+
         for s in sinks:
             if dependencies and hasattr(s, "write_work_item_dependencies"):
                 s.write_work_item_dependencies(dependencies)

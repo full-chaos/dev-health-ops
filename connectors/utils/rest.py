@@ -244,14 +244,16 @@ class GitLabRESTClient(RESTClient):
         self,
         base_url: str = "https://gitlab.com/api/v4",
         private_token: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = 15,
     ):
         """
         Initialize GitLab REST client.
 
         :param base_url: GitLab API base URL.
         :param private_token: GitLab private token.
-        :param timeout: Request timeout in seconds.
+        :param timeout: Request timeout in seconds. Default is 15s for faster
+                       failure detection, but can be increased for slower
+                       networks or larger responses.
         """
         headers = {}
         if private_token:
@@ -290,7 +292,14 @@ class GitLabRESTClient(RESTClient):
             file_path,
             ref,
         )
-        return self.get_list(endpoint, params=params)
+        ranges = self.get_list(endpoint, params=params)
+        logger.debug(
+            "Fetched blame for project %s, file %s (%d ranges)",
+            project_id,
+            file_path,
+            len(ranges),
+        )
+        return ranges
 
     def get_merge_requests(
         self,
@@ -322,8 +331,16 @@ class GitLabRESTClient(RESTClient):
             params["sort"] = sort
 
         logger.debug(
-            "Fetching merge requests for project %s, page %s",
+            "Fetching merge requests for project %s, page %s (per_page=%s)",
+            project_id,
+            page,
+            per_page,
+        )
+        mrs = self.get_list(endpoint, params=params)
+        logger.debug(
+            "Fetched %d merge requests for project %s, page %s",
+            len(mrs),
             project_id,
             page,
         )
-        return self.get_list(endpoint, params=params)
+        return mrs

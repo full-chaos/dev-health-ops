@@ -194,7 +194,9 @@ def fetch_jira_work_items_with_extras(
             work_items.append(wi)
             transitions.extend(wi_transitions)
             dependencies.extend(
-                extract_jira_issue_dependencies(issue=issue, work_item_id=wi.work_item_id)
+                extract_jira_issue_dependencies(
+                    issue=issue, work_item_id=wi.work_item_id
+                )
             )
             reopen_events.extend(
                 detect_reopen_events(
@@ -367,7 +369,7 @@ def fetch_github_project_v2_items(
         for node in client.iter_project_v2_items(
             org_login=org_login, project_number=int(project_number), first=50
         ):
-            wi = github_project_v2_item_to_work_item(
+            wi, wi_transitions = github_project_v2_item_to_work_item(
                 item_node=node,
                 project_scope_id=project_scope_id,
                 status_mapping=status_mapping,
@@ -376,6 +378,7 @@ def fetch_github_project_v2_items(
             if wi is None:
                 continue
             items[wi.work_item_id] = wi
+            transitions.extend(wi_transitions)
 
     logger.info("Fetched %d GitHub Projects v2 items", len(items))
     return list(items.values()), transitions

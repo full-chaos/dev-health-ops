@@ -633,6 +633,69 @@ def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
+    db_url = ns.db
+    if not db_url:
+        logging.error("Database URI is required (pass --db).")
+        return 2
+    try:
+        backend = detect_db_type(db_url)
+    except ValueError as exc:
+        logging.error(str(exc))
+        return 2
+    if backend != "clickhouse":
+        print("unsupported for now")
+        return 2
+
+    from dev_health_ops.audit.completeness import (
+        completeness_failed,
+        format_completeness_json,
+        format_completeness_table,
+        run_completeness_audit,
+    )
+
+    report = run_completeness_audit(db_url=db_url, days=ns.days)
+    if ns.format == "json":
+        print(format_completeness_json(report))
+    else:
+        print(format_completeness_table(report))
+
+    if ns.fail_on_missing and completeness_failed(report):
+        return 1
+    return 0
+
+
+def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
+    db_url = ns.db
+    if not db_url:
+        logging.error("Database URI is required (pass --db).")
+        return 2
+
+    from dev_health_ops.audit.coverage import (
+        coverage_failed,
+        format_coverage_json,
+        format_coverage_table,
+        parse_provider_list,
+        run_coverage_audit,
+    )
+
+    try:
+        providers = parse_provider_list(ns.providers)
+    except ValueError as exc:
+        logging.error(str(exc))
+        return 2
+
+    report = run_coverage_audit(db_url=db_url, providers=providers)
+    if ns.format == "json":
+        print(format_coverage_json(report))
+    else:
+        print(format_coverage_table(report))
+
+    if ns.fail_on_missing and coverage_failed(report):
+        return 1
+    return 0
+
+
 def _cmd_grafana_up(_ns: argparse.Namespace) -> int:
     cmd = [
         "docker",
@@ -940,6 +1003,54 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-metrics", action="store_true", help="Also generate derived metrics."
     )
     fix_gen.set_defaults(func=_cmd_fixtures_generate)
+
+    # ---- audit ----
+    audit = sub.add_parser("audit", help="Audit data completeness.")
+    audit_sub = audit.add_subparsers(dest="audit_command", required=True)
+    completeness = audit_sub.add_parser(
+        "completeness", help="Audit source data completeness."
+    )
+    completeness.add_argument("--db", required=True, help="Database connection string.")
+    completeness.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Lookback window in days.",
+    )
+    completeness.add_argument(
+        "--fail-on-missing",
+        action="store_true",
+        help="Exit non-zero if required data is missing or stale.",
+    )
+    completeness.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format.",
+    )
+    completeness.set_defaults(func=_cmd_audit_completeness)
+
+    coverage = audit_sub.add_parser(
+        "coverage", help="Audit provider coverage (implementation checks)."
+    )
+    coverage.add_argument("--db", required=True, help="Database connection string.")
+    coverage.add_argument(
+        "--providers",
+        default="jira,github,gitlab,synthetic",
+        help="Comma-separated providers to audit.",
+    )
+    coverage.add_argument(
+        "--fail-on-missing",
+        action="store_true",
+        help="Exit non-zero if coverage checks are missing.",
+    )
+    coverage.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+        help="Output format.",
+    )
+    coverage.set_defaults(func=_cmd_audit_coverage)
 
     # ---- api ----
     api = sub.add_parser("api", help="Run the Dev Health Ops API server.")

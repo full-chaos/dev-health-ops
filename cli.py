@@ -589,6 +589,26 @@ def _cmd_audit_schema(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audit_perf(ns: argparse.Namespace) -> int:
+    db_url = ns.db
+    if not db_url:
+        logging.error("Database URI is required (pass --db).")
+        return 2
+
+    from dev_health_ops.audit.perf import format_perf_report, run_perf_audit
+
+    report = run_perf_audit(
+        db_url=db_url,
+        threshold_ms=ns.threshold_ms,
+        lookback_minutes=ns.lookback_minutes,
+        limit=ns.limit,
+    )
+    print(format_perf_report(report))
+    if report.get("status") == "unchecked":
+        return 2
+    return 0
+
+
 def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
     db_url = ns.db
     if not db_url:
@@ -1005,6 +1025,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit non-zero if required schema objects are missing.",
     )
     schema.set_defaults(func=_cmd_audit_schema)
+
+    perf = audit_sub.add_parser(
+        "perf", help="Audit ClickHouse slow queries via system.query_log."
+    )
+    perf.add_argument("--db", required=True, help="Database connection string.")
+    perf.add_argument(
+        "--threshold-ms",
+        type=int,
+        default=1000,
+        help="Slow query threshold in milliseconds.",
+    )
+    perf.add_argument(
+        "--lookback-minutes",
+        type=int,
+        default=60,
+        help="Lookback window in minutes.",
+    )
+    perf.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Max number of slow queries to return.",
+    )
+    perf.set_defaults(func=_cmd_audit_perf)
 
     # ---- api ----
     api = sub.add_parser("api", help="Run the Dev Health Ops API server.")

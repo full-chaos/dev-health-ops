@@ -513,124 +513,29 @@ def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
 
 
 def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
-    from metrics.job_complexity import run_complexity_scan_job
+    from metrics.job_complexity_db import run_complexity_db_job
 
-    root_path = Path(ns.repo_path).resolve()
+    if ns.repo_path and ns.repo_path != ".":
+        logging.warning(
+            "--repo-path is ignored; complexity metrics are computed from the DB."
+        )
+    if ns.ref and ns.ref != "HEAD":
+        logging.warning("--ref is ignored; complexity metrics are computed from the DB.")
 
-    if ns.repo_id:
-        # Explicit single repo mode
-        run_complexity_scan_job(
-            repo_path=root_path,
+    try:
+        return run_complexity_db_job(
             repo_id=ns.repo_id,
             db_url=ns.db,
             date=ns.date,
             backfill_days=ns.backfill,
-            ref=ns.ref,
+            language_globs=getattr(ns, "include_glob", None),
+            max_files=getattr(ns, "max_files", None),
+            search_pattern=getattr(ns, "search", None),
+            exclude_globs=getattr(ns, "exclude_glob", None),
         )
-        return 0
-
-    # Batch mode: Fetch repos from DB and try to find them locally
-    async def fetch_repos():
-        db_type = _resolve_db_type(ns.db, None)
-        store = create_store(ns.db, db_type)
-        async with store:
-            return await store.get_all_repos()
-
-    try:
-        repos = asyncio.run(fetch_repos())
-    except Exception as e:
-        logging.error(f"Failed to fetch repos from DB: {e}")
+    except Exception as exc:
+        logging.error(f"Complexity DB job failed: {exc}")
         return 1
-
-    if not repos:
-        logging.warning("No repositories found in database.")
-        return 0
-
-    # Filter by search pattern if provided
-    if ns.search:
-        import fnmatch
-
-        original_count = len(repos)
-        repos = [r for r in repos if fnmatch.fnmatch(r.repo, ns.search)]
-        logging.info(f"Filtered repos by '{ns.search}': {len(repos)}/{original_count}")
-
-    logging.info(
-        f"Found {len(repos)} repositories in DB. Checking local availability in {root_path}..."
-    )
-
-    # Initialize sink once for batch processing
-    db_type = _resolve_db_type(ns.db, None)
-    sink = None
-    if db_type == "clickhouse":
-        from metrics.sinks.clickhouse import ClickHouseMetricsSink
-
-        sink = ClickHouseMetricsSink(ns.db)
-    elif db_type == "sqlite":
-        from metrics.sinks.sqlite import SQLiteMetricsSink
-        from metrics.job_complexity import _normalize_sqlite_url
-
-        sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.db))
-    elif db_type == "mongo":
-        from metrics.sinks.mongo import MongoMetricsSink
-
-        sink = MongoMetricsSink(ns.db)
-    elif db_type == "postgres":
-        from metrics.sinks.sqlite import SQLiteMetricsSink
-        from metrics.job_complexity import _normalize_postgres_url
-
-        sink = SQLiteMetricsSink(_normalize_postgres_url(ns.db))
-
-    if sink:
-        sink.ensure_tables()
-
-    processed_count = 0
-    try:
-        for repo in repos:
-            # Heuristics to find repo locally based on DB identifier (name/URL)
-            candidates = []
-            if repo.repo:
-                # 1. Check if root_path itself matches (by basename)
-                repo_basename = Path(
-                    repo.repo
-                ).name  # e.g., 'dev-health-ops' from 'chrisgeo/dev-health-ops'
-                if root_path.name == repo_basename and (root_path / ".git").exists():
-                    candidates.append(root_path)
-                # 2. Exact match (e.g. 'owner/repo' or 'repo') relative to root
-                candidates.append(root_path / repo.repo)
-                # 3. Basename match (e.g. 'repo' from 'owner/repo') relative to root
-                candidates.append(root_path / Path(repo.repo).name)
-
-            found_path = None
-            for cand in candidates:
-                if cand.is_dir() and (cand / ".git").exists():
-                    found_path = cand
-                    break
-
-            if found_path:
-                logging.info(
-                    f"Processing DB repo '{repo.repo}' ({repo.id}) at {found_path}"
-                )
-                try:
-                    run_complexity_scan_job(
-                        repo_path=found_path,
-                        repo_id=repo.id,
-                        db_url=ns.db,
-                        date=ns.date,
-                        backfill_days=ns.backfill,
-                        ref=ns.ref,
-                        sink=sink,  # Pass existing sink
-                    )
-                    processed_count += 1
-                except Exception as e:
-                    logging.error(f"Failed to process {repo.repo}: {e}")
-            else:
-                logging.debug(f"Skipping DB repo '{repo.repo}': not found locally.")
-    finally:
-        if sink:
-            sink.close()
-
-    logging.info(f"Processed {processed_count} repositories.")
-    return 0
 
 
 def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
@@ -934,7 +839,7 @@ def build_parser() -> argparse.ArgumentParser:
     complexity.add_argument(
         "--repo-path",
         default=".",
-        help="Path to local git repo (or root dir for batch mode). Defaults to current dir.",
+        help="Ignored (complexity is computed from DB). Kept for backward compatibility.",
     )
     complexity.add_argument(
         "--repo-id",
@@ -950,12 +855,31 @@ def build_parser() -> argparse.ArgumentParser:
         default=date.today().isoformat(),
         help="Date of snapshot (YYYY-MM-DD).",
     )
-    complexity.add_argument("--ref", default="HEAD", help="Git ref/branch analyzed.")
+    complexity.add_argument(
+        "--ref",
+        default="HEAD",
+        help="Ignored (complexity is computed from DB). Kept for backward compatibility.",
+    )
     complexity.add_argument(
         "--backfill",
         type=int,
         default=1,
         help="Compute N days ending at --date (inclusive).",
+    )
+    complexity.add_argument(
+        "--max-files",
+        type=int,
+        help="Optional limit on number of files scanned per repo.",
+    )
+    complexity.add_argument(
+        "--include-glob",
+        action="append",
+        help="Glob patterns to include when scanning (repeatable).",
+    )
+    complexity.add_argument(
+        "--exclude-glob",
+        action="append",
+        help="Glob patterns to exclude when scanning (repeatable).",
     )
     complexity.add_argument(
         "--db",

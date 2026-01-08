@@ -182,6 +182,11 @@ class GitHubWorkClient:
         Iterate GitHub Projects v2 items via GraphQL.
 
         Returns raw dict nodes (parsed GraphQL response).
+        
+        Note: Field changes (status/phase transitions) are limited to the
+        first 100 changes per item due to GraphQL query complexity. Items
+        with more than 100 status changes will only have their most recent
+        100 transitions tracked.
         """
         query = """
         query($login: String!, $number: Int!, $after: String, $first: Int!) {

@@ -251,7 +251,9 @@ class GitLabRESTClient(RESTClient):
 
         :param base_url: GitLab API base URL.
         :param private_token: GitLab private token.
-        :param timeout: Request timeout in seconds.
+        :param timeout: Request timeout in seconds. Default is 15s for faster
+                       failure detection, but can be increased for slower
+                       networks or larger responses.
         """
         headers = {}
         if private_token:

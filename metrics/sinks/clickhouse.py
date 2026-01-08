@@ -705,7 +705,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             get = (
                 item.get
                 if is_dict
-                else lambda k, default=None: getattr(item, k, default)
+                else lambda k, default=None, obj=item: getattr(obj, k, default)
             )
 
             repo_id_val = get("repo_id")
@@ -799,7 +799,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             get = (
                 item.get
                 if is_dict
-                else lambda k, default=None: getattr(item, k, default)
+                else lambda k, default=None, obj=item: getattr(obj, k, default)
             )
 
             repo_id_val = get("repo_id")

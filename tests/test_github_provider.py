@@ -37,6 +37,7 @@ from providers.github.normalize import (
     github_issue_to_work_item,
     github_milestone_to_sprint,
     github_pr_to_work_item,
+    github_project_v2_item_to_work_item,
 )
 from providers.github.provider import GitHubProvider
 from providers.identity import IdentityResolver
@@ -769,6 +770,131 @@ def test_enrich_work_item_no_priority():
     # Should return unchanged work item
     assert enriched.priority_raw is None
     assert enriched.service_class is None
+
+
+# ============================================================================
+# GitHub Project v2 Tests
+# ============================================================================
+
+
+def test_github_project_v2_item_with_transitions(mock_status_mapping, mock_identity):
+    """Test project v2 item normalization with status transitions."""
+    # Create a mock project v2 item with status changes
+    item_node = {
+        "id": "PVTI_test123",
+        "createdAt": "2024-01-01T10:00:00Z",
+        "updatedAt": "2024-01-05T15:00:00Z",
+        "content": {
+            "__typename": "Issue",
+            "id": "I_test456",
+            "number": 42,
+            "title": "Test Issue in Project",
+            "url": "https://github.com/owner/repo/issues/42",
+            "state": "OPEN",
+            "createdAt": "2024-01-01T10:00:00Z",
+            "updatedAt": "2024-01-05T15:00:00Z",
+            "closedAt": None,
+            "repository": {"nameWithOwner": "owner/repo"},
+            "labels": {"nodes": [{"name": "bug"}]},
+            "assignees": {"nodes": []},
+            "author": {"login": "testuser", "email": None, "name": "Test User"},
+        },
+        "fieldValues": {
+            "nodes": [
+                {
+                    "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                    "name": "In Progress",
+                    "field": {"name": "Status"},
+                }
+            ]
+        },
+        "changes": {
+            "nodes": [
+                {
+                    "field": {"name": "Status"},
+                    "previousValue": {"name": "Todo"},
+                    "newValue": {"name": "In Progress"},
+                    "createdAt": "2024-01-02T12:00:00Z",
+                    "actor": {"login": "developer1"},
+                },
+                {
+                    "field": {"name": "Status"},
+                    "previousValue": {"name": "In Progress"},
+                    "newValue": {"name": "In Review"},
+                    "createdAt": "2024-01-03T14:00:00Z",
+                    "actor": {"login": "developer2"},
+                },
+            ]
+        },
+    }
+
+    wi, transitions = github_project_v2_item_to_work_item(
+        item_node=item_node,
+        project_scope_id="test-project",
+        status_mapping=mock_status_mapping,
+        identity=mock_identity,
+    )
+
+    # Verify work item was created
+    assert wi is not None
+    assert wi.work_item_id == "ghproj:PVTI_test123"
+    assert wi.provider == "github"
+    assert wi.title == "Test Issue in Project"
+
+    # Verify transitions were extracted
+    assert len(transitions) == 2
+
+    # First transition: Todo -> In Progress
+    assert transitions[0].work_item_id == "ghproj:PVTI_test123"
+    assert transitions[0].from_status_raw == "Todo"
+    assert transitions[0].to_status_raw == "In Progress"
+    assert transitions[0].provider == "github"
+
+    # Second transition: In Progress -> In Review
+    assert transitions[1].work_item_id == "ghproj:PVTI_test123"
+    assert transitions[1].from_status_raw == "In Progress"
+    assert transitions[1].to_status_raw == "In Review"
+    assert transitions[1].provider == "github"
+
+
+def test_github_project_v2_item_no_transitions(mock_status_mapping, mock_identity):
+    """Test project v2 item normalization without status changes."""
+    item_node = {
+        "id": "PVTI_test789",
+        "createdAt": "2024-01-01T10:00:00Z",
+        "updatedAt": "2024-01-01T10:00:00Z",
+        "content": {
+            "__typename": "Issue",
+            "id": "I_test999",
+            "number": 99,
+            "title": "New Issue",
+            "url": "https://github.com/owner/repo/issues/99",
+            "state": "OPEN",
+            "createdAt": "2024-01-01T10:00:00Z",
+            "updatedAt": "2024-01-01T10:00:00Z",
+            "closedAt": None,
+            "repository": {"nameWithOwner": "owner/repo"},
+            "labels": {"nodes": []},
+            "assignees": {"nodes": []},
+            "author": {"login": "testuser", "email": None, "name": "Test User"},
+        },
+        "fieldValues": {"nodes": []},
+        "changes": {"nodes": []},  # No changes
+    }
+
+    wi, transitions = github_project_v2_item_to_work_item(
+        item_node=item_node,
+        project_scope_id="test-project",
+        status_mapping=mock_status_mapping,
+        identity=mock_identity,
+    )
+
+    # Verify work item was created
+    assert wi is not None
+    assert wi.work_item_id == "ghproj:PVTI_test789"
+
+    # Verify no transitions
+    assert len(transitions) == 0
 
 
 # ============================================================================

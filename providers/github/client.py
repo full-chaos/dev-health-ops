@@ -247,6 +247,38 @@ class GitHubWorkClient:
                         text
                         field { ... on ProjectV2FieldCommon { name } }
                       }
+                      ... on ProjectV2ItemFieldIterationValue {
+                        title
+                        id
+                        field { ... on ProjectV2FieldCommon { name } }
+                      }
+                      ... on ProjectV2ItemFieldNumberValue {
+                        number
+                        field { ... on ProjectV2FieldCommon { name } }
+                      }
+                    }
+                  }
+                  changes(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) {
+                    nodes {
+                      field {
+                        ... on ProjectV2FieldCommon {
+                          name
+                        }
+                      }
+                      previousValue {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name
+                        }
+                      }
+                      newValue {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name
+                        }
+                      }
+                      createdAt
+                      actor {
+                        login
+                      }
                     }
                   }
                 }

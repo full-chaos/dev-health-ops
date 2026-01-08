@@ -100,7 +100,7 @@ def _read_text(path: Path) -> str:
 
 
 def _has_def(text: str, name: str) -> bool:
-    return re.search(rf"\\bdef\\s+{re.escape(name)}\\b", text) is not None
+    return re.search(rf"\bdef\s+{re.escape(name)}\b", text) is not None
 
 
 def _find_in_files(token: str, files: Iterable[Path]) -> bool:
@@ -183,7 +183,7 @@ def _sink_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
 
 def _extract_work_item_provider_choices(cli_text: str) -> List[str]:
     match = re.search(
-        r"wi\\.add_argument\\([\\s\\S]*?--provider[\\s\\S]*?choices=\\[(.*?)\\]",
+        r"wi\.add_argument\([\s\S]*?--provider[\s\S]*?choices=\[(.*?)\]",
         cli_text,
     )
     if not match:
@@ -221,7 +221,7 @@ def _migration_tables(repo_root: Path, tables: Sequence[str]) -> List[str]:
     found: Dict[str, bool] = {table: False for table in tables}
     patterns = {
         table: re.compile(
-            rf"CREATE\\s+TABLE\\s+(IF\\s+NOT\\s+EXISTS\\s+)?{re.escape(table)}\\b",
+            rf"CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?{re.escape(table)}\b",
             re.IGNORECASE,
         )
         for table in tables

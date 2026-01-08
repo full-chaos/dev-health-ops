@@ -320,7 +320,8 @@ class GitHubWorkClient:
                 
                 # If there are more changes, fetch them
                 if changes_page_info.get("hasNextPage"):
-                    all_changes = list(changes)
+                    all_changes = []
+                    all_changes.extend(changes)
                     changes_cursor = changes_page_info.get("endCursor")
                     
                     # Fetch remaining changes for this specific item
@@ -332,12 +333,15 @@ class GitHubWorkClient:
                         )
                         self.gate.reset()
                         
-                        if not more_changes:
+                        if not more_changes or not more_changes.get("nodes"):
                             break
                         
                         all_changes.extend(more_changes.get("nodes") or [])
                         changes_page_info = more_changes.get("pageInfo") or {}
-                        changes_cursor = changes_page_info.get("endCursor") if changes_page_info.get("hasNextPage") else None
+                        changes_cursor = changes_page_info.get("endCursor")
+                        
+                        if not changes_page_info.get("hasNextPage"):
+                            break
                     
                     # Update the item with all changes
                     changes_dict["nodes"] = all_changes

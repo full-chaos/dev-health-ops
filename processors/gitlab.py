@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from models.git import GitCommit, GitCommitStat, Repo, GitPullRequest, GitBlame, GitFile, CiPipelineRun, Deployment, Incident
 from utils import AGGREGATE_STATS_MARKER, is_skippable, CONNECTORS_AVAILABLE, BATCH_SIZE
@@ -37,66 +37,85 @@ def _fetch_gitlab_commits_sync(
     since: Optional[datetime] = None,
 ):
     """Sync helper to fetch GitLab commits."""
-    list_params = {"per_page": 100}
+    list_params = {"per_page": 100, "get_all": False}
     if since is not None:
         since_iso = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         list_params["since"] = since_iso
 
-    if max_commits is None or max_commits > 100:
-        commits = gl_project.commits.list(**list_params, as_list=False)
-    else:
-        commits = gl_project.commits.list(**list_params, get_all=False)
-
     commit_objects = []
     count = 0
     commit_hashes = []
+    page = 1
+    per_page = min(max_commits, 100) if max_commits else 100
+    stop_due_to_since = False
 
-    for commit in commits:
+    while True:
         if max_commits is not None and count >= max_commits:
             break
 
-        committed_when = None
-        if hasattr(commit, "committed_date") and commit.committed_date:
-            try:
-                committed_when = datetime.fromisoformat(
-                    commit.committed_date.replace("Z", "+00:00")
-                )
-            except Exception:
-                committed_when = None
+        page_params = dict(list_params)
+        page_params["page"] = page
+        page_params["per_page"] = per_page
+        commits_page = gl_project.commits.list(**page_params)
+        if not commits_page:
+            break
+        logging.debug(
+            "GitLab commits page %d returned %d items",
+            page,
+            len(commits_page),
+        )
 
-        if since is not None and isinstance(committed_when, datetime):
-            if committed_when.astimezone(timezone.utc) < since:
+        for commit in commits_page:
+            if max_commits is not None and count >= max_commits:
                 break
 
-        git_commit = GitCommit(
-            repo_id=repo_id,
-            hash=commit.id,
-            message=commit.message,
-            author_name=(
-                commit.author_name if hasattr(commit, "author_name") else "Unknown"
-            ),
-            author_email=None,
-            author_when=(
-                datetime.fromisoformat(commit.authored_date.replace("Z", "+00:00"))
-                if hasattr(commit, "authored_date")
-                else datetime.now(timezone.utc)
-            ),
-            committer_name=(
-                commit.committer_name
-                if hasattr(commit, "committer_name")
-                else "Unknown"
-            ),
-            committer_email=None,
-            committer_when=(
-                datetime.fromisoformat(commit.committed_date.replace("Z", "+00:00"))
-                if hasattr(commit, "committed_date")
-                else datetime.now(timezone.utc)
-            ),
-            parents=len(commit.parent_ids) if hasattr(commit, "parent_ids") else 0,
-        )
-        commit_objects.append(git_commit)
-        commit_hashes.append(commit.id)
-        count += 1
+            committed_when = None
+            if hasattr(commit, "committed_date") and commit.committed_date:
+                try:
+                    committed_when = datetime.fromisoformat(
+                        commit.committed_date.replace("Z", "+00:00")
+                    )
+                except Exception:
+                    committed_when = None
+
+            if since is not None and isinstance(committed_when, datetime):
+                if committed_when.astimezone(timezone.utc) < since:
+                    stop_due_to_since = True
+                    break
+
+            git_commit = GitCommit(
+                repo_id=repo_id,
+                hash=commit.id,
+                message=commit.message,
+                author_name=(
+                    commit.author_name if hasattr(commit, "author_name") else "Unknown"
+                ),
+                author_email=None,
+                author_when=(
+                    datetime.fromisoformat(commit.authored_date.replace("Z", "+00:00"))
+                    if hasattr(commit, "authored_date")
+                    else datetime.now(timezone.utc)
+                ),
+                committer_name=(
+                    commit.committer_name
+                    if hasattr(commit, "committer_name")
+                    else "Unknown"
+                ),
+                committer_email=None,
+                committer_when=(
+                    datetime.fromisoformat(commit.committed_date.replace("Z", "+00:00"))
+                    if hasattr(commit, "committed_date")
+                    else datetime.now(timezone.utc)
+                ),
+                parents=len(commit.parent_ids) if hasattr(commit, "parent_ids") else 0,
+            )
+            commit_objects.append(git_commit)
+            commit_hashes.append(commit.id)
+            count += 1
+
+        if stop_due_to_since or len(commits_page) < per_page:
+            break
+        page += 1
 
     return commit_hashes, commit_objects
 
@@ -193,6 +212,12 @@ def _sync_gitlab_mrs_to_store(
     while True:
         try:
             gate.wait_sync()
+            logging.debug(
+                "GitLab MRs page %d (per_page=%d) for project %d",
+                page,
+                connector.per_page,
+                project_id,
+            )
             mrs = connector.rest_client.get_merge_requests(
                 project_id=project_id,
                 state=state,
@@ -215,6 +240,12 @@ def _sync_gitlab_mrs_to_store(
             continue
         if not mrs:
             break
+        logging.debug(
+            "GitLab MRs page %d returned %d items (total: %d)",
+            page,
+            len(mrs),
+            total,
+        )
 
         for mr in mrs:
             author_name = "Unknown"
@@ -458,24 +489,82 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
     return incidents
 
 
+def _iter_gitlab_repo_tree(
+    gl_project,
+    *,
+    ref: str,
+    per_page: int = 100,
+    limit: Optional[int] = None,
+) -> Iterable[Any]:
+    page = 1
+    seen = 0
+
+    while True:
+        try:
+            page_items = gl_project.repository_tree(
+                ref=ref,
+                recursive=True,
+                per_page=per_page,
+                page=page,
+                get_all=False,
+            )
+        except TypeError:
+            page_items = gl_project.repository_tree(
+                ref=ref,
+                recursive=True,
+                per_page=per_page,
+                page=page,
+                all=False,
+            )
+        if not page_items:
+            break
+        seen += len(page_items)
+        logging.debug(
+            "GitLab repo tree page %d returned %d items (total: %d)",
+            page,
+            len(page_items),
+            seen,
+        )
+        for item in page_items:
+            yield item
+        if limit is not None and seen >= limit:
+            return
+        page += 1
+
+
 def _fetch_gitlab_blame_sync(gl_project, connector, project_id, repo_id, limit=50):
     """Sync helper to fetch GitLab blame data."""
     blame_batch = []
     try:
-        # Get files from repository tree
-        items = gl_project.repository_tree(
-            ref=gl_project.default_branch, recursive=True, all=True
-        )
+        # Get files from repository tree (paged to avoid huge responses)
         files_to_process = []
-        for item in items:
+        for item in _iter_gitlab_repo_tree(
+            gl_project,
+            ref=gl_project.default_branch,
+            per_page=100,
+            limit=None,
+        ):
             if item["type"] == "blob" and not is_skippable(item["path"]):
                 files_to_process.append(item["path"])
+                if len(files_to_process) >= limit:
+                    break
 
         # Limit files
         files_to_process = files_to_process[:limit]
+        logging.debug(
+            "GitLab blame: processing %d files (limit %d)",
+            len(files_to_process),
+            limit,
+        )
 
-        for file_path in files_to_process:
+        for idx, file_path in enumerate(files_to_process, start=1):
             try:
+                logging.debug(
+                    "GitLab blame fetch %d/%d: %s",
+                    idx,
+                    len(files_to_process),
+                    file_path,
+                )
                 blame = connector.get_file_blame(
                     project_id=project_id,
                     file_path=file_path,
@@ -535,13 +624,11 @@ async def _backfill_gitlab_missing_data(
     file_paths: List[str] = []
     if needs_files or needs_blame:
         try:
-            items = project.repository_tree(
-                ref=default_branch, recursive=True, get_all=True
-            )
-        except TypeError:
-            # Older python-gitlab versions
-            items = project.repository_tree(
-                ref=default_branch, recursive=True, all=True
+            items = _iter_gitlab_repo_tree(
+                project,
+                ref=default_branch,
+                per_page=100,
+                limit=None,
             )
         except Exception as e:
             logging.warning(f"Failed to list GitLab files for {project_full_name}: {e}")
@@ -1180,14 +1267,21 @@ async def process_gitlab_projects_batch(
             await results_queue.put(_queue_sentinel)
             await consumer_task
         else:
+            logging.info(
+                "Listing GitLab projects for PR sync (group=%s, pattern=%s, max=%s)",
+                group_name,
+                pattern,
+                max_projects,
+            )
             projects = await loop.run_in_executor(
                 None,
-                lambda: connector.list_projects(
+                lambda: connector._get_projects_for_processing(
                     group_name=group_name,
                     pattern=pattern,
                     max_projects=max_projects,
                 ),
             )
+            logging.info("Discovered %d GitLab projects for PR sync", len(projects))
             semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
             async def _process_project(project_info) -> None:

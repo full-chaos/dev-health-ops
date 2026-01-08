@@ -427,7 +427,7 @@ def github_project_v2_item_to_work_item(
         transitions = _update_transitions_work_item_id(transitions, work_item_id)
 
         return WorkItem(
-            work_item_id=f"ghproj:{item_node.get('id')}",
+            work_item_id=work_item_id,
             provider="github",
             repo_id=None,
             project_key=None,

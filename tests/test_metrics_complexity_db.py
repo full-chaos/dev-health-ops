@@ -65,8 +65,8 @@ class FakeClickHouseSink:
 def test_complexity_db_job_scans_contents_without_gitpython(monkeypatch):
     repo_id = uuid.uuid4()
     files = [
-        ("alpha.py", "def alpha():\n    return 1\n"),
-        ("beta.py", "def beta(x):\n    if x:\n        return x\n    return 0\n"),
+        ("src/alpha.py", "def alpha():\n    return 1\n"),
+        ("src/beta.py", "def beta(x):\n    if x:\n        return x\n    return 0\n"),
     ]
     last_synced = datetime(2025, 1, 2, 3, 4, 5)
     client = FakeClickHouseClient(files, last_synced=last_synced)
@@ -93,4 +93,7 @@ def test_complexity_db_job_scans_contents_without_gitpython(monkeypatch):
     assert rc == 0
     assert sink.snapshots
     assert sink.dailies
-    assert {snap.file_path for snap in sink.snapshots} == {"alpha.py", "beta.py"}
+    assert {snap.file_path for snap in sink.snapshots} == {
+        "src/alpha.py",
+        "src/beta.py",
+    }

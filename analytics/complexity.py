@@ -109,6 +109,22 @@ class ComplexityScanner:
             
         return results
 
+    def scan_file_contents(
+        self, files: List[tuple[str, str]]
+    ) -> List[FileComplexity]:
+        results = []
+        for file_path, contents in files:
+            if not self.should_process(file_path):
+                continue
+            try:
+                metrics = self._analyze_content(contents, file_path)
+                if metrics:
+                    results.append(metrics)
+            except Exception as e:
+                logger.warning(f"Failed to analyze {file_path}: {e}")
+
+        return results
+
     def _analyze_file(self, file_path: Path) -> Optional[FileComplexity]:
         # Currently only Python is supported via radon
         if not file_path.suffix == ".py":

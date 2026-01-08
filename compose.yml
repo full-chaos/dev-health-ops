@@ -13,10 +13,10 @@ volumes:
       o: bind
   clickhouse_data:
     driver: local
-    driver_opts:
-      type: none
-      device: ./data/clickhouse
-      o: bind
+#    driver_opts:
+#      type: none
+#      device: ./data/clickhouse
+#      o: bind
 services:
   grafana:
     image: grafana/grafana-enterprise:latest

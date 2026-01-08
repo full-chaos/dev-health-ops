@@ -247,21 +247,21 @@ def github_project_v2_item_to_work_item(
     estimate = None
 
     for fv in (item_node.get("fieldValues") or {}).get("nodes") or []:
-        typename = (fv or {}).get("__typename")
+        fv_typename = (fv or {}).get("__typename")
         field = (fv or {}).get("field") or {}
         field_name = str(field.get("name") or "").strip().lower()
 
-        if typename == "ProjectV2ItemFieldSingleSelectValue":
+        if fv_typename == "ProjectV2ItemFieldSingleSelectValue":
             if field_name == "status":
                 status_raw = fv.get("name")
 
-        elif typename == "ProjectV2ItemFieldIterationValue":
+        elif fv_typename == "ProjectV2ItemFieldIterationValue":
             # GitHub Iterations
             if "iteration" in field_name or "sprint" in field_name:
                 iteration_title = fv.get("title")
                 iteration_id = fv.get("id")  # internal node id
 
-        elif typename == "ProjectV2ItemFieldNumberValue":
+        elif fv_typename == "ProjectV2ItemFieldNumberValue":
             # Estimates / Points
             if field_name in {"estimate", "points", "story points", "size"}:
                 try:

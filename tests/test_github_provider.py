@@ -837,7 +837,7 @@ def test_github_project_v2_item_with_transitions(mock_status_mapping, mock_ident
 
     # Verify work item was created
     assert wi is not None
-    assert wi.work_item_id == "ghproj:PVTI_test123"
+    assert wi.work_item_id == "gh:owner/repo#42"
     assert wi.provider == "github"
     assert wi.title == "Test Issue in Project"
 
@@ -845,13 +845,13 @@ def test_github_project_v2_item_with_transitions(mock_status_mapping, mock_ident
     assert len(transitions) == 2
 
     # First transition: Todo -> In Progress
-    assert transitions[0].work_item_id == "ghproj:PVTI_test123"
+    assert transitions[0].work_item_id == "gh:owner/repo#42"
     assert transitions[0].from_status_raw == "Todo"
     assert transitions[0].to_status_raw == "In Progress"
     assert transitions[0].provider == "github"
 
     # Second transition: In Progress -> In Review
-    assert transitions[1].work_item_id == "ghproj:PVTI_test123"
+    assert transitions[1].work_item_id == "gh:owner/repo#42"
     assert transitions[1].from_status_raw == "In Progress"
     assert transitions[1].to_status_raw == "In Review"
     assert transitions[1].provider == "github"
@@ -891,7 +891,7 @@ def test_github_project_v2_item_no_transitions(mock_status_mapping, mock_identit
 
     # Verify work item was created
     assert wi is not None
-    assert wi.work_item_id == "ghproj:PVTI_test789"
+    assert wi.work_item_id == "gh:owner/repo#99"
 
     # Verify no transitions
     assert len(transitions) == 0

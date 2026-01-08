@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+import logging
 
 from storage import detect_db_type
 
@@ -448,8 +449,8 @@ def run_schema_audit(*, db_url: str) -> Dict[str, Any]:
             if engine is not None:
                 try:
                     engine.dispose()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.warning("Failed to dispose SQLAlchemy engine: %s", exc)
 
         missing_tables, missing_columns, type_mismatches = _compare_schema(
             expected,

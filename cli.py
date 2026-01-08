@@ -570,6 +570,25 @@ def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audit_schema(ns: argparse.Namespace) -> int:
+    db_url = ns.db
+    if not db_url:
+        logging.error("Database URI is required (pass --db).")
+        return 2
+
+    from dev_health_ops.audit.schema import format_schema_report, run_schema_audit
+
+    report = run_schema_audit(db_url=db_url)
+    if report.get("status") == "unchecked":
+        print("unchecked")
+        return 2
+
+    print(format_schema_report(report))
+    if ns.fail_on_missing and report.get("status") == "missing":
+        return 1
+    return 0
+
+
 def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
     db_url = ns.db
     if not db_url:
@@ -975,6 +994,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     coverage.set_defaults(func=_cmd_audit_coverage)
+
+    schema = audit_sub.add_parser(
+        "schema", help="Audit database schema against migrations."
+    )
+    schema.add_argument("--db", required=True, help="Database connection string.")
+    schema.add_argument(
+        "--fail-on-missing",
+        action="store_true",
+        help="Exit non-zero if required schema objects are missing.",
+    )
+    schema.set_defaults(func=_cmd_audit_schema)
 
     # ---- api ----
     api = sub.add_parser("api", help="Run the Dev Health Ops API server.")

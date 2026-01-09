@@ -397,9 +397,10 @@ async def work_units(
         else:
             filter_payload = filters.dict()
         log_limit = str(limit).replace("\r", "").replace("\n", "")
+        log_include_textual = str(include_textual).replace("\r", "").replace("\n", "")
         logger.debug(
             "WorkUnits GET request include_textual=%s limit=%s filters=%s",
-            include_textual,
+            log_include_textual,
             log_limit,
             filter_payload,
         )

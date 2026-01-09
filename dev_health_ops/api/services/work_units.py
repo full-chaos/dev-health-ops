@@ -291,8 +291,6 @@ async def build_work_unit_signals(
                 structural_scores, modifiers, config
             )
         else:
-            modifiers = {cat: 0.0 for cat in config.categories}
-            textual_evidence = []
             final_scores = structural_scores
             text_agreement = config.text_agreement_fallback
         density_score = _graph_density(len(unit_nodes), len(component_edges))

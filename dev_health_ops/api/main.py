@@ -396,10 +396,11 @@ async def work_units(
             filter_payload = filters.model_dump(mode="json")
         else:
             filter_payload = filters.dict()
+        log_limit = str(limit).replace("\r", "").replace("\n", "")
         logger.debug(
             "WorkUnits GET request include_textual=%s limit=%s filters=%s",
             include_textual,
-            limit,
+            log_limit,
             filter_payload,
         )
         result = await build_work_unit_signals(

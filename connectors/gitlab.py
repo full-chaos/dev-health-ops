@@ -694,8 +694,14 @@ class GitLabConnector(GitConnector):
                         authored_at = datetime.fromisoformat(
                             c.authored_date.replace("Z", "+00:00")
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # If the authored_date cannot be parsed, fall back to None
+                        logger.debug(
+                            "Failed to parse authored_date '%s' for commit '%s': %s",
+                            c.authored_date,
+                            getattr(c, "id", "<unknown>"),
+                            e,
+                        )
                 commits.append(
                     PullRequestCommit(
                         sha=c.id,

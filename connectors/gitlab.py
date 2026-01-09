@@ -33,6 +33,7 @@ from connectors.models import (
     FileBlame,
     Organization,
     PullRequest,
+    PullRequestCommit,
     Repository,
     RepoStats,
 )
@@ -658,6 +659,56 @@ class GitLabConnector(GitConnector):
 
         except Exception as e:
             self._handle_gitlab_exception(e)
+
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(RateLimitException, APIException),
+    )
+    def get_merge_request_commits(
+        self,
+        project_id: Optional[int] = None,
+        project_name: Optional[str] = None,
+        iid: int = 0,
+    ) -> List[PullRequestCommit]:
+        """
+        Get commits for a specific merge request.
+
+        :param project_id: GitLab project ID (deprecated, use project_name).
+        :param project_name: GitLab project name/path (e.g., 'group/project').
+        :param iid: Merge request internal ID (iid).
+        :return: List of PullRequestCommit objects.
+        """
+        project_identifier = project_name if project_name else project_id
+        if not project_identifier:
+            raise ValueError("Either project_id or project_name must be provided")
+
+        try:
+            project = self.gitlab.projects.get(project_identifier)
+            mr = project.mergerequests.get(iid)
+            commits = []
+            for c in mr.commits():
+                authored_at = None
+                if c.authored_date:
+                    try:
+                        authored_at = datetime.fromisoformat(
+                            c.authored_date.replace("Z", "+00:00")
+                        )
+                    except Exception:
+                        pass
+                commits.append(
+                    PullRequestCommit(
+                        sha=c.id,
+                        authored_at=authored_at,
+                        message=c.message,
+                        author_name=c.author_name,
+                        author_email=c.author_email,
+                    )
+                )
+            return commits
+        except Exception as e:
+            self._handle_gitlab_exception(e)
+            return []
 
     @retry_with_backoff(
         max_retries=3,

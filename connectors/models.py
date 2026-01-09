@@ -116,3 +116,14 @@ class PullRequestReview:
     submitted_at: Optional[datetime] = None
     body: Optional[str] = None
     url: Optional[str] = None
+
+
+@dataclass
+class PullRequestCommit:
+    """Represents a commit associated with a Pull Request or Merge Request."""
+
+    sha: str
+    authored_at: Optional[datetime] = None
+    message: Optional[str] = None
+    author_name: Optional[str] = None
+    author_email: Optional[str] = None

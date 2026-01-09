@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from uuid import UUID
 from datetime import date, datetime
 from typing import List, Optional, TypedDict
 from typing_extensions import NotRequired
@@ -194,7 +195,7 @@ class RepoMetricsDailyRecord:
     rework_churn_ratio_30d: float = 0.0
     single_owner_file_ratio_30d: float = 0.0
     review_load_top_reviewer_ratio: float = 0.0
-    
+
     # Knowledge / Risk signals
     bus_factor: int = 0
     code_ownership_gini: float = 0.0
@@ -439,6 +440,45 @@ class IssueTypeMetricsRecord:
     cycle_p90_hours: float
     lead_p50_hours: float
     computed_at: datetime
+
+
+@dataclass(frozen=True)
+class WorkGraphEdgeRecord:
+    edge_id: str
+    source_type: str
+    source_id: str
+    target_type: str
+    target_id: str
+    edge_type: str
+    repo_id: Optional[UUID]
+    provider: Optional[str]
+    provenance: str
+    confidence: float
+    evidence: str
+    discovered_at: datetime
+    last_synced: datetime
+
+
+@dataclass(frozen=True)
+class WorkGraphIssuePRRecord:
+    repo_id: UUID
+    work_item_id: str
+    pr_number: int
+    confidence: float
+    provenance: str
+    evidence: str
+    last_synced: datetime
+
+
+@dataclass(frozen=True)
+class WorkGraphPRCommitRecord:
+    repo_id: UUID
+    pr_number: int
+    commit_hash: str
+    confidence: float
+    provenance: str
+    evidence: str
+    last_synced: datetime
 
 
 @dataclass(frozen=True)

@@ -32,6 +32,7 @@ from connectors.models import (
     FileBlame,
     Organization,
     PullRequest,
+    PullRequestCommit,
     PullRequestReview,
     Repository,
     RepoStats,
@@ -504,6 +505,51 @@ class GitHubConnector(GitConnector):
                     )
                 )
             return reviews
+        except Exception as e:
+            self._handle_github_exception(e)
+            return []
+
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(RateLimitException, APIException),
+    )
+    def get_pull_request_commits(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+    ) -> List[PullRequestCommit]:
+        """
+        Get commits for a specific pull request.
+
+        :param owner: Repository owner.
+        :param repo: Repository name.
+        :param number: Pull request number.
+        :return: List of PullRequestCommit objects.
+        """
+        try:
+            gh_repo = self.github.get_repo(f"{owner}/{repo}")
+            gh_pr = gh_repo.get_pull(number)
+            commits = []
+            for c in gh_pr.get_commits():
+                authored_at = None
+                author_name = None
+                author_email = None
+                if c.commit and c.commit.author:
+                    authored_at = c.commit.author.date
+                    author_name = c.commit.author.name
+                    author_email = c.commit.author.email
+                commits.append(
+                    PullRequestCommit(
+                        sha=c.sha,
+                        authored_at=authored_at,
+                        message=c.commit.message if c.commit else None,
+                        author_name=author_name,
+                        author_email=author_email,
+                    )
+                )
+            return commits
         except Exception as e:
             self._handle_github_exception(e)
             return []

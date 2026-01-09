@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
+import logging
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from analytics.work_units import (
@@ -22,7 +23,7 @@ from ..models.schemas import (
     WorkUnitSignal,
     WorkUnitTimeRange,
 )
-from ..queries.client import clickhouse_client
+from ..queries.client import clickhouse_client, query_dicts
 from ..queries.work_units import (
     fetch_commit_churn,
     fetch_commits,
@@ -36,6 +37,7 @@ from .filtering import resolve_repo_filter_ids, time_window
 NodeKey = Tuple[str, str]
 
 _CONFIG: Optional[WorkUnitConfig] = None
+logger = logging.getLogger(__name__)
 
 
 def _config() -> WorkUnitConfig:
@@ -69,7 +71,9 @@ def _parse_commit_id(commit_id: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
-def _node_time_bounds(node_type: str, data: Dict[str, object]) -> Tuple[Optional[datetime], Optional[datetime]]:
+def _node_time_bounds(
+    node_type: str, data: Dict[str, object]
+) -> Tuple[Optional[datetime], Optional[datetime]]:
     if node_type == "issue":
         start = _ensure_utc(data.get("created_at"))  # type: ignore[arg-type]
         end = _ensure_utc(data.get("completed_at"))  # type: ignore[arg-type]
@@ -135,7 +139,9 @@ def _edge_confidence(edges: Iterable[Dict[str, object]]) -> float:
     return sum(values) / float(len(values))
 
 
-def _build_components(edges: List[Dict[str, object]]) -> List[Tuple[List[NodeKey], List[Dict[str, object]]]]:
+def _build_components(
+    edges: List[Dict[str, object]],
+) -> List[Tuple[List[NodeKey], List[Dict[str, object]]]]:
     adjacency: Dict[NodeKey, List[NodeKey]] = {}
     edges_by_node: Dict[NodeKey, List[Dict[str, object]]] = {}
 
@@ -178,6 +184,7 @@ async def build_work_unit_signals(
     db_url: str,
     filters: MetricFilter,
     limit: int = 200,
+    include_text: bool = True,
 ) -> List[WorkUnitSignal]:
     config = _config()
     start_day, end_day, _, _ = time_window(filters)
@@ -187,22 +194,43 @@ async def build_work_unit_signals(
     async with clickhouse_client(db_url) as client:
         repo_ids = await resolve_repo_filter_ids(client, filters)
         edge_limit = max(50000, limit * 200)
+        logger.debug(
+            "WorkUnit signals query repo_ids=%s edge_limit=%s",
+            len(repo_ids or []),
+            edge_limit,
+        )
         edges = await fetch_work_graph_edges(
             client,
             repo_ids=repo_ids or None,
             limit=edge_limit,
         )
+        logger.debug("WorkUnit signals fetched edges=%s", len(edges))
 
         components = _build_components(edges)
+        logger.debug("WorkUnit signals components=%s", len(components))
         if not components:
             return []
 
-        issue_ids = {node_id for node_type, node_id in _flatten_nodes(components) if node_type == "issue"}
-        pr_ids = {node_id for node_type, node_id in _flatten_nodes(components) if node_type == "pr"}
-        commit_ids = {node_id for node_type, node_id in _flatten_nodes(components) if node_type == "commit"}
+        issue_ids = {
+            node_id
+            for node_type, node_id in _flatten_nodes(components)
+            if node_type == "issue"
+        }
+        pr_ids = {
+            node_id
+            for node_type, node_id in _flatten_nodes(components)
+            if node_type == "pr"
+        }
+        commit_ids = {
+            node_id
+            for node_type, node_id in _flatten_nodes(components)
+            if node_type == "commit"
+        }
 
         work_items = await fetch_work_items(client, work_item_ids=issue_ids)
-        active_hours = await fetch_work_item_active_hours(client, work_item_ids=issue_ids)
+        active_hours = await fetch_work_item_active_hours(
+            client, work_item_ids=issue_ids
+        )
 
         repo_prs = _group_prs_by_repo(pr_ids)
         prs = await fetch_pull_requests(client, repo_numbers=repo_prs)
@@ -210,6 +238,16 @@ async def build_work_unit_signals(
         repo_commits = _group_commits_by_repo(commit_ids)
         commits = await fetch_commits(client, repo_commits=repo_commits)
         commit_churn = await fetch_commit_churn(client, repo_commits=repo_commits)
+        logger.debug(
+            "WorkUnit signals issue_ids=%s pr_ids=%s commit_ids=%s work_items=%s prs=%s commits=%s churn=%s",
+            len(issue_ids),
+            len(pr_ids),
+            len(commit_ids),
+            len(work_items),
+            len(prs),
+            len(commits),
+            len(commit_churn),
+        )
 
     work_item_map = {str(item.get("work_item_id")): item for item in work_items}
     pr_map = _map_prs(prs)
@@ -219,20 +257,44 @@ async def build_work_unit_signals(
     results: List[WorkUnitSignal] = []
     for nodes, component_edges in components:
         unit_nodes = list(dict.fromkeys(nodes))
-        issue_node_ids = [node_id for node_type, node_id in unit_nodes if node_type == "issue"]
-        pr_node_ids = [node_id for node_type, node_id in unit_nodes if node_type == "pr"]
-        commit_node_ids = [node_id for node_type, node_id in unit_nodes if node_type == "commit"]
+        issue_node_ids = [
+            node_id for node_type, node_id in unit_nodes if node_type == "issue"
+        ]
+        pr_node_ids = [
+            node_id for node_type, node_id in unit_nodes if node_type == "pr"
+        ]
+        commit_node_ids = [
+            node_id for node_type, node_id in unit_nodes if node_type == "commit"
+        ]
 
         structural_scores, structural_evidence = compute_structural_scores(
             _count_work_item_types(issue_node_ids, work_item_map),
             config,
         )
 
-        texts_by_source = _collect_texts(issue_node_ids, pr_node_ids, commit_node_ids, work_item_map, pr_map, commit_map)
-        modifiers, textual_evidence = compute_textual_modifiers(texts_by_source, config)
-        final_scores = apply_textual_modifiers(structural_scores, modifiers, config.categories)
-
-        text_agreement = compute_text_agreement(structural_scores, modifiers, config)
+        if include_text:
+            texts_by_source = _collect_texts(
+                issue_node_ids,
+                pr_node_ids,
+                commit_node_ids,
+                work_item_map,
+                pr_map,
+                commit_map,
+            )
+            modifiers, textual_evidence = compute_textual_modifiers(
+                texts_by_source, config
+            )
+            final_scores = apply_textual_modifiers(
+                structural_scores, modifiers, config.categories
+            )
+            text_agreement = compute_text_agreement(
+                structural_scores, modifiers, config
+            )
+        else:
+            modifiers = {cat: 0.0 for cat in config.categories}
+            textual_evidence = []
+            final_scores = structural_scores
+            text_agreement = config.text_agreement_fallback
         density_score = _graph_density(len(unit_nodes), len(component_edges))
         provenance_score = _edge_confidence(component_edges)
 
@@ -315,11 +377,14 @@ async def build_work_unit_signals(
         )
 
     results.sort(key=lambda item: item.effort.value, reverse=True)
+    logger.debug(
+        "WorkUnit signals returning count=%s", len(results[: max(1, int(limit))])
+    )
     return results[: max(1, int(limit))]
 
 
 def _flatten_nodes(
-    components: List[Tuple[List[NodeKey], List[Dict[str, object]]]]
+    components: List[Tuple[List[NodeKey], List[Dict[str, object]]]],
 ) -> List[NodeKey]:
     nodes: List[NodeKey] = []
     for node_list, _ in components:

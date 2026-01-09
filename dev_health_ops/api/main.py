@@ -350,15 +350,29 @@ async def heatmap(
 @app.post("/api/v1/work-units", response_model=list[WorkUnitSignal])
 async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
     try:
-        return await build_work_unit_signals(
+        include_textual = (
+            True if payload.include_textual is None else payload.include_textual
+        )
+        if hasattr(payload.filters, "model_dump"):
+            filter_payload = payload.filters.model_dump(mode="json")
+        else:
+            filter_payload = payload.filters.dict()
+        logger.debug(
+            "WorkUnits POST request include_textual=%s limit=%s filters=%s",
+            include_textual,
+            payload.limit or 200,
+            filter_payload,
+        )
+        result = await build_work_unit_signals(
             db_url=_db_url(),
             filters=payload.filters,
             limit=payload.limit or 200,
-            include_text=(
-                True if payload.include_textual is None else payload.include_textual
-            ),
+            include_text=include_textual,
         )
+        logger.debug("WorkUnits POST returned count=%s", len(result))
+        return result
     except Exception as exc:
+        logger.exception("WorkUnits POST failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
@@ -377,16 +391,28 @@ async def work_units(
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
+        if hasattr(filters, "model_dump"):
+            filter_payload = filters.model_dump(mode="json")
+        else:
+            filter_payload = filters.dict()
+        logger.debug(
+            "WorkUnits GET request include_textual=%s limit=%s filters=%s",
+            include_textual,
+            limit,
+            filter_payload,
+        )
         result = await build_work_unit_signals(
             db_url=_db_url(),
             filters=filters,
             limit=limit,
             include_text=include_textual,
         )
+        logger.debug("WorkUnits GET returned count=%s", len(result))
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
         return result
     except Exception as exc:
+        logger.exception("WorkUnits GET failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 

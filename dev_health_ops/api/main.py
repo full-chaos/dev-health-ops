@@ -358,9 +358,10 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
         else:
             filter_payload = payload.filters.dict()
         log_limit = str(payload.limit or 200).replace("\r", "").replace("\n", "")
+        log_include_textual = str(include_textual).replace("\r", "").replace("\n", "")
         logger.debug(
             "WorkUnits POST request include_textual=%s limit=%s filters=%s",
-            include_textual,
+            log_include_textual,
             log_limit,
             filter_payload,
         )

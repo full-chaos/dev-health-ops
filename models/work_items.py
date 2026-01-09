@@ -45,6 +45,7 @@ class WorkItem:
     )
     provider: WorkItemProvider
     title: str
+    description: Optional[str] = None
 
     type: WorkItemType
     status: WorkItemStatusCategory

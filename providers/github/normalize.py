@@ -77,6 +77,7 @@ def github_issue_to_work_item(
     work_item_id = f"gh:{repo_full_name}#{number}"
 
     title = getattr(issue, "title", "") or ""
+    description = getattr(issue, "body", None)
     state = getattr(issue, "state", None)
     created_at = _to_utc(getattr(issue, "created_at", None)) or datetime.now(
         timezone.utc
@@ -208,6 +209,7 @@ def github_issue_to_work_item(
         # For work tracking metrics, treat the repo as the "project" scope.
         project_id=str(repo_full_name) if repo_full_name else None,
         title=str(title),
+        description=str(description) if description else None,
         type=normalized_type,
         status=normalized_status,
         status_raw=str(status_raw) if status_raw else (str(state) if state else None),
@@ -381,6 +383,7 @@ def github_project_v2_item_to_work_item(
         # Update work_item_id in transitions
         transitions = _update_transitions_work_item_id(transitions, work_item_id)
 
+        description = content.get("body")
         return WorkItem(
             work_item_id=work_item_id,
             provider="github",
@@ -390,6 +393,7 @@ def github_project_v2_item_to_work_item(
             if (project_scope_id or repo_full_name)
             else None,
             title=str(content.get("title") or ""),
+            description=str(description) if description else None,
             type=normalized_type,
             status=normalized_status,
             status_raw=str(status_raw)
@@ -426,6 +430,7 @@ def github_project_v2_item_to_work_item(
         # Update work_item_id in transitions
         transitions = _update_transitions_work_item_id(transitions, work_item_id)
 
+        description = content.get("body")
         return WorkItem(
             work_item_id=work_item_id,
             provider="github",
@@ -433,6 +438,7 @@ def github_project_v2_item_to_work_item(
             project_key=None,
             project_id=str(project_scope_id) if project_scope_id else None,
             title=str(content.get("title") or ""),
+            description=str(description) if description else None,
             type="issue",
             status=normalized_status,
             status_raw=str(status_raw) if status_raw else None,
@@ -490,6 +496,7 @@ def github_pr_to_work_item(
     work_item_id = f"ghpr:{repo_full_name}#{number}"
 
     title = getattr(pr, "title", "") or ""
+    description = getattr(pr, "body", None)
     state = getattr(pr, "state", None)
     merged = getattr(pr, "merged", False)
     created_at = _to_utc(getattr(pr, "created_at", None)) or datetime.now(timezone.utc)
@@ -629,6 +636,7 @@ def github_pr_to_work_item(
         project_key=None,
         project_id=str(repo_full_name) if repo_full_name else None,
         title=str(title),
+        description=str(description) if description else None,
         type=normalized_type,
         status=normalized_status,
         status_raw=status_raw,
@@ -915,6 +923,7 @@ def enrich_work_item_with_priority(
         project_key=work_item.project_key,
         project_id=work_item.project_id,
         title=work_item.title,
+        description=work_item.description,
         type=work_item.type,
         status=work_item.status,
         status_raw=work_item.status_raw,

@@ -86,6 +86,7 @@ def gitlab_issue_to_work_item(
     work_item_id = f"gitlab:{project_full_path}#{iid}"
 
     title = _get(issue, "title") or ""
+    description = _get(issue, "description")
     state = _get(issue, "state") or None  # opened/closed
     created_at = _to_utc(_parse_iso(_get(issue, "created_at"))) or datetime.now(
         timezone.utc
@@ -200,6 +201,7 @@ def gitlab_issue_to_work_item(
         if project_full_path
         else (str(_get(issue, "project_id")) if _get(issue, "project_id") else None),
         title=str(title),
+        description=str(description) if description else None,
         type=normalized_type,
         status=normalized_status,
         status_raw=str(state) if state else None,
@@ -242,6 +244,7 @@ def gitlab_mr_to_work_item(
     work_item_id = f"gitlab:{project_full_path}!{iid}"  # ! for MRs
 
     title = _get(mr, "title") or ""
+    description = _get(mr, "description")
     state = _get(mr, "state") or None  # opened/merged/closed
     created_at = _to_utc(_parse_iso(_get(mr, "created_at"))) or datetime.now(
         timezone.utc
@@ -352,6 +355,7 @@ def gitlab_mr_to_work_item(
         project_key=None,
         project_id=str(project_full_path) if project_full_path else None,
         title=str(title),
+        description=str(description) if description else None,
         type="merge_request",
         status=normalized_status,
         status_raw=status_raw,
@@ -620,6 +624,7 @@ def enrich_work_item_with_priority(
         project_key=work_item.project_key,
         project_id=work_item.project_id,
         title=work_item.title,
+        description=work_item.description,
         type=work_item.type,
         status=work_item.status,
         status_raw=work_item.status_raw,

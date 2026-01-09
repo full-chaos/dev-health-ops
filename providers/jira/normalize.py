@@ -289,6 +289,7 @@ def jira_issue_to_work_item(
         project_id = getattr(project, "id", None) if project else None
 
     title = _get_field(issue, "summary") or ""
+    description = _get_field(issue, "description")
 
     status_obj = _get_field(issue, "status")
     if isinstance(status_obj, dict):
@@ -459,6 +460,7 @@ def jira_issue_to_work_item(
         project_key=str(project_key) if project_key else None,
         project_id=str(project_id) if project_id else None,
         title=str(title),
+        description=str(description) if description else None,
         type=normalized_type,
         status=normalized_status,
         status_raw=str(status_raw) if status_raw else None,

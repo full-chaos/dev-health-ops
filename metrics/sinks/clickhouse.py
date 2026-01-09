@@ -29,6 +29,9 @@ from metrics.schemas import (
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    WorkGraphEdgeRecord,
+    WorkGraphIssuePRRecord,
+    WorkGraphPRCommitRecord,
 )
 from models.work_items import (
     Sprint,
@@ -690,6 +693,72 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             ],
             rows,
         )
+
+    # -------------------------------------------------------------------------
+    # Work graph (derived relationships)
+    # -------------------------------------------------------------------------
+
+    def write_work_graph_edges(self, rows: Sequence[WorkGraphEdgeRecord]) -> None:
+        if not rows:
+            return
+        data = []
+        for r in rows:
+            data.append({
+                "edge_id": r.edge_id,
+                "source_type": r.source_type,
+                "source_id": r.source_id,
+                "target_type": r.target_type,
+                "target_id": r.target_id,
+                "edge_type": r.edge_type,
+                "repo_id": str(r.repo_id) if r.repo_id else None,
+                "provider": r.provider,
+                "provenance": r.provenance,
+                "confidence": r.confidence,
+                "evidence": r.evidence,
+                "discovered_at": _dt_to_clickhouse_datetime(r.discovered_at),
+                "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+            })
+        column_names = list(data[0].keys())
+        matrix = [[row[col] for col in column_names] for row in data]
+        self.client.insert("work_graph_edges", matrix, column_names=column_names)
+
+    def write_work_graph_issue_pr(self, rows: Sequence[WorkGraphIssuePRRecord]) -> None:
+        if not rows:
+            return
+        data = []
+        for r in rows:
+            data.append({
+                "repo_id": str(r.repo_id),
+                "work_item_id": r.work_item_id,
+                "pr_number": r.pr_number,
+                "confidence": r.confidence,
+                "provenance": r.provenance,
+                "evidence": r.evidence,
+                "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+            })
+        column_names = list(data[0].keys())
+        matrix = [[row[col] for col in column_names] for row in data]
+        self.client.insert("work_graph_issue_pr", matrix, column_names=column_names)
+
+    def write_work_graph_pr_commit(
+        self, rows: Sequence[WorkGraphPRCommitRecord]
+    ) -> None:
+        if not rows:
+            return
+        data = []
+        for r in rows:
+            data.append({
+                "repo_id": str(r.repo_id),
+                "pr_number": r.pr_number,
+                "commit_hash": r.commit_hash,
+                "confidence": r.confidence,
+                "provenance": r.provenance,
+                "evidence": r.evidence,
+                "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+            })
+        column_names = list(data[0].keys())
+        matrix = [[row[col] for col in column_names] for row in data]
+        self.client.insert("work_graph_pr_commit", matrix, column_names=column_names)
 
     def write_work_items(self, work_items: Sequence[Any]) -> None:
         """Write raw work items to the work_items table."""

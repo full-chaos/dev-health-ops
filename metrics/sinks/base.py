@@ -28,6 +28,9 @@ from metrics.schemas import (
     ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
     UserMetricsDailyRecord,
+    WorkGraphEdgeRecord,
+    WorkGraphIssuePRRecord,
+    WorkGraphPRCommitRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
@@ -219,3 +222,27 @@ class BaseMetricsSink(ABC):
     def write_issue_type_metrics(self, rows: Sequence[IssueTypeMetricsRecord]) -> None:
         """Write aggregated metrics by issue type."""
         ...
+
+    # -------------------------------------------------------------------------
+    # Work graph (derived relationships)
+    # -------------------------------------------------------------------------
+
+    def write_work_graph_edges(self, rows: Sequence[WorkGraphEdgeRecord]) -> None:
+        """Write derived work graph edges."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support work graph edges"
+        )
+
+    def write_work_graph_issue_pr(self, rows: Sequence[WorkGraphIssuePRRecord]) -> None:
+        """Write derived issue↔PR link rows."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support work graph issue↔PR links"
+        )
+
+    def write_work_graph_pr_commit(
+        self, rows: Sequence[WorkGraphPRCommitRecord]
+    ) -> None:
+        """Write derived PR↔commit link rows."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support work graph PR↔commit links"
+        )

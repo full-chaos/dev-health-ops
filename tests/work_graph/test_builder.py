@@ -68,15 +68,18 @@ class TestWorkGraphBuilder:
     """Tests for WorkGraphBuilder."""
 
     def test_init(self, config):
-        """Builder should initialize with config."""
-        with patch(
-            "work_graph.builder.clickhouse_connect.get_client"
-        ) as mock_get_client:
-            mock_get_client.return_value = MagicMock()
-            with patch("work_graph.writers.clickhouse.clickhouse_connect.get_client"):
-                builder = WorkGraphBuilder(config)
-                assert builder.config == config
-                builder.close()
+        """Builder should initialize with config using sink pattern."""
+        # Create a fake sink that mimics ClickHouseMetricsSink
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+        fake_sink.client = MagicMock()
+
+        with patch("work_graph.builder.create_sink", return_value=fake_sink):
+            builder = WorkGraphBuilder(config)
+            assert builder.config == config
+            assert builder.sink == fake_sink
+            builder.close()
+            fake_sink.close.assert_called_once()
 
 
 class TestWorkGraphBuilderIntegration:

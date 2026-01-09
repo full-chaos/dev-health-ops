@@ -520,7 +520,9 @@ def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
             "--repo-path is ignored; complexity metrics are computed from the DB."
         )
     if ns.ref and ns.ref != "HEAD":
-        logging.warning("--ref is ignored; complexity metrics are computed from the DB.")
+        logging.warning(
+            "--ref is ignored; complexity metrics are computed from the DB."
+        )
 
     try:
         return run_complexity_db_job(
@@ -1065,6 +1067,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable auto-reload for local development.",
     )
     api.set_defaults(func=_cmd_api)
+
+    # ---- work-graph ----
+    wg = sub.add_parser("work-graph", help="Work graph operations.")
+    wg_sub = wg.add_subparsers(dest="work_graph_command", required=True)
+
+    wg_build = wg_sub.add_parser("build", help="Build work graph edges from raw data.")
+    wg_build.add_argument(
+        "--db",
+        required=True,
+        help="ClickHouse connection string (clickhouse://user:pass@host:port/db).",
+    )
+    wg_build.add_argument(
+        "--from",
+        dest="from_date",
+        type=str,
+        help="Start date (YYYY-MM-DD). Defaults to 30 days ago.",
+    )
+    wg_build.add_argument(
+        "--to",
+        dest="to_date",
+        type=str,
+        help="End date (YYYY-MM-DD). Defaults to today.",
+    )
+    wg_build.add_argument(
+        "--repo-id",
+        type=str,
+        help="Filter to specific repository UUID.",
+    )
+    wg_build.add_argument(
+        "--heuristic-window",
+        type=int,
+        default=7,
+        help="Days window for heuristic issue->PR matching (default: 7).",
+    )
+    wg_build.add_argument(
+        "--heuristic-confidence",
+        type=float,
+        default=0.3,
+        help="Confidence score for heuristic matches (default: 0.3).",
+    )
+    wg_build.set_defaults(func=_cmd_work_graph_build)
 
     return parser
 
@@ -1882,6 +1925,56 @@ def _cmd_api(ns: argparse.Namespace) -> int:
         access_log=True,
         log_config=log_config,
     )
+    return 0
+
+
+def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
+    """Build work graph edges from raw data."""
+    from datetime import datetime, timedelta, timezone
+
+    from work_graph.builder import BuildConfig, WorkGraphBuilder
+
+    # Parse dates
+    from_date = None
+    to_date = None
+
+    if ns.from_date:
+        from_date = datetime.fromisoformat(ns.from_date).replace(tzinfo=timezone.utc)
+    else:
+        from_date = datetime.now(timezone.utc) - timedelta(days=30)
+
+    if ns.to_date:
+        to_date = datetime.fromisoformat(ns.to_date).replace(tzinfo=timezone.utc)
+    else:
+        to_date = datetime.now(timezone.utc)
+
+    # Parse repo_id if provided
+    repo_id = None
+    if ns.repo_id:
+        import uuid
+
+        repo_id = uuid.UUID(ns.repo_id)
+
+    config = BuildConfig(
+        dsn=ns.db,
+        from_date=from_date,
+        to_date=to_date,
+        repo_id=repo_id,
+        heuristic_days_window=ns.heuristic_window,
+        heuristic_confidence=ns.heuristic_confidence,
+    )
+
+    builder = WorkGraphBuilder(config)
+    result = builder.build()
+
+    total_edges = sum(result.values())
+    logging.info("Work graph build complete. Total edges: %d", total_edges)
+    logging.info("  issue_issue_edges: %d", result.get("issue_issue_edges", 0))
+    logging.info("  issue_pr_edges: %d", result.get("issue_pr_edges", 0))
+    logging.info("  pr_commit_edges: %d", result.get("pr_commit_edges", 0))
+    logging.info("  commit_file_edges: %d", result.get("commit_file_edges", 0))
+    logging.info("  heuristic_edges: %d", result.get("heuristic_edges", 0))
+
     return 0
 
 

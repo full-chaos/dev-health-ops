@@ -1,9 +1,8 @@
-"""
-Writers for persisting work graph data.
-"""
+"""Work graph writers.
 
-from work_graph.writers.clickhouse import ClickHouseWorkGraphWriter
+This package is intentionally empty.
 
-__all__ = [
-    "ClickHouseWorkGraphWriter",
-]
+Rule:
+- Do not add bespoke backend writers here.
+- Persist derived work graph rows via `metrics/sinks/*` by extending the canonical sink contract.
+"""

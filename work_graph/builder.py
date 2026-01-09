@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
-import clickhouse_connect
+from metrics.sinks.factory import create_sink
+from metrics.schemas import WorkGraphEdgeRecord, WorkGraphIssuePRRecord
 
 from work_graph.extractors.text_parser import (
     RefType,
@@ -34,7 +35,6 @@ from work_graph.models import (
     WorkGraphEdge,
     WorkGraphIssuePR,
 )
-from work_graph.writers.clickhouse import ClickHouseWorkGraphWriter
 
 logger = logging.getLogger(__name__)
 
@@ -93,45 +93,65 @@ class WorkGraphBuilder:
             config: Build configuration
         """
         self.config = config
-        self.client = clickhouse_connect.get_client(dsn=config.dsn)
-        self.writer = ClickHouseWorkGraphWriter(config.dsn)
+        # Canonical pattern: a single sink owns the backend client + migrations.
+        self.sink = create_sink(config.dsn)
+        if getattr(self.sink, "backend_type", None) != "clickhouse":
+            raise ValueError("WorkGraphBuilder currently requires a ClickHouse sink")
+        self.client = getattr(self.sink, "client", None)
+        if self.client is None:
+            raise ValueError("ClickHouse sink did not expose a client")
         self._now = datetime.now(timezone.utc)
-        self._ensure_schema()
-
-    def _ensure_schema(self) -> None:
-        """Ensure work graph tables exist."""
-        from pathlib import Path
-
-        migrations_dir = (
-            Path(__file__).resolve().parents[1] / "migrations" / "clickhouse"
-        )
-        migration_file = migrations_dir / "014_work_graph.sql"
-
-        if not migration_file.exists():
-            logger.warning("Migration file not found: %s", migration_file)
-            return
-
-        # Check if tables already exist
-        result = self.client.query(
-            "SELECT name FROM system.tables WHERE database = currentDatabase() AND name = 'work_graph_edges'"
-        )
-        if result.result_rows:
-            logger.debug("Work graph tables already exist")
-            return
-
-        logger.info("Creating work graph tables...")
-        sql = migration_file.read_text(encoding="utf-8")
-        for stmt in sql.split(";"):
-            stmt = stmt.strip()
-            if not stmt:
-                continue
-            self.client.command(stmt)
-        logger.info("Work graph tables created")
+        # NOTE: schema creation is handled by sink.ensure_schema()
+        self.sink.ensure_schema()
 
     def close(self) -> None:
         """Close connections."""
-        self.writer.close()
-        self.client.close()
+        self.sink.close()
+
+    def _edge_to_record(self, edge: WorkGraphEdge) -> WorkGraphEdgeRecord:
+        """Convert WorkGraphEdge to WorkGraphEdgeRecord for sink."""
+        return WorkGraphEdgeRecord(
+            edge_id=edge.edge_id,
+            source_type=edge.source_type.value,
+            source_id=edge.source_id,
+            target_type=edge.target_type.value,
+            target_id=edge.target_id,
+            edge_type=edge.edge_type.value,
+            repo_id=edge.repo_id,
+            provider=edge.provider,
+            provenance=edge.provenance.value,
+            confidence=edge.confidence,
+            evidence=edge.evidence,
+            discovered_at=edge.discovered_at or self._now,
+            last_synced=edge.last_synced or self._now,
+        )
+
+    def _issue_pr_to_record(self, link: WorkGraphIssuePR) -> WorkGraphIssuePRRecord:
+        """Convert WorkGraphIssuePR to WorkGraphIssuePRRecord for sink."""
+        return WorkGraphIssuePRRecord(
+            repo_id=link.repo_id,
+            work_item_id=link.work_item_id,
+            pr_number=link.pr_number,
+            confidence=link.confidence,
+            provenance=link.provenance.value,
+            evidence=link.evidence,
+            last_synced=link.last_synced or self._now,
+        )
+
+    def _write_edges(self, edges: List[WorkGraphEdge]) -> int:
+        """Write edges via the sink."""
+        if not edges:
+            return 0
+        records = [self._edge_to_record(e) for e in edges]
+        self.sink.write_work_graph_edges(records)
+        return len(records)
+
+    def _write_issue_pr_links(self, links: List[WorkGraphIssuePR]) -> None:
+        """Write issue-PR links via the sink."""
+        if not links:
+            return
+        records = [self._issue_pr_to_record(lnk) for lnk in links]
+        self.sink.write_work_graph_issue_pr(records)
 
     def build(self) -> dict:
         """
@@ -233,7 +253,7 @@ class WorkGraphBuilder:
             )
             edges.append(edge)
 
-        count = self.writer.write_edges(edges)
+        count = self._write_edges(edges)
         logger.info("Created %d issue->issue edges", count)
         return count
 
@@ -521,8 +541,8 @@ class WorkGraphBuilder:
                     explicit_links.add((work_item_id, pr_number))
 
         # Write edges
-        edge_count = self.writer.write_edges(edges)
-        self.writer.write_issue_pr_links(fast_path_links)
+        edge_count = self._write_edges(edges)
+        self._write_issue_pr_links(fast_path_links)
 
         logger.info(
             "Extracted refs: jira=%d, github=%d, gitlab=%d",
@@ -652,8 +672,8 @@ class WorkGraphBuilder:
                         )
                     )
 
-        count = self.writer.write_edges(edges)
-        self.writer.write_issue_pr_links(fast_path_links)
+        count = self._write_edges(edges)
+        self._write_issue_pr_links(fast_path_links)
         logger.info("Created %d heuristic issue->PR edges", count)
         return count
 

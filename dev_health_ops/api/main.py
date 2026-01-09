@@ -354,7 +354,7 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
             db_url=_db_url(),
             filters=payload.filters,
             limit=payload.limit or 200,
-            include_textual=(
+            include_text=(
                 True if payload.include_textual is None else payload.include_textual
             ),
         )
@@ -381,7 +381,7 @@ async def work_units(
             db_url=_db_url(),
             filters=filters,
             limit=limit,
-            include_textual=include_textual,
+            include_text=include_textual,
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"

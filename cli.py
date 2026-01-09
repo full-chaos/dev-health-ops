@@ -965,6 +965,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fix_gen.add_argument("--pr-count", type=int, default=20, help="Total PRs.")
     fix_gen.add_argument(
+        "--provider",
+        default="synthetic",
+        choices=["synthetic", "github", "gitlab", "jira"],
+        help="Provider label to use for generated work items.",
+    )
+    fix_gen.add_argument(
+        "--with-work-graph",
+        action="store_true",
+        help="Build work graph edges after fixture generation (ClickHouse only).",
+    )
+    fix_gen.add_argument(
         "--with-metrics", action="store_true", help="Also generate derived metrics."
     )
     fix_gen.set_defaults(func=_cmd_fixtures_generate)
@@ -1118,6 +1129,8 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
     db_type = _resolve_db_type(ns.db, ns.db_type)
 
     async def _handler(store):
+        from datetime import datetime, timedelta, timezone
+
         repo_count = max(1, ns.repo_count)
         base_name = ns.repo_name
         team_assignment = SyntheticDataGenerator(
@@ -1158,7 +1171,7 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             logging.info(
                 f"Generating fixture data for repo {i + 1}/{repo_count}: {r_name}"
             )
-            generator = SyntheticDataGenerator(repo_name=r_name)
+            generator = SyntheticDataGenerator(repo_name=r_name, provider=ns.provider)
 
             # 1. Repo
             repo = generator.generate_repo()
@@ -1176,8 +1189,30 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             stats = generator.generate_commit_stats(commits)
             await _insert_batches(store.insert_git_commit_stats, stats)
 
-            # 4. PRs & Reviews
-            pr_data = generator.generate_prs(count=ns.pr_count)
+            # 4. Work Items (Raw)
+            work_items = generator.generate_work_items(days=ns.days, provider=ns.provider)
+            transitions = generator.generate_work_item_transitions(work_items)
+
+            if hasattr(store, "insert_work_items"):
+                await _insert_batches(store.insert_work_items, work_items)
+            if hasattr(store, "insert_work_item_transitions"):
+                await _insert_batches(store.insert_work_item_transitions, transitions)
+
+            issue_numbers = []
+            for item in work_items:
+                raw_id = str(getattr(item, "work_item_id", "") or "")
+                if "#" in raw_id:
+                    tail = raw_id.split("#")[-1]
+                    if tail.isdigit():
+                        issue_numbers.append(int(tail))
+                        continue
+                if "-" in raw_id:
+                    tail = raw_id.split("-")[-1]
+                    if tail.isdigit():
+                        issue_numbers.append(int(tail))
+
+            # 5. PRs & Reviews
+            pr_data = generator.generate_prs(count=ns.pr_count, issue_numbers=issue_numbers)
             prs = [p["pr"] for p in pr_data]
             await _insert_batches(store.insert_git_pull_requests, prs)
 
@@ -1186,7 +1221,7 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
                 all_reviews.extend(p["reviews"])
             await _insert_batches(store.insert_git_pull_request_reviews, all_reviews)
 
-            # 5. CI/CD + Deployments + Incidents
+            # 6. CI/CD + Deployments + Incidents
             pr_numbers = [pr.number for pr in prs]
             pipeline_runs = generator.generate_ci_pipeline_runs(days=ns.days)
             deployments = generator.generate_deployments(
@@ -1197,18 +1232,9 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             await _insert_batches(store.insert_deployments, deployments)
             await _insert_batches(store.insert_incidents, incidents)
 
-            # 6. Blame Data
+            # 7. Blame Data
             blame_data = generator.generate_blame(commits)
             await _insert_batches(store.insert_blame_data, blame_data)
-
-            # 7. Work Items (Raw)
-            work_items = generator.generate_work_items(days=ns.days)
-            transitions = generator.generate_work_item_transitions(work_items)
-
-            if hasattr(store, "insert_work_items"):
-                await _insert_batches(store.insert_work_items, work_items)
-            if hasattr(store, "insert_work_item_transitions"):
-                await _insert_batches(store.insert_work_item_transitions, transitions)
 
             logging.info(f"Generated synthetic data for {r_name}")
             logging.info(f"- Commits: {len(commits)}")
@@ -1867,6 +1893,25 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
                     logging.info("Generated fixtures metrics for %s", r_name)
 
     asyncio.run(_run_with_store(ns.db, db_type, _handler))
+    if ns.with_work_graph:
+        if db_type != "clickhouse":
+            logging.warning("Skipping work graph build (requires ClickHouse).")
+        else:
+            try:
+                from work_graph.builder import BuildConfig, WorkGraphBuilder
+
+                now = datetime.now(timezone.utc)
+                config = BuildConfig(
+                    dsn=ns.db,
+                    from_date=now - timedelta(days=ns.days),
+                    to_date=now,
+                )
+                builder = WorkGraphBuilder(config)
+                builder.build()
+                builder.close()
+                logging.info("Built work graph edges for fixtures.")
+            except Exception as exc:
+                logging.warning("Work graph build failed: %s", exc)
     return 0
 
 

@@ -45,10 +45,10 @@ class WorkItem:
     )
     provider: WorkItemProvider
     title: str
-
     type: WorkItemType
     status: WorkItemStatusCategory
     status_raw: Optional[str]
+    description: Optional[str] = None
 
     # Optional dimensions.
     repo_id: Optional[uuid.UUID] = None

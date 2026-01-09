@@ -65,6 +65,12 @@ class DrilldownRequest(BaseModel):
     limit: Optional[int] = None
 
 
+class WorkUnitRequest(BaseModel):
+    filters: MetricFilter
+    limit: Optional[int] = None
+    include_textual: Optional[bool] = None
+
+
 class FilterOptionsResponse(BaseModel):
     teams: List[str]
     repos: List[str]

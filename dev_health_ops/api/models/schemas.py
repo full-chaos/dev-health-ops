@@ -171,6 +171,36 @@ class InvestmentResponse(BaseModel):
     edges: Optional[List[Dict[str, Any]]] = None
 
 
+class WorkUnitTimeRange(BaseModel):
+    start: datetime
+    end: datetime
+
+
+class WorkUnitEffort(BaseModel):
+    metric: Literal["churn_loc", "active_hours"]
+    value: float
+
+
+class WorkUnitConfidence(BaseModel):
+    value: float
+    band: Literal["high", "moderate", "low", "very_low"]
+
+
+class WorkUnitEvidence(BaseModel):
+    structural: List[Dict[str, Any]] = Field(default_factory=list)
+    temporal: List[Dict[str, Any]] = Field(default_factory=list)
+    textual: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class WorkUnitSignal(BaseModel):
+    work_unit_id: str
+    time_range: WorkUnitTimeRange
+    effort: WorkUnitEffort
+    categories: Dict[str, float]
+    confidence: WorkUnitConfidence
+    evidence: WorkUnitEvidence
+
+
 class PersonIdentity(BaseModel):
     provider: str
     handle: str

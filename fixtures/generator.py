@@ -226,9 +226,38 @@ class SyntheticDataGenerator:
                 )
         return stats
 
-    def generate_prs(self, count: int = 20) -> List[Dict[str, Any]]:
+    def generate_prs(
+        self,
+        count: int = 20,
+        issue_numbers: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
         prs = []
         end_date = datetime.now(timezone.utc)
+        issue_numbers = issue_numbers or []
+        pr_keywords = [
+            "feature",
+            "refactor",
+            "incident",
+            "bug",
+            "test",
+            "deploy",
+            "rollback",
+            "cleanup",
+            "hotfix",
+        ]
+        pr_titles = [
+            "Implement User Auth",
+            "Fix NPE in Service",
+            "Refactor DB Layer",
+            "Update API Docs",
+            "Add Integration Tests",
+            "Bump version",
+            "Optimize Startup",
+            "Remove Legacy Code",
+            "Feature X",
+            "Fix Bug Y",
+            "Cleanup Z",
+        ]
 
         for i in range(1, count + 1):
             author_name, author_email = random.choice(self.authors)
@@ -236,6 +265,9 @@ class SyntheticDataGenerator:
             created_at = end_date - timedelta(
                 days=random.randint(0, 60), hours=random.randint(0, 23)
             )
+            issue_ref = None
+            if issue_numbers and random.random() > 0.3:
+                issue_ref = random.choice(issue_numbers)
 
             # Simulated lifecycle
             state = random.choice(["merged", "merged", "merged", "open", "closed"])
@@ -264,11 +296,24 @@ class SyntheticDataGenerator:
             elif state == "closed":
                 closed_at = created_at + timedelta(days=random.randint(1, 14))
 
+            summary = random.choice(pr_titles)
+            keywords = random.sample(pr_keywords, k=2)
+            title = f"Synthetic PR #{i}: {summary}"
+            if issue_ref is not None:
+                title = f"{title} (Fixes #{issue_ref})"
+            body = (
+                f"{summary}.\n\n"
+                f"This change includes {keywords[0]} updates and {keywords[1]} coverage.\n"
+            )
+            if issue_ref is not None:
+                body += f"\nFixes #{issue_ref}\n"
+
             prs.append({
                 "pr": GitPullRequest(
                     repo_id=self.repo_id,
                     number=i,
-                    title=f"Synthetic PR #{i}: {random.choice(['Implement User Auth', 'Fix NPE in Service', 'Refactor DB Layer', 'Update API Docs', 'Add Integration Tests', 'Bump version', 'Optimize Startup', 'Remove Legacy Code', 'Feature X', 'Fix Bug Y', 'Cleanup Z'])}",
+                    title=title,
+                    body=body,
                     state=state,
                     author_name=author_name,
                     author_email=author_email,
@@ -715,9 +760,20 @@ class SyntheticDataGenerator:
         days: int = 30,
         projects: Optional[List[str]] = None,
         investment_weights: Optional[Dict[str, float]] = None,
+        provider: Optional[str] = None,
     ) -> List[WorkItem]:
         items = []
         end_date = datetime.now(timezone.utc)
+        provider_value = provider or self.provider
+        description_keywords = {
+            "story": ["feature", "implement"],
+            "task": ["refactor", "cleanup"],
+            "bug": ["bug", "fix"],
+            "epic": ["feature", "introduce"],
+            "incident": ["incident", "hotfix"],
+            "chore": ["cleanup", "upgrade"],
+            "issue": ["feature", "fix"],
+        }
         
         # Defaults
         if not projects:
@@ -755,24 +811,41 @@ class SyntheticDataGenerator:
             # Create 1-3 active epics per project
             for i in range(random.randint(1, 3)):
                 epic_created_at = end_date - timedelta(days=random.randint(days, days + 60))
-                epic_id = f"{proj}-EPIC-{i+1}"
+                epic_number = 9000 + i + 1
+                project_key = proj.split("/")[-1].upper()[:3]
+                if provider_value == "github":
+                    epic_id = f"gh:{proj}#{epic_number}"
+                elif provider_value == "gitlab":
+                    epic_id = f"gitlab:{proj}#{epic_number}"
+                elif provider_value == "jira":
+                    epic_id = f"jira:{project_key}-{epic_number}"
+                else:
+                    epic_id = f"{proj}-EPIC-{i+1}"
                 category = random.choices(categories, weights=weights, k=1)[0]
                 
                 # Pick a random sub-category for the epic
                 sub_cats = sub_categories_map.get(category, [])
                 sub_category = random.choice(sub_cats) if sub_cats else category
 
+                epic_keywords = description_keywords.get("epic", ["feature", "implement"])
+                epic_description = (
+                    f"{category.title()} epic focused on {sub_category}. "
+                    f"{epic_keywords[0].title()} and {epic_keywords[1]} work planned."
+                )
                 # Create the Epic item
                 epic = WorkItem(
                     work_item_id=epic_id,
-                    provider=self.provider,
+                    provider=provider_value,
                     title=f"Epic: {category.title()} - {sub_category.title()} Initiative {i+1}",
                     type="epic",
                     status="in_progress",  # Epics often stay open
                     status_raw="In Progress",
+                    description=epic_description,
                     repo_id=self.repo_id,
                     project_id=proj,
+                    project_key=project_key if provider_value == "jira" else proj,
                     created_at=epic_created_at,
+                    updated_at=epic_created_at,
                     started_at=epic_created_at + timedelta(days=1),
                     completed_at=None,
                     closed_at=None,
@@ -853,18 +926,38 @@ class SyntheticDataGenerator:
                         completed_at = end_date
                         status = "in_progress" # Can't be done if date is future
                     
+            issue_number = i + 100
+            project_key = project.split("/")[-1].upper()[:3]
+            if provider_value == "github":
+                work_item_id = f"gh:{project}#{issue_number}"
+            elif provider_value == "gitlab":
+                work_item_id = f"gitlab:{project}#{issue_number}"
+            elif provider_value == "jira":
+                work_item_id = f"jira:{project_key}-{issue_number}"
+            else:
+                work_item_id = f"{project}-{issue_number}"
+
+            item_keywords = description_keywords.get(item_type, ["feature", "fix"])
+            description = (
+                f"{category.title()} work in {sub_category}. "
+                f"{item_keywords[0].title()} focus with {item_keywords[1]} checks."
+            )
+            updated_at = completed_at or started_at or created_at
+
             items.append(
                 WorkItem(
-                    work_item_id=f"{project}-{i+100}",
-                    provider=self.provider,
+                    work_item_id=work_item_id,
+                    provider=provider_value,
                     title=f"[{project}] {category.title()}/{sub_category.title()} {item_type} {i}",
                     type=item_type,
                     status=status,
                     status_raw=status,
+                    description=description,
                     repo_id=self.repo_id,
                     project_id=project,
-                    project_key=project, # Jira style
+                    project_key=project_key if provider_value == "jira" else project, # Jira style
                     created_at=created_at,
+                    updated_at=updated_at,
                     started_at=started_at,
                     completed_at=completed_at,
                     closed_at=completed_at,

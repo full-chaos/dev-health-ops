@@ -21,6 +21,8 @@ def mock_ch_client():
 
         client.query_df.return_value = pd.DataFrame()
     except ImportError:
+        # pandas is an optional test dependency; if it's not available,
+        # leave query_df unconfigured and allow tests that need it to handle this.
         pass
     return client
 

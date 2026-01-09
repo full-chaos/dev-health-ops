@@ -23,7 +23,7 @@ from ..models.schemas import (
     WorkUnitSignal,
     WorkUnitTimeRange,
 )
-from ..queries.client import clickhouse_client, query_dicts
+from ..queries.client import clickhouse_client
 from ..queries.work_units import (
     fetch_commit_churn,
     fetch_commits,

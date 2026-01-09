@@ -55,6 +55,7 @@ async def fetch_work_items(
         SELECT
             work_item_id,
             provider,
+            toString(repo_id) AS repo_id,
             title,
             description,
             type,

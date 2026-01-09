@@ -353,6 +353,9 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
             db_url=_db_url(),
             filters=payload.filters,
             limit=payload.limit or 200,
+            include_textual=(
+                True if payload.include_textual is None else payload.include_textual
+            ),
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -367,6 +370,7 @@ async def work_units(
     start_date: date | None = None,
     end_date: date | None = None,
     limit: int = 200,
+    include_textual: bool = True,
 ) -> List[WorkUnitSignal]:
     try:
         filters = _filters_from_query(
@@ -376,6 +380,7 @@ async def work_units(
             db_url=_db_url(),
             filters=filters,
             limit=limit,
+            include_textual=include_textual,
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 import logging
 import os
+from typing import List
 
 
 from fastapi import FastAPI, HTTPException, Request, Response

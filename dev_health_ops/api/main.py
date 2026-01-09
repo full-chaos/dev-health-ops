@@ -357,10 +357,11 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
             filter_payload = payload.filters.model_dump(mode="json")
         else:
             filter_payload = payload.filters.dict()
+        log_limit = str(payload.limit or 200).replace("\r", "").replace("\n", "")
         logger.debug(
             "WorkUnits POST request include_textual=%s limit=%s filters=%s",
             include_textual,
-            payload.limit or 200,
+            log_limit,
             filter_payload,
         )
         result = await build_work_unit_signals(

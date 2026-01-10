@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from analytics.work_unit_explainer import (
     CANONICAL_EXPLANATION_PROMPT,
     FORBIDDEN_WORDS,

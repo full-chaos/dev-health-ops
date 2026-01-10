@@ -491,7 +491,8 @@ async def work_unit_explain_endpoint(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Work unit explain failed for %s", work_unit_id)
+        safe_work_unit_id = work_unit_id.replace("\r", "").replace("\n", "")
+        logger.exception("Work unit explain failed for %s", safe_work_unit_id)
         raise HTTPException(status_code=503, detail="Explanation unavailable") from exc
 
 

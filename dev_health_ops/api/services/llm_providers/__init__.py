@@ -24,7 +24,7 @@ class LLMProvider(Protocol):
         Returns:
             The generated completion text
         """
-        ...
+        pass
 
 
 def get_provider(name: str = "auto") -> LLMProvider:

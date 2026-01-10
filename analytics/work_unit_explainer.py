@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 # Canonical prompt from AGENTS-WG.md - USE VERBATIM
 CANONICAL_EXPLANATION_PROMPT = """You are explaining precomputed work signals.
@@ -21,11 +21,13 @@ You are not allowed to:
 - Recalculate scores
 - Change categories
 - Introduce new conclusions
+- Be conversational (no "Hello", "As an AI", or interactive follow-ups)
 
-Explain:
-- Why this work leaned toward certain categories
-- Which signals mattered most
-- Where uncertainty exists
+Explain the signals in three distinct sections:
+
+1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using probabilistic language (appears, leans, suggests) explaining why the work leans toward the primary categories.
+2. **REASONS**: List the specific signals (structural or temporal) that contributed most to this interpretation.
+3. **UNCERTAINTY**: Disclose where uncertainty exists based on the confidence level and signal mix.
 
 Always include confidence level and limits."""
 
@@ -106,10 +108,15 @@ def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
     # Structural evidence - summarize types and values
     structural = evidence.get("structural", [])
     if structural:
-        summary["structural"] = {
-            "count": len(structural),
-            "types": list({str(item.get("type", "unknown")) for item in structural}),
-        }
+        summary["structural"] = cast(
+            Dict[str, Any],
+            {
+                "count": len(structural),
+                "types": list({
+                    str(item.get("type", "unknown")) for item in structural
+                }),
+            },
+        )
         # Include graph density if present
         for item in structural:
             if item.get("type") == "graph_density":
@@ -120,9 +127,12 @@ def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
     # Temporal evidence - summarize time span
     temporal = evidence.get("temporal", [])
     if temporal:
-        summary["temporal"] = {
-            "count": len(temporal),
-        }
+        summary["temporal"] = cast(
+            Dict[str, Any],
+            {
+                "count": len(temporal),
+            },
+        )
         for item in temporal:
             if item.get("type") == "time_range":
                 summary["temporal"]["span_days"] = float(item.get("span_days", 0))

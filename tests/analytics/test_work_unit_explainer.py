@@ -52,9 +52,9 @@ def test_canonical_prompt_matches_spec():
         "Introduce new conclusions",
     ]
     expected_explain = [
-        "Why this work leaned toward certain categories",
-        "Which signals mattered most",
-        "Where uncertainty exists",
+        "SUMMARY",
+        "REASONS",
+        "UNCERTAINTY",
     ]
 
     assert CANONICAL_EXPLANATION_PROMPT.startswith(expected_start)
@@ -136,7 +136,9 @@ def test_prompt_includes_canonical_instructions():
     # Must include the canonical prompt
     assert "You are explaining precomputed work signals" in prompt
     assert "Recalculate scores" in prompt
-    assert "probabilistic language" in prompt.lower()
+    assert "SUMMARY" in prompt
+    assert "REASONS" in prompt
+    assert "UNCERTAINTY" in prompt
 
 
 def test_validate_language_catches_forbidden_words():

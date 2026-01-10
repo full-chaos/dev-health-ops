@@ -1,10 +1,10 @@
 """
-Work Unit Explainer - builds LLM prompts for explaining precomputed work signals.
+Work Unit Explainer - builds LLM prompts for explaining precomputed investment views.
 
-CRITICAL: This module follows AGENTS-WG.md Phase 3 rules:
+CRITICAL: This module follows Investment View rules:
 - LLMs explain results, they NEVER compute them
-- Only allowed inputs: category confidence vectors, evidence metadata,
-  confidence band, time span
+- Only allowed inputs: investment vectors, evidence metadata,
+  evidence quality band, time span
 - FORBIDDEN inputs: raw events, raw text blobs, code diffs, heuristic formulas
 """
 
@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
 
 # Canonical prompt from AGENTS-WG.md - USE VERBATIM
-CANONICAL_EXPLANATION_PROMPT = """You are explaining precomputed work signals.
+CANONICAL_EXPLANATION_PROMPT = """You are explaining a precomputed investment view.
 
 You are not allowed to:
 - Recalculate scores
@@ -23,13 +23,13 @@ You are not allowed to:
 - Introduce new conclusions
 - Be conversational (no "Hello", "As an AI", or interactive follow-ups)
 
-Explain the signals in three distinct sections:
+Explain the investment view in three distinct sections:
 
 1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using probabilistic language (appears, leans, suggests) explaining why the work leans toward the primary categories.
-2. **REASONS**: List the specific signals (structural or temporal) that contributed most to this interpretation.
-3. **UNCERTAINTY**: Disclose where uncertainty exists based on the confidence level and signal mix.
+2. **REASONS**: List the specific evidence (structural, contextual, textual) that contributed most to this interpretation.
+3. **UNCERTAINTY**: Disclose where uncertainty exists based on the evidence quality and evidence mix.
 
-Always include confidence level and limits."""
+Always include evidence quality level and limits."""
 
 # Approved language per AGENTS-WG.md
 APPROVED_WORDS = frozenset(["appears", "leans", "suggests"])
@@ -50,9 +50,9 @@ class ExplanationInputs:
     work_unit_id: str
     time_range_start: datetime
     time_range_end: datetime
-    categories: Dict[str, float]  # Category confidence vectors
-    confidence_value: float
-    confidence_band: str  # high, moderate, low, very_low
+    categories: Dict[str, float]  # Investment category vectors
+    evidence_quality_value: float
+    evidence_quality_band: str  # high, moderate, low, very_low
     evidence_summary: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -61,8 +61,8 @@ def extract_allowed_inputs(
     time_range_start: datetime,
     time_range_end: datetime,
     categories: Dict[str, float],
-    confidence_value: float,
-    confidence_band: str,
+    evidence_quality_value: float,
+    evidence_quality_band: str,
     evidence: Optional[Dict[str, List[Any]]] = None,
 ) -> ExplanationInputs:
     """
@@ -75,10 +75,10 @@ def extract_allowed_inputs(
         work_unit_id: Unique identifier for the work unit
         time_range_start: Start of the work unit's time span
         time_range_end: End of the work unit's time span
-        categories: Category confidence vector (must sum to ~1.0)
-        confidence_value: Overall confidence score (0-1)
-        confidence_band: Confidence band (high/moderate/low/very_low)
-        evidence: Optional evidence dict with structural/temporal/textual arrays
+        categories: Investment category vector (must sum to ~1.0)
+        evidence_quality_value: Overall evidence quality score (0-1)
+        evidence_quality_band: Evidence quality band (high/moderate/low/very_low)
+        evidence: Optional evidence dict with structural/contextual/textual arrays
 
     Returns:
         ExplanationInputs with sanitized, allowed-only data
@@ -91,8 +91,8 @@ def extract_allowed_inputs(
         time_range_start=time_range_start,
         time_range_end=time_range_end,
         categories=dict(categories),
-        confidence_value=confidence_value,
-        confidence_band=confidence_band,
+        evidence_quality_value=evidence_quality_value,
+        evidence_quality_band=evidence_quality_band,
         evidence_summary=evidence_summary,
     )
 
@@ -124,32 +124,41 @@ def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
             if item.get("type") == "provenance":
                 summary["structural"]["provenance_score"] = float(item.get("value", 0))
 
-    # Temporal evidence - summarize time span
-    temporal = evidence.get("temporal", [])
-    if temporal:
-        summary["temporal"] = cast(
+    # Contextual evidence - summarize time span and structural context
+    contextual = evidence.get("contextual", [])
+    if contextual:
+        summary["contextual"] = cast(
             Dict[str, Any],
             {
-                "count": len(temporal),
+                "count": len(contextual),
             },
         )
-        for item in temporal:
+        for item in contextual:
             if item.get("type") == "time_range":
-                summary["temporal"]["span_days"] = float(item.get("span_days", 0))
-                summary["temporal"]["score"] = float(item.get("score", 0))
+                summary["contextual"]["span_days"] = float(item.get("span_days", 0))
+                summary["contextual"]["score"] = float(item.get("score", 0))
 
     # Textual evidence - count only, no raw content
     textual = evidence.get("textual", [])
     if textual:
-        # Count matches per category without exposing keywords
+        # Count only explicit text matches; avoid "unknown" categories.
         category_counts: Dict[str, int] = {}
+        match_count = 0
         for item in textual:
-            cat = str(item.get("category", "unknown"))
-            category_counts[cat] = category_counts.get(cat, 0) + 1
-        summary["textual"] = {
-            "match_count": len(textual),
-            "categories_with_matches": list(category_counts.keys()),
-        }
+            if not isinstance(item, dict):
+                continue
+            phrase = item.get("phrase") or item.get("keyword")
+            category = item.get("subcategory") or item.get("category")
+            if phrase is not None:
+                match_count += 1
+            if category:
+                key = str(category)
+                category_counts[key] = category_counts.get(key, 0) + 1
+        if match_count or category_counts:
+            summary["textual"] = {
+                "match_count": match_count,
+                "categories_with_matches": list(category_counts.keys()),
+            }
 
     return summary
 
@@ -167,7 +176,7 @@ def build_explanation_prompt(inputs: ExplanationInputs) -> str:
     Returns:
         Complete prompt string for LLM
     """
-    # Format category confidence vector
+    # Format investment vector
     categories_str = "\n".join(
         f"  - {cat}: {score:.2%}" for cat, score in sorted(inputs.categories.items())
     )
@@ -182,7 +191,7 @@ def build_explanation_prompt(inputs: ExplanationInputs) -> str:
     struct = inputs.evidence_summary.get("structural", {})
     if struct:
         evidence_lines.append(
-            f"  - Structural signals: {struct.get('count', 0)} items, "
+            f"  - Structural evidence: {struct.get('count', 0)} items, "
             f"types: {', '.join(struct.get('types', []))}"
         )
         if "density" in struct:
@@ -192,18 +201,17 @@ def build_explanation_prompt(inputs: ExplanationInputs) -> str:
                 f"    - Provenance score: {struct['provenance_score']:.2f}"
             )
 
-    temp = inputs.evidence_summary.get("temporal", {})
-    if temp:
+    contextual = inputs.evidence_summary.get("contextual", {})
+    if contextual:
         evidence_lines.append(
-            f"  - Temporal signals: span {temp.get('span_days', 0):.1f} days, "
-            f"score {temp.get('score', 0):.2f}"
+            f"  - Contextual evidence: span {contextual.get('span_days', 0):.1f} days, "
+            f"score {contextual.get('score', 0):.2f}"
         )
 
     text = inputs.evidence_summary.get("textual", {})
     if text:
         evidence_lines.append(
-            f"  - Minor textual modifiers were applied ({text.get('match_count', 0)} matches). "
-            "These do not determine classification."
+            f"  - Textual phrases cited: {text.get('match_count', 0)} matches."
         )
 
     evidence_str = (
@@ -219,16 +227,16 @@ Work Unit ID: {inputs.work_unit_id}
 Time Range: {inputs.time_range_start.isoformat()} to {inputs.time_range_end.isoformat()}
 Time Span: {span_days:.1f} days
 
-Category Confidence Vector:
+Investment Vector:
 {categories_str}
 
-Overall Confidence: {inputs.confidence_value:.2f} ({inputs.confidence_band})
+Evidence Quality: {inputs.evidence_quality_value:.2f} ({inputs.evidence_quality_band})
 
 Evidence Summary:
 {evidence_str}
 ---
 
-Based on the above precomputed signals, explain why this work leans toward certain categories.
+Based on the above precomputed investment view, explain why this work leans toward certain categories.
 Use probabilistic language (appears, leans, suggests). Never use definitive language (is, was, detected).
 """
 

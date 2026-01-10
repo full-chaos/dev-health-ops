@@ -11,10 +11,11 @@ from datetime import datetime, timezone
 import pytest
 
 from dev_health_ops.api.models.schemas import (
-    WorkUnitConfidence,
+    EvidenceQuality,
+    InvestmentBreakdown,
     WorkUnitEffort,
     WorkUnitEvidence,
-    WorkUnitSignal,
+    WorkUnitInvestment,
     WorkUnitTimeRange,
 )
 from dev_health_ops.api.services.llm_providers import get_provider
@@ -22,32 +23,42 @@ from dev_health_ops.api.services.llm_providers.mock import MockProvider
 from dev_health_ops.api.services.work_unit_explain import explain_work_unit
 
 
-def _sample_signal() -> WorkUnitSignal:
-    """Create a sample WorkUnitSignal for testing."""
-    return WorkUnitSignal(
+def _sample_investment() -> WorkUnitInvestment:
+    """Create a sample WorkUnitInvestment for testing."""
+    return WorkUnitInvestment(
         work_unit_id="test-work-unit-abc123",
         time_range=WorkUnitTimeRange(
             start=datetime(2025, 1, 1, tzinfo=timezone.utc),
             end=datetime(2025, 1, 14, tzinfo=timezone.utc),
         ),
         effort=WorkUnitEffort(metric="churn_loc", value=1500.0),
-        categories={
-            "feature": 0.45,
-            "maintenance": 0.30,
-            "operational": 0.15,
-            "quality": 0.10,
-        },
-        confidence=WorkUnitConfidence(value=0.72, band="moderate"),
+        investment=InvestmentBreakdown(
+            themes={
+                "feature_delivery": 0.45,
+                "maintenance": 0.30,
+                "operational": 0.15,
+                "quality": 0.10,
+                "risk": 0.0,
+            },
+            subcategories={
+                "feature_delivery.customer": 0.30,
+                "feature_delivery.roadmap": 0.15,
+                "maintenance.refactor": 0.30,
+                "operational.support": 0.15,
+                "quality.bugfix": 0.10,
+            },
+        ),
+        evidence_quality=EvidenceQuality(value=0.72, band="moderate"),
         evidence=WorkUnitEvidence(
             structural=[
                 {"type": "work_item_type", "work_item_type": "story", "count": 3},
                 {"type": "graph_density", "nodes": 5, "edges": 4, "value": 0.8},
             ],
-            temporal=[
-                {"type": "time_range", "span_days": 13.0, "score": 0.85},
-            ],
             textual=[
-                {"category": "feature", "keyword": "add", "magnitude": 0.02},
+                {"type": "text_phrase", "phrase": "add", "source": "issue_title"},
+            ],
+            contextual=[
+                {"type": "time_range", "span_days": 13.0, "score": 0.85},
             ],
         ),
     )
@@ -74,8 +85,8 @@ def test_mock_provider_uses_approved_language():
 
     async def run_test():
         prompt = """
-        Overall Confidence: 0.72 (moderate)
-          - feature: 48.00%
+        Evidence Quality: 0.72 (moderate)
+          - feature_delivery: 48.00%
           - maintenance: 30.00%
         """
         response = await provider.complete(prompt)
@@ -98,7 +109,7 @@ def test_mock_provider_avoids_forbidden_language():
     provider = MockProvider()
 
     async def run_test():
-        prompt = "Overall Confidence: 0.72 (moderate)"
+        prompt = "Evidence Quality: 0.72 (moderate)"
         response = await provider.complete(prompt)
 
         # The response should not contain these as standalone "certainty" words
@@ -143,31 +154,31 @@ def test_get_provider_explicit_mock():
 @pytest.mark.asyncio
 async def test_explain_work_unit_with_mock():
     """Test the full explain_work_unit flow with mock provider."""
-    signal = _sample_signal()
+    investment = _sample_investment()
 
-    explanation = await explain_work_unit(signal, llm_provider="mock")
+    explanation = await explain_work_unit(investment, llm_provider="mock")
 
     # Check that all required fields are present
-    assert explanation.work_unit_id == signal.work_unit_id
+    assert explanation.work_unit_id == investment.work_unit_id
     assert explanation.summary
     assert explanation.category_rationale
-    assert explanation.signal_importance
+    assert explanation.evidence_highlights
     assert explanation.uncertainty_disclosure
-    assert explanation.confidence_limits
+    assert explanation.evidence_quality_limits
 
     # Check that the top category is mentioned
     assert (
-        "feature" in explanation.summary.lower()
-        or "feature" in str(explanation.category_rationale).lower()
+        "feature_delivery" in explanation.summary.lower()
+        or "feature_delivery" in str(explanation.category_rationale).lower()
     )
 
 
 @pytest.mark.asyncio
 async def test_explanation_includes_uncertainty_disclosure():
     """Test that explanation includes uncertainty disclosure."""
-    signal = _sample_signal()
+    investment = _sample_investment()
 
-    explanation = await explain_work_unit(signal, llm_provider="mock")
+    explanation = await explain_work_unit(investment, llm_provider="mock")
 
     # Should have an uncertainty disclosure
     assert explanation.uncertainty_disclosure
@@ -175,15 +186,15 @@ async def test_explanation_includes_uncertainty_disclosure():
 
 
 @pytest.mark.asyncio
-async def test_explanation_includes_confidence_limits():
-    """Test that explanation includes confidence limits."""
-    signal = _sample_signal()
+async def test_explanation_includes_evidence_quality_limits():
+    """Test that explanation includes evidence quality limits."""
+    investment = _sample_investment()
 
-    explanation = await explain_work_unit(signal, llm_provider="mock")
+    explanation = await explain_work_unit(investment, llm_provider="mock")
 
-    # Should mention confidence
-    assert explanation.confidence_limits
+    # Should mention evidence quality
+    assert explanation.evidence_quality_limits
     assert (
-        "moderate" in explanation.confidence_limits.lower()
-        or "confidence" in explanation.confidence_limits.lower()
+        "moderate" in explanation.evidence_quality_limits.lower()
+        or "evidence" in explanation.evidence_quality_limits.lower()
     )

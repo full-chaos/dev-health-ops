@@ -1,9 +1,9 @@
 """
 Work Unit Explanation Service.
 
-Generates LLM-powered explanations for precomputed work unit signals.
+Generates LLM-powered explanations for precomputed work unit investment views.
 
-CRITICAL: This service follows AGENTS-WG.md Phase 3 rules:
+CRITICAL: This service follows the Investment View rules:
 - LLMs explain results, they NEVER compute them
 - Only allowed inputs passed to LLM
 - Responses must use approved language
@@ -20,28 +20,28 @@ from analytics.work_unit_explainer import (
     extract_allowed_inputs,
     validate_explanation_language,
 )
-from ..models.schemas import WorkUnitConfidence, WorkUnitExplanation, WorkUnitSignal
+from ..models.schemas import EvidenceQuality, WorkUnitExplanation, WorkUnitInvestment
 from .llm_providers import get_provider
 
 logger = logging.getLogger(__name__)
 
 
 async def explain_work_unit(
-    signal: WorkUnitSignal,
+    investment: WorkUnitInvestment,
     llm_provider: str = "auto",
 ) -> WorkUnitExplanation:
     """
-    Generate an LLM explanation for a work unit's precomputed signals.
+    Generate an LLM explanation for a work unit's precomputed investment view.
 
     This function:
-    1. Extracts only allowed inputs from the signal (per AGENTS-WG.md)
+    1. Extracts only allowed inputs from the investment view
     2. Builds the canonical explanation prompt
     3. Calls the LLM provider
     4. Parses and validates the response
     5. Returns a structured WorkUnitExplanation
 
     Args:
-        signal: The precomputed WorkUnitSignal to explain
+        investment: The precomputed WorkUnitInvestment to explain
         llm_provider: Which LLM provider to use ("auto", "openai", "anthropic", "mock")
 
     Returns:
@@ -49,23 +49,23 @@ async def explain_work_unit(
     """
     # 1. Extract only allowed inputs
     inputs = extract_allowed_inputs(
-        work_unit_id=signal.work_unit_id,
-        time_range_start=signal.time_range.start,
-        time_range_end=signal.time_range.end,
-        categories=signal.categories,
-        confidence_value=signal.confidence.value,
-        confidence_band=signal.confidence.band,
+        work_unit_id=investment.work_unit_id,
+        time_range_start=investment.time_range.start,
+        time_range_end=investment.time_range.end,
+        categories=investment.investment.themes,
+        evidence_quality_value=investment.evidence_quality.value,
+        evidence_quality_band=investment.evidence_quality.band,
         evidence={
-            "structural": signal.evidence.structural,
-            "temporal": signal.evidence.temporal,
-            "textual": signal.evidence.textual,
+            "structural": investment.evidence.structural,
+            "contextual": investment.evidence.contextual,
+            "textual": investment.evidence.textual,
         },
     )
 
     # 2. Build the canonical prompt
     prompt = build_explanation_prompt(inputs)
     logger.debug(
-        "Generated explanation prompt for work_unit_id=%s", signal.work_unit_id
+        "Generated explanation prompt for work_unit_id=%s", investment.work_unit_id
     )
 
     # 3. Call LLM provider
@@ -73,7 +73,7 @@ async def explain_work_unit(
     raw_response = await provider.complete(prompt)
     logger.debug(
         "Received LLM response for work_unit_id=%s, length=%d",
-        signal.work_unit_id,
+        investment.work_unit_id,
         len(raw_response),
     )
 
@@ -82,19 +82,19 @@ async def explain_work_unit(
     if violations:
         logger.warning(
             "LLM response contains language violations for work_unit_id=%s: %s",
-            signal.work_unit_id,
+            investment.work_unit_id,
             violations,
         )
         # We log but don't reject - the violations are informational
 
     # 5. Parse and structure the response
-    return _parse_llm_response(signal.work_unit_id, raw_response, signal)
+    return _parse_llm_response(investment.work_unit_id, raw_response, investment)
 
 
 def _parse_llm_response(
     work_unit_id: str,
     raw_response: str,
-    signal: WorkUnitSignal,
+    investment: WorkUnitInvestment,
 ) -> WorkUnitExplanation:
     """
     Parse LLM response into structured WorkUnitExplanation.
@@ -113,29 +113,29 @@ def _parse_llm_response(
 
     # 3. Categorize rationale from the overall text or REASONS section
     category_rationale = _extract_category_rationale(
-        reasons_text or raw_response, signal.categories
+        reasons_text or raw_response, investment.investment.themes
     )
 
-    # 4. Extract specific signal importance from REASONS
-    signal_importance = _extract_signal_importance(reasons_text or raw_response)
+    # 4. Extract specific evidence highlights from REASONS
+    evidence_highlights = _extract_evidence_highlights(reasons_text or raw_response)
 
     # 5. Extract uncertainty disclosure
     uncertainty = uncertainty_text or _extract_uncertainty(
-        raw_response, signal.confidence.band
+        raw_response, investment.evidence_quality.band
     )
 
-    # 6. Extract confidence limits (usually part of UNCERTAINTY or bottom of text)
-    confidence_limits = _extract_confidence_limits(
-        uncertainty_text or raw_response, signal.confidence
+    # 6. Extract evidence quality limits (usually part of UNCERTAINTY or bottom of text)
+    evidence_quality_limits = _extract_evidence_quality_limits(
+        uncertainty_text or raw_response, investment.evidence_quality
     )
 
     return WorkUnitExplanation(
         work_unit_id=work_unit_id,
         summary=summary,
         category_rationale=category_rationale,
-        signal_importance=signal_importance,
+        evidence_highlights=evidence_highlights,
         uncertainty_disclosure=uncertainty,
-        confidence_limits=confidence_limits,
+        evidence_quality_limits=evidence_quality_limits,
     )
 
 
@@ -173,35 +173,32 @@ def _extract_category_rationale(
         elif analysis_section:
             rationale[category] = "Category appears in overall analysis."
         else:
-            rationale[category] = "Category leaning based on structural signals."
+            rationale[category] = "Category leaning based on structural evidence."
 
     return rationale
 
 
-def _extract_signal_importance(text: str) -> List[str]:
-    """Extract list of important signals from the response."""
-    importance: List[str] = []
+def _extract_evidence_highlights(text: str) -> List[str]:
+    """Extract list of important evidence from the response."""
+    highlights: List[str] = []
 
-    # Look for signal importance section
-    importance_section = _extract_section(text, "Signal Importance")
-    if importance_section:
-        # Extract bullet points
-        bullets = re.findall(r"[-•]\s*(.+?)(?=\n|$)", importance_section)
-        importance.extend(b.strip() for b in bullets if b.strip())
+    highlights_section = _extract_section(text, "Evidence Highlights")
+    if highlights_section:
+        bullets = re.findall(r"[-•]\s*(.+?)(?=\n|$)", highlights_section)
+        highlights.extend(b.strip() for b in bullets if b.strip())
 
-    # Fallback defaults based on common patterns
-    if not importance:
+    if not highlights:
         if "structural" in text.lower():
-            importance.append("Structural evidence appears to be a primary signal")
-        if "temporal" in text.lower():
-            importance.append("Temporal coherence suggests consistent work patterns")
+            highlights.append("Structural evidence appears most significant")
+        if "contextual" in text.lower():
+            highlights.append("Contextual evidence provides corroboration")
         if "textual" in text.lower():
-            importance.append("Textual modifiers provided minor adjustments")
+            highlights.append("Textual phrases align with the investment mix")
 
-    return importance or ["Structural signals appear most significant"]
+    return highlights or ["Structural evidence appears most significant"]
 
 
-def _extract_uncertainty(text: str, confidence_band: str) -> str:
+def _extract_uncertainty(text: str, evidence_quality_band: str) -> str:
     """Extract uncertainty disclosure from the response."""
     # Look for uncertainty section
     uncertainty = _extract_section(text, "Uncertainty Disclosure")
@@ -212,29 +209,28 @@ def _extract_uncertainty(text: str, confidence_band: str) -> str:
     if uncertainty:
         return uncertainty
 
-    # Default based on confidence band
+    # Default based on evidence quality band
     band_text = {
-        "high": "With high confidence, uncertainty appears minimal but results should still be interpreted probabilistically.",
-        "moderate": "Moderate confidence suggests meaningful uncertainty exists in the categorization.",
-        "low": "Low confidence indicates significant uncertainty; these results should be treated as tentative.",
-        "very_low": "Very low confidence indicates high uncertainty; categorization leans toward estimates only.",
+        "high": "With high evidence quality, uncertainty appears minimal but results should still be interpreted probabilistically.",
+        "moderate": "Moderate evidence quality suggests meaningful uncertainty exists in the categorization.",
+        "low": "Low evidence quality indicates significant uncertainty; these results should be treated as tentative.",
+        "very_low": "Very low evidence quality indicates high uncertainty; categorization leans toward estimates only.",
     }
-    return band_text.get(confidence_band, band_text["moderate"])
+    return band_text.get(evidence_quality_band, band_text["moderate"])
 
 
-def _extract_confidence_limits(
+def _extract_evidence_quality_limits(
     text: str,
-    confidence: "WorkUnitConfidence",
+    evidence_quality: EvidenceQuality,
 ) -> str:
-    """Extract confidence limits statement from the response."""
-    # Look for confidence limits section
-    limits = _extract_section(text, "Confidence Limits")
+    """Extract evidence quality limits statement from the response."""
+    limits = _extract_section(text, "Evidence Quality Limits")
     if limits:
         return limits
 
     # Default statement
     return (
-        f"With {confidence.band} confidence ({confidence.value:.0%}), "
-        f"these results should be interpreted as probabilistic indicators. "
-        f"The categorization suggests tendencies rather than definitive classifications."
+        f"With {evidence_quality.band} evidence quality ({evidence_quality.value:.0%}), "
+        "these results should be interpreted as probabilistic indicators. "
+        "The categorization suggests tendencies rather than definitive classifications."
     )

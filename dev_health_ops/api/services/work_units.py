@@ -6,21 +6,20 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from analytics.work_units import (
     WorkUnitConfig,
-    apply_textual_modifiers,
-    compute_confidence,
-    compute_structural_scores,
-    compute_text_agreement,
-    compute_textual_modifiers,
-    confidence_band,
-    load_work_unit_config,
+    compute_evidence_quality,
+    compute_subcategory_scores,
+    evidence_quality_band,
+    merge_subcategory_vectors,
+    rollup_subcategories_to_themes,
     work_unit_id,
 )
 from ..models.filters import MetricFilter
 from ..models.schemas import (
-    WorkUnitConfidence,
+    EvidenceQuality,
+    InvestmentBreakdown,
     WorkUnitEvidence,
     WorkUnitEffort,
-    WorkUnitSignal,
+    WorkUnitInvestment,
     WorkUnitTimeRange,
 )
 from ..queries.client import clickhouse_client
@@ -33,6 +32,7 @@ from ..queries.work_units import (
     fetch_work_items,
 )
 from .filtering import resolve_repo_filter_ids, time_window
+from .investment_categorizer import categorize_investment_texts
 
 NodeKey = Tuple[str, str]
 
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 def _config() -> WorkUnitConfig:
     global _CONFIG
     if _CONFIG is None:
-        _CONFIG = load_work_unit_config()
+        _CONFIG = WorkUnitConfig()
     return _CONFIG
 
 
@@ -179,13 +179,14 @@ def _build_components(
     return components
 
 
-async def build_work_unit_signals(
+async def build_work_unit_investments(
     *,
     db_url: str,
     filters: MetricFilter,
     limit: int = 200,
     include_text: bool = True,
-) -> List[WorkUnitSignal]:
+    llm_provider: str = "auto",
+) -> List[WorkUnitInvestment]:
     config = _config()
     start_day, end_day, _, _ = time_window(filters)
     window_start = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
@@ -195,7 +196,7 @@ async def build_work_unit_signals(
         repo_ids = await resolve_repo_filter_ids(client, filters)
         edge_limit = max(50000, limit * 200)
         logger.debug(
-            "WorkUnit signals query repo_ids=%s edge_limit=%s",
+            "WorkUnit investments query repo_ids=%s edge_limit=%s",
             len(repo_ids or []),
             edge_limit,
         )
@@ -204,10 +205,10 @@ async def build_work_unit_signals(
             repo_ids=repo_ids or None,
             limit=edge_limit,
         )
-        logger.debug("WorkUnit signals fetched edges=%s", len(edges))
+        logger.debug("WorkUnit investments fetched edges=%s", len(edges))
 
         components = _build_components(edges)
-        logger.debug("WorkUnit signals components=%s", len(components))
+        logger.debug("WorkUnit investments components=%s", len(components))
         if not components:
             return []
 
@@ -239,7 +240,7 @@ async def build_work_unit_signals(
         commits = await fetch_commits(client, repo_commits=repo_commits)
         commit_churn = await fetch_commit_churn(client, repo_commits=repo_commits)
         logger.debug(
-            "WorkUnit signals issue_ids=%s pr_ids=%s commit_ids=%s work_items=%s prs=%s commits=%s churn=%s",
+            "WorkUnit investments issue_ids=%s pr_ids=%s commit_ids=%s work_items=%s prs=%s commits=%s churn=%s",
             len(issue_ids),
             len(pr_ids),
             len(commit_ids),
@@ -254,7 +255,7 @@ async def build_work_unit_signals(
     commit_map = _map_commits(commits)
     pr_churn = _pr_churn_map(prs)
 
-    results: List[WorkUnitSignal] = []
+    results: List[WorkUnitInvestment] = []
     for nodes, component_edges in components:
         unit_nodes = list(dict.fromkeys(nodes))
         issue_node_ids = [
@@ -267,11 +268,11 @@ async def build_work_unit_signals(
             node_id for node_type, node_id in unit_nodes if node_type == "commit"
         ]
 
-        structural_scores, structural_evidence = compute_structural_scores(
-            _count_work_item_types(issue_node_ids, work_item_map),
-            config,
-        )
+        type_counts = _count_work_item_types(issue_node_ids, work_item_map)
+        metadata_scores, metadata_evidence = compute_subcategory_scores(type_counts)
 
+        texts_by_source: Dict[str, List[str]] = {}
+        llm_result = None
         if include_text:
             texts_by_source = _collect_texts(
                 issue_node_ids,
@@ -281,18 +282,12 @@ async def build_work_unit_signals(
                 pr_map,
                 commit_map,
             )
-            modifiers, textual_evidence = compute_textual_modifiers(
-                texts_by_source, config
-            )
-            final_scores = apply_textual_modifiers(
-                structural_scores, modifiers, config.categories
-            )
-            text_agreement = compute_text_agreement(
-                structural_scores, modifiers, config
-            )
-        else:
-            final_scores = structural_scores
-            text_agreement = config.text_agreement_fallback
+            if _count_text_sources(texts_by_source) > 0:
+                llm_result = await categorize_investment_texts(
+                    texts_by_source,
+                    llm_provider=llm_provider,
+                )
+
         density_score = _graph_density(len(unit_nodes), len(component_edges))
         provenance_score = _edge_confidence(component_edges)
 
@@ -310,14 +305,6 @@ async def build_work_unit_signals(
             else _temporal_score(start=temporal_start, end=temporal_end, config=config)
         )
 
-        confidence_value = compute_confidence(
-            provenance_score=provenance_score,
-            temporal_score=temporal_score,
-            density_score=density_score,
-            text_agreement=text_agreement,
-            config=config,
-        )
-
         if temporal_end < window_start or temporal_start >= window_end:
             continue
 
@@ -330,53 +317,81 @@ async def build_work_unit_signals(
             active_hours=active_hours,
         )
 
+        subcategory_vector = merge_subcategory_vectors(
+            primary=llm_result.subcategories if llm_result else None,
+            secondary=metadata_scores,
+            primary_weight=config.text_weight if llm_result else 0.0,
+        )
+        theme_vector = rollup_subcategories_to_themes(subcategory_vector)
+        text_source_count = _count_text_sources(texts_by_source)
+        evidence_quality_value = compute_evidence_quality(
+            text_source_count=text_source_count,
+            metadata_present=bool(type_counts),
+            density_score=density_score,
+            provenance_score=provenance_score,
+            temporal_score=temporal_score,
+        )
+        evidence_quality = EvidenceQuality(
+            value=evidence_quality_value,
+            band=evidence_quality_band(evidence_quality_value),
+        )
+
+        contextual_evidence: List[Dict[str, object]] = [
+            {
+                "type": "time_range",
+                "start": temporal_start.isoformat(),
+                "end": temporal_end.isoformat(),
+                "span_days": max(
+                    0.0, (temporal_end - temporal_start).total_seconds() / 86400.0
+                ),
+                "score": temporal_score,
+                "window_days": config.temporal_window_days,
+            },
+            {
+                "type": "graph_density",
+                "nodes": len(unit_nodes),
+                "edges": len(component_edges),
+                "value": density_score,
+            },
+            {
+                "type": "provenance",
+                "edges": len(component_edges),
+                "value": provenance_score,
+            },
+        ]
+        repo_ids = _collect_repo_ids(component_edges)
+        if repo_ids:
+            contextual_evidence.append({"type": "repo_scope", "repo_ids": repo_ids})
+
+        textual_evidence = _build_textual_evidence(
+            texts_by_source, llm_result.textual_evidence if llm_result else []
+        )
+        if llm_result and llm_result.uncertainty:
+            textual_evidence.extend(llm_result.uncertainty)
+
         evidence = WorkUnitEvidence(
-            structural=structural_evidence
-            + [
-                {
-                    "type": "graph_density",
-                    "nodes": len(unit_nodes),
-                    "edges": len(component_edges),
-                    "value": density_score,
-                },
-                {
-                    "type": "provenance",
-                    "edges": len(component_edges),
-                    "value": provenance_score,
-                },
-            ],
-            temporal=[
-                {
-                    "type": "time_range",
-                    "start": temporal_start.isoformat(),
-                    "end": temporal_end.isoformat(),
-                    "span_days": max(
-                        0.0, (temporal_end - temporal_start).total_seconds() / 86400.0
-                    ),
-                    "score": temporal_score,
-                    "window_days": config.temporal_window_days,
-                }
-            ],
             textual=textual_evidence,
+            structural=metadata_evidence,
+            contextual=contextual_evidence,
         )
 
         results.append(
-            WorkUnitSignal(
+            WorkUnitInvestment(
                 work_unit_id=work_unit_id(unit_nodes),
                 time_range=WorkUnitTimeRange(start=temporal_start, end=temporal_end),
                 effort=effort,
-                categories=final_scores,
-                confidence=WorkUnitConfidence(
-                    value=confidence_value,
-                    band=confidence_band(confidence_value),
+                investment=InvestmentBreakdown(
+                    themes=theme_vector,
+                    subcategories=subcategory_vector,
                 ),
+                evidence_quality=evidence_quality,
                 evidence=evidence,
             )
         )
 
     results.sort(key=lambda item: item.effort.value, reverse=True)
     logger.debug(
-        "WorkUnit signals returning count=%s", len(results[: max(1, int(limit))])
+        "WorkUnit investments returning count=%s", len(results[: max(1, int(limit))])
     )
     return results[: max(1, int(limit))]
 
@@ -495,6 +510,33 @@ def _collect_texts(
             texts.setdefault("commit_message", []).append(str(message))
 
     return texts
+
+
+def _count_text_sources(texts_by_source: Dict[str, List[str]]) -> int:
+    return sum(1 for texts in texts_by_source.values() if any(t.strip() for t in texts))
+
+
+def _build_textual_evidence(
+    texts_by_source: Dict[str, List[str]],
+    llm_evidence: List[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    evidence: List[Dict[str, object]] = []
+    for source, texts in texts_by_source.items():
+        if texts:
+            evidence.append({"type": "text_source", "source": source, "count": len(texts)})
+    for entry in llm_evidence:
+        if isinstance(entry, dict):
+            evidence.append(entry)
+    return evidence
+
+
+def _collect_repo_ids(edges: List[Dict[str, object]]) -> List[str]:
+    repo_ids = {
+        str(edge.get("repo_id") or "")
+        for edge in edges
+        if edge.get("repo_id")
+    }
+    return sorted(repo_id for repo_id in repo_ids if repo_id)
 
 
 def _component_time_bounds(

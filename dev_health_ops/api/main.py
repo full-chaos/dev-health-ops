@@ -37,7 +37,7 @@ from .models.schemas import (
     OpportunitiesResponse,
     QuadrantResponse,
     WorkUnitExplanation,
-    WorkUnitSignal,
+    WorkUnitInvestment,
     PersonDrilldownResponse,
     PersonMetricResponse,
     PersonSearchResult,
@@ -65,7 +65,7 @@ from .services.flame import build_flame_response
 from .services.aggregated_flame import build_aggregated_flame_response
 from .services.quadrant import build_quadrant_response
 from .services.sankey import build_sankey_response
-from .services.work_units import build_work_unit_signals
+from .services.work_units import build_work_unit_investments
 from .services.work_unit_explain import explain_work_unit
 
 HOME_CACHE = TTLCache(ttl_seconds=60)
@@ -349,8 +349,8 @@ async def heatmap(
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
-@app.post("/api/v1/work-units", response_model=list[WorkUnitSignal])
-async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
+@app.post("/api/v1/work-units", response_model=list[WorkUnitInvestment])
+async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitInvestment]:
     try:
         include_textual = (
             True if payload.include_textual is None else payload.include_textual
@@ -367,7 +367,7 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
             log_limit,
             filter_payload,
         )
-        result = await build_work_unit_signals(
+        result = await build_work_unit_investments(
             db_url=_db_url(),
             filters=payload.filters,
             limit=payload.limit or 200,
@@ -380,7 +380,7 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
-@app.get("/api/v1/work-units", response_model=list[WorkUnitSignal])
+@app.get("/api/v1/work-units", response_model=list[WorkUnitInvestment])
 async def work_units(
     response: Response,
     scope_type: str = "org",
@@ -390,7 +390,7 @@ async def work_units(
     end_date: date | None = None,
     limit: int = 200,
     include_textual: bool = True,
-) -> List[WorkUnitSignal]:
+) -> List[WorkUnitInvestment]:
     try:
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
@@ -407,7 +407,7 @@ async def work_units(
             log_limit,
             filter_payload,
         )
-        result = await build_work_unit_signals(
+        result = await build_work_unit_investments(
             db_url=_db_url(),
             filters=filters,
             limit=limit,
@@ -436,12 +436,12 @@ async def work_unit_explain_endpoint(
     llm_provider: str = "auto",
 ) -> WorkUnitExplanation:
     """
-    Generate an LLM explanation for a work unit's precomputed signals.
+    Generate an LLM explanation for a work unit's precomputed investment view.
 
-    This endpoint follows AGENTS-WG.md Phase 3 rules:
+    This endpoint follows the Investment model rules:
     - LLMs explain results, they NEVER compute them
-    - Only allowed inputs passed to LLM (category vectors, evidence metadata,
-      confidence band, time span)
+    - Only allowed inputs passed to LLM (investment vectors, evidence metadata,
+      evidence quality band, time span)
     - Responses use probabilistic language (appears, leans, suggests)
 
     Args:
@@ -457,11 +457,11 @@ async def work_unit_explain_endpoint(
         WorkUnitExplanation with summary, rationale, and uncertainty disclosure
     """
     try:
-        # Fetch the work unit signal first
+        # Fetch the work unit investment first
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
-        signals = await build_work_unit_signals(
+        investments = await build_work_unit_investments(
             db_url=_db_url(),
             filters=filters,
             limit=500,  # Fetch enough to find the specific work unit
@@ -469,13 +469,13 @@ async def work_unit_explain_endpoint(
         )
 
         # Find the specific work unit
-        target_signal = None
-        for signal in signals:
-            if signal.work_unit_id == work_unit_id:
-                target_signal = signal
+        target_investment = None
+        for investment in investments:
+            if investment.work_unit_id == work_unit_id:
+                target_investment = investment
                 break
 
-        if target_signal is None:
+        if target_investment is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Work unit {work_unit_id} not found",
@@ -483,7 +483,7 @@ async def work_unit_explain_endpoint(
 
         # Generate explanation
         explanation = await explain_work_unit(
-            signal=target_signal,
+            investment=target_investment,
             llm_provider=llm_provider,
         )
         return explanation

@@ -1,7 +1,7 @@
 """
 Unit tests for work_unit_explainer module.
 
-These tests verify Phase 3 compliance with AGENTS-WG.md:
+These tests verify compliance with the investment explanation rules:
 - Canonical prompt matches spec exactly
 - Only allowed inputs are extracted
 - Forbidden inputs are excluded
@@ -28,16 +28,23 @@ def _sample_inputs() -> ExplanationInputs:
         work_unit_id="test-work-unit-123",
         time_range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
         time_range_end=datetime(2025, 1, 15, tzinfo=timezone.utc),
-        categories={"feature": 0.48, "maintenance": 0.30, "quality": 0.22},
-        confidence_value=0.72,
-        confidence_band="moderate",
+        categories={
+            "feature_delivery": 0.48,
+            "maintenance": 0.30,
+            "quality": 0.22,
+        },
+        evidence_quality_value=0.72,
+        evidence_quality_band="moderate",
         evidence_summary={
             "structural": {
                 "count": 3,
-                "types": ["work_item_type", "structural_scores"],
+                "types": ["work_item_type", "subcategory_scores"],
             },
-            "temporal": {"span_days": 14.0, "score": 0.7},
-            "textual": {"match_count": 2, "categories_with_matches": ["feature"]},
+            "contextual": {"span_days": 14.0, "score": 0.7},
+            "textual": {
+                "match_count": 2,
+                "categories_with_matches": ["feature_delivery"],
+            },
         },
     )
 
@@ -45,7 +52,7 @@ def _sample_inputs() -> ExplanationInputs:
 def test_canonical_prompt_matches_spec():
     """Verify the canonical prompt matches AGENTS-WG.md exactly."""
     # The canonical prompt from AGENTS-WG.md Section 4
-    expected_start = "You are explaining precomputed work signals."
+    expected_start = "You are explaining a precomputed investment view."
     expected_rules = [
         "Recalculate scores",
         "Change categories",
@@ -62,7 +69,7 @@ def test_canonical_prompt_matches_spec():
         assert rule in CANONICAL_EXPLANATION_PROMPT
     for item in expected_explain:
         assert item in CANONICAL_EXPLANATION_PROMPT
-    assert "confidence level and limits" in CANONICAL_EXPLANATION_PROMPT
+    assert "evidence quality level and limits" in CANONICAL_EXPLANATION_PROMPT
 
 
 def test_extract_allowed_inputs_excludes_raw_text():
@@ -72,13 +79,13 @@ def test_extract_allowed_inputs_excludes_raw_text():
             {"type": "work_item_type", "work_item_type": "story", "count": 2},
             {"type": "graph_density", "value": 0.8},
         ],
-        "temporal": [
+        "contextual": [
             {"type": "time_range", "span_days": 7.0, "score": 0.9},
         ],
         "textual": [
             # These raw keywords should NOT appear in the output
-            {"category": "feature", "keyword": "add login", "weight": 0.02},
-            {"category": "feature", "keyword": "implement auth", "weight": 0.03},
+            {"category": "feature_delivery", "keyword": "add login", "weight": 0.02},
+            {"category": "feature_delivery", "keyword": "implement auth", "weight": 0.03},
         ],
     }
 
@@ -86,9 +93,9 @@ def test_extract_allowed_inputs_excludes_raw_text():
         work_unit_id="test-123",
         time_range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
         time_range_end=datetime(2025, 1, 8, tzinfo=timezone.utc),
-        categories={"feature": 0.7, "maintenance": 0.3},
-        confidence_value=0.85,
-        confidence_band="high",
+        categories={"feature_delivery": 0.7, "maintenance": 0.3},
+        evidence_quality_value=0.85,
+        evidence_quality_band="high",
         evidence=evidence,
     )
 
@@ -99,13 +106,12 @@ def test_extract_allowed_inputs_excludes_raw_text():
 
     # But metadata IS present
     assert inputs.evidence_summary.get("textual", {}).get("match_count") == 2
-    assert "feature" in inputs.evidence_summary.get("textual", {}).get(
+    assert "feature_delivery" in inputs.evidence_summary.get("textual", {}).get(
         "categories_with_matches", []
     )
 
-
-def test_prompt_includes_confidence_band():
-    """Verify that confidence band is included in the prompt."""
+def test_prompt_includes_evidence_quality_band():
+    """Verify that evidence quality band is included in the prompt."""
     inputs = _sample_inputs()
     prompt = build_explanation_prompt(inputs)
 
@@ -119,12 +125,12 @@ def test_prompt_includes_evidence_metadata_not_content():
     prompt = build_explanation_prompt(inputs)
 
     # Metadata should be present
-    assert "Structural signals" in prompt
-    assert "Temporal signals" in prompt
-    assert "textual modifiers" in prompt.lower()
+    assert "Structural evidence" in prompt
+    assert "Contextual evidence" in prompt
+    assert "textual phrases" in prompt.lower()
 
     # Categories should appear
-    assert "feature" in prompt
+    assert "feature_delivery" in prompt
     assert "maintenance" in prompt
 
 
@@ -134,7 +140,7 @@ def test_prompt_includes_canonical_instructions():
     prompt = build_explanation_prompt(inputs)
 
     # Must include the canonical prompt
-    assert "You are explaining precomputed work signals" in prompt
+    assert "You are explaining a precomputed investment view" in prompt
     assert "Recalculate scores" in prompt
     assert "SUMMARY" in prompt
     assert "REASONS" in prompt
@@ -158,7 +164,7 @@ def test_validate_language_allows_approved_words():
     # Text with only approved words
     good_text = (
         "This work unit appears to lean toward feature work. "
-        "The signals suggest a maintenance component as well."
+        "The evidence suggests a maintenance component as well."
     )
     violations = validate_explanation_language(good_text)
 

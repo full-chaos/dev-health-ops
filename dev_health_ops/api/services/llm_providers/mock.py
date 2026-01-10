@@ -50,6 +50,8 @@ class MockProvider:
                         top_score = score
                         top_category = category
                 except (ValueError, IndexError):
+                    # Ignore malformed or unexpectedly formatted score lines in the mock provider
+                    # and continue using the previously computed/default top_score and top_category.
                     pass
 
         # Build response using only approved language

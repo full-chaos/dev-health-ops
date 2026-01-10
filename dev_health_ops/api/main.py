@@ -36,6 +36,7 @@ from .models.schemas import (
     MetaResponse,
     OpportunitiesResponse,
     QuadrantResponse,
+    WorkUnitExplanation,
     WorkUnitSignal,
     PersonDrilldownResponse,
     PersonMetricResponse,
@@ -65,6 +66,7 @@ from .services.aggregated_flame import build_aggregated_flame_response
 from .services.quadrant import build_quadrant_response
 from .services.sankey import build_sankey_response
 from .services.work_units import build_work_unit_signals
+from .services.work_unit_explain import explain_work_unit
 
 HOME_CACHE = TTLCache(ttl_seconds=60)
 EXPLAIN_CACHE = TTLCache(ttl_seconds=120)
@@ -418,6 +420,79 @@ async def work_units(
     except Exception as exc:
         logger.exception("WorkUnits GET failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
+
+
+@app.post(
+    "/api/v1/work-units/{work_unit_id}/explain",
+    response_model=WorkUnitExplanation,
+)
+async def work_unit_explain_endpoint(
+    work_unit_id: str,
+    scope_type: str = "org",
+    scope_id: str = "",
+    range_days: int = 14,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    llm_provider: str = "auto",
+) -> WorkUnitExplanation:
+    """
+    Generate an LLM explanation for a work unit's precomputed signals.
+
+    This endpoint follows AGENTS-WG.md Phase 3 rules:
+    - LLMs explain results, they NEVER compute them
+    - Only allowed inputs passed to LLM (category vectors, evidence metadata,
+      confidence band, time span)
+    - Responses use probabilistic language (appears, leans, suggests)
+
+    Args:
+        work_unit_id: The work unit to explain
+        scope_type: Scope level (org, team, repo)
+        scope_id: Scope identifier
+        range_days: Time window in days
+        start_date: Optional start date
+        end_date: Optional end date
+        llm_provider: LLM provider to use (auto, openai, anthropic, mock)
+
+    Returns:
+        WorkUnitExplanation with summary, rationale, and uncertainty disclosure
+    """
+    try:
+        # Fetch the work unit signal first
+        filters = _filters_from_query(
+            scope_type, scope_id, range_days, range_days, start_date, end_date
+        )
+        signals = await build_work_unit_signals(
+            db_url=_db_url(),
+            filters=filters,
+            limit=500,  # Fetch enough to find the specific work unit
+            include_text=True,
+        )
+
+        # Find the specific work unit
+        target_signal = None
+        for signal in signals:
+            if signal.work_unit_id == work_unit_id:
+                target_signal = signal
+                break
+
+        if target_signal is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Work unit {work_unit_id} not found",
+            )
+
+        # Generate explanation
+        explanation = await explain_work_unit(
+            signal=target_signal,
+            llm_provider=llm_provider,
+        )
+        return explanation
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Work unit explain failed for %s", work_unit_id)
+        raise HTTPException(status_code=503, detail="Explanation unavailable") from exc
 
 
 @app.get("/api/v1/flame", response_model=FlameResponse)

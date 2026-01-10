@@ -201,6 +201,17 @@ class WorkUnitSignal(BaseModel):
     evidence: WorkUnitEvidence
 
 
+class WorkUnitExplanation(BaseModel):
+    """LLM-generated explanation for a work unit's precomputed signals."""
+
+    work_unit_id: str
+    summary: str  # Plain text explanation narrative
+    category_rationale: Dict[str, str]  # Why each category leans that way
+    signal_importance: List[str]  # Which signals mattered most
+    uncertainty_disclosure: str  # Where uncertainty exists
+    confidence_limits: str  # Confidence level statement
+
+
 class PersonIdentity(BaseModel):
     provider: str
     handle: str

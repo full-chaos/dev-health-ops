@@ -42,6 +42,8 @@ dependencies = [
   "motor",
   "uvicorn",
   "radon",
+  "openai",
+  "anthropic",
 ]
 
 [project.optional-dependencies]

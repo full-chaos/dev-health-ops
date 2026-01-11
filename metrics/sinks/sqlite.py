@@ -28,6 +28,8 @@ from metrics.schemas import (
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    WorkUnitInvestmentEvidenceQuoteRecord,
+    WorkUnitInvestmentRecord,
 )
 from metrics.sinks.base import BaseMetricsSink
 
@@ -1735,3 +1737,17 @@ class SQLiteMetricsSink(BaseMetricsSink):
             "lead_p50_hours": float(data["lead_p50_hours"]),
             "computed_at": _dt_to_sqlite(data["computed_at"]),
         }
+
+    def write_work_unit_investments(
+        self, rows: Sequence[WorkUnitInvestmentRecord]
+    ) -> None:
+        raise NotImplementedError(
+            "Work unit investment materialization is not supported for SQLite"
+        )
+
+    def write_work_unit_investment_quotes(
+        self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
+    ) -> None:
+        raise NotImplementedError(
+            "Work unit investment evidence quotes are not supported for SQLite"
+        )

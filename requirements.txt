@@ -25,3 +25,5 @@ alembic
 motor
 uvicorn
 radon
+openai
+anthropic

@@ -1120,6 +1120,69 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wg_build.set_defaults(func=_cmd_work_graph_build)
 
+    # ---- investment ----
+    investment = sub.add_parser(
+        "investment", help="Investment materialization operations."
+    )
+    investment_sub = investment.add_subparsers(
+        dest="investment_command", required=True
+    )
+    investment_materialize = investment_sub.add_parser(
+        "materialize",
+        help="Materialize work unit investment categorization into sinks.",
+    )
+    investment_materialize.add_argument(
+        "--db",
+        required=True,
+        help="ClickHouse connection string (clickhouse://user:pass@host:port/db).",
+    )
+    investment_materialize.add_argument(
+        "--from",
+        dest="from_date",
+        type=str,
+        help="Start date (YYYY-MM-DD). Defaults to window-days before --to.",
+    )
+    investment_materialize.add_argument(
+        "--to",
+        dest="to_date",
+        type=str,
+        help="End date (YYYY-MM-DD). Defaults to now.",
+    )
+    investment_materialize.add_argument(
+        "--window-days",
+        type=int,
+        default=30,
+        help="Window size in days when --from is not set (default: 30).",
+    )
+    investment_materialize.add_argument(
+        "--repo-id",
+        action="append",
+        default=[],
+        help="Filter to specific repository UUID(s).",
+    )
+    investment_materialize.add_argument(
+        "--team-id",
+        action="append",
+        default=[],
+        help="Filter to specific team identifier(s).",
+    )
+    investment_materialize.add_argument(
+        "--llm-provider",
+        default="auto",
+        help="LLM provider (auto, openai, anthropic, local, mock).",
+    )
+    investment_materialize.add_argument(
+        "--persist-evidence-snippets",
+        action="store_true",
+        help="Persist extractive evidence quotes for work units.",
+    )
+    investment_materialize.add_argument(
+        "--model-version",
+        default=None,
+        help="Override model version label for audit fields.",
+    )
+    investment_materialize.set_defaults(func=_cmd_investment_materialize)
+
     return parser
 
 
@@ -2020,6 +2083,56 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
     logging.info("  commit_file_edges: %d", result.get("commit_file_edges", 0))
     logging.info("  heuristic_edges: %d", result.get("heuristic_edges", 0))
 
+    return 0
+
+
+def _cmd_investment_materialize(ns: argparse.Namespace) -> int:
+    from datetime import datetime, time, timedelta, timezone
+
+    from work_graph.investment.materialize import (
+        MaterializeConfig,
+        materialize_investments,
+    )
+
+    now = datetime.now(timezone.utc)
+    if ns.to_date:
+        to_day = date.fromisoformat(ns.to_date)
+        to_ts = datetime.combine(to_day + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    else:
+        to_ts = now
+
+    if ns.from_date:
+        from_day = date.fromisoformat(ns.from_date)
+        from_ts = datetime.combine(from_day, time.min, tzinfo=timezone.utc)
+    else:
+        window_days = max(1, int(ns.window_days or 30))
+        from_ts = to_ts - timedelta(days=window_days)
+
+    if from_ts >= to_ts:
+        logging.error("--from must be before --to")
+        return 2
+
+    repo_ids = [repo_id for repo_id in (ns.repo_id or []) if repo_id]
+    team_ids = [team_id for team_id in (ns.team_id or []) if team_id]
+
+    config = MaterializeConfig(
+        dsn=ns.db,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        repo_ids=repo_ids or None,
+        llm_provider=ns.llm_provider,
+        persist_evidence_snippets=ns.persist_evidence_snippets,
+        model_version=ns.model_version,
+        team_ids=team_ids or None,
+    )
+
+    stats = materialize_investments(config)
+    logging.info(
+        "Investment materialization complete. Components=%d Records=%d Quotes=%d",
+        stats.get("components", 0),
+        stats.get("records", 0),
+        stats.get("quotes", 0),
+    )
     return 0
 
 

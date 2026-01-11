@@ -2532,3 +2532,102 @@ class ClickHouseStore:
             ],
             rows,
         )
+
+    async def insert_work_item_dependencies(
+        self, dependencies: List["WorkItemDependency"]
+    ) -> None:
+        if not dependencies:
+            return
+
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+
+        for item in dependencies:
+            is_dict = isinstance(item, dict)
+            get = (
+                item.get
+                if is_dict
+                else lambda k, default=None: getattr(item, k, default)
+            )
+
+            rows.append({
+                "source_work_item_id": str(get("source_work_item_id")),
+                "target_work_item_id": str(get("target_work_item_id")),
+                "relationship_type": str(get("relationship_type") or ""),
+                "relationship_type_raw": str(get("relationship_type_raw") or ""),
+                "last_synced": self._normalize_datetime(
+                    get("last_synced") or synced_at_default
+                ),
+            })
+
+        await self._insert_rows(
+            "work_item_dependencies",
+            [
+                "source_work_item_id",
+                "target_work_item_id",
+                "relationship_type",
+                "relationship_type_raw",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_work_graph_issue_pr(self, records: List[Dict[str, Any]]) -> None:
+        if not records:
+            return
+
+        columns = [
+            "repo_id",
+            "work_item_id",
+            "pr_number",
+            "confidence",
+            "provenance",
+            "evidence",
+            "last_synced",
+        ]
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in records:
+            rows.append({
+                "repo_id": self._normalize_uuid(item.get("repo_id")),
+                "work_item_id": str(item.get("work_item_id") or ""),
+                "pr_number": int(item.get("pr_number") or 0),
+                "confidence": float(item.get("confidence") or 1.0),
+                "provenance": str(item.get("provenance") or ""),
+                "evidence": str(item.get("evidence") or ""),
+                "last_synced": self._normalize_datetime(
+                    item.get("last_synced") or synced_at_default
+                ),
+            })
+
+        await self._insert_rows("work_graph_issue_pr", columns, rows)
+
+    async def insert_work_graph_pr_commit(self, records: List[Dict[str, Any]]) -> None:
+        if not records:
+            return
+
+        columns = [
+            "repo_id",
+            "pr_number",
+            "commit_hash",
+            "confidence",
+            "provenance",
+            "evidence",
+            "last_synced",
+        ]
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in records:
+            rows.append({
+                "repo_id": self._normalize_uuid(item.get("repo_id")),
+                "pr_number": int(item.get("pr_number") or 0),
+                "commit_hash": str(item.get("commit_hash") or ""),
+                "confidence": float(item.get("confidence") or 1.0),
+                "provenance": str(item.get("provenance") or ""),
+                "evidence": str(item.get("evidence") or ""),
+                "last_synced": self._normalize_datetime(
+                    item.get("last_synced") or synced_at_default
+                ),
+            })
+
+        await self._insert_rows("work_graph_pr_commit", columns, rows)

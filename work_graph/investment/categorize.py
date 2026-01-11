@@ -92,7 +92,7 @@ def fallback_outcome(reason: str) -> CategorizationOutcome:
         subcategories=_fallback_distribution(),
         evidence_quotes=[],
         uncertainty="Insufficient validated evidence to assign a confident subcategory mix.",
-        status="invalid_llm_output",
+        status=str(reason or "insufficient_evidence"),
         errors=[reason],
     )
 

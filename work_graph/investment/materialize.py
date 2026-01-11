@@ -21,6 +21,7 @@ from work_graph.investment.categorize import (
     categorize_text_bundle,
     fallback_outcome,
 )
+from work_graph.investment.constants import MIN_EVIDENCE_CHARS
 from work_graph.investment.evidence import (
     build_text_bundle,
     compute_evidence_quality,
@@ -333,7 +334,7 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 work_unit_id=unit_id,
             )
 
-            if len(bundle.source_block) < 30:
+            if bundle.text_char_count < MIN_EVIDENCE_CHARS:
                 outcome = fallback_outcome("insufficient_evidence")
             elif bundle.text_source_count == 0:
                 outcome = fallback_outcome("no_text_sources")

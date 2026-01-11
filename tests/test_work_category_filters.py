@@ -60,27 +60,8 @@ async def test_investment_response_applies_work_category_filter(monkeypatch):
             }
         ]
 
-    async def _fake_edges(
-        _client,
-        *,
-        start_ts,
-        end_ts,
-        scope_filter,
-        scope_params,
-        themes=None,
-    ):
-        captured["edges"] = {
-            "scope_filter": scope_filter,
-            "scope_params": scope_params,
-            "start_ts": start_ts,
-            "end_ts": end_ts,
-            "themes": themes,
-        }
-        return [{"source": "feature_delivery", "target": "repo-a", "value": 2}]
-
     monkeypatch.setattr(investment_service, "clickhouse_client", _fake_clickhouse_client)
     monkeypatch.setattr(investment_service, "fetch_investment_breakdown", _fake_breakdown)
-    monkeypatch.setattr(investment_service, "fetch_investment_edges", _fake_edges)
     monkeypatch.setattr(
         investment_service, "resolve_repo_filter_ids", _fake_resolve_repo_filter_ids
     )
@@ -98,8 +79,8 @@ async def test_investment_response_applies_work_category_filter(monkeypatch):
 
     assert captured["breakdown"]["themes"] == ["feature_delivery"]
     assert captured["breakdown"]["subcategories"] == ["feature_delivery.roadmap"]
-    assert captured["edges"]["themes"] == ["feature_delivery"]
-    assert response.categories[0].key == "feature_delivery"
+    assert response.theme_distribution["feature_delivery"] == 2.0
+    assert response.subcategory_distribution["feature_delivery.roadmap"] == 2.0
 
 
 @pytest.mark.asyncio
@@ -215,25 +196,8 @@ async def test_investment_response_without_work_category_filter(monkeypatch):
             }
         ]
 
-    async def _fake_edges(
-        _client,
-        *,
-        start_ts,
-        end_ts,
-        scope_filter,
-        scope_params,
-        themes=None,
-    ):
-        captured["edges"] = {
-            "scope_filter": scope_filter,
-            "scope_params": scope_params,
-            "themes": themes,
-        }
-        return [{"source": "feature_delivery", "target": "repo-a", "value": 2}]
-
     monkeypatch.setattr(investment_service, "clickhouse_client", _fake_clickhouse_client)
     monkeypatch.setattr(investment_service, "fetch_investment_breakdown", _fake_breakdown)
-    monkeypatch.setattr(investment_service, "fetch_investment_edges", _fake_edges)
     monkeypatch.setattr(
         investment_service, "resolve_repo_filter_ids", _fake_resolve_repo_filter_ids
     )
@@ -252,7 +216,6 @@ async def test_investment_response_without_work_category_filter(monkeypatch):
 
     assert captured["breakdown"]["themes"] is None
     assert captured["breakdown"]["subcategories"] is None
-    assert captured["edges"]["themes"] is None
 
     # Test with empty list
     filters = MetricFilter(

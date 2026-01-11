@@ -40,5 +40,3 @@ CREATE TABLE IF NOT EXISTS work_item_transitions (
     last_synced DateTime64(3)
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, work_item_id, occurred_at);
-
-

@@ -32,6 +32,8 @@ from metrics.schemas import (
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
+    WorkUnitInvestmentEvidenceQuoteRecord,
+    WorkUnitInvestmentRecord,
 )
 from models.work_items import (
     Sprint,
@@ -690,6 +692,58 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "cycle_p90_hours",
                 "lead_p50_hours",
                 "computed_at",
+            ],
+            rows,
+        )
+
+    # -------------------------------------------------------------------------
+    # Work unit investment materialization
+    # -------------------------------------------------------------------------
+
+    def write_work_unit_investments(
+        self, rows: Sequence[WorkUnitInvestmentRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "work_unit_investments",
+            [
+                "work_unit_id",
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "provider",
+                "effort_metric",
+                "effort_value",
+                "theme_distribution_json",
+                "subcategory_distribution_json",
+                "structural_evidence_json",
+                "evidence_quality",
+                "evidence_quality_band",
+                "categorization_status",
+                "categorization_errors_json",
+                "categorization_model_version",
+                "categorization_input_hash",
+                "categorization_run_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_work_unit_investment_quotes(
+        self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "work_unit_investment_quotes",
+            [
+                "work_unit_id",
+                "quote",
+                "source_type",
+                "source_id",
+                "computed_at",
+                "categorization_run_id",
             ],
             rows,
         )

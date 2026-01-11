@@ -1,292 +1,68 @@
-Below is the **collapsed, single canonical `AGENTS.md` block**.
-This is the version you pin at repo root and reference everywhere.
-No duplication. No ambiguity.
+# AGENT INSTRUCTIONS — WORK GRAPH & INVESTMENT MATERIALIZATION
 
----
+These rules are non-negotiable. Violations are architectural regressions.
 
-# AGENT INSTRUCTIONS — WORK GRAPH, UX SIGNALS, AND AI EXPLANATIONS
+## 0. Core Contract
 
-These rules are **non-negotiable**.
-Violations are considered architectural regressions.
+- WorkUnits are evidence containers, not categories.
+- LLM decides subcategory distributions at compute-time only.
+- Theme roll-up is deterministic from subcategories.
+- UX renders only persisted distributions and edges.
+- LLM explanation may run on-demand but may not alter persisted decisions.
+- No static files or export paths; sinks only.
 
----
+## 1. Investment Taxonomy (Fixed)
 
-## 0. Foundational Principle
+- Themes and subcategories are canonical and non-configurable.
+- Provider labels/types (Jira/GitHub/GitLab) are inputs only and normalized away.
 
-This system **infers and explains work behavior**, not people.
+## 2. Compute-Time LLM Categorization (Required)
 
-- Everything is probabilistic
-- Uncertainty is surfaced, not hidden
-- AI explains results, it never produces them
+- LLM output MUST be strict JSON matching the schema in `work_graph/investment/llm_schema.py`.
+- Keys must come from the canonical subcategory registry.
+- Probabilities must be valid and normalized.
+- Evidence quotes must be extractive substrings from provided inputs.
+- Retry policy: one repair attempt only. Otherwise mark invalid and apply deterministic fallback.
+- Persist audit fields for every categorization run.
 
----
+## 3. UX-Time LLM Explanation (Allowed)
 
-## 1. Work Graph Interpretation (Phase 1 context)
+- LLM may generate explanation text only from persisted distributions and stored evidence.
+- LLM must not recompute categories, edges, weights, or distributions.
+- All explanation output must be labeled as AI-generated.
 
-The work graph represents **what actually happened**, reconstructed from artifacts.
+### Canonical explanation prompt (verbatim)
 
-### Graph elements
-
-- Nodes: issues, PRs, commits, files
-- Edges: explicit or inferred relationships
-- Each edge has:
-
-  - provenance
-  - confidence
-  - evidence
-
-### WorkUnits
-
-A WorkUnit is a connected subgraph bounded by time and causality.
-
-WorkUnits are the atomic unit for:
-
-- categorization
-- effort accounting
-- visualization
-- explanation
-
----
-
-## 2. Phase 2 — UX Signals (MANDATORY RULES)
-
-### 2.1 Textual hints are MODIFIERS ONLY
-
-Text (issue titles/descriptions, PR titles/descriptions, commit messages):
-
-- Never decides categories
-- Only adjusts confidence slightly
-
-Rules:
-
-- Use keyword dictionaries per category
-- Max modifier range: ±0.15
-- Apply AFTER structural scoring
-- Always record matched keywords as evidence
-
-Forbidden:
-
-- NLP classification
-- Embeddings
-- ML inference
-- LLM usage
-
----
-
-### 2.2 Category confidence vectors (REQUIRED OUTPUT)
-
-All categorization outputs must be:
-
-- Multi-label
-- Probability-based
-- Summing to ~1.0
-
-Example:
-
-```json
-{
-  "feature": 0.22,
-  "maintenance": 0.48,
-  "operational": 0.21,
-  "quality": 0.09
-}
-```
-
-Overall confidence is computed from:
-
-- relationship provenance
-- temporal coherence
-- graph density
-- text agreement
-
-Confidence bands:
-
-- 0.80–1.00: High
-- 0.60–0.79: Moderate
-- 0.40–0.59: Low
-- < 0.40: Very low
-
-Confidence is a first-class output.
-
----
-
-### 2.3 UX copy rules (STRICT)
-
-Allowed language:
-
-- “appears”
-- “leans”
-- “suggests”
-
-Forbidden language:
-
-- “is”
-- “was”
-- “detected”
-- “the system determined”
-
-Every view must expose:
-
-- numeric confidence
-- confidence band
-- “How this was calculated”
-
-Textual hints must be disclosed as:
-
-> “Minor textual modifiers were applied. These do not determine classification.”
-
----
-
-## 3. Phase 2 — Data Contracts (OPS → WEB)
-
-### Canonical payload (must not drift)
-
-```json
-{
-  "work_unit_id": "string",
-  "time_range": { "start": "ISO", "end": "ISO" },
-  "effort": { "metric": "churn_loc | active_hours", "value": 1234 },
-  "categories": { "...": 0.0 },
-  "confidence": { "value": 0.73, "band": "moderate" },
-  "evidence": {
-    "structural": [],
-    "temporal": [],
-    "textual": []
-  }
-}
-```
-
-Guarantees:
-
-- Categories always sum to ~1.0
-- Evidence arrays are never omitted
-- Confidence band is computed server-side
-
-Visualization inputs:
-
-- Treemap: size = effort, opacity = confidence
-- Sankey: value = probability-weighted effort
-- Sunburst: hierarchical aggregation only
-
----
-
-## 4. Phase 3 — LLM Usage (EXPLANATION ONLY)
-
-### Absolute rule
-
-LLMs **never compute, classify, score, or decide**.
-
-They only explain precomputed results.
-
----
-
-### Allowed LLM inputs
-
-- Category confidence vectors
-- Evidence metadata
-- Confidence band
-- Time span
-
-### Forbidden LLM inputs
-
-- Raw events
-- Raw text blobs
-- Code diffs
-- Heuristic formulas
-- Hidden signals
-
----
-
-### Required LLM behavior
-
-LLMs must:
-
-- Explain why results lean a certain way
-- Call out uncertainty explicitly
-- Reference evidence types
-- Use approved UX language
-
-LLMs must not:
-
-- Recalculate
-- Reclassify
-- Predict
-- Recommend actions
-
----
-
-### Canonical explanation prompt
-
-```text
-You are explaining precomputed work signals.
+You are explaining a precomputed investment view.
 
 You are not allowed to:
 - Recalculate scores
 - Change categories
 - Introduce new conclusions
+- Be conversational (no "Hello", "As an AI", or interactive follow-ups)
 
-Explain:
-- Why this work leaned toward certain categories
-- Which signals mattered most
-- Where uncertainty exists
+Explain the investment view in three distinct sections:
 
-Always include confidence level and limits.
-```
+1. **SUMMARY**: Provide a high-level narrative (max 3 sentences) using probabilistic language (appears, leans, suggests) explaining why the work leans toward the primary categories.
+2. **REASONS**: List the specific evidence (structural, contextual, textual) that contributed most to this interpretation.
+3. **UNCERTAINTY**: Disclose where uncertainty exists based on the evidence quality and evidence mix.
 
----
+Always include evidence quality level and limits.
 
-Follow-up: revisit WorkUnit subgraph boundaries at the end of Phase 3.
+## 4. Language Rules
 
----
+Allowed language:
+- appears
+- leans
+- suggests
 
-## 5. Canonical ClickHouse + Persistence Rules
+Forbidden language:
+- is
+- was
+- detected
+- determined
 
-### Non-negotiable
+## 5. Persistence Contract
 
-- No bespoke ClickHouse clients
-- No custom writers in feature code
-- No `clickhouse_connect.get_client()` outside sinks
-
-All writes must go through:
-
-- `metrics/sinks/*`
-- `create_sink(dsn)`
-- `sink.write_*` methods
-
-### Specific to `work_graph/`
-
-- Must never instantiate a ClickHouse client
-- Must never define its own writer
-- Must only emit derived relationship rows via sinks
-
----
-
-## 6. Architectural Boundaries
-
-- `dev_health_ops` is API-only
-- `work_graph/` is derived, top-level, and deletable
-- Analysis logic must not leak into ingestion or API layers
-
-If deleting `work_graph/` breaks the API:
-
-- The implementation is wrong
-
----
-
-## 7. Enforcement Rule
-
-If you are about to:
-
-- Collapse ambiguity
-- Invent intelligence
-- Hide uncertainty
-- Introduce a new abstraction
-
-Stop.
-
-You are violating the system’s core design.
-
----
-
-**This file is the source of truth.
-Agents are expected to comply exactly.**
+- All compute outputs are persisted via `metrics/sinks/*` only.
+- No JSON/YAML dumps, no output paths, no debug files under `work_graph/` or investment modules.

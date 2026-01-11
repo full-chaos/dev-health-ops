@@ -5,50 +5,15 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from work_graph.investment.taxonomy import SUBCATEGORIES, THEMES, theme_of
+
 logger = logging.getLogger(__name__)
 
-CANONICAL_INVESTMENT_THEMES: Tuple[str, ...] = (
-    "feature_delivery",
-    "operational",
-    "maintenance",
-    "quality",
-    "risk",
-)
-
-CANONICAL_SUBCATEGORIES: Tuple[str, ...] = (
-    "feature_delivery.customer",
-    "feature_delivery.roadmap",
-    "feature_delivery.enablement",
-    "operational.incident_response",
-    "operational.on_call",
-    "operational.support",
-    "maintenance.refactor",
-    "maintenance.upgrade",
-    "maintenance.debt",
-    "quality.testing",
-    "quality.bugfix",
-    "quality.reliability",
-    "risk.security",
-    "risk.compliance",
-    "risk.vulnerability",
-)
+CANONICAL_INVESTMENT_THEMES: Tuple[str, ...] = tuple(sorted(THEMES))
+CANONICAL_SUBCATEGORIES: Tuple[str, ...] = tuple(sorted(SUBCATEGORIES))
 
 SUBCATEGORY_TO_THEME: Dict[str, str] = {
-    "feature_delivery.customer": "feature_delivery",
-    "feature_delivery.roadmap": "feature_delivery",
-    "feature_delivery.enablement": "feature_delivery",
-    "operational.incident_response": "operational",
-    "operational.on_call": "operational",
-    "operational.support": "operational",
-    "maintenance.refactor": "maintenance",
-    "maintenance.upgrade": "maintenance",
-    "maintenance.debt": "maintenance",
-    "quality.testing": "quality",
-    "quality.bugfix": "quality",
-    "quality.reliability": "quality",
-    "risk.security": "risk",
-    "risk.compliance": "risk",
-    "risk.vulnerability": "risk",
+    subcategory: theme_of(subcategory) for subcategory in CANONICAL_SUBCATEGORIES
 }
 
 WORK_ITEM_TYPE_WEIGHTS: Dict[str, Dict[str, float]] = {

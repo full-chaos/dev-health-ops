@@ -147,7 +147,7 @@ def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
         for item in textual:
             if not isinstance(item, dict):
                 continue
-            phrase = item.get("phrase") or item.get("keyword")
+            phrase = item.get("phrase") or item.get("keyword") or item.get("quote")
             category = item.get("subcategory") or item.get("category")
             if phrase is not None:
                 match_count += 1

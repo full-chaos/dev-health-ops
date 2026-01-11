@@ -155,16 +155,19 @@ def test_get_provider_explicit_mock():
 async def test_explain_work_unit_with_mock():
     """Test the full explain_work_unit flow with mock provider."""
     investment = _sample_investment()
+    original_themes = dict(investment.investment.themes)
 
     explanation = await explain_work_unit(investment, llm_provider="mock")
 
     # Check that all required fields are present
     assert explanation.work_unit_id == investment.work_unit_id
+    assert explanation.ai_generated is True
     assert explanation.summary
     assert explanation.category_rationale
     assert explanation.evidence_highlights
     assert explanation.uncertainty_disclosure
     assert explanation.evidence_quality_limits
+    assert investment.investment.themes == original_themes
 
     # Check that the top category is mentioned
     assert (

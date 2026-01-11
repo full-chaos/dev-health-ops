@@ -31,6 +31,8 @@ from metrics.schemas import (
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
+    WorkUnitInvestmentEvidenceQuoteRecord,
+    WorkUnitInvestmentRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
@@ -221,6 +223,24 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def write_issue_type_metrics(self, rows: Sequence[IssueTypeMetricsRecord]) -> None:
         """Write aggregated metrics by issue type."""
+        ...
+
+    # -------------------------------------------------------------------------
+    # Work unit investment materialization
+    # -------------------------------------------------------------------------
+
+    @abstractmethod
+    def write_work_unit_investments(
+        self, rows: Sequence[WorkUnitInvestmentRecord]
+    ) -> None:
+        """Write work unit-level investment materializations."""
+        ...
+
+    @abstractmethod
+    def write_work_unit_investment_quotes(
+        self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
+    ) -> None:
+        """Write extractive evidence quotes for work unit investment records."""
         ...
 
     # -------------------------------------------------------------------------

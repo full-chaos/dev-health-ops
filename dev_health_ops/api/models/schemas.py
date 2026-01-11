@@ -210,11 +210,19 @@ class WorkUnitExplanation(BaseModel):
     """LLM-generated explanation for a work unit's precomputed investment view."""
 
     work_unit_id: str
+    ai_generated: bool = True
     summary: str  # Plain text explanation narrative
     category_rationale: Dict[str, str]  # Why each category leans that way
     evidence_highlights: List[str]  # Which evidence mattered most
     uncertainty_disclosure: str  # Where uncertainty exists
     evidence_quality_limits: str  # Evidence quality statement
+
+
+class InvestmentSunburstSlice(BaseModel):
+    theme: str
+    subcategory: str
+    scope: str
+    value: float
 
 
 class PersonIdentity(BaseModel):

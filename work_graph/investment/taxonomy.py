@@ -1,41 +1,10 @@
-"""Canonical investment taxonomy (themes and subcategories)."""
+"""Canonical investment taxonomy re-export.
 
-from __future__ import annotations
+The authoritative taxonomy lives in `investment_taxonomy.py` to ensure it is
+available to both compute-time (`work_graph/`) and request-time (API) code even
+when `work_graph` is not installed as a package.
+"""
 
-from typing import Dict, Set
+from investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
 
-
-THEMES: Set[str] = {
-    "feature_delivery",
-    "operational",
-    "maintenance",
-    "quality",
-    "risk",
-}
-
-SUBCATEGORIES: Set[str] = {
-    "feature_delivery.customer",
-    "feature_delivery.roadmap",
-    "feature_delivery.enablement",
-    "operational.incident_response",
-    "operational.on_call",
-    "operational.support",
-    "maintenance.refactor",
-    "maintenance.upgrade",
-    "maintenance.debt",
-    "quality.testing",
-    "quality.bugfix",
-    "quality.reliability",
-    "risk.security",
-    "risk.compliance",
-    "risk.vulnerability",
-}
-
-_SUBCATEGORY_TO_THEME: Dict[str, str] = {
-    subcategory: subcategory.split(".", 1)[0] for subcategory in SUBCATEGORIES
-}
-
-
-def theme_of(subcategory_key: str) -> str:
-    """Return the canonical theme for a subcategory key."""
-    return _SUBCATEGORY_TO_THEME.get(subcategory_key, "")
+__all__ = ["THEMES", "SUBCATEGORIES", "theme_of"]

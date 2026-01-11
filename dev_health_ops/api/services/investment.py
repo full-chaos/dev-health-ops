@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from ..models.filters import MetricFilter
 from ..models.schemas import (
@@ -37,6 +37,51 @@ def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]
     return list(dict.fromkeys(themes)), list(dict.fromkeys(subcategories))
 
 
+async def _tables_present(client: Any, tables: List[str]) -> bool:
+    if not tables:
+        return True
+    try:
+        from ..queries.client import query_dicts
+
+        rows = await query_dicts(
+            client,
+            """
+            SELECT name
+            FROM system.tables
+            WHERE database = currentDatabase()
+              AND name IN %(tables)s
+            """,
+            {"tables": tables},
+        )
+    except Exception:
+        return False
+    present = {row.get("name") for row in rows}
+    return all(table in present for table in tables)
+
+
+async def _columns_present(client: Any, table: str, columns: List[str]) -> bool:
+    if not columns:
+        return True
+    try:
+        from ..queries.client import query_dicts
+
+        rows = await query_dicts(
+            client,
+            """
+            SELECT name
+            FROM system.columns
+            WHERE database = currentDatabase()
+              AND table = %(table)s
+              AND name IN %(columns)s
+            """,
+            {"table": table, "columns": columns},
+        )
+    except Exception:
+        return False
+    present = {row.get("name") for row in rows}
+    return all(column in present for column in columns)
+
+
 async def build_investment_response(
     *,
     db_url: str,
@@ -48,6 +93,21 @@ async def build_investment_response(
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
     async with clickhouse_client(db_url) as client:
+        if not await _tables_present(client, ["work_unit_investments"]):
+            return InvestmentResponse(categories=[], subtypes=[], edges=[])
+        if not await _columns_present(
+            client,
+            "work_unit_investments",
+            [
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "effort_value",
+                "theme_distribution_json",
+                "subcategory_distribution_json",
+            ],
+        ):
+            return InvestmentResponse(categories=[], subtypes=[], edges=[])
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(client, filters)
@@ -112,6 +172,20 @@ async def build_investment_sunburst(
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
     async with clickhouse_client(db_url) as client:
+        if not await _tables_present(client, ["work_unit_investments"]):
+            return []
+        if not await _columns_present(
+            client,
+            "work_unit_investments",
+            [
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "effort_value",
+                "subcategory_distribution_json",
+            ],
+        ):
+            return []
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(client, filters)

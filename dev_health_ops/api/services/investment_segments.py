@@ -4,8 +4,7 @@ import json
 from datetime import datetime, time, timezone
 from typing import Dict, List, Optional, Tuple
 
-from work_graph.investment.taxonomy import SUBCATEGORIES, THEMES
-from work_graph.investment.utils import evidence_quality_band, normalize_scores
+from investment_taxonomy import SUBCATEGORIES, THEMES
 
 from ..models.filters import MetricFilter
 from ..models.schemas import (
@@ -22,6 +21,24 @@ from ..queries.work_unit_investments import (
     fetch_work_unit_investments,
 )
 from .filtering import resolve_repo_filter_ids, time_window
+
+
+def _normalize_scores(scores: Dict[str, float], keys: List[str]) -> Dict[str, float]:
+    total = sum(float(scores.get(key, 0.0) or 0.0) for key in keys)
+    if total <= 0.0:
+        uniform = 1.0 / len(keys) if keys else 0.0
+        return {key: uniform for key in keys}
+    return {key: float(scores.get(key, 0.0) or 0.0) / total for key in keys}
+
+
+def _evidence_quality_band(value: float) -> str:
+    if value >= 0.8:
+        return "high"
+    if value >= 0.6:
+        return "moderate"
+    if value >= 0.4:
+        return "low"
+    return "very_low"
 
 
 def _parse_distribution(value: object) -> Dict[str, float]:
@@ -146,17 +163,15 @@ async def build_segment_investment(
                     )
                 )
 
-        theme_distribution = normalize_scores(theme_totals, sorted(THEMES))
-        subcategory_distribution = normalize_scores(
-            subcategory_totals, sorted(SUBCATEGORIES)
-        )
+        theme_distribution = _normalize_scores(theme_totals, sorted(THEMES))
+        subcategory_distribution = _normalize_scores(subcategory_totals, sorted(SUBCATEGORIES))
 
         evidence_quality_value = (
             evidence_weighted / total_effort if total_effort > 0 else 0.0
         )
         evidence_quality = EvidenceQuality(
             value=evidence_quality_value,
-            band=evidence_quality_band(evidence_quality_value),
+            band=_evidence_quality_band(evidence_quality_value),
         )
 
         contributions.sort(key=lambda item: item[0], reverse=True)

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from metrics.sinks.factory import detect_backend
-from work_graph.investment.taxonomy import SUBCATEGORIES, THEMES
+from investment_taxonomy import SUBCATEGORIES, THEMES
 
 from .models.filters import (
     DrilldownRequest,

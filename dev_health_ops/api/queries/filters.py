@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from .client import query_dicts
-from work_graph.investment.taxonomy import SUBCATEGORIES, THEMES
+from investment_taxonomy import SUBCATEGORIES, THEMES
 
 
 async def fetch_filter_options(client: Any) -> Dict[str, List[str]]:

@@ -20,10 +20,10 @@ async def fetch_investment_breakdown(
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     if themes:
-        filters.append("theme IN %(themes)s")
+        filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
     if subcategories:
-        filters.append("subcategory IN %(subcategories)s")
+        filters.append("subcategory_kv.1 IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
@@ -33,7 +33,8 @@ async def fetch_investment_breakdown(
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
         ARRAY JOIN mapToArray(subcategory_distribution_json) AS subcategory_kv
-        WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s
+        WHERE work_unit_investments.from_ts < %(end_ts)s
+          AND work_unit_investments.to_ts >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY subcategory, theme
@@ -65,7 +66,8 @@ async def fetch_investment_edges(
         FROM work_unit_investments
         LEFT JOIN repos AS r ON r.id = repo_id
         ARRAY JOIN mapToArray(theme_distribution_json) AS theme_kv
-        WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s
+        WHERE work_unit_investments.from_ts < %(end_ts)s
+          AND work_unit_investments.to_ts >= %(start_ts)s
         {scope_filter}
         {theme_filter}
         GROUP BY source, target
@@ -93,10 +95,10 @@ async def fetch_investment_sunburst(
     }
     params.update(scope_params)
     if themes:
-        filters.append("theme IN %(themes)s")
+        filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
     if subcategories:
-        filters.append("subcategory IN %(subcategories)s")
+        filters.append("subcategory_kv.1 IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
@@ -108,7 +110,8 @@ async def fetch_investment_sunburst(
         FROM work_unit_investments
         LEFT JOIN repos AS r ON r.id = repo_id
         ARRAY JOIN mapToArray(subcategory_distribution_json) AS subcategory_kv
-        WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s
+        WHERE work_unit_investments.from_ts < %(end_ts)s
+          AND work_unit_investments.to_ts >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY theme, subcategory, scope

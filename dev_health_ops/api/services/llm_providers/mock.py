@@ -24,7 +24,11 @@ class MockProvider:
         The response uses only approved language (appears, leans, suggests)
         and never uses forbidden language (is, was, detected, determined).
         """
-        if "Output schema" in prompt and "\"subcategories\"" in prompt:
+        if (
+            "Output schema" in prompt
+            and "\"subcategories\"" in prompt
+            and "\"evidence_quotes\"" in prompt
+        ):
             return self._mock_categorization(prompt)
 
         # Extract key info from prompt to make response contextual
@@ -74,14 +78,37 @@ This analysis reflects {evidence_quality_band} evidence quality. The categorizat
         return response
 
     def _mock_categorization(self, prompt: str) -> str:
-        current_source = "issue_title"
-        phrase = "incremental improvement"
-        for line in prompt.splitlines():
-            line = line.strip()
-            if line.startswith("[") and line.endswith("]"):
-                current_source = line.strip("[]")
-            if line.startswith("- ") and phrase == "incremental improvement":
-                phrase = line[2:].strip()
+        # Extract the first available source block entry, which is formatted as:
+        # [issue] <id>
+        # <text...>
+        source_type = "issue"
+        source_id = ""
+        source_text = ""
+        lines = prompt.splitlines()
+        for idx, raw_line in enumerate(lines):
+            line = raw_line.strip()
+            if not line.startswith("[") or "]" not in line:
+                continue
+            header, rest = line.split("]", 1)
+            header = header.strip("[]").strip()
+            rest = rest.strip()
+            if header in {"issue", "pr", "commit"} and rest:
+                source_type = header
+                source_id = rest
+                # take subsequent non-empty lines as text until next header or blank line
+                text_lines = []
+                for next_line in lines[idx + 1 :]:
+                    next_line = next_line.rstrip("\n")
+                    if next_line.strip().startswith("[") and "]" in next_line:
+                        break
+                    if next_line.strip() == "" and text_lines:
+                        break
+                    if next_line.strip():
+                        text_lines.append(next_line.strip())
+                source_text = " ".join(text_lines).strip()
+                break
+
+        phrase = source_text or "incremental improvement"
 
         top_category = "feature_delivery.customer"
         lowered = phrase.lower()
@@ -94,7 +121,9 @@ This analysis reflects {evidence_quality_band} evidence quality. The categorizat
         elif any(token in lowered for token in ["security", "vulnerability", "compliance"]):
             top_category = "risk.security"
 
-        base = {cat: 1.0 / 15.0 for cat in [
+        base = {
+            cat: 1.0 / 15.0
+            for cat in [
             "feature_delivery.customer",
             "feature_delivery.roadmap",
             "feature_delivery.enablement",
@@ -110,27 +139,23 @@ This analysis reflects {evidence_quality_band} evidence quality. The categorizat
             "risk.security",
             "risk.compliance",
             "risk.vulnerability",
-        ]}
+            ]
+        }
         base[top_category] = 0.5
         remaining = 0.5 / 14.0
         for cat in base:
             if cat != top_category:
                 base[cat] = remaining
 
+        quote = phrase[: min(80, len(phrase))].strip()
+        if not quote:
+            quote = "incremental improvement"
+
         response = {
             "subcategories": base,
-            "textual_evidence": [
-                {
-                    "phrase": phrase,
-                    "source": current_source,
-                    "subcategory": top_category,
-                }
+            "evidence_quotes": [
+                {"quote": quote, "source": source_type, "id": source_id or "unknown"}
             ],
-            "uncertainty": [
-                {
-                    "subcategory": top_category,
-                    "statement": "Text evidence is limited; categorization suggests an initial interpretation.",
-                }
-            ],
+            "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation.",
         }
         return json.dumps(response)

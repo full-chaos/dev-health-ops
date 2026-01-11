@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from work_graph.investment.taxonomy import SUBCATEGORIES, THEMES, theme_of
+from investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
 
 logger = logging.getLogger(__name__)
 

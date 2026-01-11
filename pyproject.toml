@@ -88,8 +88,12 @@ packages = [
   "providers.github",
   "providers.gitlab",
   "providers.jira",
+  "work_graph",
+  "work_graph.extractors",
+  "work_graph.investment",
+  "work_graph.writers",
 ]
-py-modules = ["cli", "storage", "utils"]
+py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
 
 [tool.setuptools.package-data]
 dev_health_ops = ["api/sql/**/*.sql"]

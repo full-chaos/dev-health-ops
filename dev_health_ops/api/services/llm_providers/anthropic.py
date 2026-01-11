@@ -63,14 +63,26 @@ class AnthropicProvider:
         client = self._get_client()
 
         try:
-            response = await client.messages.create(  # type: ignore
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=(
+            is_json_prompt = (
+                "Output schema" in (prompt or "")
+                and '"subcategories"' in (prompt or "")
+                and '"evidence_quotes"' in (prompt or "")
+                and '"uncertainty"' in (prompt or "")
+            )
+            system = (
+                "You are a JSON generator. Return a single JSON object only. "
+                "Do not output markdown, code fences, comments, or extra text."
+                if is_json_prompt
+                else (
                     "You are an assistant that explains precomputed work analytics. "
                     "Use probabilistic language (appears, leans, suggests). "
                     "Never use definitive language (is, was, detected, determined)."
-                ),
+                )
+            )
+            response = await client.messages.create(  # type: ignore
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=system,
                 messages=[{"role": "user", "content": prompt}],
             )
 

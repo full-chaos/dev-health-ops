@@ -26,6 +26,12 @@ async def test_investment_response_applies_work_category_filter(monkeypatch):
     async def _fake_resolve_repo_filter_ids(*_args, **_kwargs):
         return []
 
+    async def _fake_tables_present(*_args, **_kwargs):
+        return True
+
+    async def _fake_columns_present(*_args, **_kwargs):
+        return True
+
     async def _fake_breakdown(
         _client,
         *,
@@ -76,6 +82,8 @@ async def test_investment_response_applies_work_category_filter(monkeypatch):
     monkeypatch.setattr(
         investment_service, "resolve_repo_filter_ids", _fake_resolve_repo_filter_ids
     )
+    monkeypatch.setattr(investment_service, "_tables_present", _fake_tables_present)
+    monkeypatch.setattr(investment_service, "_columns_present", _fake_columns_present)
 
     filters = MetricFilter(
         time=TimeFilter(range_days=7, compare_days=7),
@@ -149,6 +157,12 @@ async def test_investment_response_without_work_category_filter(monkeypatch):
     async def _fake_resolve_repo_filter_ids(*_args, **_kwargs):
         return []
 
+    async def _fake_tables_present(*_args, **_kwargs):
+        return True
+
+    async def _fake_columns_present(*_args, **_kwargs):
+        return True
+
     async def _fake_breakdown(
         _client,
         *,
@@ -195,6 +209,8 @@ async def test_investment_response_without_work_category_filter(monkeypatch):
     monkeypatch.setattr(
         investment_service, "resolve_repo_filter_ids", _fake_resolve_repo_filter_ids
     )
+    monkeypatch.setattr(investment_service, "_tables_present", _fake_tables_present)
+    monkeypatch.setattr(investment_service, "_columns_present", _fake_columns_present)
 
     # Test with None work_category
     filters = MetricFilter(

@@ -5,15 +5,12 @@ from typing import Any, Dict, List, Tuple
 
 from ..models.filters import MetricFilter
 from ..models.schemas import (
-    InvestmentCategory,
     InvestmentResponse,
-    InvestmentSubtype,
     InvestmentSunburstSlice,
 )
 from ..queries.client import clickhouse_client
 from ..queries.investment import (
     fetch_investment_breakdown,
-    fetch_investment_edges,
     fetch_investment_sunburst,
 )
 from ..queries.scopes import build_scope_filter_multi
@@ -94,7 +91,7 @@ async def build_investment_response(
 
     async with clickhouse_client(db_url) as client:
         if not await _tables_present(client, ["work_unit_investments"]):
-            return InvestmentResponse(categories=[], subtypes=[], edges=[])
+            return InvestmentResponse(theme_distribution={}, subcategory_distribution={}, edges=[])
         if not await _columns_present(
             client,
             "work_unit_investments",
@@ -107,7 +104,7 @@ async def build_investment_response(
                 "subcategory_distribution_json",
             ],
         ):
-            return InvestmentResponse(categories=[], subtypes=[], edges=[])
+            return InvestmentResponse(theme_distribution={}, subcategory_distribution={}, edges=[])
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(client, filters)
@@ -123,41 +120,23 @@ async def build_investment_response(
             themes=theme_filters or None,
             subcategories=subcategory_filters or None,
         )
-        edges = await fetch_investment_edges(
-            client,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            scope_filter=scope_filter,
-            scope_params=scope_params,
-            themes=theme_filters or None,
-        )
 
-    category_totals: Dict[str, float] = {}
+    theme_distribution: Dict[str, float] = {}
+    subcategory_distribution: Dict[str, float] = {}
     for row in rows:
-        theme = str(row.get("theme") or "Unassigned")
-        category_totals[theme] = category_totals.get(theme, 0.0) + float(
-            row.get("value") or 0.0
-        )
+        theme = str(row.get("theme") or "")
+        subcategory = str(row.get("subcategory") or "")
+        value = float(row.get("value") or 0.0)
+        if theme and value > 0:
+            theme_distribution[theme] = theme_distribution.get(theme, 0.0) + value
+        if subcategory and "." in subcategory and value > 0:
+            subcategory_distribution[subcategory] = subcategory_distribution.get(subcategory, 0.0) + value
 
-    categories = [
-        InvestmentCategory(key=key, name=key.title(), value=value)
-        for key, value in category_totals.items()
-    ]
-    categories.sort(key=lambda item: item.value, reverse=True)
-
-    subtypes: List[InvestmentSubtype] = []
-    for row in rows:
-        area = str(row.get("theme") or "Unassigned")
-        stream = str(row.get("subcategory") or "Other")
-        subtypes.append(
-            InvestmentSubtype(
-                name=stream.title(),
-                value=float(row.get("value") or 0.0),
-                parentKey=area,
-            )
-        )
-
-    return InvestmentResponse(categories=categories, subtypes=subtypes, edges=edges)
+    return InvestmentResponse(
+        theme_distribution=theme_distribution,
+        subcategory_distribution=subcategory_distribution,
+        edges=[],
+    )
 
 
 async def build_investment_sunburst(

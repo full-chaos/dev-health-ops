@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from metrics.sinks.factory import detect_backend
-from investment_taxonomy import SUBCATEGORIES, THEMES
+
 
 from .models.filters import (
     DrilldownRequest,
@@ -20,6 +20,7 @@ from .models.filters import (
     FilterOptionsResponse,
     HomeRequest,
     InvestmentExplainRequest,
+    InvestmentFlowRequest,
     MetricFilter,
     SankeyRequest,
     ScopeFilter,
@@ -36,6 +37,7 @@ from .models.schemas import (
     HomeResponse,
     InvestmentResponse,
     InvestmentSunburstSlice,
+    InvestmentMixExplanation,
     MetaResponse,
     OpportunitiesResponse,
     QuadrantResponse,
@@ -55,7 +57,8 @@ from .services.explain import build_explain_response
 from .services.filtering import scope_filter_for_metric, time_window
 from .services.home import build_home_response
 from .services.investment import build_investment_response, build_investment_sunburst
-from .services.investment_segments import build_segment_investment
+from .services.investment_flow import build_investment_flow_response
+from .services.investment_mix_explain import explain_investment_mix
 from .services.opportunities import build_opportunities_response
 from .services.people import (
     build_person_drilldown_issues_response,
@@ -935,63 +938,40 @@ async def investment_sunburst(
 
 @app.post(
     "/api/v1/investment/explain",
-    response_model=WorkUnitExplanation,
+    response_model=InvestmentMixExplanation,
 )
 async def investment_explain(
     payload: InvestmentExplainRequest,
     llm_provider: str = "auto",
-) -> WorkUnitExplanation:
+) -> InvestmentMixExplanation:
     try:
-        if payload.work_unit_id:
-            investments = await build_work_unit_investments(
-                db_url=_db_url(),
-                filters=payload.filters,
-                limit=1,
-                include_text=True,
-                work_unit_id=payload.work_unit_id,
-            )
-            if not investments:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Work unit {payload.work_unit_id} not found",
-                )
-            target_investment = investments[0]
-        else:
-            if not payload.theme and not payload.subcategory:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Provide work_unit_id or theme/subcategory",
-                )
-            if payload.theme and payload.theme not in THEMES:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Unknown theme",
-                )
-            if payload.subcategory and payload.subcategory not in SUBCATEGORIES:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Unknown subcategory",
-                )
-            target_investment = await build_segment_investment(
-                db_url=_db_url(),
-                filters=payload.filters,
-                theme=payload.theme,
-                subcategory=payload.subcategory,
-            )
-            if target_investment is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail="No investment segment data available",
-                )
-        return await explain_work_unit(
-            investment=target_investment,
+        return await explain_investment_mix(
+            db_url=_db_url(),
+            filters=payload.filters,
+            theme=payload.theme,
+            subcategory=payload.subcategory,
             llm_provider=llm_provider,
         )
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Investment explain failed")
         raise HTTPException(status_code=503, detail="Explanation unavailable") from exc
+
+
+@app.post("/api/v1/investment/flow", response_model=SankeyResponse)
+async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
+    try:
+        return await build_investment_flow_response(
+            db_url=_db_url(),
+            filters=payload.filters,
+            theme=payload.theme,
+        )
+    except Exception as exc:
+        logger.exception("Investment flow failed")
+        raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
 @app.get("/api/v1/sankey", response_model=SankeyResponse)

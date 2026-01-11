@@ -60,10 +60,14 @@ class ExplainRequest(BaseModel):
 
 
 class InvestmentExplainRequest(BaseModel):
-    work_unit_id: Optional[str] = None
     theme: Optional[str] = None
     subcategory: Optional[str] = None
     filters: MetricFilter = Field(default_factory=MetricFilter)
+
+
+class InvestmentFlowRequest(BaseModel):
+    filters: MetricFilter = Field(default_factory=MetricFilter)
+    theme: Optional[str] = None
 
 
 class DrilldownRequest(BaseModel):

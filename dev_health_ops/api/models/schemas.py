@@ -166,9 +166,19 @@ class InvestmentSubtype(BaseModel):
 
 
 class InvestmentResponse(BaseModel):
-    categories: List[InvestmentCategory]
-    subtypes: List[InvestmentSubtype]
+    theme_distribution: Dict[str, float]
+    subcategory_distribution: Dict[str, float]
+    evidence_quality_distribution: Optional[Dict[str, float]] = None
+    unit: Optional[str] = None
     edges: Optional[List[Dict[str, Any]]] = None
+
+
+class InvestmentMixExplanation(BaseModel):
+    summary: str
+    dominant_themes: List[str]
+    key_drivers: List[str]
+    operational_signals: List[str]
+    confidence_note: str
 
 
 class WorkUnitTimeRange(BaseModel):

@@ -10,7 +10,17 @@ from typing import Any, Callable, Dict, List, Optional, Union, TYPE_CHECKING
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 from pymongo.errors import ConfigurationError
-from sqlalchemy import Column, Float, Integer, MetaData, String, Table, and_, func, select
+from sqlalchemy import (
+    Column,
+    Float,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    and_,
+    func,
+    select,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -34,7 +44,7 @@ if TYPE_CHECKING:
     from metrics.schemas import FileComplexitySnapshot
     from metrics.schemas import WorkItemUserMetricsDailyRecord
     from models.teams import Team
-    from models.work_items import WorkItem, WorkItemStatusTransition
+    from models.work_items import WorkItem, WorkItemDependency, WorkItemStatusTransition
 
 
 def _parse_date_value(value: Any) -> Optional[date]:
@@ -294,7 +304,9 @@ class SQLAlchemyStore:
         day_value = as_of_day.isoformat()
         where_clause = snapshots.c.as_of_day <= day_value
         if resolved_repo_id is not None:
-            where_clause = and_(where_clause, snapshots.c.repo_id == str(resolved_repo_id))
+            where_clause = and_(
+                where_clause, snapshots.c.repo_id == str(resolved_repo_id)
+            )
 
         latest = (
             select(
@@ -306,29 +318,26 @@ class SQLAlchemyStore:
             .subquery("latest")
         )
 
-        query = (
-            select(
-                snapshots.c.repo_id,
-                snapshots.c.as_of_day,
-                snapshots.c.ref,
-                snapshots.c.file_path,
-                snapshots.c.language,
-                snapshots.c.loc,
-                snapshots.c.functions_count,
-                snapshots.c.cyclomatic_total,
-                snapshots.c.cyclomatic_avg,
-                snapshots.c.high_complexity_functions,
-                snapshots.c.very_high_complexity_functions,
-                snapshots.c.computed_at,
-            )
-            .select_from(
-                snapshots.join(
-                    latest,
-                    and_(
-                        snapshots.c.repo_id == latest.c.repo_id,
-                        snapshots.c.as_of_day == latest.c.max_day,
-                    ),
-                )
+        query = select(
+            snapshots.c.repo_id,
+            snapshots.c.as_of_day,
+            snapshots.c.ref,
+            snapshots.c.file_path,
+            snapshots.c.language,
+            snapshots.c.loc,
+            snapshots.c.functions_count,
+            snapshots.c.cyclomatic_total,
+            snapshots.c.cyclomatic_avg,
+            snapshots.c.high_complexity_functions,
+            snapshots.c.very_high_complexity_functions,
+            snapshots.c.computed_at,
+        ).select_from(
+            snapshots.join(
+                latest,
+                and_(
+                    snapshots.c.repo_id == latest.c.repo_id,
+                    snapshots.c.as_of_day == latest.c.max_day,
+                ),
             )
         )
 
@@ -476,8 +485,7 @@ class SQLAlchemyStore:
                     "path": item.get("path"),
                     "executable": item.get("executable"),
                     "contents": item.get("contents"),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -515,8 +523,7 @@ class SQLAlchemyStore:
                     "committer_email": item.get("committer_email"),
                     "committer_when": item.get("committer_when"),
                     "parents": item.get("parents"),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -569,8 +576,7 @@ class SQLAlchemyStore:
                     "deletions": item.get("deletions"),
                     "old_file_mode": old_mode,
                     "new_file_mode": new_mode,
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 old_mode = getattr(item, "old_file_mode", None) or "unknown"
@@ -617,8 +623,7 @@ class SQLAlchemyStore:
                     "author_when": item.get("author_when"),
                     "commit_hash": item.get("commit_hash"),
                     "line": item.get("line"),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -677,8 +682,7 @@ class SQLAlchemyStore:
                     "changes_requested_count": item.get("changes_requested_count", 0),
                     "reviews_count": item.get("reviews_count", 0),
                     "comments_count": item.get("comments_count", 0),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -752,8 +756,7 @@ class SQLAlchemyStore:
                     "reviewer": item.get("reviewer"),
                     "state": item.get("state"),
                     "submitted_at": item.get("submitted_at"),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -780,9 +783,7 @@ class SQLAlchemyStore:
             ],
         )
 
-    async def insert_ci_pipeline_runs(
-        self, runs: List[CiPipelineRun]
-    ) -> None:
+    async def insert_ci_pipeline_runs(self, runs: List[CiPipelineRun]) -> None:
         if not runs:
             return
         synced_at_default = datetime.now(timezone.utc)
@@ -796,8 +797,7 @@ class SQLAlchemyStore:
                     "queued_at": item.get("queued_at"),
                     "started_at": item.get("started_at"),
                     "finished_at": item.get("finished_at"),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -842,8 +842,7 @@ class SQLAlchemyStore:
                     "deployed_at": item.get("deployed_at"),
                     "merged_at": item.get("merged_at"),
                     "pull_request_number": item.get("pull_request_number"),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -890,8 +889,7 @@ class SQLAlchemyStore:
                     "status": item.get("status"),
                     "started_at": item.get("started_at"),
                     "resolved_at": item.get("resolved_at"),
-                    "last_synced": item.get("last_synced")
-                    or synced_at_default,
+                    "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
                 row = {
@@ -919,14 +917,15 @@ class SQLAlchemyStore:
 
     async def insert_teams(self, teams: List["Team"]) -> None:
         from models.teams import Team
+
         if not teams:
             return
-        
+
         # Convert objects to dicts for upsert
         rows: List[Dict[str, Any]] = []
         for item in teams:
             if isinstance(item, dict):
-                 rows.append(item)
+                rows.append(item)
             else:
                 rows.append({
                     "id": item.id,
@@ -936,16 +935,23 @@ class SQLAlchemyStore:
                     "members": item.members,
                     "updated_at": item.updated_at,
                 })
-        
+
         await self._upsert_many(
             Team,
             rows,
             conflict_columns=["id"],
-            update_columns=["team_uuid", "name", "description", "members", "updated_at"],
+            update_columns=[
+                "team_uuid",
+                "name",
+                "description",
+                "members",
+                "updated_at",
+            ],
         )
 
     async def get_all_teams(self) -> List["Team"]:
         from models.teams import Team
+
         assert self.session is not None
         result = await self.session.execute(select(Team))
         return list(result.scalars().all())
@@ -1062,9 +1068,9 @@ class MongoStore:
             as_of_day_val = _parse_date_value(doc.get("as_of_day"))
             if as_of_day_val is None:
                 continue
-            computed_at_val = _parse_datetime_value(doc.get("computed_at")) or datetime.now(
-                timezone.utc
-            )
+            computed_at_val = _parse_datetime_value(
+                doc.get("computed_at")
+            ) or datetime.now(timezone.utc)
             snapshots.append(
                 FileComplexitySnapshot(
                     repo_id=r_id,
@@ -1076,7 +1082,9 @@ class MongoStore:
                     functions_count=int(doc.get("functions_count") or 0),
                     cyclomatic_total=int(doc.get("cyclomatic_total") or 0),
                     cyclomatic_avg=float(doc.get("cyclomatic_avg") or 0.0),
-                    high_complexity_functions=int(doc.get("high_complexity_functions") or 0),
+                    high_complexity_functions=int(
+                        doc.get("high_complexity_functions") or 0
+                    ),
                     very_high_complexity_functions=int(
                         doc.get("very_high_complexity_functions") or 0
                     ),
@@ -1110,17 +1118,21 @@ class MongoStore:
             user_identity = str(doc.get("user_identity") or "")
             if not user_identity:
                 continue
-            computed_at_val = _parse_datetime_value(doc.get("computed_at")) or datetime.now(
-                timezone.utc
-            )
+            computed_at_val = _parse_datetime_value(
+                doc.get("computed_at")
+            ) or datetime.now(timezone.utc)
             out.append(
                 WorkItemUserMetricsDailyRecord(
                     day=day_val,
                     provider=str(doc.get("provider") or ""),
                     work_scope_id=str(doc.get("work_scope_id") or ""),
                     user_identity=user_identity,
-                    team_id=str(doc.get("team_id")) if doc.get("team_id") is not None else None,
-                    team_name=str(doc.get("team_name")) if doc.get("team_name") is not None else None,
+                    team_id=str(doc.get("team_id"))
+                    if doc.get("team_id") is not None
+                    else None,
+                    team_name=str(doc.get("team_name"))
+                    if doc.get("team_name") is not None
+                    else None,
                     items_started=int(doc.get("items_started") or 0),
                     items_completed=int(doc.get("items_completed") or 0),
                     wip_count_end_of_day=int(doc.get("wip_count_end_of_day") or 0),
@@ -1236,9 +1248,7 @@ class MongoStore:
                     "queued_at": self._normalize_datetime(
                         getattr(item, "queued_at", None)
                     ),
-                    "started_at": self._normalize_datetime(
-                        getattr(item, "started_at")
-                    ),
+                    "started_at": self._normalize_datetime(getattr(item, "started_at")),
                     "finished_at": self._normalize_datetime(
                         getattr(item, "finished_at", None)
                     ),
@@ -1339,6 +1349,7 @@ class MongoStore:
 
     async def insert_teams(self, teams: List["Team"]) -> None:
         from models.teams import Team
+
         await self._upsert_many(
             "teams",
             teams,
@@ -1350,11 +1361,11 @@ class MongoStore:
     ) -> None:
         if not dependencies:
             return
-        
+
         # We use _upsert_many if possible, but ClickHouseStore._upsert_many is for Mongo?
         # No, ClickHouseStore in storage.py does NOT have _upsert_many. MongoStore has.
         # ClickHouseStore has _insert_rows.
-        
+
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
         rows: List[Dict[str, Any]] = []
         for item in dependencies:
@@ -1391,15 +1402,13 @@ class MongoStore:
             rows,
         )
 
-    async def insert_work_graph_pr_commit(
-        self, records: List[Dict[str, Any]]
-    ) -> None:
+    async def insert_work_graph_pr_commit(self, records: List[Dict[str, Any]]) -> None:
         if not records:
             return
-        
+
         # work_graph_pr_commit schema:
         # repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced
-        
+
         columns = [
             "repo_id",
             "pr_number",
@@ -1409,10 +1418,10 @@ class MongoStore:
             "evidence",
             "last_synced",
         ]
-        
+
         rows: List[Dict[str, Any]] = []
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        
+
         for item in records:
             # item is expected to be a dict
             rows.append({
@@ -1426,18 +1435,21 @@ class MongoStore:
                     item.get("last_synced") or synced_at_default
                 ),
             })
-            
+
         await self._insert_rows("work_graph_pr_commit", columns, rows)
 
     async def get_all_teams(self) -> List["Team"]:
         from models.teams import Team
+
         cursor = self.db["teams"].find({})
         teams = []
         async for doc in cursor:
             teams.append(
                 Team(
                     id=doc.get("id") or doc.get("_id"),
-                    team_uuid=uuid.UUID(str(doc.get("team_uuid"))) if doc.get("team_uuid") else None,
+                    team_uuid=uuid.UUID(str(doc.get("team_uuid")))
+                    if doc.get("team_uuid")
+                    else None,
                     name=doc.get("name"),
                     description=doc.get("description"),
                     members=doc.get("members", []),
@@ -1640,7 +1652,7 @@ class ClickHouseStore:
         query = "SELECT id, repo FROM repos"
         async with self._lock:
             result = await asyncio.to_thread(self.client.query, query)
-        
+
         repos = []
         if result.result_rows:
             for row in result.result_rows:
@@ -1667,7 +1679,9 @@ class ClickHouseStore:
             repo_filter = " AND repo_id = {repo_id:UUID}"
         elif repo_name is not None:
             params["repo_name"] = repo_name
-            repo_filter = " AND repo_id IN (SELECT id FROM repos WHERE repo = {repo_name:String})"
+            repo_filter = (
+                " AND repo_id IN (SELECT id FROM repos WHERE repo = {repo_name:String})"
+            )
 
         query = f"""
         SELECT
@@ -1704,9 +1718,9 @@ class ClickHouseStore:
             as_of_day_val = _parse_date_value(row_dict.get("as_of_day"))
             if as_of_day_val is None:
                 continue
-            computed_at_val = _parse_datetime_value(row_dict.get("computed_at")) or datetime.now(
-                timezone.utc
-            )
+            computed_at_val = _parse_datetime_value(
+                row_dict.get("computed_at")
+            ) or datetime.now(timezone.utc)
             snapshots.append(
                 FileComplexitySnapshot(
                     repo_id=r_id,
@@ -1772,17 +1786,21 @@ class ClickHouseStore:
             user_identity = str(row_dict.get("user_identity") or "")
             if not user_identity:
                 continue
-            computed_at_val = _parse_datetime_value(row_dict.get("computed_at")) or datetime.now(
-                timezone.utc
-            )
+            computed_at_val = _parse_datetime_value(
+                row_dict.get("computed_at")
+            ) or datetime.now(timezone.utc)
             out.append(
                 WorkItemUserMetricsDailyRecord(
                     day=day_val,
                     provider=str(row_dict.get("provider") or ""),
                     work_scope_id=str(row_dict.get("work_scope_id") or ""),
                     user_identity=user_identity,
-                    team_id=str(row_dict.get("team_id")) if row_dict.get("team_id") is not None else None,
-                    team_name=str(row_dict.get("team_name")) if row_dict.get("team_name") is not None else None,
+                    team_id=str(row_dict.get("team_id"))
+                    if row_dict.get("team_id") is not None
+                    else None,
+                    team_name=str(row_dict.get("team_name"))
+                    if row_dict.get("team_name") is not None
+                    else None,
                     items_started=int(row_dict.get("items_started") or 0),
                     items_completed=int(row_dict.get("items_completed") or 0),
                     wip_count_end_of_day=int(row_dict.get("wip_count_end_of_day") or 0),
@@ -2177,9 +2195,7 @@ class ClickHouseStore:
                     "queued_at": self._normalize_datetime(
                         getattr(item, "queued_at", None)
                     ),
-                    "started_at": self._normalize_datetime(
-                        getattr(item, "started_at")
-                    ),
+                    "started_at": self._normalize_datetime(getattr(item, "started_at")),
                     "finished_at": self._normalize_datetime(
                         getattr(item, "finished_at", None)
                     ),
@@ -2241,9 +2257,7 @@ class ClickHouseStore:
                     "merged_at": self._normalize_datetime(
                         getattr(item, "merged_at", None)
                     ),
-                    "pull_request_number": getattr(
-                        item, "pull_request_number", None
-                    ),
+                    "pull_request_number": getattr(item, "pull_request_number", None),
                     "last_synced": self._normalize_datetime(
                         getattr(item, "last_synced", None) or synced_at_default
                     ),
@@ -2288,9 +2302,7 @@ class ClickHouseStore:
                     "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
                     "incident_id": str(getattr(item, "incident_id")),
                     "status": getattr(item, "status", None),
-                    "started_at": self._normalize_datetime(
-                        getattr(item, "started_at")
-                    ),
+                    "started_at": self._normalize_datetime(getattr(item, "started_at")),
                     "resolved_at": self._normalize_datetime(
                         getattr(item, "resolved_at", None)
                     ),
@@ -2317,7 +2329,7 @@ class ClickHouseStore:
             return
         # Note: Imports inside method to avoid circular deps if models imports storage
         from models.teams import Team
-        
+
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
         rows: List[Dict[str, Any]] = []
         for item in teams:
@@ -2340,45 +2352,60 @@ class ClickHouseStore:
                     "updated_at": self._normalize_datetime(getattr(item, "updated_at")),
                     "last_synced": synced_at,
                 })
-        
+
         await self._insert_rows(
             "teams",
-            ["id", "team_uuid", "name", "description", "members", "updated_at", "last_synced"],
-            rows
+            [
+                "id",
+                "team_uuid",
+                "name",
+                "description",
+                "members",
+                "updated_at",
+                "last_synced",
+            ],
+            rows,
         )
 
     async def get_all_teams(self) -> List["Team"]:
         from models.teams import Team
+
         assert self.client is not None
         # Using FINAL to get the latest version of each team
         query = "SELECT id, team_uuid, name, description, members, updated_at FROM teams FINAL"
         async with self._lock:
             result = await asyncio.to_thread(self.client.query, query)
-        
+
         teams = []
         if result.result_rows:
             for row in result.result_rows:
-                teams.append(Team(
-                    id=row[0],
-                    team_uuid=row[1],
-                    name=row[2],
-                    description=row[3],
-                    members=row[4],
-                    updated_at=_parse_datetime_value(row[5])
-                ))
+                teams.append(
+                    Team(
+                        id=row[0],
+                        team_uuid=row[1],
+                        name=row[2],
+                        description=row[3],
+                        members=row[4],
+                        updated_at=_parse_datetime_value(row[5]),
+                    )
+                )
         return teams
 
     async def insert_work_items(self, work_items: List["WorkItem"]) -> None:
         if not work_items:
             return
-        
+
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
         rows: List[Dict[str, Any]] = []
-        
+
         for item in work_items:
             is_dict = isinstance(item, dict)
-            get = item.get if is_dict else lambda k, default=None: getattr(item, k, default)
-            
+            get = (
+                item.get
+                if is_dict
+                else lambda k, default=None: getattr(item, k, default)
+            )
+
             repo_id_val = get("repo_id")
             if repo_id_val:
                 repo_id_val = self._normalize_uuid(repo_id_val)
@@ -2404,7 +2431,9 @@ class ClickHouseStore:
                 "completed_at": self._normalize_datetime(get("completed_at")),
                 "closed_at": self._normalize_datetime(get("closed_at")),
                 "labels": get("labels") or [],
-                "story_points": float(get("story_points")) if get("story_points") is not None else None,
+                "story_points": float(get("story_points"))
+                if get("story_points") is not None
+                else None,
                 "sprint_id": str(get("sprint_id") or ""),
                 "sprint_name": str(get("sprint_name") or ""),
                 "parent_id": str(get("parent_id") or ""),
@@ -2419,28 +2448,55 @@ class ClickHouseStore:
         await self._insert_rows(
             "work_items",
             [
-                "repo_id", "work_item_id", "provider", "title", "description", "type",
-                "status", "status_raw",
-                "project_key", "project_id", "assignees", "reporter",
-                "created_at", "updated_at", "started_at", "completed_at", "closed_at",
-                "labels", "story_points", "sprint_id", "sprint_name", "parent_id", "epic_id", "url",
-                "priority_raw", "service_class", "due_at",
-                "last_synced"
+                "repo_id",
+                "work_item_id",
+                "provider",
+                "title",
+                "description",
+                "type",
+                "status",
+                "status_raw",
+                "project_key",
+                "project_id",
+                "assignees",
+                "reporter",
+                "created_at",
+                "updated_at",
+                "started_at",
+                "completed_at",
+                "closed_at",
+                "labels",
+                "story_points",
+                "sprint_id",
+                "sprint_name",
+                "parent_id",
+                "epic_id",
+                "url",
+                "priority_raw",
+                "service_class",
+                "due_at",
+                "last_synced",
             ],
-            rows
+            rows,
         )
 
-    async def insert_work_item_transitions(self, transitions: List["WorkItemStatusTransition"]) -> None:
+    async def insert_work_item_transitions(
+        self, transitions: List["WorkItemStatusTransition"]
+    ) -> None:
         if not transitions:
             return
-            
+
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
         rows: List[Dict[str, Any]] = []
 
         for item in transitions:
             is_dict = isinstance(item, dict)
-            get = item.get if is_dict else lambda k, default=None: getattr(item, k, default)
-            
+            get = (
+                item.get
+                if is_dict
+                else lambda k, default=None: getattr(item, k, default)
+            )
+
             repo_id_val = get("repo_id")
             if repo_id_val:
                 repo_id_val = self._normalize_uuid(repo_id_val)
@@ -2459,13 +2515,20 @@ class ClickHouseStore:
                 "actor": str(get("actor") or ""),
                 "last_synced": synced_at,
             })
-            
+
         await self._insert_rows(
             "work_item_transitions",
             [
-                "repo_id", "work_item_id", "occurred_at", "provider", 
-                "from_status", "to_status", "from_status_raw", "to_status_raw", 
-                "actor", "last_synced"
+                "repo_id",
+                "work_item_id",
+                "occurred_at",
+                "provider",
+                "from_status",
+                "to_status",
+                "from_status_raw",
+                "to_status_raw",
+                "actor",
+                "last_synced",
             ],
-            rows
+            rows,
         )

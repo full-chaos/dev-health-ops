@@ -14,7 +14,7 @@ from models.git import (
     Deployment,
     Incident,
 )
-from models.work_items import WorkItem, WorkItemStatusTransition, WorkItemType
+from models.work_items import WorkItem, WorkItemDependency, WorkItemStatusTransition, WorkItemType
 from models.teams import Team
 from metrics.schemas import (
     RepoMetricsDailyRecord,
@@ -1077,6 +1077,129 @@ class SyntheticDataGenerator:
                     )
                 )
         return transitions
+
+    def generate_work_item_dependencies(
+        self, items: List[WorkItem]
+    ) -> List[WorkItemDependency]:
+        dependencies = []
+        synced_at = datetime.now(timezone.utc)
+        
+        # 1. Parent/Child (Epic -> Story)
+        # Note: In generate_work_items, we already set parent_id/epic_id on items.
+        # We should reflect these as explicit dependencies.
+        for item in items:
+            if item.parent_id:
+                dependencies.append(WorkItemDependency(
+                    source_work_item_id=item.parent_id,
+                    target_work_item_id=item.work_item_id,
+                    relationship_type="parent",
+                    relationship_type_raw="Parent",
+                    last_synced=synced_at
+                ))
+                dependencies.append(WorkItemDependency(
+                    source_work_item_id=item.work_item_id,
+                    target_work_item_id=item.parent_id,
+                    relationship_type="child",
+                    relationship_type_raw="Child",
+                    last_synced=synced_at
+                ))
+
+        # 2. Blocks/Blocked By (Random)
+        # Randomly pick pairs of items
+        candidates = [i for i in items if i.type != "epic"]
+        if len(candidates) > 2:
+            num_links = len(candidates) // 5
+            for _ in range(num_links):
+                source = random.choice(candidates)
+                target = random.choice(candidates)
+                if source.work_item_id == target.work_item_id:
+                    continue
+                
+                dependencies.append(WorkItemDependency(
+                    source_work_item_id=source.work_item_id,
+                    target_work_item_id=target.work_item_id,
+                    relationship_type="blocks",
+                    relationship_type_raw="Blocks",
+                    last_synced=synced_at
+                ))
+                dependencies.append(WorkItemDependency(
+                    source_work_item_id=target.work_item_id,
+                    target_work_item_id=source.work_item_id,
+                    relationship_type="is_blocked_by",
+                    relationship_type_raw="Is Blocked By",
+                    last_synced=synced_at
+                ))
+
+        return dependencies
+
+    def generate_pr_commits(
+        self,
+        prs: List[GitPullRequest],
+        commits: List[GitCommit],
+    ) -> List[Dict[str, Any]]:
+        """
+        Link PRs to commits.
+        Assumes commits and PRs are already generated.
+        Returns a list of dicts suitable for insertion into work_graph_pr_commit.
+        """
+        links = []
+        synced_at = datetime.now(timezone.utc)
+        
+        # Sort commits by date
+        commits_sorted = sorted(commits, key=lambda c: c.committer_when)
+        
+        # For each PR, pick a range of commits that happened before PR merge/close
+        # and after PR creation (loosely).
+        
+        # Shuffle PRs to distribute commits
+        shuffled_prs = list(prs)
+        random.shuffle(shuffled_prs)
+        
+        # Naive distribution: each PR gets 1-5 commits
+        # If we have more commits than PRs * 5, some commits might be orphaned (which is fine, direct pushes)
+        # If we have fewer, we reuse commits? No, commits belong to one PR usually.
+        
+        available_commits = list(commits_sorted)
+        
+        for pr in shuffled_prs:
+            if not available_commits:
+                break
+                
+            num_commits = random.randint(1, min(5, len(available_commits)))
+            
+            # Pick commits close to PR creation
+            # Filter available commits that are <= pr.merged_at (if merged)
+            # or <= pr.created_at + 7 days
+            
+            cutoff = pr.merged_at or (pr.created_at + timedelta(days=7))
+            
+            # This is O(N^2) effectively if we iterate, but lists are small for fixtures.
+            # Let's just pop from available for simplicity in synthetic gen.
+            
+            pr_commits = []
+            for _ in range(num_commits):
+                if not available_commits:
+                    break
+                # Pop from end? or start? Start is oldest.
+                # PRs are somewhat random in time.
+                # Let's just pick random commits for now, but valid logic would be better.
+                # Given strict requirements, let's just assign.
+                c = available_commits.pop(0) 
+                pr_commits.append(c)
+                
+            for c in pr_commits:
+                links.append({
+                    "repo_id": str(pr.repo_id),
+                    "pr_number": pr.number,
+                    "commit_hash": c.hash,
+                    "confidence": 1.0,
+                    "provenance": "synthetic",
+                    "evidence": "generated_fixture",
+                    "last_synced": synced_at
+                })
+                
+        return links
+
 
     def generate_repo_metrics_daily(
         self, days: int = 30

@@ -28,7 +28,7 @@ class MockProvider:
             "Output schema" in prompt
             and "\"subcategories\"" in prompt
             and "\"evidence_quotes\"" in prompt
-        ):
+        ) or "matching the schema" in prompt:
             return self._mock_categorization(prompt)
 
         # Extract key info from prompt to make response contextual
@@ -96,16 +96,17 @@ This analysis reflects {evidence_quality_band} evidence quality. The categorizat
                 source_type = header
                 source_id = rest
                 # take subsequent non-empty lines as text until next header or blank line
-                text_lines = []
                 for next_line in lines[idx + 1 :]:
                     next_line = next_line.rstrip("\n")
                     if next_line.strip().startswith("[") and "]" in next_line:
-                        break
-                    if next_line.strip() == "" and text_lines:
-                        break
-                    if next_line.strip():
-                        text_lines.append(next_line.strip())
-                source_text = " ".join(text_lines).strip()
+                        potential_header = next_line.split("]", 1)[0].strip("[").strip()
+                        if potential_header in {"issue", "pr", "commit"}:
+                            break
+                    if next_line.strip() == "":
+                        continue
+                    # Found a non-empty line, use it as the source text/quote
+                    source_text = next_line.strip()
+                    break
                 break
 
         phrase = source_text or "incremental improvement"

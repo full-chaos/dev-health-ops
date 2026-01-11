@@ -32,7 +32,7 @@ async def fetch_investment_breakdown(
             splitByChar('.', subcategory_kv.1)[1] AS theme,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        ARRAY JOIN mapToArray(subcategory_distribution_json) AS subcategory_kv
+        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
         {scope_filter}
@@ -65,7 +65,7 @@ async def fetch_investment_edges(
             sum(theme_kv.2 * effort_value) AS value
         FROM work_unit_investments
         LEFT JOIN repos AS r ON r.id = repo_id
-        ARRAY JOIN mapToArray(theme_distribution_json) AS theme_kv
+        ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
         {scope_filter}
@@ -109,7 +109,7 @@ async def fetch_investment_sunburst(
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
         LEFT JOIN repos AS r ON r.id = repo_id
-        ARRAY JOIN mapToArray(subcategory_distribution_json) AS subcategory_kv
+        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
         {scope_filter}

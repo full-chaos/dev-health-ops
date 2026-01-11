@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import pytest
 
@@ -12,6 +13,7 @@ from dev_health_ops.api.models.filters import (
 )
 from dev_health_ops.api.services import investment as investment_service
 from dev_health_ops.api.services import sankey as sankey_service
+from dev_health_ops.api.queries import sankey as sankey_queries
 
 
 @asynccontextmanager
@@ -147,6 +149,32 @@ async def test_sankey_investment_applies_work_category_filter(monkeypatch):
     assert "themes" in captured["flow"]["scope_filter"]
     assert " AND theme_kv.1 IN %(themes)s" in captured["flow"]["scope_filter"]
     assert response.nodes
+
+
+@pytest.mark.asyncio
+async def test_sankey_investment_flow_query_avoids_maptoarray(monkeypatch):
+    captured = {}
+
+    async def _fake_query_dicts(_client, query, params):
+        captured["query"] = query
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(sankey_queries, "query_dicts", _fake_query_dicts)
+
+    await sankey_queries.fetch_investment_flow_items(
+        object(),
+        start_ts=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        end_ts=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        scope_filter="",
+        scope_params={},
+        limit=10,
+    )
+
+    assert "mapToArray" not in captured["query"]
+    assert "CAST(theme_distribution_json AS Array(Tuple(String, Float32)))" in captured[
+        "query"
+    ]
 
 
 @pytest.mark.asyncio

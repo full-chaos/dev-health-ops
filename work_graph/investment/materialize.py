@@ -333,7 +333,9 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 work_unit_id=unit_id,
             )
 
-            if bundle.text_source_count == 0:
+            if len(bundle.source_block) < 30:
+                outcome = fallback_outcome("insufficient_evidence")
+            elif bundle.text_source_count == 0:
                 outcome = fallback_outcome("no_text_sources")
             else:
                 outcome = _run_coro(

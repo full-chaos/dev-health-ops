@@ -1345,6 +1345,90 @@ class MongoStore:
             lambda obj: str(getattr(obj, "id")),
         )
 
+    async def insert_work_item_dependencies(
+        self, dependencies: List[WorkItemDependency]
+    ) -> None:
+        if not dependencies:
+            return
+        
+        # We use _upsert_many if possible, but ClickHouseStore._upsert_many is for Mongo?
+        # No, ClickHouseStore in storage.py does NOT have _upsert_many. MongoStore has.
+        # ClickHouseStore has _insert_rows.
+        
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in dependencies:
+            if isinstance(item, dict):
+                rows.append({
+                    "source_work_item_id": item.get("source_work_item_id"),
+                    "target_work_item_id": item.get("target_work_item_id"),
+                    "relationship_type": item.get("relationship_type"),
+                    "relationship_type_raw": item.get("relationship_type_raw"),
+                    "last_synced": self._normalize_datetime(
+                        item.get("last_synced") or synced_at_default
+                    ),
+                })
+            else:
+                rows.append({
+                    "source_work_item_id": getattr(item, "source_work_item_id"),
+                    "target_work_item_id": getattr(item, "target_work_item_id"),
+                    "relationship_type": getattr(item, "relationship_type"),
+                    "relationship_type_raw": getattr(item, "relationship_type_raw"),
+                    "last_synced": self._normalize_datetime(
+                        getattr(item, "last_synced", None) or synced_at_default
+                    ),
+                })
+
+        await self._insert_rows(
+            "work_item_dependencies",
+            [
+                "source_work_item_id",
+                "target_work_item_id",
+                "relationship_type",
+                "relationship_type_raw",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_work_graph_pr_commit(
+        self, records: List[Dict[str, Any]]
+    ) -> None:
+        if not records:
+            return
+        
+        # work_graph_pr_commit schema:
+        # repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced
+        
+        columns = [
+            "repo_id",
+            "pr_number",
+            "commit_hash",
+            "confidence",
+            "provenance",
+            "evidence",
+            "last_synced",
+        ]
+        
+        rows: List[Dict[str, Any]] = []
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        
+        for item in records:
+            # item is expected to be a dict
+            rows.append({
+                "repo_id": self._normalize_uuid(item.get("repo_id")),
+                "pr_number": int(item.get("pr_number") or 0),
+                "commit_hash": item.get("commit_hash"),
+                "confidence": float(item.get("confidence") or 1.0),
+                "provenance": item.get("provenance"),
+                "evidence": item.get("evidence"),
+                "last_synced": self._normalize_datetime(
+                    item.get("last_synced") or synced_at_default
+                ),
+            })
+            
+        await self._insert_rows("work_graph_pr_commit", columns, rows)
+
     async def get_all_teams(self) -> List["Team"]:
         from models.teams import Team
         cursor = self.db["teams"].find({})

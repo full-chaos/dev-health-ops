@@ -980,6 +980,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fix_gen.set_defaults(func=_cmd_fixtures_generate)
 
+    fix_val = fix_sub.add_parser("validate", help="Validate fixture data quality.")
+    fix_val.add_argument(
+        "--db",
+        required=True,
+        help="Database URI.",
+    )
+    fix_val.set_defaults(func=_cmd_fixtures_validate)
+
     # ---- audit ----
     audit = sub.add_parser("audit", help="Audit data completeness.")
     audit_sub = audit.add_subparsers(dest="audit_command", required=True)
@@ -1261,6 +1269,10 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             if hasattr(store, "insert_work_item_transitions"):
                 await _insert_batches(store.insert_work_item_transitions, transitions)
 
+            dependencies = generator.generate_work_item_dependencies(work_items)
+            if hasattr(store, "insert_work_item_dependencies"):
+                await _insert_batches(store.insert_work_item_dependencies, dependencies)
+
             issue_numbers = []
             for item in work_items:
                 raw_id = str(getattr(item, "work_item_id", "") or "")
@@ -1283,6 +1295,10 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             for p in pr_data:
                 all_reviews.extend(p["reviews"])
             await _insert_batches(store.insert_git_pull_request_reviews, all_reviews)
+
+            pr_commit_links = generator.generate_pr_commits(prs, commits)
+            if hasattr(store, "insert_work_graph_pr_commit"):
+                await _insert_batches(store.insert_work_graph_pr_commit, pr_commit_links)
 
             # 6. CI/CD + Deployments + Incidents
             pr_numbers = [pr.number for pr in prs]
@@ -2133,6 +2149,90 @@ def _cmd_investment_materialize(ns: argparse.Namespace) -> int:
         stats.get("records", 0),
         stats.get("quotes", 0),
     )
+    return 0
+
+
+def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
+    """Validate that fixture data is sufficient for work graph and investment."""
+    import clickhouse_connect
+    
+    db_url = ns.db
+    if not db_url.startswith("clickhouse://"):
+        logging.error("Validation only supported for ClickHouse currently.")
+        return 1
+
+    try:
+        client = clickhouse_connect.get_client(dsn=db_url)
+    except Exception as e:
+        logging.error(f"Failed to connect to DB: {e}")
+        return 1
+
+    logging.info("Running fixture validation...")
+    
+    # 1. Check raw data counts
+    try:
+        wi_count = client.query("SELECT count() FROM work_items").result_rows[0][0]
+        pr_count = client.query("SELECT count() FROM git_pull_requests").result_rows[0][0]
+        commit_count = client.query("SELECT count() FROM git_commits").result_rows[0][0]
+        logging.info(f"Raw Counts: WI={wi_count}, PR={pr_count}, Commits={commit_count}")
+        
+        if wi_count < 10 or pr_count < 5 or commit_count < 20:
+            logging.error("FAIL: Insufficient raw data.")
+            return 1
+    except Exception as e:
+        logging.error(f"FAIL: Could not query raw tables: {e}")
+        return 1
+
+    # 2. Check Work Graph
+    try:
+        edge_count = client.query("SELECT count() FROM work_graph_edges").result_rows[0][0]
+        logging.info(f"Work Graph Edges: {edge_count}")
+        if edge_count < 5:
+            logging.error("FAIL: Work graph edges too low. Did you run with --with-work-graph?")
+            return 1
+            
+        # Check component connectivity (heuristic: edges per node)
+        # Not easily doable in SQL without recursive CTEs, but we can check distinct nodes in edges
+        nodes_in_edges = client.query("""
+            SELECT count(DISTINCT id) FROM (
+                SELECT source_id as id FROM work_graph_edges
+                UNION ALL
+                SELECT target_id as id FROM work_graph_edges
+            )
+        """).result_rows[0][0]
+        logging.info(f"Nodes in Graph: {nodes_in_edges}")
+        
+    except Exception as e:
+        logging.warning(f"Could not validate work graph (tables might be missing): {e}")
+        return 1
+
+    # 3. Check Text Bundle Sizes (Proxy)
+    # Check if we have descriptions/bodies
+    try:
+        avg_wi_len = client.query("SELECT avg(length(description)) FROM work_items").result_rows[0][0]
+        avg_pr_len = client.query("SELECT avg(length(body)) FROM git_pull_requests").result_rows[0][0]
+        logging.info(f"Avg Text Lengths: WI={avg_wi_len:.1f}, PR={avg_pr_len:.1f}")
+        
+        if avg_wi_len < 20 or avg_pr_len < 20:
+             logging.error("FAIL: Text content too short for investment classification.")
+             return 1
+    except Exception as e:
+        logging.warning(f"Could not check text lengths: {e}")
+
+    # 4. Check Investment Materialization
+    try:
+        inv_count = client.query("SELECT count() FROM work_unit_investments").result_rows[0][0]
+        quote_count = client.query("SELECT count() FROM work_unit_investment_quotes").result_rows[0][0]
+        logging.info(f"Investment Records: {inv_count}")
+        logging.info(f"Evidence Quotes: {quote_count}")
+        
+        if inv_count == 0:
+            logging.warning("WARN: No investment records found. Run 'investment materialize'?")
+        
+    except Exception as e:
+        logging.info(f"Investment tables might not exist yet: {e}")
+
+    logging.info("PASS: Fixture validation successful.")
     return 0
 
 

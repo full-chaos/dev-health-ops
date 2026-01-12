@@ -44,7 +44,7 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     end = candidate.rfind("}")
 
     if start == -1 or end == -1 or end < start:
-        logger.warning("Failed to find JSON object in LLM response")
+        logger.warning(f"Failed to find JSON object in LLM response. Text: {text[:500]}...")
         return None
 
     json_str = candidate[start : end + 1]
@@ -52,7 +52,7 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     try:
         parsed = json.loads(json_str)
     except json.JSONDecodeError as e:
-        logger.warning(f"JSON decode error in LLM response: {e}")
+        logger.warning(f"JSON decode error in LLM response: {e}. Text: {json_str[:500]}...")
         return None
     if not isinstance(parsed, dict):
         logger.warning("Parsed JSON is not a dictionary")

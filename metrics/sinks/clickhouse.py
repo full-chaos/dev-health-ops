@@ -775,6 +775,8 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "evidence": r.evidence,
                 "discovered_at": _dt_to_clickhouse_datetime(r.discovered_at),
                 "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                "event_ts": _dt_to_clickhouse_datetime(r.event_ts),
+                "day": r.day,
             })
         column_names = list(data[0].keys())
         matrix = [[row[col] for col in column_names] for row in data]

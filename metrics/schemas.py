@@ -457,6 +457,8 @@ class WorkGraphEdgeRecord:
     evidence: str
     discovered_at: datetime
     last_synced: datetime
+    event_ts: datetime
+    day: date
 
 
 @dataclass(frozen=True)

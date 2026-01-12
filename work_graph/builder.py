@@ -12,7 +12,7 @@ import logging
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 from metrics.sinks.factory import create_sink
@@ -125,6 +125,8 @@ class WorkGraphBuilder:
             evidence=edge.evidence,
             discovered_at=edge.discovered_at or self._now,
             last_synced=edge.last_synced or self._now,
+            event_ts=edge.event_ts or self._now,
+            day=edge.day or (edge.event_ts or self._now).date(),
         )
 
     def _issue_pr_to_record(self, link: WorkGraphIssuePR) -> WorkGraphIssuePRRecord:
@@ -229,7 +231,8 @@ class WorkGraphBuilder:
             source_work_item_id,
             target_work_item_id,
             relationship_type,
-            relationship_type_raw
+            relationship_type_raw,
+            last_synced
         FROM work_item_dependencies FINAL
         """
 
@@ -243,7 +246,7 @@ class WorkGraphBuilder:
 
         edges = []
         for row in rows:
-            source_id, target_id, rel_type, rel_type_raw = row
+            source_id, target_id, rel_type, rel_type_raw, last_synced = row
 
             # Map relationship type to EdgeType
             edge_type = DEPENDENCY_TYPE_MAP.get(
@@ -259,6 +262,13 @@ class WorkGraphBuilder:
                 target_id,
             )
 
+            # Ensure timezone
+            event_ts = last_synced
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
             edge = WorkGraphEdge(
                 edge_id=edge_id,
                 source_type=NodeType.ISSUE,
@@ -271,6 +281,7 @@ class WorkGraphBuilder:
                 evidence=rel_type_raw or rel_type or "dependency",
                 discovered_at=self._now,
                 last_synced=self._now,
+                event_ts=event_ts,
             )
             edges.append(edge)
 
@@ -392,6 +403,13 @@ class WorkGraphBuilder:
             if not title:
                 continue
 
+            # Ensure timezone
+            event_ts = created_at
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
             # Extract Jira keys
             jira_refs = extract_jira_keys(title)
             jira_refs_found += len(jira_refs)
@@ -434,6 +452,7 @@ class WorkGraphBuilder:
                             evidence=ref.raw_match,
                             discovered_at=self._now,
                             last_synced=self._now,
+                            event_ts=event_ts,
                         )
                     )
 
@@ -494,6 +513,7 @@ class WorkGraphBuilder:
                             evidence=ref.raw_match,
                             discovered_at=self._now,
                             last_synced=self._now,
+                            event_ts=event_ts,
                         )
                     )
 
@@ -545,6 +565,7 @@ class WorkGraphBuilder:
                             evidence=ref.raw_match,
                             discovered_at=self._now,
                             last_synced=self._now,
+                            event_ts=event_ts,
                         )
                     )
 
@@ -683,6 +704,16 @@ class WorkGraphBuilder:
                 continue
 
             pr_number = best[0]
+            pr_created_at = best[1]
+            
+            # Use max(updated_at, pr_created_at) as event time
+            event_ts = pr_created_at
+            if updated_at and updated_at > event_ts:
+                event_ts = updated_at
+            # Ensure timezone
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            
             pr_id = generate_pr_id(uuid.UUID(repo_key), pr_number)
             edge_id = generate_edge_id(
                 NodeType.PR,
@@ -706,6 +737,7 @@ class WorkGraphBuilder:
                     evidence=f"time_window_{self.config.heuristic_days_window}d",
                     discovered_at=self._now,
                     last_synced=self._now,
+                    event_ts=event_ts,
                 )
             )
 
@@ -731,25 +763,27 @@ class WorkGraphBuilder:
 
         query = """
         SELECT
-            repo_id,
-            work_item_id,
-            pr_number,
-            confidence,
-            provenance,
-            evidence,
-            last_synced
-        FROM work_graph_issue_pr FINAL
+            p.repo_id,
+            p.work_item_id,
+            p.pr_number,
+            p.confidence,
+            p.provenance,
+            p.evidence,
+            p.last_synced,
+            pr.created_at
+        FROM work_graph_issue_pr AS p
+        INNER JOIN git_pull_requests AS pr ON (p.repo_id = pr.repo_id AND p.pr_number = pr.number)
         """
         where_parts: List[str] = []
         if self.config.repo_id:
-            where_parts.append(f"repo_id = '{self.config.repo_id}'")
+            where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
         if self.config.from_date:
             where_parts.append(
-                f"last_synced >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+                f"pr.created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
             )
         if self.config.to_date:
             where_parts.append(
-                f"last_synced <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+                f"pr.created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
             )
         if where_parts:
             query += " WHERE " + " AND ".join(where_parts)
@@ -763,7 +797,7 @@ class WorkGraphBuilder:
         edges: List[WorkGraphEdge] = []
         links: Set[Tuple[str, int]] = set()
         for row in rows:
-            repo_id, work_item_id, pr_number, confidence, provenance, evidence, _synced = row
+            repo_id, work_item_id, pr_number, confidence, provenance, evidence, _synced, created_at = row
             repo_uuid = uuid.UUID(str(repo_id))
             pr_id = generate_pr_id(repo_uuid, int(pr_number))
             edge_id = generate_edge_id(
@@ -773,6 +807,14 @@ class WorkGraphBuilder:
                 NodeType.ISSUE,
                 str(work_item_id),
             )
+            
+            # Ensure timezone
+            event_ts = created_at
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
             edges.append(
                 WorkGraphEdge(
                     edge_id=edge_id,
@@ -787,6 +829,7 @@ class WorkGraphBuilder:
                     evidence=str(evidence or "issue_pr_fast_path"),
                     discovered_at=self._now,
                     last_synced=self._now,
+                    event_ts=event_ts,
                 )
             )
             links.add((str(work_item_id), int(pr_number)))
@@ -800,29 +843,33 @@ class WorkGraphBuilder:
 
         query = """
         SELECT
-            repo_id,
-            pr_number,
-            commit_hash,
-            confidence,
-            provenance,
-            evidence,
-            last_synced
-        FROM work_graph_pr_commit FINAL
+            p.repo_id,
+            p.pr_number,
+            p.commit_hash,
+            p.confidence,
+            p.provenance,
+            p.evidence,
+            p.last_synced,
+            c.author_when
+        FROM work_graph_pr_commit AS p
+        INNER JOIN git_commits AS c ON (p.repo_id = c.repo_id AND p.commit_hash = c.hash)
         """
         where_parts: List[str] = []
         if self.config.repo_id:
-            where_parts.append(f"repo_id = '{self.config.repo_id}'")
+            where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
         if self.config.from_date:
             where_parts.append(
-                f"last_synced >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+                f"c.author_when >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
             )
         if self.config.to_date:
             where_parts.append(
-                f"last_synced <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+                f"c.author_when <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
             )
         if where_parts:
             query += " WHERE " + " AND ".join(where_parts)
 
+        # Optimize for distributed join if needed, but local join is fine here
+        
         result = self.client.query(query)
         rows = result.result_rows or []
         logger.info("Found %d rows in work_graph_pr_commit", len(rows))
@@ -831,7 +878,7 @@ class WorkGraphBuilder:
 
         edges: List[WorkGraphEdge] = []
         for row in rows:
-            repo_id, pr_number, commit_hash, confidence, provenance, evidence, _synced = row
+            repo_id, pr_number, commit_hash, confidence, provenance, evidence, _synced, author_when = row
             repo_uuid = uuid.UUID(str(repo_id))
             pr_id = generate_pr_id(repo_uuid, int(pr_number))
             commit_id = generate_commit_id(repo_uuid, str(commit_hash))
@@ -842,6 +889,14 @@ class WorkGraphBuilder:
                 NodeType.COMMIT,
                 commit_id,
             )
+            
+            # Ensure timezone
+            event_ts = author_when
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
             edges.append(
                 WorkGraphEdge(
                     edge_id=edge_id,
@@ -856,6 +911,7 @@ class WorkGraphBuilder:
                     evidence=str(evidence or "pr_commit_fast_path"),
                     discovered_at=self._now,
                     last_synced=self._now,
+                    event_ts=event_ts,
                 )
             )
 

@@ -2176,8 +2176,8 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
             return 1
 
         where_parts = [
-            f"discovered_at >= '{from_date.strftime('%Y-%m-%d %H:%M:%S')}'",
-            f"discovered_at <= '{to_date.strftime('%Y-%m-%d %H:%M:%S')}'",
+            f"event_ts >= '{from_date.strftime('%Y-%m-%d %H:%M:%S')}'",
+            f"event_ts <= '{to_date.strftime('%Y-%m-%d %H:%M:%S')}'",
         ]
         if repo_id:
             where_parts.append(f"repo_id = '{repo_id}'")
@@ -2187,6 +2187,14 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
             f"SELECT count() FROM work_graph_edges WHERE {where_sql}"
         ).result_rows[0][0]
         if int(edge_count or 0) == 0:
+            # Debug logging
+            try:
+                bounds = client.query("SELECT min(event_ts), max(event_ts) FROM work_graph_edges").result_rows[0]
+                logging.info(f"DEBUG: work_graph_edges event_ts range: {bounds[0]} to {bounds[1]}")
+                logging.info(f"DEBUG: Filter window: {from_date} to {to_date}")
+            except Exception:
+                pass
+                
             logging.error(
                 "FAIL: work_graph_edges is empty for the selected window. "
                 "Prerequisites missing or build produced no edges."
@@ -2323,10 +2331,10 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
         linked_non_epic = int(
             client.query(
                 """
-                SELECT count(DISTINCT wi.work_item_id)
+                SELECT count(DISTINCT wi.repo_id, wi.work_item_id)
                 FROM work_items wi
                 INNER JOIN work_graph_issue_pr l
-                  ON wi.work_item_id = l.work_item_id
+                  ON wi.repo_id = l.repo_id AND wi.work_item_id = l.work_item_id
                 WHERE wi.type != 'epic'
                 """
             ).result_rows[0][0]
@@ -2340,7 +2348,7 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
             return 1
 
         prs_with_commits = int(
-            client.query("SELECT count(DISTINCT pr_number) FROM work_graph_pr_commit").result_rows[0][0]
+            client.query("SELECT count(DISTINCT repo_id, pr_number) FROM work_graph_pr_commit").result_rows[0][0]
         )
         if prs_with_commits < pr_count:
             logging.error(

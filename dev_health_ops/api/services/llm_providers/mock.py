@@ -63,19 +63,23 @@ class MockProvider:
                     pass
 
         # Build response using only approved language
-        response = f"""**SUMMARY**: Based on the precomputed investment view, this work unit appears to lean toward {top_category} work.
+        summary = f"Based on the precomputed investment view, this work unit appears to lean toward {top_category} work."
+        confidence_note = f"This analysis reflects {evidence_quality_band} evidence quality. The categorization leans toward {top_category} but may not fully capture the nuanced nature of the work."
 
-**REASONS**: 
-- Structural evidence appears to contribute most significantly to the categorization.
-- Contextual evidence suggests the work occurred within a consistent timeframe.
-- Textual phrases appear to align with the investment interpretation.
-
-**UNCERTAINTY**: 
-This analysis reflects {evidence_quality_band} evidence quality. The categorization leans toward {top_category} but may not fully capture the nuanced nature of the work. The evidence suggests a tendency rather than a definitive classification.
-
-**Evidence Quality Limits**: With {evidence_quality_band} evidence quality ({top_score:.0%} for the top category), these results should be interpreted as probabilistic indicators. Lower-weight categories may still represent meaningful aspects of the work."""
-
-        return response
+        response_data = {
+            "summary": summary,
+            "dominant_themes": [top_category.split(".")[0]],
+            "key_drivers": [
+                "Structural evidence appears to contribute most significantly to the categorization.",
+                "Textual phrases appear to align with the investment interpretation."
+            ],
+            "operational_signals": [
+                f"Evidence quality bands indicate {evidence_quality_band} uncertainty.",
+                "Lower-weight categories may still represent meaningful aspects of the work."
+            ],
+            "confidence_note": confidence_note
+        }
+        return json.dumps(response_data)
 
     def _mock_categorization(self, prompt: str) -> str:
         # Extract the first available source block entry, which is formatted as:

@@ -213,17 +213,17 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[InvestmentClassificationRecord]
     ) -> None:
         """Write investment area classifications for artifacts."""
-        ...
+        pass
 
     @abstractmethod
     def write_investment_metrics(self, rows: Sequence[InvestmentMetricsRecord]) -> None:
         """Write aggregated investment metrics by area/team."""
-        ...
+        pass
 
     @abstractmethod
     def write_issue_type_metrics(self, rows: Sequence[IssueTypeMetricsRecord]) -> None:
         """Write aggregated metrics by issue type."""
-        ...
+        pass
 
     # -------------------------------------------------------------------------
     # Work unit investment materialization
@@ -234,14 +234,14 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[WorkUnitInvestmentRecord]
     ) -> None:
         """Write work unit-level investment materializations."""
-        ...
+        pass
 
     @abstractmethod
     def write_work_unit_investment_quotes(
         self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
     ) -> None:
         """Write extractive evidence quotes for work unit investment records."""
-        ...
+        pass
 
     # -------------------------------------------------------------------------
     # Work graph (derived relationships)

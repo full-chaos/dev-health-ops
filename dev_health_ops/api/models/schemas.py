@@ -174,12 +174,51 @@ class InvestmentResponse(BaseModel):
     edges: Optional[List[Dict[str, Any]]] = None
 
 
+class InvestmentFindingEvidence(BaseModel):
+    """Evidence backing a single finding."""
+
+    theme: str
+    subcategory: Optional[str] = None
+    share_pct: float
+    delta_pct_points: Optional[float] = None
+    evidence_quality_mean: Optional[float] = None
+    evidence_quality_band: Optional[str] = None
+
+
+class InvestmentFinding(BaseModel):
+    """A single finding from the investment mix analysis."""
+
+    finding: str
+    evidence: InvestmentFindingEvidence
+
+
+class InvestmentConfidence(BaseModel):
+    """Confidence metadata for the explanation."""
+
+    level: Literal["high", "moderate", "low", "unknown"]
+    quality_mean: Optional[float] = None
+    quality_stddev: Optional[float] = None
+    band_mix: Dict[str, int] = Field(default_factory=dict)
+    drivers: List[str] = Field(default_factory=list)
+
+
+class InvestmentActionItem(BaseModel):
+    """A suggested action item for follow-up."""
+
+    action: str
+    why: str
+    where: str
+
+
 class InvestmentMixExplanation(BaseModel):
+    """Structured explanation for an investment mix view."""
+
     summary: str
-    dominant_themes: List[str]
-    key_drivers: List[str]
-    operational_signals: List[str]
-    confidence_note: str
+    top_findings: List[InvestmentFinding] = Field(default_factory=list)
+    confidence: InvestmentConfidence
+    what_to_check_next: List[InvestmentActionItem] = Field(default_factory=list)
+    anti_claims: List[str] = Field(default_factory=list)
+    status: Optional[Literal["valid", "invalid_json", "invalid_llm_output"]] = None
 
 
 class WorkUnitTimeRange(BaseModel):

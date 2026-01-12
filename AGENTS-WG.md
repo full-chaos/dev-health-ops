@@ -36,6 +36,7 @@ These rules are non-negotiable. Violations are architectural regressions.
 You are explaining a precomputed investment view.
 
 You are not allowed to:
+
 - Recalculate scores
 - Change categories
 - Introduce new conclusions
@@ -52,11 +53,13 @@ Always include evidence quality level and limits.
 ## 4. Language Rules
 
 Allowed language:
+
 - appears
 - leans
 - suggests
 
 Forbidden language:
+
 - is
 - was
 - detected
@@ -66,3 +69,15 @@ Forbidden language:
 
 - All compute outputs are persisted via `metrics/sinks/*` only.
 - No JSON/YAML dumps, no output paths, no debug files under `work_graph/` or investment modules.
+
+## Fix: OpenAI Response Handling (Production Bug)
+
+Fixed production-blocking bug where OpenAI responses were blank (content_length=0) with finish_reason=length.
+
+### Implementation Checklist
+
+- **JSON mode**: Must include explicit JSON instruction in system and user message.
+- **Tokens**: Uses `max_completion_tokens` (min 512).
+- **Retry**: Automatic single retry on whitespace, truncated responses (finish_reason=length), or invalid JSON.
+- **Retry Strategy**: Doubles tokens and simplifies/hardens JSON prompt on retry.
+- **Observability**: Logs `finish_reason`, `content_length`, and token params.

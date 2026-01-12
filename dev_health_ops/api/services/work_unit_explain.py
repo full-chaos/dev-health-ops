@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 async def explain_work_unit(
     investment: WorkUnitInvestment,
     llm_provider: str = "auto",
+    llm_model: Optional[str] = None,
 ) -> WorkUnitExplanation:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
@@ -43,6 +44,7 @@ async def explain_work_unit(
     Args:
         investment: The precomputed WorkUnitInvestment to explain
         llm_provider: Which LLM provider to use ("auto", "openai", "anthropic", "mock")
+        llm_model: Optional model name to override provider default
 
     Returns:
         Structured WorkUnitExplanation with validated content
@@ -69,7 +71,7 @@ async def explain_work_unit(
     )
 
     # 3. Call LLM provider
-    provider = get_provider(llm_provider)
+    provider = get_provider(llm_provider, model=llm_model)
     raw_response = await provider.complete(prompt)
     logger.debug(
         "Received LLM response for work_unit_id=%s, length=%d",

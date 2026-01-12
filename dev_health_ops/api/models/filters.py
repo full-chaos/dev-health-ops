@@ -63,6 +63,7 @@ class InvestmentExplainRequest(BaseModel):
     theme: Optional[str] = None
     subcategory: Optional[str] = None
     filters: MetricFilter = Field(default_factory=MetricFilter)
+    llm_model: Optional[str] = None
 
 
 class InvestmentFlowRequest(BaseModel):

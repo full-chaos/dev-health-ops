@@ -109,7 +109,7 @@ def test_materialize_invokes_sink(monkeypatch):
     repo_id, edges, work_items, commits = _sample_data()
     sink = FakeSink()
 
-    async def _fake_categorize(bundle, llm_provider: str):
+    async def _fake_categorize(bundle, llm_provider, llm_model=None):
         return CategorizationOutcome(
             subcategories={"feature_delivery.roadmap": 1.0},
             evidence_quotes=[],
@@ -135,7 +135,7 @@ def test_materialize_invokes_sink(monkeypatch):
         repo_ids=[repo_id],
         llm_provider="mock",
         persist_evidence_snippets=False,
-        model_version="test-model",
+        llm_model="test-model",
     )
 
     stats = materialize_investments(config)
@@ -147,7 +147,7 @@ def test_materialize_does_not_write_files(monkeypatch):
     repo_id, edges, work_items, commits = _sample_data()
     sink = FakeSink()
 
-    async def _fake_categorize(bundle, llm_provider: str):
+    async def _fake_categorize(bundle, llm_provider, llm_model=None):
         return CategorizationOutcome(
             subcategories={"feature_delivery.roadmap": 1.0},
             evidence_quotes=[],
@@ -196,7 +196,7 @@ def test_materialize_does_not_write_files(monkeypatch):
         repo_ids=[repo_id],
         llm_provider="mock",
         persist_evidence_snippets=False,
-        model_version="test-model",
+        llm_model="test-model",
     )
 
     stats = materialize_investments(config)

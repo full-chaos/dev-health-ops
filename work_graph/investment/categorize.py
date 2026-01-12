@@ -97,8 +97,10 @@ def fallback_outcome(reason: str) -> CategorizationOutcome:
     )
 
 
-async def _complete(prompt: str, provider_name: str) -> str:
-    provider = get_provider(provider_name)
+async def _complete(
+    prompt: str, provider_name: str, model: Optional[str] = None
+) -> str:
+    provider = get_provider(provider_name, model=model)
     return await provider.complete(prompt)
 
 
@@ -120,10 +122,11 @@ async def categorize_text_bundle(
     bundle: TextBundle,
     *,
     llm_provider: str,
+    llm_model: Optional[str] = None,
 ) -> CategorizationOutcome:
     prompt = _build_prompt(bundle.source_block)
 
-    raw_response = await _complete(prompt, llm_provider)
+    raw_response = await _complete(prompt, llm_provider, model=llm_model)
     payload, parse_errors = parse_llm_json(raw_response)
     if parse_errors:
         validation = LLMValidationResult(
@@ -146,7 +149,7 @@ async def categorize_text_bundle(
         )
 
     repair_prompt = _build_repair_prompt(validation.errors, bundle.source_block)
-    repaired_response = await _complete(repair_prompt, llm_provider)
+    repaired_response = await _complete(repair_prompt, llm_provider, model=llm_model)
     payload, parse_errors = parse_llm_json(repaired_response)
     if parse_errors:
         validation = LLMValidationResult(

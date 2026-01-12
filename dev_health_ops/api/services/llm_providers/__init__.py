@@ -7,7 +7,7 @@ Provides a unified interface for LLM completion, supporting multiple backends.
 from __future__ import annotations
 
 import os
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, Optional
 
 
 @runtime_checkable
@@ -27,7 +27,7 @@ class LLMProvider(Protocol):
         pass
 
 
-def get_provider(name: str = "auto") -> LLMProvider:
+def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider:
     """
     Get an LLM provider by name.
 
@@ -41,6 +41,7 @@ def get_provider(name: str = "auto") -> LLMProvider:
               - "ollama": Ollama server (localhost:11434)
               - "lmstudio": LMStudio server (localhost:1234)
               - "mock": Deterministic mock for testing
+        model: Optional model name to override provider default.
 
     Returns:
         An LLMProvider instance
@@ -74,7 +75,9 @@ def get_provider(name: str = "auto") -> LLMProvider:
         base_url = os.getenv("OPENAI_BASE_URL")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable not set")
-        return OpenAIProvider(api_key=api_key, base_url=base_url)
+        return OpenAIProvider(
+            api_key=api_key, base_url=base_url, model=model or "gpt-5-mini"
+        )
 
     if name == "anthropic":
         from .anthropic import AnthropicProvider
@@ -82,22 +85,24 @@ def get_provider(name: str = "auto") -> LLMProvider:
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
-        return AnthropicProvider(api_key=api_key)
+        return AnthropicProvider(
+            api_key=api_key, model=model or "claude-3-haiku-20240307"
+        )
 
     if name == "local":
         from .local import LocalProvider
 
-        return LocalProvider()
+        return LocalProvider(model=model)
 
     if name == "ollama":
         from .local import OllamaProvider
 
-        return OllamaProvider()
+        return OllamaProvider(model=model)
 
     if name == "lmstudio":
         from .local import LMStudioProvider
 
-        return LMStudioProvider()
+        return LMStudioProvider(model=model)
 
     raise ValueError(f"Unknown LLM provider: {name}")
 

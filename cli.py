@@ -1143,9 +1143,7 @@ def build_parser() -> argparse.ArgumentParser:
     investment = sub.add_parser(
         "investment", help="Investment materialization operations."
     )
-    investment_sub = investment.add_subparsers(
-        dest="investment_command", required=True
-    )
+    investment_sub = investment.add_subparsers(dest="investment_command", required=True)
     investment_materialize = investment_sub.add_parser(
         "materialize",
         help="Materialize work unit investment categorization into sinks.",
@@ -1196,7 +1194,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Persist extractive evidence quotes for work units.",
     )
     investment_materialize.add_argument(
-        "--model-version",
+        "--model",
         default=None,
         help="Override model version label for audit fields.",
     )
@@ -1275,7 +1273,9 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             await _insert_batches(store.insert_git_commit_stats, stats)
 
             # 4. Work Items (Raw)
-            work_items = generator.generate_work_items(days=ns.days, provider=ns.provider)
+            work_items = generator.generate_work_items(
+                days=ns.days, provider=ns.provider
+            )
             transitions = generator.generate_work_item_transitions(work_items)
 
             if hasattr(store, "insert_work_items"):
@@ -1301,7 +1301,9 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
                         issue_numbers.append(int(tail))
 
             # 5. PRs & Reviews
-            pr_data = generator.generate_prs(count=ns.pr_count, issue_numbers=issue_numbers)
+            pr_data = generator.generate_prs(
+                count=ns.pr_count, issue_numbers=issue_numbers
+            )
             prs = [p["pr"] for p in pr_data]
             await _insert_batches(store.insert_git_pull_requests, prs)
 
@@ -1312,9 +1314,13 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
 
             pr_commit_links = generator.generate_pr_commits(prs, commits)
             if hasattr(store, "insert_work_graph_pr_commit"):
-                await _insert_batches(store.insert_work_graph_pr_commit, pr_commit_links)
+                await _insert_batches(
+                    store.insert_work_graph_pr_commit, pr_commit_links
+                )
 
-            issue_pr_links = generator.generate_issue_pr_links(work_items, prs, min_coverage=0.7)
+            issue_pr_links = generator.generate_issue_pr_links(
+                work_items, prs, min_coverage=0.7
+            )
             if hasattr(store, "insert_work_graph_issue_pr"):
                 await _insert_batches(store.insert_work_graph_issue_pr, issue_pr_links)
 
@@ -2012,12 +2018,18 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
 
                 client = getattr(builder, "client", None)
                 if client is None:
-                    logging.error("FAIL: Work graph builder did not expose a ClickHouse client.")
+                    logging.error(
+                        "FAIL: Work graph builder did not expose a ClickHouse client."
+                    )
                     return 1
 
-                edge_count = client.query("SELECT count() FROM work_graph_edges").result_rows[0][0]
+                edge_count = client.query(
+                    "SELECT count() FROM work_graph_edges"
+                ).result_rows[0][0]
                 if int(edge_count or 0) == 0:
-                    logging.error("FAIL: work_graph_edges is empty after fixture build.")
+                    logging.error(
+                        "FAIL: work_graph_edges is empty after fixture build."
+                    )
                     return 1
 
                 nodes = client.query(
@@ -2172,7 +2184,9 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
 
         client = getattr(builder, "client", None)
         if client is None:
-            logging.error("FAIL: Work graph builder did not expose a ClickHouse client.")
+            logging.error(
+                "FAIL: Work graph builder did not expose a ClickHouse client."
+            )
             return 1
 
         where_parts = [
@@ -2189,25 +2203,32 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
         if int(edge_count or 0) == 0:
             # Debug logging
             try:
-                bounds = client.query("SELECT min(event_ts), max(event_ts) FROM work_graph_edges").result_rows[0]
-                logging.info(f"DEBUG: work_graph_edges event_ts range: {bounds[0]} to {bounds[1]}")
+                bounds = client.query(
+                    "SELECT min(event_ts), max(event_ts) FROM work_graph_edges"
+                ).result_rows[0]
+                logging.info(
+                    f"DEBUG: work_graph_edges event_ts range: {bounds[0]} to {bounds[1]}"
+                )
                 logging.info(f"DEBUG: Filter window: {from_date} to {to_date}")
             except Exception:
                 pass
-                
+
             logging.error(
                 "FAIL: work_graph_edges is empty for the selected window. "
                 "Prerequisites missing or build produced no edges."
             )
             return 1
 
-        edge_rows = client.query(
-            f"""
+        edge_rows = (
+            client.query(
+                f"""
             SELECT source_type, source_id, target_type, target_id
             FROM work_graph_edges
             WHERE {where_sql}
             """
-        ).result_rows or []
+            ).result_rows
+            or []
+        )
         components = _component_count(edge_rows)
         if components == 1 and not ns.allow_degenerate:
             logging.error(
@@ -2233,7 +2254,9 @@ def _cmd_investment_materialize(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     if ns.to_date:
         to_day = date.fromisoformat(ns.to_date)
-        to_ts = datetime.combine(to_day + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        to_ts = datetime.combine(
+            to_day + timedelta(days=1), time.min, tzinfo=timezone.utc
+        )
     else:
         to_ts = now
 
@@ -2258,7 +2281,7 @@ def _cmd_investment_materialize(ns: argparse.Namespace) -> int:
         repo_ids=repo_ids or None,
         llm_provider=ns.llm_provider,
         persist_evidence_snippets=ns.persist_evidence_snippets,
-        model_version=ns.model_version,
+        llm_model=ns.model,
         team_ids=team_ids or None,
     )
 
@@ -2285,7 +2308,7 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
         fetch_work_items,
     )
     from work_graph.ids import parse_commit_from_id, parse_pr_from_id
-    
+
     db_url = ns.db
     if not db_url.startswith("clickhouse://"):
         logging.error("Validation only supported for ClickHouse currently.")
@@ -2298,17 +2321,25 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
         return 1
 
     logging.info("Running fixture validation...")
-    
+
     # 1. Check raw data counts
     try:
         wi_count = int(client.query("SELECT count() FROM work_items").result_rows[0][0])
         non_epic_wi_count = int(
-            client.query("SELECT count() FROM work_items WHERE type != 'epic'").result_rows[0][0]
+            client.query(
+                "SELECT count() FROM work_items WHERE type != 'epic'"
+            ).result_rows[0][0]
         )
-        pr_count = int(client.query("SELECT count() FROM git_pull_requests").result_rows[0][0])
-        commit_count = int(client.query("SELECT count() FROM git_commits").result_rows[0][0])
-        logging.info(f"Raw Counts: WI={wi_count}, PR={pr_count}, Commits={commit_count}")
-        
+        pr_count = int(
+            client.query("SELECT count() FROM git_pull_requests").result_rows[0][0]
+        )
+        commit_count = int(
+            client.query("SELECT count() FROM git_commits").result_rows[0][0]
+        )
+        logging.info(
+            f"Raw Counts: WI={wi_count}, PR={pr_count}, Commits={commit_count}"
+        )
+
         if wi_count < 10 or pr_count < 5 or commit_count < 20:
             logging.error("FAIL: Insufficient raw data.")
             return 1
@@ -2318,14 +2349,24 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
 
     # 2. Check prerequisites
     try:
-        pr_commit_count = int(client.query("SELECT count() FROM work_graph_pr_commit").result_rows[0][0])
-        issue_pr_count = int(client.query("SELECT count() FROM work_graph_issue_pr").result_rows[0][0])
-        logging.info(f"Prereqs: work_graph_pr_commit={pr_commit_count}, work_graph_issue_pr={issue_pr_count}")
+        pr_commit_count = int(
+            client.query("SELECT count() FROM work_graph_pr_commit").result_rows[0][0]
+        )
+        issue_pr_count = int(
+            client.query("SELECT count() FROM work_graph_issue_pr").result_rows[0][0]
+        )
+        logging.info(
+            f"Prereqs: work_graph_pr_commit={pr_commit_count}, work_graph_issue_pr={issue_pr_count}"
+        )
         if pr_commit_count == 0:
-            logging.error("FAIL: work_graph_pr_commit is empty (fixtures missing PR->commit prerequisites).")
+            logging.error(
+                "FAIL: work_graph_pr_commit is empty (fixtures missing PR->commit prerequisites)."
+            )
             return 1
         if issue_pr_count == 0:
-            logging.error("FAIL: work_graph_issue_pr is empty (fixtures missing issue->PR prerequisites).")
+            logging.error(
+                "FAIL: work_graph_issue_pr is empty (fixtures missing issue->PR prerequisites)."
+            )
             return 1
 
         linked_non_epic = int(
@@ -2348,7 +2389,9 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
             return 1
 
         prs_with_commits = int(
-            client.query("SELECT count(DISTINCT repo_id, pr_number) FROM work_graph_pr_commit").result_rows[0][0]
+            client.query(
+                "SELECT count(DISTINCT repo_id, pr_number) FROM work_graph_pr_commit"
+            ).result_rows[0][0]
         )
         if prs_with_commits < pr_count:
             logging.error(
@@ -2365,7 +2408,9 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
     try:
         edges = fetch_work_graph_edges(client)
         if not edges:
-            logging.error("FAIL: work_graph_edges is empty (run `cli.py work-graph build`).")
+            logging.error(
+                "FAIL: work_graph_edges is empty (run `cli.py work-graph build`)."
+            )
             return 1
 
         adjacency: dict[tuple[str, str], list[tuple[str, str]]] = {}
@@ -2395,7 +2440,11 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
 
         component_count = len(components)
         min_components = min(50, max(2, non_epic_wi_count // 2))
-        logging.info("WorkUnits (connected components): %d (min_required=%d)", component_count, min_components)
+        logging.info(
+            "WorkUnits (connected components): %d (min_required=%d)",
+            component_count,
+            min_components,
+        )
         if component_count < min_components:
             logging.error(
                 "FAIL: WorkUnits too low (components=%d, required>=%d).",
@@ -2421,16 +2470,26 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
                 break
 
         if not eligible:
-            logging.error("FAIL: No WorkUnits with both issues and PRs; evidence bundles will be empty.")
+            logging.error(
+                "FAIL: No WorkUnits with both issues and PRs; evidence bundles will be empty."
+            )
             return 1
 
         for idx, node_list in enumerate(eligible, start=1):
-            issue_ids = [node_id for node_type, node_id in node_list if node_type == "issue"]
+            issue_ids = [
+                node_id for node_type, node_id in node_list if node_type == "issue"
+            ]
             pr_ids = [node_id for node_type, node_id in node_list if node_type == "pr"]
-            commit_ids = [node_id for node_type, node_id in node_list if node_type == "commit"]
+            commit_ids = [
+                node_id for node_type, node_id in node_list if node_type == "commit"
+            ]
 
             work_items = fetch_work_items(client, work_item_ids=issue_ids)
-            work_item_map = {str(item.get("work_item_id")): item for item in work_items if item.get("work_item_id")}
+            work_item_map = {
+                str(item.get("work_item_id")): item
+                for item in work_items
+                if item.get("work_item_id")
+            }
 
             pr_repo_numbers: dict[str, list[int]] = {}
             for pr_id in pr_ids:
@@ -2449,7 +2508,9 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
             for commit_id in commit_ids:
                 repo_id, commit_hash = parse_commit_from_id(commit_id)
                 if repo_id and commit_hash:
-                    commit_repo_hashes.setdefault(str(repo_id), []).append(str(commit_hash))
+                    commit_repo_hashes.setdefault(str(repo_id), []).append(
+                        str(commit_hash)
+                    )
             commits = fetch_commits(client, repo_commits=commit_repo_hashes)
             commit_map: dict[str, dict[str, object]] = {}
             for commit in commits:
@@ -2458,8 +2519,16 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
                 if repo and commit_hash:
                     commit_map[f"{repo}@{commit_hash}"] = commit
 
-            parent_ids = {str(item.get("parent_id") or "") for item in work_items if item.get("parent_id")}
-            epic_ids = {str(item.get("epic_id") or "") for item in work_items if item.get("epic_id")}
+            parent_ids = {
+                str(item.get("parent_id") or "")
+                for item in work_items
+                if item.get("parent_id")
+            }
+            epic_ids = {
+                str(item.get("epic_id") or "")
+                for item in work_items
+                if item.get("epic_id")
+            }
             parent_titles = fetch_parent_titles(client, work_item_ids=parent_ids)
             epic_titles = fetch_parent_titles(client, work_item_ids=epic_ids)
 
@@ -2483,7 +2552,11 @@ def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
                 )
                 return 1
 
-        logging.info("Evidence sanity: PASS (sampled %d work units, min_chars=%d)", len(eligible), MIN_EVIDENCE_CHARS)
+        logging.info(
+            "Evidence sanity: PASS (sampled %d work units, min_chars=%d)",
+            len(eligible),
+            MIN_EVIDENCE_CHARS,
+        )
     except Exception as e:
         logging.error(f"FAIL: Evidence sanity check failed: {e}")
         return 1

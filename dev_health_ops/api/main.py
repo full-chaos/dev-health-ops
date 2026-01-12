@@ -441,6 +441,7 @@ async def work_unit_explain_endpoint(
     start_date: date | None = None,
     end_date: date | None = None,
     llm_provider: str = "auto",
+    llm_model: Optional[str] = None,
 ) -> WorkUnitExplanation:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
@@ -459,6 +460,7 @@ async def work_unit_explain_endpoint(
         start_date: Optional start date
         end_date: Optional end date
         llm_provider: LLM provider to use (auto, openai, anthropic, mock)
+        llm_model: Optional model version override
 
     Returns:
         WorkUnitExplanation with summary, rationale, and uncertainty disclosure
@@ -487,6 +489,7 @@ async def work_unit_explain_endpoint(
         explanation = await explain_work_unit(
             investment=target_investment,
             llm_provider=llm_provider,
+            llm_model=llm_model,
         )
         return explanation
 
@@ -951,6 +954,7 @@ async def investment_explain(
             theme=payload.theme,
             subcategory=payload.subcategory,
             llm_provider=llm_provider,
+            llm_model=payload.llm_model,
         )
     except HTTPException:
         raise

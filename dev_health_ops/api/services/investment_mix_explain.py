@@ -10,8 +10,13 @@ from analytics.investment_mix_explainer import (
 )
 from investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
 
-from ..models.filters import MetricFilter
-from ..models.schemas import InvestmentMixExplanation
+from ..models.schemas import (
+    InvestmentActionItem,
+    InvestmentConfidence,
+    InvestmentFinding,
+    InvestmentFindingEvidence,
+    InvestmentMixExplanation,
+)
 from .investment import build_investment_response
 from .llm_providers import get_provider
 from .work_units import build_work_unit_investments
@@ -42,13 +47,26 @@ def _dominant_subcategory(subcategories: Dict[str, float]) -> Optional[str]:
     return best_key
 
 
+def _determine_confidence_level(
+    quality_mean: Optional[float], quality_stddev: Optional[float]
+) -> str:
+    if quality_mean is None:
+        return "unknown"
+    if quality_mean >= 0.7 and (quality_stddev is None or quality_stddev < 0.15):
+        return "high"
+    if quality_mean >= 0.5:
+        return "moderate"
+    return "low"
+
+
 async def explain_investment_mix(
     *,
     db_url: str,
-    filters: MetricFilter,
+    filters: Any,
     theme: Optional[str] = None,
     subcategory: Optional[str] = None,
     llm_provider: str = "auto",
+    llm_model: Optional[str] = None,
 ) -> InvestmentMixExplanation:
     if theme and theme not in THEMES:
         raise ValueError("Unknown theme")
@@ -193,21 +211,94 @@ async def explain_investment_mix(
     prompt_text = load_prompt()
     full_prompt = build_prompt(base_prompt=prompt_text, payload=payload)
 
-    provider = get_provider(llm_provider)
+    provider = get_provider(llm_provider, model=llm_model)
     raw = await provider.complete(full_prompt)
-    parsed = parse_and_validate_response(raw)
+    logger.debug(f"Raw LLM response ({len(raw) if raw else 0} chars): {raw!r}")
+    parsed = parse_and_validate_response(
+        raw,
+        fallback_band_mix=band_counts,
+        fallback_drivers=quality_drivers,
+        fallback_mean=quality_mean,
+        fallback_stddev=quality_stddev,
+    )
+
     if not parsed:
         logger.warning("Investment mix explanation parse/validation failed")
+        # Build deterministic fallback
+        confidence_level = _determine_confidence_level(quality_mean, quality_stddev)
+        fallback_findings: List[InvestmentFinding] = []
+        for key, value in top_themes[:2]:
+            pct = (value / total_effort * 100) if total_effort else 0.0
+            fallback_findings.append(
+                InvestmentFinding(
+                    finding=f"Effort appears concentrated in {key} (~{pct:.0f}% of total).",
+                    evidence=InvestmentFindingEvidence(
+                        theme=key,
+                        subcategory=None,
+                        share_pct=pct,
+                        delta_pct_points=None,
+                        evidence_quality_mean=quality_mean,
+                        evidence_quality_band=confidence_level
+                        if confidence_level != "unknown"
+                        else None,
+                    ),
+                )
+            )
         return InvestmentMixExplanation(
             summary="This mix suggests effort leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.",
-            dominant_themes=[key for key, _ in top_themes[:3]],
-            key_drivers=[
-                "The distribution appears concentrated in the largest segments shown in the chart."
+            top_findings=fallback_findings,
+            confidence=InvestmentConfidence(
+                level=confidence_level,
+                quality_mean=quality_mean,
+                quality_stddev=quality_stddev,
+                band_mix=band_counts,
+                drivers=quality_drivers,
+            ),
+            what_to_check_next=[
+                InvestmentActionItem(
+                    action="Review the largest subcategories",
+                    why="They drive the overall theme distribution",
+                    where="Subcategory breakdown panel",
+                )
             ],
-            operational_signals=[
-                "Evidence quality bands indicate uncertainty varies across contributing work units."
+            anti_claims=[
+                "This does not measure individual productivity.",
+                "This does not assign intent or correctness to any work.",
             ],
-            confidence_note="AI-generated interpretation based on the data shown above; confidence appears bounded by the evidence quality mix.",
+            status="invalid_llm_output",
         )
 
-    return InvestmentMixExplanation(**parsed)
+    return InvestmentMixExplanation(
+        summary=parsed["summary"],
+        top_findings=[
+            InvestmentFinding(
+                finding=f["finding"],
+                evidence=InvestmentFindingEvidence(
+                    theme=f["evidence"]["theme"],
+                    subcategory=f["evidence"]["subcategory"],
+                    share_pct=f["evidence"]["share_pct"],
+                    delta_pct_points=f["evidence"]["delta_pct_points"],
+                    evidence_quality_mean=f["evidence"]["evidence_quality_mean"],
+                    evidence_quality_band=f["evidence"]["evidence_quality_band"],
+                ),
+            )
+            for f in parsed["top_findings"]
+        ],
+        confidence=InvestmentConfidence(
+            level=parsed["confidence"]["level"],
+            quality_mean=parsed["confidence"]["quality_mean"],
+            quality_stddev=parsed["confidence"]["quality_stddev"],
+            band_mix=parsed["confidence"]["band_mix"],
+            drivers=parsed["confidence"]["drivers"],
+        ),
+        what_to_check_next=[
+            InvestmentActionItem(
+                action=a["action"],
+                why=a["why"],
+                where=a["where"],
+            )
+            for a in parsed["what_to_check_next"]
+        ],
+        anti_claims=parsed["anti_claims"],
+        status=parsed["status"],
+    )

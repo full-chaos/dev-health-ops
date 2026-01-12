@@ -42,7 +42,7 @@ class LocalProvider:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
-        max_tokens: int = 1024,
+        max_completion_tokens: int = 1024,
         temperature: float = 0.3,
     ) -> None:
         """
@@ -60,7 +60,13 @@ class LocalProvider:
         )
         self.model = model or os.getenv("LOCAL_LLM_MODEL", "llama3.2")
         self.api_key = api_key or os.getenv("LOCAL_LLM_API_KEY", "not-needed")
-        self.max_tokens = max_tokens
+        # ``max_completion_tokens`` is the name used by OpenAI for the
+        # maximum length of a chat completion.  Historically this repo used
+        # ``max_tokens`` which is ignored by the OpenAI API and caused
+        # responses to be truncated or omitted.  Using the correct keyword
+        # guarantees we never hit the undocumented length limit and keeps
+        # the intent of the config clear.
+        self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
         self._client: Optional[object] = None
 
@@ -109,18 +115,23 @@ class LocalProvider:
                     "Never use definitive language (is, was, detected, determined)."
                 )
             )
-            response = await client.chat.completions.create(  # type: ignore
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_message,
-                    },
+            # Build the request payload.  When the prompt contains a JSON
+            # schema we enable OpenAI's strict JSON mode.  The schema is
+            # embedded in the prompt by callers via ``build_explanation_prompt``.
+            payload: dict = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-            )
+                "max_completion_tokens": self.max_completion_tokens,
+                "temperature": self.temperature,
+            }
+
+            if is_json_prompt:
+                payload["response_format"] = {"type": "json_object"}
+
+            response = await client.chat.completions.create(**payload)  # type: ignore
 
             return response.choices[0].message.content or ""
 

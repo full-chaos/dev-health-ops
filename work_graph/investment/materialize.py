@@ -55,7 +55,7 @@ class MaterializeConfig:
     repo_ids: Optional[List[str]]
     llm_provider: str
     persist_evidence_snippets: bool
-    model_version: Optional[str]
+    llm_model: Optional[str]
     team_ids: Optional[List[str]] = None
 
 
@@ -186,11 +186,7 @@ def _effort_from_work_unit(
 
 
 def _collect_repo_ids(edges: List[Dict[str, object]]) -> List[str]:
-    repo_ids = {
-        str(edge.get("repo_id") or "")
-        for edge in edges
-        if edge.get("repo_id")
-    }
+    repo_ids = {str(edge.get("repo_id") or "") for edge in edges if edge.get("repo_id")}
     return sorted(repo_id for repo_id in repo_ids if repo_id)
 
 
@@ -249,7 +245,9 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         edges = fetch_work_graph_edges(client, repo_ids=repo_ids)
         components = _build_components(edges)
         if not components:
-            logger.info("No work graph components found for investment materialization.")
+            logger.info(
+                "No work graph components found for investment materialization."
+            )
             return {"components": 0, "records": 0, "quotes": 0}
 
         issue_ids = {
@@ -287,9 +285,7 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
             if item.get("parent_id")
         }
         epic_ids = {
-            str(item.get("epic_id") or "")
-            for item in work_items
-            if item.get("epic_id")
+            str(item.get("epic_id") or "") for item in work_items if item.get("epic_id")
         }
         parent_titles = fetch_parent_titles(client, work_item_ids=parent_ids)
         epic_titles = fetch_parent_titles(client, work_item_ids=epic_ids)
@@ -298,7 +294,7 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         quote_records: List[WorkUnitInvestmentEvidenceQuoteRecord] = []
         run_id = uuid.uuid4().hex
         computed_at = datetime.now(timezone.utc)
-        model_version = config.model_version or config.llm_provider
+        model_version = config.llm_model or config.llm_provider
 
         for nodes, component_edges in components:
             unit_nodes = list(dict.fromkeys(nodes))
@@ -312,9 +308,7 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 node_id for node_type, node_id in unit_nodes if node_type == "commit"
             ]
 
-            bounds = compute_time_bounds(
-                unit_nodes, work_item_map, pr_map, commit_map
-            )
+            bounds = compute_time_bounds(unit_nodes, work_item_map, pr_map, commit_map)
             if bounds is None:
                 continue
             if bounds.end < config.from_ts or bounds.start >= config.to_ts:
@@ -339,7 +333,11 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 outcome = fallback_outcome("no_text_sources")
             else:
                 outcome = _run_coro(
-                    categorize_text_bundle(bundle, llm_provider=config.llm_provider)
+                    categorize_text_bundle(
+                        bundle,
+                        llm_provider=config.llm_provider,
+                        llm_model=config.llm_model,
+                    )
                 )
 
             theme_distribution = rollup_subcategories_to_themes(outcome.subcategories)

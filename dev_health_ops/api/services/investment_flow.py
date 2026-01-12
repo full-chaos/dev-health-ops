@@ -101,7 +101,6 @@ async def build_investment_flow_response(
 
     # 3. Decision Logic
     # Thresholds: Prefer Team if cov >= 0.7 and targets >= 2. Else Repo if cov >= 0.7 and targets >= 2.
-    chosen_mode = "fallback"
     rows_to_use = []
 
     if distinct_team_targets >= 2 and team_coverage >= 0.70:

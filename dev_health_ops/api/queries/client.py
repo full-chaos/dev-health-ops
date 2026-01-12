@@ -51,6 +51,11 @@ async def close_global_client() -> None:
 async def query_dicts(
     client: Any, query: str, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
+    if client is None:
+        raise RuntimeError("ClickHouse client is None")
+    if not hasattr(client, "query"):
+        raise RuntimeError(f"Invalid ClickHouse client: {type(client).__name__} (no 'query' method)")
+
     result = client.query(query, parameters=params)
     if inspect.isawaitable(result):
         result = await result

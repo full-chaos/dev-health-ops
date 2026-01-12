@@ -71,9 +71,10 @@ def get_provider(name: str = "auto") -> LLMProvider:
         from .openai import OpenAIProvider
 
         api_key = os.getenv("OPENAI_API_KEY")
+        base_url = os.getenv("OPENAI_BASE_URL")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable not set")
-        return OpenAIProvider(api_key=api_key)
+        return OpenAIProvider(api_key=api_key, base_url=base_url)
 
     if name == "anthropic":
         from .anthropic import AnthropicProvider

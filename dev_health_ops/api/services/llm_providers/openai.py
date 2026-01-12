@@ -18,6 +18,7 @@ class OpenAIProvider:
     def __init__(
         self,
         api_key: str,
+        base_url: Optional[str] = None,
         model: str = "gpt-5-mini",
         max_tokens: int = 1024,
         temperature: float = 0.3,
@@ -27,11 +28,13 @@ class OpenAIProvider:
 
         Args:
             api_key: OpenAI API key
-            model: Model to use (default: gpt-4o-mini for cost efficiency)
+            base_url: Optional base URL override
+            model: Model to use (default: gpt-5-mini)
             max_tokens: Maximum tokens in response
             temperature: Sampling temperature (lower = more deterministic)
         """
         self.api_key = api_key
+        self.base_url = base_url
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -61,6 +64,13 @@ class OpenAIProvider:
             return False
         return True
 
+    def _system_role(self) -> str:
+        """Newer models prefer 'developer' role over 'system'."""
+        model = (self.model or "").strip()
+        if model.startswith(("o1", "o3", "gpt-5")):
+            return "developer"
+        return "system"
+
     def _is_json_schema_prompt(self, prompt: str) -> bool:
         text = prompt or ""
         return (
@@ -89,7 +99,7 @@ class OpenAIProvider:
             try:
                 from openai import AsyncOpenAI
 
-                self._client = AsyncOpenAI(api_key=self.api_key)
+                self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
             except ImportError:
                 raise ImportError(
                     "OpenAI package not installed. Install with: pip install openai"
@@ -117,12 +127,14 @@ class OpenAIProvider:
                 else {}
             )
             system_message = self._system_message(prompt)
+            system_role = self._system_role()
+
             # Use the chat completions API
             response = await client.chat.completions.create(  # type: ignore
                 model=self.model,
                 messages=[
                     {
-                        "role": "system",
+                        "role": system_role,
                         "content": system_message,
                     },
                     {"role": "user", "content": prompt},

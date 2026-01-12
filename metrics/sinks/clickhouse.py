@@ -115,13 +115,17 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             logger.info(f"Applying migration: {version}")
 
             if path.suffix == ".sql":
-                sql = path.read_text(encoding="utf-8")
-                # Very small splitter: migrations are expected to contain only DDL.
-                for stmt in sql.split(";"):
-                    stmt = stmt.strip()
-                    if not stmt:
-                        continue
-                    self.client.command(stmt)
+                try:
+                    sql = path.read_text(encoding="utf-8")
+                    # Very small splitter: migrations are expected to contain only DDL.
+                    for stmt in sql.split(";"):
+                        stmt = stmt.strip()
+                        if not stmt:
+                            continue
+                        self.client.command(stmt)
+                except Exception as e:
+                    logger.error(f"CRITICAL: Migration failed: {path.name}\nError: {e}")
+                    raise
             elif path.suffix == ".py":
                 # Execute python migration script
                 try:

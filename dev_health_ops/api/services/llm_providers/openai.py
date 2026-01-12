@@ -127,6 +127,7 @@ class OpenAIProvider:
                     },
                     {"role": "user", "content": prompt},
                 ],
+                response_format={"type": "json_object"},
                 **token_kwargs,
                 **temperature_kwargs,
             )

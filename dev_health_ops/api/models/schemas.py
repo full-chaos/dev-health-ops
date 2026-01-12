@@ -440,6 +440,11 @@ class SankeyResponse(BaseModel):
     unit: Optional[str] = None
     label: Optional[str] = None
     description: Optional[str] = None
+    team_coverage: Optional[float] = None
+    repo_coverage: Optional[float] = None
+    distinct_team_targets: Optional[int] = None
+    distinct_repo_targets: Optional[int] = None
+    chosen_mode: Optional[str] = None
 
 
 # Aggregated flame graph models (hierarchical tree format)

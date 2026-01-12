@@ -55,6 +55,54 @@ async def fetch_work_unit_investments(
     return await query_dicts(client, query, params)
 
 
+async def fetch_repo_scopes(
+    client: Any,
+    *,
+    repo_ids: Iterable[str],
+) -> Dict[str, str]:
+    ids = [repo_id for repo_id in repo_ids if repo_id]
+    if not ids:
+        return {}
+    query = """
+        SELECT
+            toString(id) AS repo_id,
+            repo
+        FROM repos
+        WHERE id IN %(repo_ids)s
+    """
+    rows = await query_dicts(client, query, {"repo_ids": ids})
+    return {str(row.get("repo_id")): str(row.get("repo") or "") for row in rows if row.get("repo_id")}
+
+
+async def fetch_work_item_team_assignments(
+    client: Any,
+    *,
+    work_item_ids: Iterable[str],
+) -> Dict[str, Dict[str, str]]:
+    ids = [work_item_id for work_item_id in work_item_ids if work_item_id]
+    if not ids:
+        return {}
+    query = """
+        SELECT
+            work_item_id,
+            argMax(team_id, computed_at) AS team_id,
+            argMax(team_name, computed_at) AS team_name
+        FROM work_item_cycle_times
+        WHERE work_item_id IN %(work_item_ids)s
+        GROUP BY work_item_id
+    """
+    rows = await query_dicts(client, query, {"work_item_ids": ids})
+    result: Dict[str, Dict[str, str]] = {}
+    for row in rows:
+        work_item_id = str(row.get("work_item_id") or "")
+        if not work_item_id:
+            continue
+        team_id = str(row.get("team_id") or "")
+        team_name = str(row.get("team_name") or "")
+        result[work_item_id] = {"team_id": team_id, "team_name": team_name}
+    return result
+
+
 async def fetch_work_unit_investment_quotes(
     client: Any,
     *,

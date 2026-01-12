@@ -18,6 +18,8 @@ from ..queries.client import clickhouse_client
 from ..queries.work_unit_investments import (
     fetch_work_unit_investment_quotes,
     fetch_work_unit_investments,
+    fetch_repo_scopes,
+    fetch_work_item_team_assignments,
 )
 from .filtering import resolve_repo_filter_ids, time_window
 
@@ -62,6 +64,46 @@ def _parse_distribution(value: object) -> Dict[str, float]:
     return {}
 
 
+def _extract_issue_ids(structural_payload: object) -> List[str]:
+    if not structural_payload:
+        return []
+    try:
+        parsed = (
+            json.loads(structural_payload)
+            if isinstance(structural_payload, str)
+            else structural_payload
+        )
+    except Exception:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    issues = parsed.get("issues")
+    if not isinstance(issues, list):
+        return []
+    return [str(item) for item in issues if item]
+
+
+def _majority_team_for_issues(
+    issue_ids: Iterable[str],
+    team_map: Dict[str, Dict[str, str]],
+) -> Tuple[str, str]:
+    counts: Dict[str, int] = {}
+    names: Dict[str, str] = {}
+    for issue_id in issue_ids:
+        assignment = team_map.get(str(issue_id)) or {}
+        team_id = str(assignment.get("team_id") or "").strip()
+        team_name = str(assignment.get("team_name") or "").strip()
+        if not team_id:
+            continue
+        counts[team_id] = counts.get(team_id, 0) + 1
+        if team_name:
+            names.setdefault(team_id, team_name)
+    if not counts:
+        return "unassigned", "Unassigned"
+    team_id = max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+    return team_id, names.get(team_id) or team_id
+
+
 def _matches_category_filter(
     theme_distribution: Dict[str, float],
     subcategory_distribution: Dict[str, float],
@@ -95,6 +137,9 @@ async def build_work_unit_investments(
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
     theme_filters, subcategory_filters = _split_category_filters(filters)
+
+    repo_scopes: Dict[str, str] = {}
+    team_assignments: Dict[str, Dict[str, str]] = {}
 
     async with clickhouse_client(db_url) as client:
         repo_ids = await resolve_repo_filter_ids(client, filters)
@@ -138,6 +183,20 @@ async def build_work_unit_investments(
             quote_rows = await fetch_work_unit_investment_quotes(
                 client, unit_runs=unit_runs
             )
+
+        repo_id_values = [
+            str(row.get("repo_id") or "")
+            for row in rows
+            if row.get("repo_id")
+        ]
+        repo_scopes = await fetch_repo_scopes(client, repo_ids=repo_id_values)
+
+        issue_ids: List[str] = []
+        for row in rows:
+            issue_ids.extend(_extract_issue_ids(row.get("structural_evidence_json")))
+        team_assignments = await fetch_work_item_team_assignments(
+            client, work_item_ids=issue_ids
+        )
 
     quotes_by_unit: Dict[str, List[Dict[str, object]]] = {}
     for quote in quote_rows:
@@ -190,6 +249,21 @@ async def build_work_unit_investments(
                 "span_days": span_days,
             }
         ]
+
+        repo_scope = "unassigned"
+        repo_id = row.get("repo_id")
+        if repo_id:
+            repo_id_str = str(repo_id)
+            repo_scope = repo_scopes.get(repo_id_str) or repo_id_str or "unassigned"
+        contextual_evidence.append({"type": "repo_scope", "repo_ids": [repo_scope]})
+
+        unit_issue_ids = _extract_issue_ids(structural_payload)
+        team_id, team_name = _majority_team_for_issues(
+            unit_issue_ids, team_assignments
+        )
+        contextual_evidence.append(
+            {"type": "team_scope", "team_ids": [team_id], "team_names": [team_name]}
+        )
 
         evidence_quality_value = float(row.get("evidence_quality") or 0.0)
         evidence_band = str(row.get("evidence_quality_band") or "very_low")

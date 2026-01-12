@@ -146,7 +146,7 @@ async def fetch_investment_team_edges(
                 argMax(team_name, computed_at) AS team_name
             FROM work_item_cycle_times
             GROUP BY work_item_id
-        ) AS t ON has(extractAll(structural_evidence_json, '"issues":\\[([^\\]]+)\\]'), toString(t.work_item_id)) OR has(extractAll(structural_evidence_json, '"issues":\\["([^"]+)"\\]'), toString(t.work_item_id))
+        ) AS t ON t.work_item_id = arrayElement(JSONExtract(structural_evidence_json, 'issues', 'Array(String)'), 1)
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s

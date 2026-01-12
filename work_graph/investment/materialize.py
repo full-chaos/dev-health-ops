@@ -17,7 +17,6 @@ from metrics.schemas import (
 from metrics.sinks.factory import create_sink
 from work_graph.ids import parse_commit_from_id, parse_pr_from_id
 from work_graph.investment.categorize import (
-    CategorizationOutcome,
     categorize_text_bundle,
     fallback_outcome,
 )

@@ -7,10 +7,10 @@ from dev_health_ops.api.services.llm_providers.openai import OpenAIProvider
 
 class _StubResponse:
     def __init__(self) -> None:
-        self.choices = [type("Choice", (), {"message": type("Msg", (), {"content": "ok"})()})()]
+        self.output_text = '{"status": "ok"}'
 
 
-class _StubCompletions:
+class _StubResponses:
     def __init__(self, captured: dict) -> None:
         self._captured = captured
 
@@ -19,25 +19,25 @@ class _StubCompletions:
         return _StubResponse()
 
 
-class _StubChat:
-    def __init__(self, captured: dict) -> None:
-        self.completions = _StubCompletions(captured)
-
-
 class _StubClient:
     def __init__(self, captured: dict) -> None:
-        self.chat = _StubChat(captured)
+        self.responses = _StubResponses(captured)
 
 
 @pytest.mark.asyncio
 async def test_openai_provider_uses_max_completion_tokens_for_gpt5():
     captured: dict = {}
-    provider = OpenAIProvider(api_key="test", model="gpt-5-mini", max_tokens=123)
-    provider._client = _StubClient(captured)
+    provider = OpenAIProvider(
+        api_key="test", model="gpt-5-mini", max_completion_tokens=123
+    )
+    provider._impl._client = _StubClient(captured)
 
     result = await provider.complete("hello")
-    assert result == "ok"
-    assert "max_completion_tokens" in captured["kwargs"]
-    assert captured["kwargs"]["max_completion_tokens"] == 123
+    assert result == '{"status": "ok"}'
+    # GPT-5 internal parameter is max_output_tokens
+    assert "max_output_tokens" in captured["kwargs"]
+    assert (
+        captured["kwargs"]["max_output_tokens"] == 2048
+    )  # max(clamped 1024, explanation default 2048)
     assert "max_tokens" not in captured["kwargs"]
     assert "temperature" not in captured["kwargs"]

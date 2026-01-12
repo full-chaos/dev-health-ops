@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from dev_health_ops.api.services.llm_providers.openai import OpenAIProvider
@@ -30,16 +31,30 @@ class _StubChat:
         self.completions = _StubCompletions(captured)
 
 
+class _StubResponses:
+    def __init__(self, captured: dict) -> None:
+        self._captured = captured
+
+    async def create(self, **kwargs):
+        self._captured["kwargs"] = kwargs
+        resp = MagicMock()
+        resp.output_text = "{}"
+        resp.incomplete_details = None
+        return resp
+
+
 class _StubClient:
     def __init__(self, captured: dict) -> None:
-        self.chat = _StubChat(captured)
+        self.responses = _StubResponses(captured)
 
 
 @pytest.mark.asyncio
 async def test_openai_provider_uses_json_system_prompt_for_schema_prompts():
     captured: dict = {}
-    provider = OpenAIProvider(api_key="test", model="gpt-5-mini", max_tokens=50)
-    provider._client = _StubClient(captured)
+    provider = OpenAIProvider(
+        api_key="test", model="gpt-5-mini", max_completion_tokens=1024, temperature=0.2
+    )
+    provider._impl._client = _StubClient(captured)
 
     prompt = """Output schema:
 {
@@ -49,6 +64,5 @@ async def test_openai_provider_uses_json_system_prompt_for_schema_prompts():
 }
 """
     await provider.complete(prompt)
-    system = captured["kwargs"]["messages"][0]["content"]
+    system = captured["kwargs"]["instructions"]
     assert "JSON" in system
-

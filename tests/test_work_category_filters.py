@@ -18,7 +18,11 @@ from dev_health_ops.api.queries import sankey as sankey_queries
 
 @asynccontextmanager
 async def _fake_clickhouse_client(_dsn):
-    yield object()
+    from unittest.mock import MagicMock
+
+    mock = MagicMock()
+    mock.query.return_value = []
+    yield mock
 
 
 @pytest.mark.asyncio
@@ -60,8 +64,12 @@ async def test_investment_response_applies_work_category_filter(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(investment_service, "clickhouse_client", _fake_clickhouse_client)
-    monkeypatch.setattr(investment_service, "fetch_investment_breakdown", _fake_breakdown)
+    monkeypatch.setattr(
+        investment_service, "clickhouse_client", _fake_clickhouse_client
+    )
+    monkeypatch.setattr(
+        investment_service, "fetch_investment_breakdown", _fake_breakdown
+    )
     monkeypatch.setattr(
         investment_service, "resolve_repo_filter_ids", _fake_resolve_repo_filter_ids
     )
@@ -153,9 +161,10 @@ async def test_sankey_investment_flow_query_avoids_maptoarray(monkeypatch):
     )
 
     assert "mapToArray" not in captured["query"]
-    assert "CAST(theme_distribution_json AS Array(Tuple(String, Float32)))" in captured[
-        "query"
-    ]
+    assert (
+        "CAST(theme_distribution_json AS Array(Tuple(String, Float32)))"
+        in captured["query"]
+    )
 
 
 @pytest.mark.asyncio
@@ -196,8 +205,12 @@ async def test_investment_response_without_work_category_filter(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(investment_service, "clickhouse_client", _fake_clickhouse_client)
-    monkeypatch.setattr(investment_service, "fetch_investment_breakdown", _fake_breakdown)
+    monkeypatch.setattr(
+        investment_service, "clickhouse_client", _fake_clickhouse_client
+    )
+    monkeypatch.setattr(
+        investment_service, "fetch_investment_breakdown", _fake_breakdown
+    )
     monkeypatch.setattr(
         investment_service, "resolve_repo_filter_ids", _fake_resolve_repo_filter_ids
     )

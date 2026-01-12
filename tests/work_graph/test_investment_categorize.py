@@ -35,7 +35,7 @@ def test_retry_limit_and_fallback(monkeypatch):
     provider = StubProvider(["not json", "still not json"])
     monkeypatch.setattr(
         "work_graph.investment.categorize.get_provider",
-        lambda _: provider,
+        lambda name, model=None: provider,
     )
     outcome = asyncio.run(categorize_text_bundle(_bundle(), llm_provider="mock"))
     assert provider.calls == 2
@@ -44,10 +44,9 @@ def test_retry_limit_and_fallback(monkeypatch):
 
 
 def test_repaired_status(monkeypatch):
-    provider = StubProvider(
-        [
-            "not json",
-            """{
+    provider = StubProvider([
+        "not json",
+        """{
               "subcategories": {
                 "feature_delivery.roadmap": 1.0
               },
@@ -56,11 +55,10 @@ def test_repaired_status(monkeypatch):
               ],
               "uncertainty": "Some uncertainty remains."
             }""",
-        ]
-    )
+    ])
     monkeypatch.setattr(
         "work_graph.investment.categorize.get_provider",
-        lambda _: provider,
+        lambda name, model=None: provider,
     )
     outcome = asyncio.run(categorize_text_bundle(_bundle(), llm_provider="mock"))
     assert provider.calls == 2

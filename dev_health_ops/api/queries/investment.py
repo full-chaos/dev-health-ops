@@ -99,7 +99,7 @@ async def fetch_investment_subcategory_edges(
     query = f"""
         SELECT
             subcategory_kv.1 AS source,
-            ifNull(r.repo, if(repo_id=0, 'unassigned', toString(repo_id))) AS target,
+            ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS target,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
         LEFT JOIN repos AS r ON r.id = repo_id

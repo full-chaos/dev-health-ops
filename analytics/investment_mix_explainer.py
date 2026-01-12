@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
 
 PROMPT_PATH = Path(__file__).with_name("investment_mix_explain_prompt.txt")
+logger = logging.getLogger(__name__)
 
 
 class InvestmentMixExplainOutput(TypedDict):
@@ -16,7 +18,7 @@ class InvestmentMixExplainOutput(TypedDict):
     confidence_note: str
 
 
-_FORBIDDEN_WORDS = (" should ", " should.", " should,", " is ", " was ", " determined ", " detected ")
+_FORBIDDEN_WORDS = (" should ", " should.", " should,", " determined ", " detected ")
 
 
 def load_prompt() -> str:
@@ -42,15 +44,18 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     end = candidate.rfind("}")
 
     if start == -1 or end == -1 or end < start:
+        logger.warning("Failed to find JSON object in LLM response")
         return None
 
     json_str = candidate[start : end + 1]
 
     try:
         parsed = json.loads(json_str)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logger.warning(f"JSON decode error in LLM response: {e}")
         return None
     if not isinstance(parsed, dict):
+        logger.warning("Parsed JSON is not a dictionary")
         return None
     return parsed
 
@@ -78,8 +83,10 @@ def parse_and_validate_response(text: str) -> Optional[InvestmentMixExplainOutpu
     summary = parsed.get("summary")
     confidence_note = parsed.get("confidence_note")
     if not isinstance(summary, str) or not summary.strip():
+        logger.warning("Missing or empty 'summary' in LLM response")
         return None
     if not isinstance(confidence_note, str) or not confidence_note.strip():
+        logger.warning("Missing or empty 'confidence_note' in LLM response")
         return None
 
     output: InvestmentMixExplainOutput = {
@@ -100,6 +107,7 @@ def parse_and_validate_response(text: str) -> Optional[InvestmentMixExplainOutpu
         ]
     )
     if _contains_forbidden_language(all_text):
+        logger.warning("LLM response contains forbidden language")
         return None
 
     return output

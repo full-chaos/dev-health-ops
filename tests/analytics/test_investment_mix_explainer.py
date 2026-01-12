@@ -55,6 +55,21 @@ def test_parse_and_validate_response_forbidden_language():
     text = json.dumps(payload)
     assert parse_and_validate_response(text) is None
 
+def test_parse_and_validate_response_common_verbs():
+    # This test currently fails because "is" is forbidden
+    payload = {
+        "summary": "The evidence is suggesting a trend.",
+        "dominant_themes": ["Theme A"],
+        "key_drivers": [],
+        "operational_signals": [],
+        "confidence_note": "Note."
+    }
+    text = json.dumps(payload)
+    # "is" is now allowed
+    result = parse_and_validate_response(text)
+    assert result is not None
+    assert result["summary"] == "The evidence is suggesting a trend."
+
 def test_parse_and_validate_response_missing_fields():
     payload = {
         "summary": "Summary only."

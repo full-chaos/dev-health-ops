@@ -4,10 +4,9 @@ import asyncio
 import json
 import uuid
 from collections.abc import Iterable
-from dataclasses import asdict
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
@@ -42,24 +41,23 @@ from models.git import (
     Repo,
 )
 from models.work_items import WorkItem, WorkItemDependency, WorkItemStatusTransition
+from models.teams import Team
 
-if TYPE_CHECKING:
-    from metrics.schemas import FileComplexitySnapshot
-    from metrics.schemas import WorkItemUserMetricsDailyRecord
-    from models.teams import Team
+from metrics.schemas import FileComplexitySnapshot
+from metrics.schemas import WorkItemUserMetricsDailyRecord
 
 
 def _parse_date_value(value: Any) -> Optional[date]:
-    if value is None:
-        return None
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if isinstance(value, datetime):
-        return value.date()
-    try:
-        return date.fromisoformat(str(value))
-    except Exception:
-        return None
+    if value:
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        try:
+            return date.fromisoformat(str(value))
+        except Exception:
+            pass
+    return None
 
 
 def _parse_datetime_value(value: Any) -> Optional[datetime]:

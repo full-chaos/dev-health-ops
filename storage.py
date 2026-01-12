@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import uuid
@@ -39,12 +41,12 @@ from models.git import (
     Incident,
     Repo,
 )
+from models.work_items import WorkItem, WorkItemDependency, WorkItemStatusTransition
 
 if TYPE_CHECKING:
     from metrics.schemas import FileComplexitySnapshot
     from metrics.schemas import WorkItemUserMetricsDailyRecord
     from models.teams import Team
-    from models.work_items import WorkItem, WorkItemDependency, WorkItemStatusTransition
 
 
 def _parse_date_value(value: Any) -> Optional[date]:

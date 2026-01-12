@@ -1464,12 +1464,16 @@ class ClickHouseStore:
                     continue
 
                 if path.suffix == ".sql":
-                    sql = await asyncio.to_thread(path.read_text, encoding="utf-8")
-                    for stmt in sql.split(";"):
-                        stmt = stmt.strip()
-                        if not stmt:
-                            continue
-                        await asyncio.to_thread(self.client.command, stmt)
+                    try:
+                        sql = await asyncio.to_thread(path.read_text, encoding="utf-8")
+                        for stmt in sql.split(";"):
+                            stmt = stmt.strip()
+                            if not stmt:
+                                continue
+                            await asyncio.to_thread(self.client.command, stmt)
+                    except Exception as e:
+                        print(f"CRITICAL: Migration failed: {path.name}\nError: {e}")
+                        raise
                 elif path.suffix == ".py":
                     # Dynamic import and execution for Python migrations
                     import importlib.util

@@ -169,6 +169,7 @@ class InvestmentResponse(BaseModel):
     theme_distribution: Dict[str, float]
     subcategory_distribution: Dict[str, float]
     evidence_quality_distribution: Optional[Dict[str, float]] = None
+    evidence_quality_stats: Optional["EvidenceQualityStats"] = None
     unit: Optional[str] = None
     edges: Optional[List[Dict[str, Any]]] = None
 
@@ -192,8 +193,17 @@ class WorkUnitEffort(BaseModel):
 
 
 class EvidenceQuality(BaseModel):
-    value: float
-    band: Literal["high", "moderate", "low", "very_low"]
+    value: Optional[float] = None
+    band: Optional[Literal["high", "moderate", "low", "very_low", "unknown"]] = None
+
+
+class EvidenceQualityStats(BaseModel):
+    """Aggregated evidence quality statistics for a slice."""
+
+    mean: Optional[float] = None
+    stddev: Optional[float] = None
+    band_counts: Dict[str, int] = Field(default_factory=dict)
+    quality_drivers: List[str] = Field(default_factory=list)
 
 
 class WorkUnitEvidence(BaseModel):

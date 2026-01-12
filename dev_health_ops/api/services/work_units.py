@@ -185,9 +185,7 @@ async def build_work_unit_investments(
             )
 
         repo_id_values = [
-            str(row.get("repo_id") or "")
-            for row in rows
-            if row.get("repo_id")
+            str(row.get("repo_id") or "") for row in rows if row.get("repo_id")
         ]
         repo_scopes = await fetch_repo_scopes(client, repo_ids=repo_id_values)
 
@@ -234,14 +232,12 @@ async def build_work_unit_investments(
 
         textual_evidence: List[Dict[str, object]] = []
         for quote in quotes_by_unit.get(unit_id, []):
-            textual_evidence.append(
-                {
-                    "type": "evidence_quote",
-                    "quote": quote.get("quote"),
-                    "source": quote.get("source_type"),
-                    "id": quote.get("source_id"),
-                }
-            )
+            textual_evidence.append({
+                "type": "evidence_quote",
+                "quote": quote.get("quote"),
+                "source": quote.get("source_type"),
+                "id": quote.get("source_id"),
+            })
 
         span_days = max(0.0, (to_ts - from_ts).total_seconds() / 86400.0)
         contextual_evidence = [
@@ -261,15 +257,21 @@ async def build_work_unit_investments(
         contextual_evidence.append({"type": "repo_scope", "repo_ids": [repo_scope]})
 
         unit_issue_ids = _extract_issue_ids(structural_payload)
-        team_id, team_name = _majority_team_for_issues(
-            unit_issue_ids, team_assignments
-        )
-        contextual_evidence.append(
-            {"type": "team_scope", "team_ids": [team_id], "team_names": [team_name]}
-        )
+        team_id, team_name = _majority_team_for_issues(unit_issue_ids, team_assignments)
+        contextual_evidence.append({
+            "type": "team_scope",
+            "team_ids": [team_id],
+            "team_names": [team_name],
+        })
 
-        evidence_quality_value = float(row.get("evidence_quality") or 0.0)
-        evidence_band = str(row.get("evidence_quality_band") or "very_low")
+        raw_quality = row.get("evidence_quality")
+        evidence_quality_value = float(raw_quality) if raw_quality is not None else None
+        raw_band = row.get("evidence_quality_band")
+        evidence_band = (
+            str(raw_band)
+            if raw_band
+            else ("unknown" if raw_quality is None else "very_low")
+        )
 
         results.append(
             WorkUnitInvestment(

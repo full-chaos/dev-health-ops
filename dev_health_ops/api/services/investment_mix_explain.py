@@ -3,7 +3,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from analytics.investment_mix_explainer import build_prompt, load_prompt, parse_and_validate_response
+from analytics.investment_mix_explainer import (
+    build_prompt,
+    load_prompt,
+    parse_and_validate_response,
+)
 from investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
 
 from ..models.filters import MetricFilter
@@ -17,7 +21,11 @@ logger = logging.getLogger(__name__)
 
 def _top_items(distribution: Dict[str, float], limit: int) -> List[Tuple[str, float]]:
     return sorted(
-        [(k, float(v or 0.0)) for k, v in distribution.items() if float(v or 0.0) > 0.0],
+        [
+            (k, float(v or 0.0))
+            for k, v in distribution.items()
+            if float(v or 0.0) > 0.0
+        ],
         key=lambda item: item[1],
         reverse=True,
     )[: max(1, int(limit))]
@@ -61,7 +69,9 @@ async def explain_investment_mix(
         }
     if subcategory:
         subcategory_distribution = {
-            key: value for key, value in subcategory_distribution.items() if key == subcategory
+            key: value
+            for key, value in subcategory_distribution.items()
+            if key == subcategory
         }
 
     units = await build_work_unit_investments(
@@ -73,12 +83,14 @@ async def explain_investment_mix(
 
     if theme:
         units = [
-            unit for unit in units
+            unit
+            for unit in units
             if float((unit.investment.themes or {}).get(theme, 0.0)) > 0.0
         ]
     if subcategory:
         units = [
-            unit for unit in units
+            unit
+            for unit in units
             if float((unit.investment.subcategories or {}).get(subcategory, 0.0)) > 0.0
         ]
 
@@ -100,7 +112,9 @@ async def explain_investment_mix(
             quote = entry.get("quote")
             if not isinstance(quote, str) or not quote.strip():
                 continue
-            quotes_by_subcategory.setdefault(dominant or "unassigned", []).append(quote.strip())
+            quotes_by_subcategory.setdefault(dominant or "unassigned", []).append(
+                quote.strip()
+            )
 
     top_themes = _top_items(theme_distribution, 8)
     top_subcategories = _top_items(subcategory_distribution, 12)
@@ -115,15 +129,54 @@ async def explain_investment_mix(
     total_effort = sum(float(v or 0.0) for v in theme_distribution.values())
     total_units = len(units)
 
+    # Compute quality statistics from units
+    quality_values = [
+        float(u.evidence_quality.value)
+        for u in units
+        if u.evidence_quality.value is not None
+    ]
+    quality_mean = sum(quality_values) / len(quality_values) if quality_values else None
+    quality_stddev = None
+    if quality_values and len(quality_values) > 1:
+        import math
+
+        variance = sum((v - quality_mean) ** 2 for v in quality_values) / len(
+            quality_values
+        )
+        quality_stddev = math.sqrt(variance)
+
+    # Determine quality drivers based on band distribution
+    quality_drivers: List[str] = []
+    unknown_count = band_counts.get("unknown", 0)
+    low_count = band_counts.get("low", 0) + band_counts.get("very_low", 0)
+    total_band = sum(band_counts.values())
+    if total_band > 0:
+        if unknown_count / total_band > 0.3:
+            quality_drivers.append("missing_evidence_metadata")
+        if low_count / total_band > 0.5:
+            quality_drivers.append("weak_cross_links")
+    if quality_mean is not None and quality_mean < 0.4:
+        quality_drivers.append("low_text_signal")
+    if quality_stddev is not None and quality_stddev > 0.25:
+        quality_drivers.append("high_uncertainty_spread")
+
     payload: Dict[str, Any] = {
         "focus": {"theme": theme, "subcategory": subcategory},
         "total_effort": total_effort,
         "theme_distribution_top": [
-            {"theme": key, "value": value, "pct": (value / total_effort) if total_effort else 0.0}
+            {
+                "theme": key,
+                "value": value,
+                "pct": (value / total_effort) if total_effort else 0.0,
+            }
             for key, value in top_themes
         ],
         "subcategory_distribution_top": [
-            {"subcategory": key, "value": value, "pct": (value / total_effort) if total_effort else 0.0}
+            {
+                "subcategory": key,
+                "value": value,
+                "pct": (value / total_effort) if total_effort else 0.0,
+            }
             for key, value in top_subcategories
         ],
         "work_unit_count": total_units,
@@ -131,6 +184,9 @@ async def explain_investment_mix(
             {"subcategory": key, "count": int(value)} for key, value in top_counts
         ],
         "evidence_quality_band_counts": band_counts,
+        "evidence_quality_mean": quality_mean,
+        "evidence_quality_stddev": quality_stddev,
+        "quality_drivers": quality_drivers,
         "evidence_quote_samples": sample_quotes,
     }
 
@@ -145,10 +201,13 @@ async def explain_investment_mix(
         return InvestmentMixExplanation(
             summary="This mix suggests effort leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.",
             dominant_themes=[key for key, _ in top_themes[:3]],
-            key_drivers=["The distribution appears concentrated in the largest segments shown in the chart."],
-            operational_signals=["Evidence quality bands indicate uncertainty varies across contributing work units."],
+            key_drivers=[
+                "The distribution appears concentrated in the largest segments shown in the chart."
+            ],
+            operational_signals=[
+                "Evidence quality bands indicate uncertainty varies across contributing work units."
+            ],
             confidence_note="AI-generated interpretation based on the data shown above; confidence appears bounded by the evidence quality mix.",
         )
 
     return InvestmentMixExplanation(**parsed)
-

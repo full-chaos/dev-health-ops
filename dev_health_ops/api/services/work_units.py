@@ -227,7 +227,10 @@ async def build_work_unit_investments(
                 if isinstance(parsed, dict):
                     structural_evidence.append({"type": "work_unit_nodes", **parsed})
             except json.JSONDecodeError:
-                pass
+                logger.warning(
+                    "Failed to decode structural_evidence_json for work_unit_id %s",
+                    unit_id,
+                )
 
         textual_evidence: List[Dict[str, object]] = []
         for quote in quotes_by_unit.get(unit_id, []):

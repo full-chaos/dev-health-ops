@@ -40,11 +40,17 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     candidate = text.strip()
     candidate = re.sub(r"^```(?:json)?\s*", "", candidate, flags=re.IGNORECASE)
     candidate = re.sub(r"\s*```$", "", candidate)
-    match = re.search(r"\{[\s\S]*\}", candidate)
-    if not match:
+
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+
+    if start == -1 or end == -1 or end < start:
         return None
+
+    json_str = candidate[start : end + 1]
+
     try:
-        parsed = json.loads(match.group(0))
+        parsed = json.loads(json_str)
     except json.JSONDecodeError:
         return None
     if not isinstance(parsed, dict):

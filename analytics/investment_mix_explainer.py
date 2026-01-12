@@ -38,8 +38,6 @@ def build_prompt(*, base_prompt: str, payload: Dict[str, Any]) -> str:
 
 def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     candidate = text.strip()
-    candidate = re.sub(r"^```(?:json)?\s*", "", candidate, flags=re.IGNORECASE)
-    candidate = re.sub(r"\s*```$", "", candidate)
 
     start = candidate.find("{")
     end = candidate.rfind("}")

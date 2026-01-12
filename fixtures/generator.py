@@ -1176,11 +1176,6 @@ class SyntheticDataGenerator:
                 num_commits = 2
             
             # Pick commits close to PR creation
-            # Filter available commits that are <= pr.merged_at (if merged)
-            # or <= pr.created_at + 7 days
-            
-            cutoff = pr.merged_at or (pr.created_at + timedelta(days=7))
-            
             # This is O(N^2) effectively if we iterate, but lists are small for fixtures.
             # Let's just pop from available for simplicity in synthetic gen.
             

@@ -72,11 +72,12 @@ local_scheme = "dirty-tag"
 [tool.setuptools]
 packages = [
   "analytics",
-  "dev_health_ops",
-  "dev_health_ops.api",
-  "dev_health_ops.api.models",
-  "dev_health_ops.api.queries",
-  "dev_health_ops.api.services",
+  "api",
+  "api.models",
+  "api.queries",
+  "api.services",
+  "api.services.llm_providers",
+  "audit",
   "connectors",
   "connectors.utils",
   "fixtures",
@@ -96,4 +97,4 @@ packages = [
 py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
 
 [tool.setuptools.package-data]
-dev_health_ops = ["api/sql/**/*.sql"]
+api = ["sql/**/*.sql"]

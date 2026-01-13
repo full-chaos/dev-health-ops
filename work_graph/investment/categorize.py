@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List
 
-from dev_health_ops.api.services.llm_providers import get_provider
+from api.services.llm_providers import get_provider
 from work_graph.investment.llm_schema import (
     EvidenceQuote,
     LLMValidationResult,

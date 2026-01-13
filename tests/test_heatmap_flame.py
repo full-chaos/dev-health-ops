@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from dev_health_ops.api.models.schemas import (
+from api.models.schemas import (
     FlameFrame,
     FlameTimeline,
     HeatmapAxes,
@@ -8,8 +8,8 @@ from dev_health_ops.api.models.schemas import (
     HeatmapLegend,
     HeatmapResponse,
 )
-from dev_health_ops.api.services.flame import validate_flame_frames
-from dev_health_ops.api.services.heatmap import (
+from api.services.flame import validate_flame_frames
+from api.services.heatmap import (
     HEATMAP_METRICS,
     WEEKDAY_LABELS,
     _hour_labels,
@@ -108,7 +108,7 @@ def test_flame_frames_gap_detection():
 def test_aggregated_flame_empty_response_shape():
     """Verify empty aggregated flame response has valid structure."""
     from datetime import date
-    from dev_health_ops.api.models.schemas import (
+    from api.models.schemas import (
         AggregatedFlameNode,
         AggregatedFlameMeta,
         AggregatedFlameResponse,
@@ -133,7 +133,7 @@ def test_aggregated_flame_empty_response_shape():
 
 def test_aggregated_flame_cycle_breakdown_structure():
     """Verify cycle breakdown tree builds correctly with categories."""
-    from dev_health_ops.api.services.aggregated_flame import (
+    from api.services.aggregated_flame import (
         _build_cycle_breakdown_tree,
     )
 
@@ -163,7 +163,7 @@ def test_aggregated_flame_cycle_breakdown_structure():
 
 def test_aggregated_flame_code_hotspots_hierarchy():
     """Verify code hotspots tree builds path hierarchy correctly."""
-    from dev_health_ops.api.services.aggregated_flame import (
+    from api.services.aggregated_flame import (
         _build_code_hotspots_tree,
     )
 
@@ -193,7 +193,7 @@ def test_aggregated_flame_code_hotspots_hierarchy():
 def test_aggregated_flame_filter_propagation():
     """Verify filters are included in meta."""
     from datetime import date
-    from dev_health_ops.api.models.schemas import (
+    from api.models.schemas import (
         AggregatedFlameNode,
         AggregatedFlameMeta,
         AggregatedFlameResponse,
@@ -216,7 +216,7 @@ def test_aggregated_flame_filter_propagation():
 
 def test_aggregated_flame_throughput_tree_structure():
     """Verify throughput tree builds correctly with work types and teams/repos."""
-    from dev_health_ops.api.services.aggregated_flame import _build_throughput_tree
+    from api.services.aggregated_flame import _build_throughput_tree
 
     rows = [
         {"work_type": "Feature", "team_id": "team1", "repo_id": None, "throughput": 10},
@@ -240,7 +240,7 @@ def test_aggregated_flame_milestone_approximation():
     import pytest
     from unittest.mock import patch, MagicMock
     from datetime import date
-    from dev_health_ops.api.services.aggregated_flame import (
+    from api.services.aggregated_flame import (
         build_aggregated_flame_response,
     )
 
@@ -262,15 +262,15 @@ def test_aggregated_flame_milestone_approximation():
 
     with (
         patch(
-            "dev_health_ops.api.services.aggregated_flame.fetch_cycle_breakdown",
+            "api.services.aggregated_flame.fetch_cycle_breakdown",
             side_effect=mock_fetch_status_durations,
         ),
         patch(
-            "dev_health_ops.api.services.aggregated_flame.fetch_cycle_milestones",
+            "api.services.aggregated_flame.fetch_cycle_milestones",
             side_effect=mock_fetch_cycle_milestones,
         ),
         patch(
-            "dev_health_ops.api.services.aggregated_flame.clickhouse_client",
+            "api.services.aggregated_flame.clickhouse_client",
             side_effect=mock_clickhouse_client,
         ),
     ):

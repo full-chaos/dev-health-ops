@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dev_health_ops.api.services.llm_providers.openai import (
+from api.services.llm_providers.openai import (
     OpenAIProvider,
     OpenAIGPT5Provider,
     OpenAIGPTLegacyProvider,

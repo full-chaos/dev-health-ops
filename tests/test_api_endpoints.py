@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from dev_health_ops.api.main import app
-from dev_health_ops.api.models.schemas import (
+from api.main import app
+from api.models.schemas import (
     ConstraintCard,
     ConstraintEvidence,
     Coverage,
@@ -20,7 +20,7 @@ from dev_health_ops.api.models.schemas import (
     SankeyNode,
     SankeyResponse,
 )
-from dev_health_ops.api.models.filters import MetricFilter
+from api.models.filters import MetricFilter
 
 
 def _validate(model, payload):
@@ -38,7 +38,7 @@ def client():
 def mock_db_url(monkeypatch):
     """Set a dummy DATABASE_URL so endpoints don't return 503."""
     monkeypatch.setattr(
-        "dev_health_ops.api.main._db_url",
+        "api.main._db_url",
         lambda: "clickhouse://localhost:8123/default",
     )
 
@@ -95,7 +95,7 @@ def test_home_endpoint_schema(client, monkeypatch):
     async def _fake_home(**_):
         return sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_home_response", _fake_home)
+    monkeypatch.setattr("api.main.build_home_response", _fake_home)
 
     response = client.get("/api/v1/home")
     assert response.status_code == 200
@@ -130,7 +130,7 @@ def test_home_post_uses_filters(client, monkeypatch):
             events=[],
         )
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_home_response", _fake_home)
+    monkeypatch.setattr("api.main.build_home_response", _fake_home)
 
     response = client.post(
         "/api/v1/home",
@@ -183,7 +183,7 @@ def test_home_query_translation_matches_post(client, monkeypatch):
             events=[],
         )
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_home_response", _fake_home)
+    monkeypatch.setattr("api.main.build_home_response", _fake_home)
 
     response = client.get(
         "/api/v1/home",
@@ -244,7 +244,7 @@ def test_explain_endpoint_schema(client, monkeypatch):
     async def _fake_explain(**_):
         return sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_explain_response", _fake_explain)
+    monkeypatch.setattr("api.main.build_explain_response", _fake_explain)
 
     response = client.get("/api/v1/explain", params={"metric": "cycle_time"})
     assert response.status_code == 200
@@ -267,7 +267,7 @@ def test_sankey_endpoint_schema(client, monkeypatch):
     async def _fake_sankey(**_):
         return sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_sankey_response", _fake_sankey)
+    monkeypatch.setattr("api.main.build_sankey_response", _fake_sankey)
 
     response = client.post(
         "/api/v1/sankey",
@@ -302,7 +302,7 @@ def test_sankey_endpoint_get_schema(client, monkeypatch):
     async def _fake_sankey(**_):
         return sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_sankey_response", _fake_sankey)
+    monkeypatch.setattr("api.main.build_sankey_response", _fake_sankey)
 
     response = client.get(
         "/api/v1/sankey",

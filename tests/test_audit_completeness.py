@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from dev_health_ops.audit.completeness import (
+from audit.completeness import (
     build_git_commits_query,
     build_git_pull_requests_query,
     build_transitions_query,

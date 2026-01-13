@@ -1,0 +1,1726 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../PRIVATE_REPO_TESTING/">
+      
+      
+        <link rel="next" href="../metrics-inventory/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Overview - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#developer-health-metrics-v2" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Overview
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CONNECTOR_USAGE/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PRIVATE_REPO_TESTING/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#source-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Source Data
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#derived-tables-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      Derived Tables / Collections
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Derived Tables / Collections">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#git-repo-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      Git / Repo / User
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work Tracking
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#team-well-being-team-level-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Team Well-being (team-level only)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metric-definitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metric Definitions
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metric Definitions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#commit-size-bucketing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit size bucketing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pr-cycle-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      PR cycle time
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#large-change-thresholds" class="md-nav__link">
+    <span class="md-ellipsis">
+      Large change thresholds
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daily-user-metrics-user_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily user metrics (user_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daily-repo-metrics-repo_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily repo metrics (repo_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-per-commit-metrics-commit_metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional per-commit metrics (commit_metrics)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-item-normalization-cycle-times" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work item normalization + cycle times
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-tracking-daily-metrics-work_item_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work tracking daily metrics (work_item_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-item-facts-work_item_cycle_times" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work item facts (work_item_cycle_times)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-item-time-in-state-work_item_state_durations_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work item time-in-state (work_item_state_durations_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unassigned-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unassigned work
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#team-well-being-team-level-only_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Team well-being (team-level only)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Storage Targets
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Storage Targets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      ClickHouse (tables)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clickhouse-query-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      ClickHouse query notes
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ClickHouse query notes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mongodb-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      MongoDB (collections)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sqlite-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      SQLite (tables)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-daily-job" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running The Daily Job
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running The Daily Job">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment variables
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Examples
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ic-metrics-landscape-v3" class="md-nav__link">
+    <span class="md-ellipsis">
+      IC Metrics &amp; Landscape (v3)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="IC Metrics & Landscape (v3)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#identity-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Resolution
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ic-metrics-user_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      IC Metrics (user_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#landscape-maps-ic_landscape_rolling_30d" class="md-nav__link">
+    <span class="md-ellipsis">
+      Landscape Maps (ic_landscape_rolling_30d)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Landscape Maps (ic_landscape_rolling_30d)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#map-1-churn-vs-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      Map 1: Churn vs Throughput
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#map-2-cycle-time-vs-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      Map 2: Cycle Time vs Throughput
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#map-3-wip-vs-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      Map 3: WIP vs Throughput
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-complexity-repo_complexity_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code Complexity (repo_complexity_daily)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#investment-metrics-investment_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Investment Metrics (investment_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grafana/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Grafana
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#source-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Source Data
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#derived-tables-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      Derived Tables / Collections
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Derived Tables / Collections">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#git-repo-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      Git / Repo / User
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work Tracking
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#team-well-being-team-level-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Team Well-being (team-level only)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metric-definitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metric Definitions
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metric Definitions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#commit-size-bucketing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Commit size bucketing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pr-cycle-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      PR cycle time
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#large-change-thresholds" class="md-nav__link">
+    <span class="md-ellipsis">
+      Large change thresholds
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daily-user-metrics-user_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily user metrics (user_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daily-repo-metrics-repo_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily repo metrics (repo_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-per-commit-metrics-commit_metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional per-commit metrics (commit_metrics)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-item-normalization-cycle-times" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work item normalization + cycle times
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-tracking-daily-metrics-work_item_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work tracking daily metrics (work_item_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-item-facts-work_item_cycle_times" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work item facts (work_item_cycle_times)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-item-time-in-state-work_item_state_durations_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work item time-in-state (work_item_state_durations_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unassigned-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unassigned work
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#team-well-being-team-level-only_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Team well-being (team-level only)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-targets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Storage Targets
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Storage Targets">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      ClickHouse (tables)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clickhouse-query-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      ClickHouse query notes
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ClickHouse query notes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mongodb-collections" class="md-nav__link">
+    <span class="md-ellipsis">
+      MongoDB (collections)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sqlite-tables" class="md-nav__link">
+    <span class="md-ellipsis">
+      SQLite (tables)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-daily-job" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running The Daily Job
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running The Daily Job">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment variables
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Examples
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ic-metrics-landscape-v3" class="md-nav__link">
+    <span class="md-ellipsis">
+      IC Metrics &amp; Landscape (v3)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="IC Metrics & Landscape (v3)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#identity-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Resolution
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ic-metrics-user_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      IC Metrics (user_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#landscape-maps-ic_landscape_rolling_30d" class="md-nav__link">
+    <span class="md-ellipsis">
+      Landscape Maps (ic_landscape_rolling_30d)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Landscape Maps (ic_landscape_rolling_30d)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#map-1-churn-vs-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      Map 1: Churn vs Throughput
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#map-2-cycle-time-vs-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      Map 2: Cycle Time vs Throughput
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#map-3-wip-vs-throughput" class="md-nav__link">
+    <span class="md-ellipsis">
+      Map 3: WIP vs Throughput
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-complexity-repo_complexity_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code Complexity (repo_complexity_daily)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#investment-metrics-investment_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Investment Metrics (investment_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="developer-health-metrics-v2">Developer Health Metrics (v2)<a class="headerlink" href="#developer-health-metrics-v2" title="Permanent link">&para;</a></h1>
+<p>This repository computes daily “developer health” metrics from:</p>
+<ul>
+<li>synced Git facts (<code>git_commits</code>, <code>git_commit_stats</code>, <code>git_pull_requests</code>)</li>
+<li>optional work tracking data (Jira issues, GitHub issues/Projects v2, GitLab issues)</li>
+</ul>
+<p>Derived time series are written to <strong>ClickHouse</strong> (preferred) and/or <strong>MongoDB</strong> (optional) for Grafana.</p>
+<p>All timestamps are treated as <strong>UTC</strong> (ClickHouse stores DateTime in UTC; Mongo stores naive datetimes as UTC by convention).</p>
+<p>Important: Jira (and other issue trackers) is <strong>not</strong> a replacement for pull request data. Work items are used for planning/throughput/WIP metrics, while PR metrics (cycle time, merge frequency, review metrics when available) come from the Git provider sync.</p>
+<h2 id="source-data">Source Data<a class="headerlink" href="#source-data" title="Permanent link">&para;</a></h2>
+<p>Git facts must already exist in the backend you point the job at:</p>
+<ul>
+<li><code>git_commits</code></li>
+<li><code>git_commit_stats</code></li>
+<li><code>git_pull_requests</code></li>
+</ul>
+<p>Work tracking facts should be synced from provider APIs via <code>python cli.py sync work-items ...</code>.
+See <code>docs/task_trackers.md</code> for configuration. (<code>metrics daily --provider ...</code> still exists as a convenience/backward-compatible path.)</p>
+<p>CI/CD pipeline facts are synced from GitHub/GitLab via the <code>sync cicd</code> job:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>cli.py<span class="w"> </span>sync<span class="w"> </span>cicd<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;&lt;DB_CONN&gt;&quot;</span><span class="w"> </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--owner<span class="w"> </span><span class="s2">&quot;&lt;org&gt;&quot;</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">&quot;&lt;repo&gt;&quot;</span>
+python<span class="w"> </span>cli.py<span class="w"> </span>sync<span class="w"> </span>cicd<span class="w"> </span>--provider<span class="w"> </span>gitlab<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;&lt;DB_CONN&gt;&quot;</span><span class="w"> </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITLAB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--gitlab-url<span class="w"> </span><span class="s2">&quot;&lt;URL&gt;&quot;</span><span class="w"> </span>--project-id<span class="w"> </span>&lt;ID&gt;
+</code></pre></div>
+<p>Deployments and incident facts are synced via their own jobs:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>cli.py<span class="w"> </span>sync<span class="w"> </span>deployments<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;&lt;DB_CONN&gt;&quot;</span><span class="w"> </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--owner<span class="w"> </span><span class="s2">&quot;&lt;org&gt;&quot;</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">&quot;&lt;repo&gt;&quot;</span>
+python<span class="w"> </span>cli.py<span class="w"> </span>sync<span class="w"> </span>incidents<span class="w"> </span>--provider<span class="w"> </span>github<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;&lt;DB_CONN&gt;&quot;</span><span class="w"> </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITHUB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--owner<span class="w"> </span><span class="s2">&quot;&lt;org&gt;&quot;</span><span class="w"> </span>--repo<span class="w"> </span><span class="s2">&quot;&lt;repo&gt;&quot;</span>
+python<span class="w"> </span>cli.py<span class="w"> </span>sync<span class="w"> </span>deployments<span class="w"> </span>--provider<span class="w"> </span>gitlab<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;&lt;DB_CONN&gt;&quot;</span><span class="w"> </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITLAB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--gitlab-url<span class="w"> </span><span class="s2">&quot;&lt;URL&gt;&quot;</span><span class="w"> </span>--project-id<span class="w"> </span>&lt;ID&gt;
+python<span class="w"> </span>cli.py<span class="w"> </span>sync<span class="w"> </span>incidents<span class="w"> </span>--provider<span class="w"> </span>gitlab<span class="w"> </span>--db<span class="w"> </span><span class="s2">&quot;&lt;DB_CONN&gt;&quot;</span><span class="w"> </span>--auth<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GITLAB_TOKEN</span><span class="s2">&quot;</span><span class="w"> </span>--gitlab-url<span class="w"> </span><span class="s2">&quot;&lt;URL&gt;&quot;</span><span class="w"> </span>--project-id<span class="w"> </span>&lt;ID&gt;
+</code></pre></div>
+<p>Note: Jira Ops/Service Desk incidents are planned once project-to-repo or deployment mapping is defined.</p>
+<h2 id="derived-tables-collections">Derived Tables / Collections<a class="headerlink" href="#derived-tables-collections" title="Permanent link">&para;</a></h2>
+<h3 id="git-repo-user">Git / Repo / User<a class="headerlink" href="#git-repo-user" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>repo_metrics_daily</code></li>
+<li><code>user_metrics_daily</code></li>
+<li><code>commit_metrics</code></li>
+</ul>
+<h3 id="work-tracking">Work Tracking<a class="headerlink" href="#work-tracking" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>work_item_metrics_daily</code> (daily aggregates, by provider/team/repo)</li>
+<li><code>work_item_user_metrics_daily</code> (daily aggregates, by provider/user/team)</li>
+<li><code>work_item_cycle_times</code> (per-work-item fact rows for completed items)</li>
+</ul>
+<h3 id="team-well-being-team-level-only">Team Well-being (team-level only)<a class="headerlink" href="#team-well-being-team-level-only" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>team_metrics_daily</code></li>
+</ul>
+<h2 id="metric-definitions">Metric Definitions<a class="headerlink" href="#metric-definitions" title="Permanent link">&para;</a></h2>
+<h3 id="commit-size-bucketing">Commit size bucketing<a class="headerlink" href="#commit-size-bucketing" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>total_loc = additions + deletions</code> (summed from <code>git_commit_stats</code>)</li>
+<li>bucket:</li>
+<li><code>small</code>: <code>total_loc &lt;= 50</code></li>
+<li><code>medium</code>: <code>51..300</code></li>
+<li><code>large</code>: <code>&gt; 300</code></li>
+</ul>
+<h3 id="pr-cycle-time">PR cycle time<a class="headerlink" href="#pr-cycle-time" title="Permanent link">&para;</a></h3>
+<p>For PRs with <code>merged_at</code> on day <strong>D</strong>:</p>
+<ul>
+<li><code>cycle_time_hours = (merged_at - created_at) / 3600</code></li>
+<li>Distribution fields (per repo/day and user/day):</li>
+<li><code>median_pr_cycle_hours</code> (p50)</li>
+<li><code>pr_cycle_p75_hours</code></li>
+<li><code>pr_cycle_p90_hours</code></li>
+</ul>
+<h3 id="large-change-thresholds">Large change thresholds<a class="headerlink" href="#large-change-thresholds" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Large commits: <code>total_loc &gt; 300</code></li>
+<li>Large PRs: <code>additions + deletions &gt;= LARGE_PR_LOC_THRESHOLD</code> (default: <code>1000</code>)</li>
+<li>Note: PR size facts are <strong>best-effort</strong> and may be missing depending on the connector.</li>
+</ul>
+<h3 id="daily-user-metrics-user_metrics_daily">Daily user metrics (<code>user_metrics_daily</code>)<a class="headerlink" href="#daily-user-metrics-user_metrics_daily" title="Permanent link">&para;</a></h3>
+<p>Keyed by <code>(repo_id, author_email, day)</code> where <code>author_email</code> falls back to <code>author_name</code> when email is missing.</p>
+<ul>
+<li>Commits: counts, LOC added/deleted, distinct files changed (union across the day), large commits, avg commit size</li>
+<li>PRs: authored (created that day), merged (merged that day), avg/p50/p75/p90 PR cycle hours (for PRs merged that day)</li>
+<li>Collaboration (nullable when not available):</li>
+<li><code>pr_pickup_time_p50_hours</code>: PR created → first interaction (comment/review)</li>
+<li><code>pr_first_review_p50_hours</code> / <code>p90</code>: PR created → first review</li>
+<li><code>pr_review_time_p50_hours</code>: first review → merge</li>
+<li><code>reviews_given</code>, <code>changes_requested_given</code>: counts of review submissions for the day</li>
+</ul>
+<p>Null behavior:</p>
+<ul>
+<li>if review/comment facts are unavailable, pickup/first-review/review-time fields remain <code>NULL</code></li>
+</ul>
+<h3 id="daily-repo-metrics-repo_metrics_daily">Daily repo metrics (<code>repo_metrics_daily</code>)<a class="headerlink" href="#daily-repo-metrics-repo_metrics_daily" title="Permanent link">&para;</a></h3>
+<p>Keyed by <code>(repo_id, day)</code>.</p>
+<ul>
+<li>Commits: count, LOC touched, avg size, large commit ratio</li>
+<li>PRs: merged count, p50/p75/p90 PR cycle hours</li>
+<li>Quality (best-effort): <code>large_pr_ratio</code>, <code>pr_rework_ratio</code> (requires PR size and review facts)</li>
+<li>Knowledge:</li>
+<li><code>bus_factor</code>: smallest number of developers accounting for ≥ 50% of code churn</li>
+<li><code>code_ownership_gini</code>: Gini coefficient of code contribution inequality (0..1)</li>
+</ul>
+<h3 id="optional-per-commit-metrics-commit_metrics">Optional per-commit metrics (<code>commit_metrics</code>)<a class="headerlink" href="#optional-per-commit-metrics-commit_metrics" title="Permanent link">&para;</a></h3>
+<p>Keyed by <code>(repo_id, day, author_email, commit_hash)</code>.</p>
+<h3 id="work-item-normalization-cycle-times">Work item normalization + cycle times<a class="headerlink" href="#work-item-normalization-cycle-times" title="Permanent link">&para;</a></h3>
+<p>Work items are normalized into a unified <code>WorkItem</code> abstraction (<code>models/work_items.py</code>).</p>
+<p>Best-effort fields:</p>
+<ul>
+<li><code>started_at</code>: first transition into normalized <code>in_progress</code></li>
+<li><code>completed_at</code>: first transition into normalized <code>done</code> or <code>canceled</code></li>
+</ul>
+<p>Time metrics:</p>
+<ul>
+<li><code>lead_time_hours = completed_at - created_at</code> (when completed)</li>
+<li><code>cycle_time_hours = completed_at - started_at</code> (when started + completed)</li>
+</ul>
+<p>Null behavior:</p>
+<ul>
+<li>items missing <code>started_at</code> are excluded from cycle-time distributions</li>
+</ul>
+<h3 id="work-tracking-daily-metrics-work_item_metrics_daily">Work tracking daily metrics (<code>work_item_metrics_daily</code>)<a class="headerlink" href="#work-tracking-daily-metrics-work_item_metrics_daily" title="Permanent link">&para;</a></h3>
+<p>Keyed by <code>(day, provider, team_id, work_scope_id)</code>.</p>
+<p><code>work_scope_id</code> is provider-native and is used to avoid assuming a repo UUID exists for work items:</p>
+<ul>
+<li>Jira: Jira project key (e.g. <code>ABC</code>)</li>
+<li>GitHub: repository full name (e.g. <code>owner/repo</code>) when sourced from issues; Projects v2 uses <code>ghprojv2:&lt;org&gt;#&lt;number&gt;</code></li>
+<li>GitLab: project full path (e.g. <code>group/project</code>)</li>
+<li>Throughput: <code>items_started</code>, <code>items_completed</code></li>
+<li>Ownership gap: <code>items_completed_unassigned</code> (subset of completed items that had no assignee at completion time)</li>
+<li>WIP: <code>wip_count_end_of_day</code></li>
+<li>Cycle/lead time distributions (nullable if no samples): p50/p90</li>
+<li>WIP age distributions (nullable if no WIP samples): p50/p90</li>
+<li><code>bug_completed_ratio</code>: completed bugs / total completed</li>
+<li><code>story_points_completed</code>: sum of story points completed (Jira only, when configured)</li>
+<li><code>predictability_score</code>: Completion Rate = <code>items_completed / (items_completed + wip_count_end_of_day)</code></li>
+</ul>
+<h3 id="work-item-facts-work_item_cycle_times">Work item facts (<code>work_item_cycle_times</code>)<a class="headerlink" href="#work-item-facts-work_item_cycle_times" title="Permanent link">&para;</a></h3>
+<p>Keyed by <code>(provider, work_item_id)</code>; stored as ClickHouse <code>ReplacingMergeTree</code> by <code>computed_at</code> and as Mongo upserts.</p>
+<h3 id="work-item-time-in-state-work_item_state_durations_daily">Work item time-in-state (<code>work_item_state_durations_daily</code>)<a class="headerlink" href="#work-item-time-in-state-work_item_state_durations_daily" title="Permanent link">&para;</a></h3>
+<p>Keyed by <code>(day, provider, work_scope_id, team_id, status)</code> and computed from provider status transitions (Jira changelog when available).</p>
+<p>Null behavior:</p>
+<ul>
+<li>items without status transition history contribute no rows</li>
+</ul>
+<h3 id="unassigned-work">Unassigned work<a class="headerlink" href="#unassigned-work" title="Permanent link">&para;</a></h3>
+<p>If a work item has no assignee, daily rollups:</p>
+<ul>
+<li>count it under <code>team_id=''</code> (shown as “unassigned” in dashboards)</li>
+<li>emit a <code>work_item_user_metrics_daily</code> row with <code>user_identity='unassigned'</code> so you can chart “closed unassigned” work over time</li>
+</ul>
+<h3 id="team-well-being-team-level-only_1">Team well-being (team-level only)<a class="headerlink" href="#team-well-being-team-level-only_1" title="Permanent link">&para;</a></h3>
+<p>Computed from commits (deduplicated by commit hash) and a team mapping.</p>
+<ul>
+<li><code>after_hours_commit_ratio</code>: commits outside business hours on weekdays</li>
+<li><code>weekend_commit_ratio</code>: commits on weekends</li>
+</ul>
+<p>Configuration:</p>
+<ul>
+<li><code>BUSINESS_TIMEZONE</code> (default: <code>UTC</code>)</li>
+<li><code>BUSINESS_HOURS_START</code> (default: <code>9</code>)</li>
+<li><code>BUSINESS_HOURS_END</code> (default: <code>17</code>)</li>
+</ul>
+<h2 id="storage-targets">Storage Targets<a class="headerlink" href="#storage-targets" title="Permanent link">&para;</a></h2>
+<h3 id="clickhouse-tables">ClickHouse (tables)<a class="headerlink" href="#clickhouse-tables" title="Permanent link">&para;</a></h3>
+<p>Tables are created automatically if missing:</p>
+<ul>
+<li><code>repo_metrics_daily</code></li>
+<li><code>user_metrics_daily</code></li>
+<li><code>commit_metrics</code></li>
+<li><code>team_metrics_daily</code></li>
+<li><code>work_item_metrics_daily</code></li>
+<li><code>work_item_user_metrics_daily</code></li>
+<li><code>work_item_cycle_times</code></li>
+</ul>
+<p>They are <code>MergeTree</code> tables partitioned by <code>toYYYYMM(day)</code> and ordered by the natural keys for Grafana queries.</p>
+<h2 id="clickhouse-query-notes">ClickHouse query notes<a class="headerlink" href="#clickhouse-query-notes" title="Permanent link">&para;</a></h2>
+<p>These derived tables are append-only with a <code>computed_at</code> version. To query the latest value per key, use <code>argMax(&lt;metric&gt;, computed_at)</code> grouped by the key columns. If you need a daily total, do it in two steps (no nested aggregates):</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span>
+<span class="w">  </span><span class="k">day</span><span class="p">,</span>
+<span class="w">  </span><span class="k">sum</span><span class="p">(</span><span class="n">items_completed_unassigned_latest</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">items_completed_unassigned</span>
+<span class="k">FROM</span>
+<span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span>
+<span class="w">    </span><span class="k">day</span><span class="p">,</span>
+<span class="w">    </span><span class="n">provider</span><span class="p">,</span>
+<span class="w">    </span><span class="n">work_scope_id</span><span class="p">,</span>
+<span class="w">    </span><span class="n">team_id</span><span class="p">,</span>
+<span class="w">    </span><span class="n">argMax</span><span class="p">(</span><span class="n">items_completed_unassigned</span><span class="p">,</span><span class="w"> </span><span class="n">computed_at</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">items_completed_unassigned_latest</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">work_item_metrics_daily</span>
+<span class="w">  </span><span class="k">WHERE</span><span class="w"> </span><span class="n">provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;jira&#39;</span>
+<span class="w">  </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">day</span><span class="p">,</span><span class="w"> </span><span class="n">provider</span><span class="p">,</span><span class="w"> </span><span class="n">work_scope_id</span><span class="p">,</span><span class="w"> </span><span class="n">team_id</span>
+<span class="p">)</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">day</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="k">day</span><span class="p">;</span>
+</code></pre></div>
+<p>Re-computations are <strong>append-only</strong> and distinguished by <code>computed_at</code>. To query the latest metrics for a key/day, use <code>argMax(..., computed_at)</code> in ClickHouse.</p>
+<h3 id="mongodb-collections">MongoDB (collections)<a class="headerlink" href="#mongodb-collections" title="Permanent link">&para;</a></h3>
+<p>Collections are created automatically:</p>
+<ul>
+<li><code>repo_metrics_daily</code></li>
+<li><code>user_metrics_daily</code></li>
+<li><code>commit_metrics</code></li>
+<li><code>team_metrics_daily</code></li>
+<li><code>work_item_metrics_daily</code></li>
+<li><code>work_item_user_metrics_daily</code></li>
+<li><code>work_item_cycle_times</code></li>
+</ul>
+<p>Documents use stable compound <code>_id</code> keys and are written via upserts, so recomputation is safe.</p>
+<h3 id="sqlite-tables">SQLite (tables)<a class="headerlink" href="#sqlite-tables" title="Permanent link">&para;</a></h3>
+<p>Tables are created automatically in the same <code>.db</code> file:</p>
+<ul>
+<li><code>repo_metrics_daily</code></li>
+<li><code>user_metrics_daily</code></li>
+<li><code>commit_metrics</code></li>
+<li><code>team_metrics_daily</code></li>
+<li><code>work_item_metrics_daily</code></li>
+<li><code>work_item_user_metrics_daily</code></li>
+<li><code>work_item_cycle_times</code></li>
+</ul>
+<h2 id="running-the-daily-job">Running The Daily Job<a class="headerlink" href="#running-the-daily-job" title="Permanent link">&para;</a></h2>
+<p>The job reads source data from the <strong>same backend</strong> you point it at (ClickHouse or MongoDB), using the synced tables/collections:</p>
+<ul>
+<li><code>git_commits</code></li>
+<li><code>git_commit_stats</code></li>
+<li><code>git_pull_requests</code>
+  It also supports SQLite, reading the same tables and writing metrics tables into the same <code>.db</code> file.</li>
+</ul>
+<h3 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>DATABASE_URI</code> (or <code>DATABASE_URL</code>): ClickHouse, MongoDB, SQLite, or PostgreSQL URI for both reading source data and writing derived metrics.</li>
+<li><code>SECONDARY_DATABASE_URI</code>: Required when running with <code>--sink both</code> to write to a secondary backend.</li>
+</ul>
+<h3 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Compute one day (backend inferred from <code>--db</code> or <code>DATABASE_URI</code>):</li>
+<li><code>python cli.py metrics daily --date 2025-02-01 --db clickhouse://localhost:8123/default</code></li>
+<li><code>python cli.py metrics daily --date 2025-02-01 --db mongodb://localhost:27017/mergestat</code></li>
+<li><code>python cli.py metrics daily --date 2025-02-01 --db sqlite:///./mergestat.db</code></li>
+<li>Compute 7-day backfill ending at a date:</li>
+<li><code>python cli.py metrics daily --date 2025-02-01 --backfill 7 --db clickhouse://localhost:8123/default</code></li>
+<li>Filter to one repository:</li>
+<li><code>python cli.py metrics daily --date 2025-02-01 --repo-id &lt;uuid&gt; --db clickhouse://localhost:8123/default</code></li>
+<li>Compute git + work item metrics (requires provider credentials; see <code>docs/task_trackers.md</code>):</li>
+<li><code>python cli.py sync work-items --provider all --date 2025-02-01 --backfill 30 --db clickhouse://localhost:8123/default</code></li>
+<li><code>python cli.py metrics daily --date 2025-02-01 --backfill 30 --db clickhouse://localhost:8123/default</code></li>
+</ul>
+<h2 id="dependencies">Dependencies<a class="headerlink" href="#dependencies" title="Permanent link">&para;</a></h2>
+<ul>
+<li>ClickHouse uses <code>clickhouse-connect</code> (already in <code>requirements.txt</code>).</li>
+<li>MongoDB uses <code>pymongo</code> (available via the <code>motor</code> dependency in <code>requirements.txt</code>).</li>
+<li>SQLite uses <code>sqlalchemy</code> (already in <code>requirements.txt</code>).</li>
+</ul>
+<h2 id="ic-metrics-landscape-v3">IC Metrics &amp; Landscape (v3)<a class="headerlink" href="#ic-metrics-landscape-v3" title="Permanent link">&para;</a></h2>
+<p>We compute canonical Individual Contributor (IC) metrics and "Developer Landscape" maps to visualize patterns in churn, throughput, and work-in-progress.</p>
+<p><strong>Note:</strong> These metrics are designed for identifying signals and patterns, not for ranking individuals.</p>
+<h3 id="identity-resolution">Identity Resolution<a class="headerlink" href="#identity-resolution" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Users are mapped to a canonical <code>identity_id</code> (preferring email) across providers.</li>
+<li>Configuration: <code>config/teams.yaml</code> or <code>config/team_mapping.yaml</code>.</li>
+</ul>
+<h3 id="ic-metrics-user_metrics_daily">IC Metrics (<code>user_metrics_daily</code>)<a class="headerlink" href="#ic-metrics-user_metrics_daily" title="Permanent link">&para;</a></h3>
+<p>Extends the daily user metrics with work tracking and unified throughput signals:</p>
+<ul>
+<li><code>identity_id</code>: Canonical user identity.</li>
+<li><code>loc_touched</code>: Sum of additions + deletions.</li>
+<li><code>delivery_units</code>: <code>prs_merged</code> + <code>work_items_completed</code>.</li>
+<li><code>work_items_active</code>: Number of items in progress/review/blocked at end of day.</li>
+<li><code>cycle_p50_hours</code>: Median cycle time (PRs).</li>
+</ul>
+<h3 id="landscape-maps-ic_landscape_rolling_30d">Landscape Maps (<code>ic_landscape_rolling_30d</code>)<a class="headerlink" href="#landscape-maps-ic_landscape_rolling_30d" title="Permanent link">&para;</a></h3>
+<p>Rolling 30-day metrics normalized by team percentiles (0..1).
+Stored in ClickHouse table <code>ic_landscape_rolling_30d</code>.</p>
+<h4 id="map-1-churn-vs-throughput">Map 1: Churn vs Throughput<a class="headerlink" href="#map-1-churn-vs-throughput" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>X</strong>: <code>log(churn_loc_30d)</code> (rolling 30d sum of LOC touched)</li>
+<li><strong>Y</strong>: <code>delivery_units_30d</code> (rolling 30d sum of delivery units)</li>
+</ul>
+<h4 id="map-2-cycle-time-vs-throughput">Map 2: Cycle Time vs Throughput<a class="headerlink" href="#map-2-cycle-time-vs-throughput" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>X</strong>: <code>log(cycle_p50_30d_hours)</code> (median of daily median PR cycle times over 30d)</li>
+<li><strong>Y</strong>: <code>delivery_units_30d</code></li>
+</ul>
+<h4 id="map-3-wip-vs-throughput">Map 3: WIP vs Throughput<a class="headerlink" href="#map-3-wip-vs-throughput" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>X</strong>: <code>wip_max_30d</code> (max active work items over 30d)</li>
+<li><strong>Y</strong>: <code>delivery_units_30d</code></li>
+</ul>
+<p>Each coordinate (<code>x_raw</code>, <code>y_raw</code>) is normalized per team into (<code>x_norm</code>, <code>y_norm</code>) representing the percentile rank within the team.</p>
+<h2 id="code-complexity-repo_complexity_daily">Code Complexity (<code>repo_complexity_daily</code>)<a class="headerlink" href="#code-complexity-repo_complexity_daily" title="Permanent link">&para;</a></h2>
+<p>Complexity metrics are computed by scanning local git clones at specific historical references using <code>radon</code>.</p>
+<ul>
+<li><strong>Cyclomatic Complexity (CC)</strong>: Measures the number of linearly independent paths through a program's source code.</li>
+<li><strong>Metric fields</strong>:</li>
+<li><code>cyclomatic_total</code>: Sum of CC for all functions/classes in the repo.</li>
+<li><code>cyclomatic_avg</code>: Mean CC per function.</li>
+<li><code>high_complexity_functions</code>: Count of functions with CC &gt; 15 (configurable).</li>
+<li><code>very_high_complexity_functions</code>: Count of functions with CC &gt; 25.</li>
+<li><strong>Backfilling</strong>: Uses <code>git checkout</code> (via <code>GitPython</code>) to analyze historical state.</li>
+</ul>
+<h2 id="investment-metrics-investment_metrics_daily">Investment Metrics (<code>investment_metrics_daily</code>)<a class="headerlink" href="#investment-metrics-investment_metrics_daily" title="Permanent link">&para;</a></h2>
+<p>Categorizes engineering effort into investment areas (e.g., "New Value", "Security", "Infrastructure") using a rule-based classifier.</p>
+<ul>
+<li><strong>Artifacts Classified</strong>:</li>
+<li><strong>Work Items</strong>: Based on labels, components, and title keywords.</li>
+<li><strong>Commits (Churn)</strong>: Based on file path patterns (e.g., <code>infra/</code> or <code>tests/</code>).</li>
+<li><strong>Metric fields</strong>:</li>
+<li><code>investment_area</code>: The assigned category.</li>
+<li><code>project_stream</code>: A secondary grouping (e.g., "Project Phoenix").</li>
+<li><code>delivery_units</code>: Story points or count of work items completed.</li>
+<li><code>churn_loc</code>: Sum of additions + deletions associated with the area.</li>
+<li><strong>Configuration</strong>: <code>config/investment_areas.yaml</code> defines the matching rules and priorities.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

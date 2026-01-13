@@ -220,9 +220,15 @@ async def keep_alive_wrapper(coro):
                 break
             # Yield whitespace to keep proxy/load-balancer connection alive
             yield " "
-    except Exception as e:
+    except Exception:
         logger.exception("Streaming error in keep_alive_wrapper")
-        yield json.dumps({"error": "Streaming error", "detail": str(e)})
+        # Return a generic error message without exposing internal exception details
+        yield json.dumps(
+            {
+                "error": "Streaming error",
+                "detail": "An internal streaming error occurred.",
+            }
+        )
 
 
 @app.get("/api/v1/meta", response_model=MetaResponse)

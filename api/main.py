@@ -222,7 +222,12 @@ async def keep_alive_wrapper(coro):
             yield " "
     except Exception:
         logger.exception("Streaming error in keep_alive_wrapper")
-        # Return a generic error message without exposing internal exception details
+        yield json.dumps(
+            {
+                "error": "Streaming error",
+                "detail": "An internal error has occurred.",
+            }
+        )
         yield json.dumps(
             {
                 "error": "Streaming error",

@@ -1150,7 +1150,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     investment_materialize.add_argument(
         "--db",
-        required=True,
+        default=os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL"),
         help="ClickHouse connection string (clickhouse://user:pass@host:port/db).",
     )
     investment_materialize.add_argument(
@@ -2277,8 +2277,16 @@ def _cmd_investment_materialize(ns: argparse.Namespace) -> int:
     repo_ids = [repo_id for repo_id in (ns.repo_id or []) if repo_id]
     team_ids = [team_id for team_id in (ns.team_id or []) if team_id]
 
+    dsn = ns.db
+    if not dsn:
+        dsn = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+
+    if not dsn:
+        logging.error("Database URI is required (pass --db or set DATABASE_URI).")
+        return 1
+
     config = MaterializeConfig(
-        dsn=ns.db,
+        dsn=dsn,
         from_ts=from_ts,
         to_ts=to_ts,
         repo_ids=repo_ids or None,

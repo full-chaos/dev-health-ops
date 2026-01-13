@@ -105,7 +105,7 @@ async def test_openai_provider_uses_json_mode_and_instructions():
 
     # Use a prompt that triggers the "schema" system message to verify all instructions
     prompt = 'Output schema: "subcategories", "evidence_quotes", "uncertainty"'
-    result = await provider.complete(prompt)
+    await provider.complete(prompt)
 
     # Verify the system message contains JSON instructions
     # GPT-5 uses instructions and input

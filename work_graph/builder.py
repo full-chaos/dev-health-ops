@@ -12,7 +12,7 @@ import logging
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 from metrics.sinks.factory import create_sink

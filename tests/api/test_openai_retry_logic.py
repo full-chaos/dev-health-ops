@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
-from dev_health_ops.api.services.llm_providers.openai import OpenAIProvider
+from api.services.llm_providers.openai import OpenAIProvider
 
 
 @pytest.mark.asyncio

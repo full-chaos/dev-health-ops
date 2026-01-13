@@ -4,6 +4,7 @@ import builtins
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import uuid
+import pytest
 
 
 from work_graph.investment.categorize import CategorizationOutcome
@@ -105,11 +106,12 @@ def _patch_queries(monkeypatch, edges, work_items, commits):
     )
 
 
-def test_materialize_invokes_sink(monkeypatch):
+@pytest.mark.asyncio
+async def test_materialize_invokes_sink(monkeypatch):
     repo_id, edges, work_items, commits = _sample_data()
     sink = FakeSink()
 
-    async def _fake_categorize(bundle, llm_provider, llm_model=None):
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
         return CategorizationOutcome(
             subcategories={"feature_delivery.roadmap": 1.0},
             evidence_quotes=[],
@@ -138,16 +140,17 @@ def test_materialize_invokes_sink(monkeypatch):
         llm_model="test-model",
     )
 
-    stats = materialize_investments(config)
+    stats = await materialize_investments(config)
     assert stats["records"] == 1
     assert len(sink.investment_rows) == 1
 
 
-def test_materialize_does_not_write_files(monkeypatch):
+@pytest.mark.asyncio
+async def test_materialize_does_not_write_files(monkeypatch):
     repo_id, edges, work_items, commits = _sample_data()
     sink = FakeSink()
 
-    async def _fake_categorize(bundle, llm_provider, llm_model=None):
+    async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
         return CategorizationOutcome(
             subcategories={"feature_delivery.roadmap": 1.0},
             evidence_quotes=[],
@@ -199,5 +202,5 @@ def test_materialize_does_not_write_files(monkeypatch):
         llm_model="test-model",
     )
 
-    stats = materialize_investments(config)
+    stats = await materialize_investments(config)
     assert stats["records"] == 1

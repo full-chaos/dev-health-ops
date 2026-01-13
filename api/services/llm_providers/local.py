@@ -139,6 +139,10 @@ class LocalProvider:
             logger.error("Local LLM API error (%s): %s", self.base_url, e)
             raise
 
+    async def aclose(self) -> None:
+        if self._client:
+            await self._client.close()  # type: ignore
+
 
 class OllamaProvider(LocalProvider):
     """Ollama-specific provider with sensible defaults."""

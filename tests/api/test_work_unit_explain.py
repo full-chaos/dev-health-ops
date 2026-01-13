@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from dev_health_ops.api.models.schemas import (
+from api.models.schemas import (
     EvidenceQuality,
     InvestmentBreakdown,
     WorkUnitEffort,
@@ -18,9 +18,9 @@ from dev_health_ops.api.models.schemas import (
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
-from dev_health_ops.api.services.llm_providers import get_provider
-from dev_health_ops.api.services.llm_providers.mock import MockProvider
-from dev_health_ops.api.services.work_unit_explain import explain_work_unit
+from api.services.llm_providers import get_provider
+from api.services.llm_providers.mock import MockProvider
+from api.services.work_unit_explain import explain_work_unit
 
 
 def _sample_investment() -> WorkUnitInvestment:

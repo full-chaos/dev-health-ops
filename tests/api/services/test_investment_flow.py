@@ -1,8 +1,8 @@
 import pytest
 from datetime import date
 from unittest.mock import MagicMock, patch
-from dev_health_ops.api.services.investment_flow import build_investment_flow_response
-from dev_health_ops.api.models.filters import MetricFilter
+from api.services.investment_flow import build_investment_flow_response
+from api.models.filters import MetricFilter
 
 
 @pytest.mark.asyncio
@@ -25,30 +25,30 @@ async def test_build_investment_flow_prefers_team():
 
     with (
         patch(
-            "dev_health_ops.api.services.investment_flow.time_window",
+            "api.services.investment_flow.time_window",
             return_value=(date(2024, 1, 1), date(2024, 1, 31), None, None),
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow._split_category_filters",
+            "api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+            "api.services.investment_flow.clickhouse_client"
         ) as mock_client_cm,
         patch(
-            "dev_health_ops.api.services.investment_flow._tables_present",
+            "api.services.investment_flow._tables_present",
             return_value=True,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow._columns_present",
+            "api.services.investment_flow._columns_present",
             return_value=True,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.fetch_investment_team_edges",
+            "api.services.investment_flow.fetch_investment_team_edges",
             return_value=team_edges,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.fetch_investment_subcategory_edges",
+            "api.services.investment_flow.fetch_investment_subcategory_edges",
             return_value=repo_edges,
         ),
     ):
@@ -88,30 +88,30 @@ async def test_build_investment_flow_prefers_repo():
 
     with (
         patch(
-            "dev_health_ops.api.services.investment_flow.time_window",
+            "api.services.investment_flow.time_window",
             return_value=(date(2024, 1, 1), date(2024, 1, 31), None, None),
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow._split_category_filters",
+            "api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+            "api.services.investment_flow.clickhouse_client"
         ) as mock_client_cm,
         patch(
-            "dev_health_ops.api.services.investment_flow._tables_present",
+            "api.services.investment_flow._tables_present",
             return_value=True,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow._columns_present",
+            "api.services.investment_flow._columns_present",
             return_value=True,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.fetch_investment_team_edges",
+            "api.services.investment_flow.fetch_investment_team_edges",
             return_value=team_edges,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.fetch_investment_subcategory_edges",
+            "api.services.investment_flow.fetch_investment_subcategory_edges",
             return_value=repo_edges,
         ),
     ):
@@ -140,30 +140,30 @@ async def test_build_investment_flow_fallbacks():
 
     with (
         patch(
-            "dev_health_ops.api.services.investment_flow.time_window",
+            "api.services.investment_flow.time_window",
             return_value=(date(2024, 1, 1), date(2024, 1, 31), None, None),
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow._split_category_filters",
+            "api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+            "api.services.investment_flow.clickhouse_client"
         ) as mock_client_cm,
         patch(
-            "dev_health_ops.api.services.investment_flow._tables_present",
+            "api.services.investment_flow._tables_present",
             return_value=True,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow._columns_present",
+            "api.services.investment_flow._columns_present",
             return_value=True,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.fetch_investment_team_edges",
+            "api.services.investment_flow.fetch_investment_team_edges",
             return_value=team_edges,
         ),
         patch(
-            "dev_health_ops.api.services.investment_flow.fetch_investment_subcategory_edges",
+            "api.services.investment_flow.fetch_investment_subcategory_edges",
             return_value=repo_edges,
         ),
     ):

@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List
 
-from dev_health_ops.api.services.llm_providers import get_provider
+from api.services.llm_providers import get_provider, LLMProvider
 from work_graph.investment.llm_schema import (
     EvidenceQuote,
     LLMValidationResult,
@@ -97,9 +97,16 @@ def fallback_outcome(reason: str) -> CategorizationOutcome:
     )
 
 
-async def _complete(prompt: str, provider_name: str, model: str | None = None) -> str:
-    provider = get_provider(provider_name, model=model)
-    return await provider.complete(prompt)
+async def _complete(
+    prompt: str,
+    provider_name: str,
+    model: str | None = None,
+    provider: LLMProvider | None = None,
+) -> str:
+    if provider:
+        return await provider.complete(prompt)
+    provider_instance = get_provider(provider_name, model=model)
+    return await provider_instance.complete(prompt)
 
 
 def _build_prompt(source_block: str) -> str:
@@ -121,10 +128,13 @@ async def categorize_text_bundle(
     *,
     llm_provider: str,
     llm_model: str | None = None,
+    provider: LLMProvider | None = None,
 ) -> CategorizationOutcome:
     prompt = _build_prompt(bundle.source_block)
 
-    raw_response = await _complete(prompt, llm_provider, model=llm_model)
+    raw_response = await _complete(
+        prompt, llm_provider, model=llm_model, provider=provider
+    )
     payload, parse_errors = parse_llm_json(raw_response)
     if parse_errors:
         validation = LLMValidationResult(
@@ -147,7 +157,9 @@ async def categorize_text_bundle(
         )
 
     repair_prompt = _build_repair_prompt(validation.errors, bundle.source_block)
-    repaired_response = await _complete(repair_prompt, llm_provider, model=llm_model)
+    repaired_response = await _complete(
+        repair_prompt, llm_provider, model=llm_model, provider=provider
+    )
     payload, parse_errors = parse_llm_json(repaired_response)
     if parse_errors:
         validation = LLMValidationResult(

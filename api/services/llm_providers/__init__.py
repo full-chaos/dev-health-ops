@@ -26,6 +26,10 @@ class LLMProvider(Protocol):
         """
         pass
 
+    async def aclose(self) -> None:
+        """Close the underlying client and release resources."""
+        pass
+
 
 def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider:
     """

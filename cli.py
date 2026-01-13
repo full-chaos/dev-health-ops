@@ -554,7 +554,7 @@ def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
         print("unsupported for now")
         return 2
 
-    from dev_health_ops.audit.completeness import (
+    from audit.completeness import (
         completeness_failed,
         format_completeness_json,
         format_completeness_table,
@@ -578,7 +578,7 @@ def _cmd_audit_schema(ns: argparse.Namespace) -> int:
         logging.error("Database URI is required (pass --db).")
         return 2
 
-    from dev_health_ops.audit.schema import format_schema_report, run_schema_audit
+    from audit.schema import format_schema_report, run_schema_audit
 
     report = run_schema_audit(db_url=db_url)
     if report.get("status") == "unchecked":
@@ -597,7 +597,7 @@ def _cmd_audit_perf(ns: argparse.Namespace) -> int:
         logging.error("Database URI is required (pass --db).")
         return 2
 
-    from dev_health_ops.audit.perf import format_perf_report, run_perf_audit
+    from audit.perf import format_perf_report, run_perf_audit
 
     report = run_perf_audit(
         db_url=db_url,
@@ -617,7 +617,7 @@ def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
         logging.error("Database URI is required (pass --db).")
         return 2
 
-    from dev_health_ops.audit.coverage import (
+    from audit.coverage import (
         coverage_failed,
         format_coverage_json,
         format_coverage_table,
@@ -2098,7 +2098,7 @@ def _cmd_api(ns: argparse.Namespace) -> int:
     }
 
     uvicorn.run(
-        "dev_health_ops.api.main:app",
+        "api.main:app",
         host=ns.host,
         port=ns.port,
         reload=ns.reload,

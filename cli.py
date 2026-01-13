@@ -2210,8 +2210,11 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
                     f"DEBUG: work_graph_edges event_ts range: {bounds[0]} to {bounds[1]}"
                 )
                 logging.info(f"DEBUG: Filter window: {from_date} to {to_date}")
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(
+                    "DEBUG: Failed to query work_graph_edges bounds for diagnostics: %s",
+                    e,
+                )
 
             logging.error(
                 "FAIL: work_graph_edges is empty for the selected window. "

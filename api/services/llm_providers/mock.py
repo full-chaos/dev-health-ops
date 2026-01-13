@@ -164,3 +164,6 @@ class MockProvider:
             "uncertainty": "Text evidence is limited; categorization suggests an initial interpretation.",
         }
         return json.dumps(response)
+
+    async def aclose(self) -> None:
+        pass

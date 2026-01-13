@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from api.services.llm_providers import get_provider
 from metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
@@ -214,10 +215,6 @@ def _collect_provider(
     return None
 
 
-def _run_coro(coro):
-    return asyncio.run(coro)
-
-
 def _resolve_repo_ids(
     client: object,
     repo_ids: Optional[List[str]],
@@ -230,8 +227,9 @@ def _resolve_repo_ids(
     return None
 
 
-def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
+async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
     sink = create_sink(config.dsn)
+    provider_instance = None
     try:
         if getattr(sink, "backend_type", None) != "clickhouse":
             raise ValueError("Investment materialization requires a ClickHouse sink")
@@ -240,6 +238,9 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
             raise ValueError("ClickHouse sink did not expose a client")
 
         sink.ensure_schema()
+
+        # Initialize LLM provider once (reusing connection pool)
+        provider_instance = get_provider(config.llm_provider, model=config.llm_model)
 
         repo_ids = _resolve_repo_ids(client, config.repo_ids, config.team_ids)
         edges = fetch_work_graph_edges(client, repo_ids=repo_ids)
@@ -332,12 +333,11 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
             elif bundle.text_source_count == 0:
                 outcome = fallback_outcome("no_text_sources")
             else:
-                outcome = _run_coro(
-                    categorize_text_bundle(
-                        bundle,
-                        llm_provider=config.llm_provider,
-                        llm_model=config.llm_model,
-                    )
+                outcome = await categorize_text_bundle(
+                    bundle,
+                    llm_provider=config.llm_provider,
+                    llm_model=config.llm_model,
+                    provider=provider_instance,
                 )
 
             theme_distribution = rollup_subcategories_to_themes(outcome.subcategories)
@@ -427,3 +427,5 @@ def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         }
     finally:
         sink.close()
+        if provider_instance:
+            await provider_instance.aclose()

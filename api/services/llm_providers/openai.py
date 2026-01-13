@@ -162,6 +162,9 @@ class OpenAIProvider:
     async def complete(self, prompt: str) -> str:
         return await self._impl.complete(prompt)
 
+    async def aclose(self) -> None:
+        await self._impl.aclose()
+
 
 def _is_gpt5_family(model: str) -> bool:
     m = (model or "").strip()
@@ -198,6 +201,10 @@ class _OpenAIProviderBase:
 
     async def complete(self, prompt: str) -> str:
         raise NotImplementedError
+
+    async def aclose(self) -> None:
+        if self._client:
+            await self._client.close()
 
     # -----------------------------------------------------------------------------
     # GPT-5+ (Responses API)

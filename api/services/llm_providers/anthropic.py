@@ -94,3 +94,7 @@ class AnthropicProvider:
         except Exception as e:
             logger.error("Anthropic API error: %s", e)
             raise
+
+    async def aclose(self) -> None:
+        if self._client:
+            await self._client.close()  # type: ignore

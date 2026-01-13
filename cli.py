@@ -2288,7 +2288,7 @@ def _cmd_investment_materialize(ns: argparse.Namespace) -> int:
         team_ids=team_ids or None,
     )
 
-    stats = materialize_investments(config)
+    stats = asyncio.run(materialize_investments(config))
     logging.info(
         "Investment materialization complete. Components=%d Records=%d Quotes=%d",
         stats.get("components", 0),

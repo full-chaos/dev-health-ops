@@ -8,8 +8,10 @@ from typing import List
 
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import json
 
 from metrics.sinks.factory import detect_backend
 
@@ -198,6 +200,29 @@ async def health() -> HealthResponse | JSONResponse:
         )
         return JSONResponse(status_code=503, content=content)
     return response
+
+
+async def keep_alive_wrapper(coro):
+    """
+    Yields whitespace every 5 seconds while waiting for the coroutine to finish.
+    The final JSON is yielded as the last chunk.
+    """
+    task = asyncio.create_task(coro)
+    try:
+        while True:
+            done, pending = await asyncio.wait([task], timeout=5)
+            if done:
+                result = await task
+                if hasattr(result, "model_dump_json"):
+                    yield result.model_dump_json()
+                else:
+                    yield json.dumps(result)
+                break
+            # Yield whitespace to keep proxy/load-balancer connection alive
+            yield " "
+    except Exception as e:
+        logger.exception("Streaming error in keep_alive_wrapper")
+        yield json.dumps({"error": "Streaming error", "detail": str(e)})
 
 
 @app.get("/api/v1/meta", response_model=MetaResponse)
@@ -484,14 +509,22 @@ async def work_unit_explain_endpoint(
             )
 
         target_investment = investments[0]
-
-        # Generate explanation
-        explanation = await explain_work_unit(
-            investment=target_investment,
-            llm_provider=llm_provider,
-            llm_model=llm_model,
+        logger.info(
+            "Generating streaming explanation for work_unit_id=%s",
+            _sanitize_for_log(work_unit_id),
         )
-        return explanation
+
+        # Return streaming response with keep-alive pings
+        return StreamingResponse(
+            keep_alive_wrapper(
+                explain_work_unit(
+                    investment=target_investment,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                )
+            ),
+            media_type="application/json",
+        )
 
     except HTTPException:
         raise
@@ -946,15 +979,21 @@ async def investment_sunburst(
 async def investment_explain(
     payload: InvestmentExplainRequest,
     llm_provider: str = "auto",
-) -> InvestmentMixExplanation:
+):
     try:
-        return await explain_investment_mix(
-            db_url=_db_url(),
-            filters=payload.filters,
-            theme=payload.theme,
-            subcategory=payload.subcategory,
-            llm_provider=llm_provider,
-            llm_model=payload.llm_model,
+        logger.info("Generating streaming investment explanation")
+        return StreamingResponse(
+            keep_alive_wrapper(
+                explain_investment_mix(
+                    db_url=_db_url(),
+                    filters=payload.filters,
+                    theme=payload.theme,
+                    subcategory=payload.subcategory,
+                    llm_provider=llm_provider,
+                    llm_model=payload.llm_model,
+                )
+            ),
+            media_type="application/json",
         )
     except HTTPException:
         raise

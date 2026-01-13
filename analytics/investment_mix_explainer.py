@@ -93,8 +93,13 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     try:
         parsed = json.loads(json_str)
     except json.JSONDecodeError as e:
+        safe_preview = json_str[:500].replace("\r", "\\r").replace("\n", "\\n")
         logger.warning(
-            f"JSON decode error in LLM response: {e}. Text: {json_str[:500]}..."
+            "JSON decode error in LLM response: %s. Text preview (%d chars shown, total %d): %r",
+            e,
+            len(safe_preview),
+            len(json_str),
+            safe_preview,
         )
         return None
     if not isinstance(parsed, dict):

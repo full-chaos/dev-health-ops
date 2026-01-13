@@ -39,7 +39,7 @@ async def test_openai_retry_on_empty_content():
 
     # Check that tokens were doubled on retry
     second_call_kwargs = mock_client.chat.completions.create.call_args_list[1].kwargs
-    assert second_call_kwargs["max_completion_tokens"] == 2048
+    assert second_call_kwargs["max_completion_tokens"] == 8192
 
 
 @pytest.mark.asyncio
@@ -75,7 +75,7 @@ async def test_gpt5_retry_on_finish_reason_truncation():
 
     # Verify token doubling in second call
     second_call_kwargs = mock_client.responses.create.call_args_list[1].kwargs
-    assert second_call_kwargs["max_output_tokens"] == 4096
+    assert second_call_kwargs["max_output_tokens"] == 8192
 
 
 @pytest.mark.asyncio
@@ -95,4 +95,4 @@ async def test_openai_token_clamping():
 
     # Check that tokens were clamped to min 1024
     call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["max_completion_tokens"] == 1024
+    assert call_kwargs["max_completion_tokens"] == 4096

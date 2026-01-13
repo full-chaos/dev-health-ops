@@ -132,7 +132,7 @@ async def test_openai_provider_uses_max_completion_tokens():
     # Verify that max_output_tokens is used (for GPT-5).
     # Logic: max(1024 (clamped), 2048 (default for explanation)) = 2048
     assert "max_output_tokens" in captured["kwargs"]
-    assert captured["kwargs"]["max_output_tokens"] == 2048
+    assert captured["kwargs"]["max_output_tokens"] == 4096
 
 
 @pytest.mark.asyncio

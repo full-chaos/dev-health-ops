@@ -37,7 +37,7 @@ async def test_openai_provider_uses_max_completion_tokens_for_gpt5():
     # GPT-5 internal parameter is max_output_tokens
     assert "max_output_tokens" in captured["kwargs"]
     assert (
-        captured["kwargs"]["max_output_tokens"] == 2048
-    )  # max(clamped 1024, explanation default 2048)
+        captured["kwargs"]["max_output_tokens"] == 4096
+    )  # max(clamped 2048 explanation default 4096)
     assert "max_tokens" not in captured["kwargs"]
     assert "temperature" not in captured["kwargs"]

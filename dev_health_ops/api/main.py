@@ -13,11 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from metrics.sinks.factory import detect_backend
 
+
 from .models.filters import (
     DrilldownRequest,
     ExplainRequest,
     FilterOptionsResponse,
     HomeRequest,
+    InvestmentExplainRequest,
+    InvestmentFlowRequest,
     MetricFilter,
     SankeyRequest,
     ScopeFilter,
@@ -33,10 +36,13 @@ from .models.schemas import (
     HeatmapResponse,
     HomeResponse,
     InvestmentResponse,
+    InvestmentSunburstSlice,
+    InvestmentMixExplanation,
     MetaResponse,
     OpportunitiesResponse,
     QuadrantResponse,
-    WorkUnitSignal,
+    WorkUnitExplanation,
+    WorkUnitInvestment,
     PersonDrilldownResponse,
     PersonMetricResponse,
     PersonSearchResult,
@@ -50,7 +56,9 @@ from .services.cache import TTLCache
 from .services.explain import build_explain_response
 from .services.filtering import scope_filter_for_metric, time_window
 from .services.home import build_home_response
-from .services.investment import build_investment_response
+from .services.investment import build_investment_response, build_investment_sunburst
+from .services.investment_flow import build_investment_flow_response
+from .services.investment_mix_explain import explain_investment_mix
 from .services.opportunities import build_opportunities_response
 from .services.people import (
     build_person_drilldown_issues_response,
@@ -64,7 +72,8 @@ from .services.flame import build_flame_response
 from .services.aggregated_flame import build_aggregated_flame_response
 from .services.quadrant import build_quadrant_response
 from .services.sankey import build_sankey_response
-from .services.work_units import build_work_unit_signals
+from .services.work_units import build_work_unit_investments
+from .services.work_unit_explain import explain_work_unit
 
 HOME_CACHE = TTLCache(ttl_seconds=60)
 EXPLAIN_CACHE = TTLCache(ttl_seconds=120)
@@ -347,8 +356,8 @@ async def heatmap(
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
-@app.post("/api/v1/work-units", response_model=list[WorkUnitSignal])
-async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
+@app.post("/api/v1/work-units", response_model=list[WorkUnitInvestment])
+async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitInvestment]:
     try:
         include_textual = (
             True if payload.include_textual is None else payload.include_textual
@@ -365,7 +374,7 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
             log_limit,
             filter_payload,
         )
-        result = await build_work_unit_signals(
+        result = await build_work_unit_investments(
             db_url=_db_url(),
             filters=payload.filters,
             limit=payload.limit or 200,
@@ -378,7 +387,7 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitSignal]:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
-@app.get("/api/v1/work-units", response_model=list[WorkUnitSignal])
+@app.get("/api/v1/work-units", response_model=list[WorkUnitInvestment])
 async def work_units(
     response: Response,
     scope_type: str = "org",
@@ -388,7 +397,7 @@ async def work_units(
     end_date: date | None = None,
     limit: int = 200,
     include_textual: bool = True,
-) -> List[WorkUnitSignal]:
+) -> List[WorkUnitInvestment]:
     try:
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
@@ -405,7 +414,7 @@ async def work_units(
             log_limit,
             filter_payload,
         )
-        result = await build_work_unit_signals(
+        result = await build_work_unit_investments(
             db_url=_db_url(),
             filters=filters,
             limit=limit,
@@ -418,6 +427,78 @@ async def work_units(
     except Exception as exc:
         logger.exception("WorkUnits GET failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
+
+
+@app.post(
+    "/api/v1/work-units/{work_unit_id}/explain",
+    response_model=WorkUnitExplanation,
+)
+async def work_unit_explain_endpoint(
+    work_unit_id: str,
+    scope_type: str = "org",
+    scope_id: str = "",
+    range_days: int = 14,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    llm_provider: str = "auto",
+    llm_model: str | None = None,
+) -> WorkUnitExplanation:
+    """
+    Generate an LLM explanation for a work unit's precomputed investment view.
+
+    This endpoint follows the Investment model rules:
+    - LLMs explain results, they NEVER compute them
+    - Only allowed inputs passed to LLM (investment vectors, evidence metadata,
+      evidence quality band, time span)
+    - Responses use probabilistic language (appears, leans, suggests)
+
+    Args:
+        work_unit_id: The work unit to explain
+        scope_type: Scope level (org, team, repo)
+        scope_id: Scope identifier
+        range_days: Time window in days
+        start_date: Optional start date
+        end_date: Optional end date
+        llm_provider: LLM provider to use (auto, openai, anthropic, mock)
+        llm_model: Optional model version override
+
+    Returns:
+        WorkUnitExplanation with summary, rationale, and uncertainty disclosure
+    """
+    try:
+        filters = _filters_from_query(
+            scope_type, scope_id, range_days, range_days, start_date, end_date
+        )
+        investments = await build_work_unit_investments(
+            db_url=_db_url(),
+            filters=filters,
+            limit=1,
+            include_text=True,
+            work_unit_id=work_unit_id,
+        )
+
+        if not investments:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Work unit {work_unit_id} not found",
+            )
+
+        target_investment = investments[0]
+
+        # Generate explanation
+        explanation = await explain_work_unit(
+            investment=target_investment,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+        )
+        return explanation
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        safe_work_unit_id = work_unit_id.replace("\r", "").replace("\n", "")
+        logger.exception("Work unit explain failed for %s", safe_work_unit_id)
+        raise HTTPException(status_code=503, detail="Explanation unavailable") from exc
 
 
 @app.get("/api/v1/flame", response_model=FlameResponse)
@@ -828,6 +909,72 @@ async def investment_post(payload: HomeRequest) -> InvestmentResponse:
             db_url=_db_url(), filters=payload.filters
         )
     except Exception as exc:
+        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+
+
+@app.get(
+    "/api/v1/investment/sunburst",
+    response_model=list[InvestmentSunburstSlice],
+)
+async def investment_sunburst(
+    response: Response,
+    scope_type: str = "org",
+    scope_id: str = "",
+    range_days: int = 30,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = 500,
+) -> List[InvestmentSunburstSlice]:
+    try:
+        filters = _filters_from_query(
+            scope_type, scope_id, range_days, range_days, start_date, end_date
+        )
+        result = await build_investment_sunburst(
+            db_url=_db_url(), filters=filters, limit=limit
+        )
+        if response is not None:
+            response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+
+
+@app.post(
+    "/api/v1/investment/explain",
+    response_model=InvestmentMixExplanation,
+)
+async def investment_explain(
+    payload: InvestmentExplainRequest,
+    llm_provider: str = "auto",
+) -> InvestmentMixExplanation:
+    try:
+        return await explain_investment_mix(
+            db_url=_db_url(),
+            filters=payload.filters,
+            theme=payload.theme,
+            subcategory=payload.subcategory,
+            llm_provider=llm_provider,
+            llm_model=payload.llm_model,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Investment explain failed")
+        raise HTTPException(status_code=503, detail="Explanation unavailable") from exc
+
+
+@app.post("/api/v1/investment/flow", response_model=SankeyResponse)
+async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
+    try:
+        return await build_investment_flow_response(
+            db_url=_db_url(),
+            filters=payload.filters,
+            theme=payload.theme,
+        )
+    except Exception as exc:
+        logger.exception("Investment flow failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 

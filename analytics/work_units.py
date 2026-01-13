@@ -2,128 +2,77 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-import yaml
+from investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WORK_UNIT_CONFIG_PATH = Path("config/work_units.yaml")
+CANONICAL_INVESTMENT_THEMES: Tuple[str, ...] = tuple(sorted(THEMES))
+CANONICAL_SUBCATEGORIES: Tuple[str, ...] = tuple(sorted(SUBCATEGORIES))
+
+SUBCATEGORY_TO_THEME: Dict[str, str] = {
+    subcategory: theme_of(subcategory) for subcategory in CANONICAL_SUBCATEGORIES
+}
+
+WORK_ITEM_TYPE_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "story": {"feature_delivery.roadmap": 1.0},
+    "epic": {"feature_delivery.roadmap": 1.0},
+    "feature": {"feature_delivery.customer": 1.0},
+    "enhancement": {"feature_delivery.customer": 0.7, "feature_delivery.enablement": 0.3},
+    "task": {"feature_delivery.enablement": 0.6, "maintenance.debt": 0.4},
+    "issue": {"feature_delivery.customer": 0.3, "maintenance.debt": 0.3, "quality.bugfix": 0.4},
+    "chore": {"maintenance.debt": 1.0},
+    "refactor": {"maintenance.refactor": 0.8, "quality.reliability": 0.2},
+    "bug": {"quality.bugfix": 0.8, "maintenance.debt": 0.2},
+    "defect": {"quality.bugfix": 0.8, "maintenance.debt": 0.2},
+    "incident": {"operational.incident_response": 1.0},
+    "outage": {"operational.incident_response": 1.0},
+    "support": {"operational.support": 1.0},
+    "oncall": {"operational.on_call": 1.0},
+    "reliability": {"quality.reliability": 0.7, "operational.on_call": 0.3},
+    "security": {"risk.security": 1.0},
+    "vulnerability": {"risk.vulnerability": 1.0},
+    "compliance": {"risk.compliance": 1.0},
+}
+
+DEFAULT_TEXT_WEIGHT = 0.72
+DEFAULT_METADATA_WEIGHT = 0.28
+TEMPORAL_WINDOW_DAYS = 30.0
+TEMPORAL_FALLBACK = 0.5
+
+EVIDENCE_QUALITY_WEIGHTS = {
+    "text_coverage": 0.45,
+    "metadata_coverage": 0.2,
+    "contextual_strength": 0.35,
+}
 
 
 @dataclass(frozen=True)
 class WorkUnitConfig:
-    categories: List[str]
-    work_item_type_weights: Dict[str, Dict[str, float]]
-    text_keywords: Dict[str, List[Dict[str, float]]]
-    text_source_weights: Dict[str, float]
-    text_max_modifier: float
-    confidence_weights: Dict[str, float]
-    temporal_window_days: float
-    temporal_fallback: float
-    text_agreement_fallback: float
+    text_weight: float = DEFAULT_TEXT_WEIGHT
+    metadata_weight: float = DEFAULT_METADATA_WEIGHT
+    temporal_window_days: float = TEMPORAL_WINDOW_DAYS
+    temporal_fallback: float = TEMPORAL_FALLBACK
 
 
-def default_work_unit_config() -> WorkUnitConfig:
-    categories = ["feature", "maintenance", "operational", "quality"]
-    return WorkUnitConfig(
-        categories=categories,
-        work_item_type_weights={
-            "story": {"feature": 1.0},
-            "epic": {"feature": 1.0},
-            "task": {"feature": 0.7, "maintenance": 0.3},
-            "issue": {"feature": 0.5, "maintenance": 0.5},
-            "chore": {"maintenance": 1.0},
-            "bug": {"quality": 1.0},
-            "incident": {"operational": 1.0},
-            "unknown": {cat: 1.0 / len(categories) for cat in categories},
-        },
-        text_keywords={},
-        text_source_weights={},
-        text_max_modifier=0.15,
-        confidence_weights={
-            "provenance": 0.4,
-            "temporal": 0.2,
-            "density": 0.2,
-            "text_agreement": 0.2,
-        },
-        temporal_window_days=30.0,
-        temporal_fallback=0.5,
-        text_agreement_fallback=0.5,
-    )
+_CONFIG: Optional[WorkUnitConfig] = None
+
+
+def _config() -> WorkUnitConfig:
+    global _CONFIG
+    if _CONFIG is None:
+        _CONFIG = WorkUnitConfig()
+    return _CONFIG
 
 
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _normalize_keywords(
-    payload: Dict[str, List[Dict[str, float]]],
-) -> Dict[str, List[Dict[str, float]]]:
-    keywords: Dict[str, List[Dict[str, float]]] = {}
-    for category, entries in (payload or {}).items():
-        cleaned: List[Dict[str, float]] = []
-        for entry in entries or []:
-            if isinstance(entry, str):
-                cleaned.append({"keyword": entry, "weight": 0.02})
-                continue
-            keyword = str(entry.get("keyword") or "").strip()
-            if not keyword:
-                continue
-            try:
-                weight = float(entry.get("weight", 0.0))
-            except (TypeError, ValueError):
-                weight = 0.0
-            cleaned.append({"keyword": keyword, "weight": weight})
-        if cleaned:
-            keywords[str(category)] = cleaned
-    return keywords
-
-
-def load_work_unit_config(path: Optional[Path] = None) -> WorkUnitConfig:
-    env_path = os.getenv("WORK_UNIT_CONFIG_PATH")
-    if env_path:
-        path = Path(env_path)
-    path = path or DEFAULT_WORK_UNIT_CONFIG_PATH
-    if not path.exists():
-        logger.warning("Work unit config not found at %s, using defaults", path)
-        return default_work_unit_config()
-    with path.open("r", encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle) or {}
-
-    categories = [str(c) for c in (payload.get("categories") or []) if str(c).strip()]
-    if not categories:
-        categories = default_work_unit_config().categories
-
-    structural = payload.get("structural") or {}
-    work_item_type_weights = structural.get("work_item_type_weights") or {}
-
-    textual = payload.get("textual") or {}
-    text_max_modifier = float(textual.get("max_modifier", 0.15))
-    text_source_weights = {
-        str(k): float(v) for k, v in (textual.get("source_weights") or {}).items()
-    }
-    text_keywords = _normalize_keywords(textual.get("keywords") or {})
-
-    confidence = payload.get("confidence") or {}
-    confidence_weights = {
-        str(k): float(v) for k, v in (confidence.get("weights") or {}).items()
-    }
-
-    return WorkUnitConfig(
-        categories=categories,
-        work_item_type_weights=work_item_type_weights,
-        text_keywords=text_keywords,
-        text_source_weights=text_source_weights,
-        text_max_modifier=text_max_modifier,
-        confidence_weights=confidence_weights,
-        temporal_window_days=float(confidence.get("temporal_window_days", 30.0)),
-        temporal_fallback=float(confidence.get("temporal_fallback", 0.5)),
-        text_agreement_fallback=float(confidence.get("text_agreement_fallback", 0.5)),
-    )
+def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
 
 
 def normalize_scores(
@@ -136,19 +85,26 @@ def normalize_scores(
     return {cat: scores.get(cat, 0.0) / total for cat in categories}
 
 
-def compute_structural_scores(
+def _normalize_work_item_type(value: Optional[str]) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw else "unknown"
+
+
+def compute_subcategory_scores(
     type_counts: Dict[str, int],
-    config: WorkUnitConfig,
 ) -> Tuple[Dict[str, float], List[Dict[str, object]]]:
-    scores = {cat: 0.0 for cat in config.categories}
+    scores = {cat: 0.0 for cat in CANONICAL_SUBCATEGORIES}
     evidence: List[Dict[str, object]] = []
 
     for work_type, count in type_counts.items():
-        if count <= 0:
-            continue
-        weights = config.work_item_type_weights.get(
-            work_type, config.work_item_type_weights.get("unknown", {})
-        )
+        normalized_type = _normalize_work_item_type(work_type)
+        weights = WORK_ITEM_TYPE_WEIGHTS.get(normalized_type)
+        if not weights:
+            weights = {
+                cat: 1.0 / len(CANONICAL_SUBCATEGORIES)
+                for cat in CANONICAL_SUBCATEGORIES
+            }
+
         contribution: Dict[str, float] = {}
         for category, weight in (weights or {}).items():
             if category not in scores:
@@ -159,129 +115,79 @@ def compute_structural_scores(
         evidence.append(
             {
                 "type": "work_item_type",
-                "work_item_type": work_type,
+                "work_item_type": normalized_type,
                 "count": int(count),
                 "weights": weights,
                 "contribution": contribution,
             }
         )
 
-    normalized = normalize_scores(scores, config.categories)
-    evidence.append({"type": "structural_scores", "scores": normalized})
+    normalized = normalize_scores(scores, CANONICAL_SUBCATEGORIES)
+    evidence.append({"type": "subcategory_scores", "scores": normalized})
     return normalized, evidence
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
-
-def compute_textual_modifiers(
-    texts_by_source: Dict[str, Sequence[str]],
-    config: WorkUnitConfig,
-) -> Tuple[Dict[str, float], List[Dict[str, object]]]:
-    modifiers = {cat: 0.0 for cat in config.categories}
-    evidence: List[Dict[str, object]] = []
-
-    for source, texts in (texts_by_source or {}).items():
-        source_weight = float(config.text_source_weights.get(source, 1.0))
-        for text in texts or []:
-            haystack = str(text or "").lower()
-            if not haystack:
-                continue
-            for category, entries in (config.text_keywords or {}).items():
-                if category not in modifiers:
-                    continue
-                for entry in entries or []:
-                    keyword = str(entry.get("keyword") or "").strip()
-                    if not keyword:
-                        continue
-                    if keyword.lower() not in haystack:
-                        continue
-                    weight = float(entry.get("weight", 0.0))
-                    magnitude = weight * source_weight
-                    modifiers[category] += magnitude
-                    evidence.append(
-                        {
-                            "category": category,
-                            "keyword": keyword,
-                            "source": source,
-                            "weight": weight,
-                            "magnitude": magnitude,
-                        }
-                    )
-
-    for category, value in list(modifiers.items()):
-        clamped = _clamp(value, -config.text_max_modifier, config.text_max_modifier)
-        if clamped != value:
-            evidence.append(
-                {
-                    "category": category,
-                    "reason": "clamped",
-                    "raw": value,
-                    "clamped": clamped,
-                }
-            )
-            modifiers[category] = clamped
-
-    return modifiers, evidence
-
-
-def apply_textual_modifiers(
-    structural_scores: Dict[str, float],
-    modifiers: Dict[str, float],
-    categories: Sequence[str],
-) -> Dict[str, float]:
-    combined = {}
-    for category in categories:
-        combined[category] = _clamp(
-            structural_scores.get(category, 0.0) + modifiers.get(category, 0.0),
-            0.0,
-            1.0,
-        )
-    return normalize_scores(combined, categories)
-
-
-def compute_text_agreement(
-    structural_scores: Dict[str, float],
-    modifiers: Dict[str, float],
-    config: WorkUnitConfig,
-) -> float:
-    total_abs = sum(abs(modifiers.get(cat, 0.0)) for cat in config.categories)
-    if total_abs <= 0:
-        return config.text_agreement_fallback
-    alignment = 0.0
-    for category in config.categories:
-        score = structural_scores.get(category, 0.0)
-        mod = modifiers.get(category, 0.0)
-        if mod >= 0:
-            alignment += mod * score
-        else:
-            alignment += (-mod) * (1.0 - score)
-    return _clamp(alignment / total_abs, 0.0, 1.0)
-
-
-def compute_confidence(
+def merge_subcategory_vectors(
     *,
+    primary: Optional[Dict[str, float]],
+    secondary: Optional[Dict[str, float]],
+    primary_weight: float,
+) -> Dict[str, float]:
+    if not primary and not secondary:
+        return normalize_scores({}, CANONICAL_SUBCATEGORIES)
+    if not secondary:
+        return normalize_scores(primary or {}, CANONICAL_SUBCATEGORIES)
+    if not primary:
+        return normalize_scores(secondary or {}, CANONICAL_SUBCATEGORIES)
+
+    weighted: Dict[str, float] = {}
+    secondary_weight = 1.0 - primary_weight
+    for category in CANONICAL_SUBCATEGORIES:
+        weighted[category] = (
+            float(primary.get(category, 0.0)) * primary_weight
+            + float(secondary.get(category, 0.0)) * secondary_weight
+        )
+
+    return normalize_scores(weighted, CANONICAL_SUBCATEGORIES)
+
+
+def rollup_subcategories_to_themes(
+    subcategories: Dict[str, float],
+) -> Dict[str, float]:
+    totals = {theme: 0.0 for theme in CANONICAL_INVESTMENT_THEMES}
+    for subcategory, value in subcategories.items():
+        theme = SUBCATEGORY_TO_THEME.get(subcategory)
+        if not theme:
+            continue
+        totals[theme] += float(value)
+    return normalize_scores(totals, CANONICAL_INVESTMENT_THEMES)
+
+
+def compute_evidence_quality(
+    *,
+    text_source_count: int,
+    metadata_present: bool,
+    density_score: float,
     provenance_score: float,
     temporal_score: float,
-    density_score: float,
-    text_agreement: float,
-    config: WorkUnitConfig,
 ) -> float:
-    weights = config.confidence_weights or {}
-    total_weight = sum(float(v) for v in weights.values())
-    if total_weight <= 0:
-        total_weight = 1.0
-    value = (
-        float(weights.get("provenance", 0.0)) * provenance_score
-        + float(weights.get("temporal", 0.0)) * temporal_score
-        + float(weights.get("density", 0.0)) * density_score
-        + float(weights.get("text_agreement", 0.0)) * text_agreement
+    text_coverage = _clamp(text_source_count / 3.0, 0.0, 1.0)
+    metadata_coverage = 1.0 if metadata_present else 0.0
+    contextual_strength = _clamp(
+        (density_score + provenance_score + temporal_score) / 3.0
     )
-    return _clamp(value / total_weight, 0.0, 1.0)
+
+    weights = EVIDENCE_QUALITY_WEIGHTS
+    total_weight = sum(weights.values()) or 1.0
+    value = (
+        weights["text_coverage"] * text_coverage
+        + weights["metadata_coverage"] * metadata_coverage
+        + weights["contextual_strength"] * contextual_strength
+    )
+    return _clamp(value / total_weight)
 
 
-def confidence_band(value: float) -> str:
+def evidence_quality_band(value: float) -> str:
     if value >= 0.8:
         return "high"
     if value >= 0.6:

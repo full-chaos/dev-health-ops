@@ -965,6 +965,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fix_gen.add_argument("--pr-count", type=int, default=20, help="Total PRs.")
     fix_gen.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Deterministic seed for fixtures (repeatable runs).",
+    )
+    fix_gen.add_argument(
         "--provider",
         default="synthetic",
         choices=["synthetic", "github", "gitlab", "jira"],
@@ -979,6 +985,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-metrics", action="store_true", help="Also generate derived metrics."
     )
     fix_gen.set_defaults(func=_cmd_fixtures_generate)
+
+    fix_val = fix_sub.add_parser("validate", help="Validate fixture data quality.")
+    fix_val.add_argument(
+        "--db",
+        required=True,
+        help="Database URI.",
+    )
+    fix_val.set_defaults(func=_cmd_fixtures_validate)
 
     # ---- audit ----
     audit = sub.add_parser("audit", help="Audit data completeness.")
@@ -1118,7 +1132,73 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.3,
         help="Confidence score for heuristic matches (default: 0.3).",
     )
+    wg_build.add_argument(
+        "--allow-degenerate",
+        action="store_true",
+        help="Allow single connected-component graphs (default: fail).",
+    )
     wg_build.set_defaults(func=_cmd_work_graph_build)
+
+    # ---- investment ----
+    investment = sub.add_parser(
+        "investment", help="Investment materialization operations."
+    )
+    investment_sub = investment.add_subparsers(dest="investment_command", required=True)
+    investment_materialize = investment_sub.add_parser(
+        "materialize",
+        help="Materialize work unit investment categorization into sinks.",
+    )
+    investment_materialize.add_argument(
+        "--db",
+        required=True,
+        help="ClickHouse connection string (clickhouse://user:pass@host:port/db).",
+    )
+    investment_materialize.add_argument(
+        "--from",
+        dest="from_date",
+        type=str,
+        help="Start date (YYYY-MM-DD). Defaults to window-days before --to.",
+    )
+    investment_materialize.add_argument(
+        "--to",
+        dest="to_date",
+        type=str,
+        help="End date (YYYY-MM-DD). Defaults to now.",
+    )
+    investment_materialize.add_argument(
+        "--window-days",
+        type=int,
+        default=30,
+        help="Window size in days when --from is not set (default: 30).",
+    )
+    investment_materialize.add_argument(
+        "--repo-id",
+        action="append",
+        default=[],
+        help="Filter to specific repository UUID(s).",
+    )
+    investment_materialize.add_argument(
+        "--team-id",
+        action="append",
+        default=[],
+        help="Filter to specific team identifier(s).",
+    )
+    investment_materialize.add_argument(
+        "--llm-provider",
+        default="auto",
+        help="LLM provider (auto, openai, anthropic, local, mock).",
+    )
+    investment_materialize.add_argument(
+        "--persist-evidence-snippets",
+        action="store_true",
+        help="Persist extractive evidence quotes for work units.",
+    )
+    investment_materialize.add_argument(
+        "--model",
+        default=None,
+        help="Override model version label for audit fields.",
+    )
+    investment_materialize.set_defaults(func=_cmd_investment_materialize)
 
     return parser
 
@@ -1134,7 +1214,7 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
         repo_count = max(1, ns.repo_count)
         base_name = ns.repo_name
         team_assignment = SyntheticDataGenerator(
-            repo_name=base_name
+            repo_name=base_name, seed=ns.seed
         ).get_team_assignment(count=8)
         if hasattr(store, "insert_teams") and team_assignment.get("teams"):
             await store.insert_teams(team_assignment["teams"])
@@ -1171,7 +1251,10 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             logging.info(
                 f"Generating fixture data for repo {i + 1}/{repo_count}: {r_name}"
             )
-            generator = SyntheticDataGenerator(repo_name=r_name, provider=ns.provider)
+            seed_value = (int(ns.seed) + i) if ns.seed is not None else None
+            generator = SyntheticDataGenerator(
+                repo_name=r_name, provider=ns.provider, seed=seed_value
+            )
 
             # 1. Repo
             repo = generator.generate_repo()
@@ -1190,13 +1273,19 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             await _insert_batches(store.insert_git_commit_stats, stats)
 
             # 4. Work Items (Raw)
-            work_items = generator.generate_work_items(days=ns.days, provider=ns.provider)
+            work_items = generator.generate_work_items(
+                days=ns.days, provider=ns.provider
+            )
             transitions = generator.generate_work_item_transitions(work_items)
 
             if hasattr(store, "insert_work_items"):
                 await _insert_batches(store.insert_work_items, work_items)
             if hasattr(store, "insert_work_item_transitions"):
                 await _insert_batches(store.insert_work_item_transitions, transitions)
+
+            dependencies = generator.generate_work_item_dependencies(work_items)
+            if hasattr(store, "insert_work_item_dependencies"):
+                await _insert_batches(store.insert_work_item_dependencies, dependencies)
 
             issue_numbers = []
             for item in work_items:
@@ -1212,7 +1301,9 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
                         issue_numbers.append(int(tail))
 
             # 5. PRs & Reviews
-            pr_data = generator.generate_prs(count=ns.pr_count, issue_numbers=issue_numbers)
+            pr_data = generator.generate_prs(
+                count=ns.pr_count, issue_numbers=issue_numbers
+            )
             prs = [p["pr"] for p in pr_data]
             await _insert_batches(store.insert_git_pull_requests, prs)
 
@@ -1220,6 +1311,18 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
             for p in pr_data:
                 all_reviews.extend(p["reviews"])
             await _insert_batches(store.insert_git_pull_request_reviews, all_reviews)
+
+            pr_commit_links = generator.generate_pr_commits(prs, commits)
+            if hasattr(store, "insert_work_graph_pr_commit"):
+                await _insert_batches(
+                    store.insert_work_graph_pr_commit, pr_commit_links
+                )
+
+            issue_pr_links = generator.generate_issue_pr_links(
+                work_items, prs, min_coverage=0.7
+            )
+            if hasattr(store, "insert_work_graph_issue_pr"):
+                await _insert_batches(store.insert_work_graph_issue_pr, issue_pr_links)
 
             # 6. CI/CD + Deployments + Incidents
             pr_numbers = [pr.number for pr in prs]
@@ -1897,21 +2000,54 @@ def _cmd_fixtures_generate(ns: argparse.Namespace) -> int:
         if db_type != "clickhouse":
             logging.warning("Skipping work graph build (requires ClickHouse).")
         else:
-            try:
-                from work_graph.builder import BuildConfig, WorkGraphBuilder
+            from work_graph.builder import BuildConfig, WorkGraphBuilder
 
-                now = datetime.now(timezone.utc)
-                config = BuildConfig(
-                    dsn=ns.db,
-                    from_date=now - timedelta(days=ns.days),
-                    to_date=now,
-                )
-                builder = WorkGraphBuilder(config)
-                builder.build()
-                builder.close()
+            now = datetime.now(timezone.utc)
+            config = BuildConfig(
+                dsn=ns.db,
+                from_date=now - timedelta(days=ns.days),
+                to_date=now,
+            )
+            builder = WorkGraphBuilder(config)
+            try:
+                result = builder.build()
+                total_edges = sum(result.values())
+                if total_edges == 0:
+                    logging.error("FAIL: Work graph build produced zero edges.")
+                    return 1
+
+                client = getattr(builder, "client", None)
+                if client is None:
+                    logging.error(
+                        "FAIL: Work graph builder did not expose a ClickHouse client."
+                    )
+                    return 1
+
+                edge_count = client.query(
+                    "SELECT count() FROM work_graph_edges"
+                ).result_rows[0][0]
+                if int(edge_count or 0) == 0:
+                    logging.error(
+                        "FAIL: work_graph_edges is empty after fixture build."
+                    )
+                    return 1
+
+                nodes = client.query(
+                    """
+                    SELECT count(DISTINCT id) FROM (
+                        SELECT source_id as id FROM work_graph_edges
+                        UNION ALL
+                        SELECT target_id as id FROM work_graph_edges
+                    )
+                    """
+                ).result_rows[0][0]
+                if int(nodes or 0) <= 1:
+                    logging.error("FAIL: Work graph is degenerate (nodes<=1).")
+                    return 1
+
                 logging.info("Built work graph edges for fixtures.")
-            except Exception as exc:
-                logging.warning("Work graph build failed: %s", exc)
+            finally:
+                builder.close()
     return 0
 
 
@@ -1979,6 +2115,31 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
 
     from work_graph.builder import BuildConfig, WorkGraphBuilder
 
+    def _component_count(edges: list[tuple[str, str, str, str]]) -> int:
+        adjacency: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for source_type, source_id, target_type, target_id in edges:
+            source = (str(source_type), str(source_id))
+            target = (str(target_type), str(target_id))
+            adjacency.setdefault(source, []).append(target)
+            adjacency.setdefault(target, []).append(source)
+
+        visited: set[tuple[str, str]] = set()
+        components = 0
+        for node in adjacency:
+            if node in visited:
+                continue
+            components += 1
+            stack = [node]
+            visited.add(node)
+            while stack:
+                current = stack.pop()
+                for neighbor in adjacency.get(current, []):
+                    if neighbor in visited:
+                        continue
+                    visited.add(neighbor)
+                    stack.append(neighbor)
+        return components
+
     # Parse dates
     from_date = None
     to_date = None
@@ -2010,16 +2171,400 @@ def _cmd_work_graph_build(ns: argparse.Namespace) -> int:
     )
 
     builder = WorkGraphBuilder(config)
-    result = builder.build()
+    try:
+        result = builder.build()
 
-    total_edges = sum(result.values())
-    logging.info("Work graph build complete. Total edges: %d", total_edges)
-    logging.info("  issue_issue_edges: %d", result.get("issue_issue_edges", 0))
-    logging.info("  issue_pr_edges: %d", result.get("issue_pr_edges", 0))
-    logging.info("  pr_commit_edges: %d", result.get("pr_commit_edges", 0))
-    logging.info("  commit_file_edges: %d", result.get("commit_file_edges", 0))
-    logging.info("  heuristic_edges: %d", result.get("heuristic_edges", 0))
+        total_edges = sum(result.values())
+        logging.info("Work graph build complete. Total edges: %d", total_edges)
+        logging.info("  issue_issue_edges: %d", result.get("issue_issue_edges", 0))
+        logging.info("  issue_pr_edges: %d", result.get("issue_pr_edges", 0))
+        logging.info("  pr_commit_edges: %d", result.get("pr_commit_edges", 0))
+        logging.info("  commit_file_edges: %d", result.get("commit_file_edges", 0))
+        logging.info("  heuristic_edges: %d", result.get("heuristic_edges", 0))
 
+        client = getattr(builder, "client", None)
+        if client is None:
+            logging.error(
+                "FAIL: Work graph builder did not expose a ClickHouse client."
+            )
+            return 1
+
+        where_parts = [
+            f"event_ts >= '{from_date.strftime('%Y-%m-%d %H:%M:%S')}'",
+            f"event_ts <= '{to_date.strftime('%Y-%m-%d %H:%M:%S')}'",
+        ]
+        if repo_id:
+            where_parts.append(f"repo_id = '{repo_id}'")
+        where_sql = " AND ".join(where_parts)
+
+        edge_count = client.query(
+            f"SELECT count() FROM work_graph_edges WHERE {where_sql}"
+        ).result_rows[0][0]
+        if int(edge_count or 0) == 0:
+            # Debug logging
+            try:
+                bounds = client.query(
+                    "SELECT min(event_ts), max(event_ts) FROM work_graph_edges"
+                ).result_rows[0]
+                logging.info(
+                    f"DEBUG: work_graph_edges event_ts range: {bounds[0]} to {bounds[1]}"
+                )
+                logging.info(f"DEBUG: Filter window: {from_date} to {to_date}")
+            except Exception as e:
+                logging.debug(
+                    "DEBUG: Failed to query work_graph_edges bounds for diagnostics: %s",
+                    e,
+                )
+
+            logging.error(
+                "FAIL: work_graph_edges is empty for the selected window. "
+                "Prerequisites missing or build produced no edges."
+            )
+            return 1
+
+        edge_rows = (
+            client.query(
+                f"""
+            SELECT source_type, source_id, target_type, target_id
+            FROM work_graph_edges
+            WHERE {where_sql}
+            """
+            ).result_rows
+            or []
+        )
+        components = _component_count(edge_rows)
+        if components == 1 and not ns.allow_degenerate:
+            logging.error(
+                "FAIL: Work graph is degenerate (connected_components=1). "
+                "Re-run with --allow-degenerate to override."
+            )
+            return 1
+
+        logging.info("Connected components in window: %d", components)
+        return 0
+    finally:
+        builder.close()
+
+
+def _cmd_investment_materialize(ns: argparse.Namespace) -> int:
+    from datetime import datetime, time, timedelta, timezone
+
+    from work_graph.investment.materialize import (
+        MaterializeConfig,
+        materialize_investments,
+    )
+
+    now = datetime.now(timezone.utc)
+    if ns.to_date:
+        to_day = date.fromisoformat(ns.to_date)
+        to_ts = datetime.combine(
+            to_day + timedelta(days=1), time.min, tzinfo=timezone.utc
+        )
+    else:
+        to_ts = now
+
+    if ns.from_date:
+        from_day = date.fromisoformat(ns.from_date)
+        from_ts = datetime.combine(from_day, time.min, tzinfo=timezone.utc)
+    else:
+        window_days = max(1, int(ns.window_days or 30))
+        from_ts = to_ts - timedelta(days=window_days)
+
+    if from_ts >= to_ts:
+        logging.error("--from must be before --to")
+        return 2
+
+    repo_ids = [repo_id for repo_id in (ns.repo_id or []) if repo_id]
+    team_ids = [team_id for team_id in (ns.team_id or []) if team_id]
+
+    config = MaterializeConfig(
+        dsn=ns.db,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        repo_ids=repo_ids or None,
+        llm_provider=ns.llm_provider,
+        persist_evidence_snippets=ns.persist_evidence_snippets,
+        llm_model=ns.model,
+        team_ids=team_ids or None,
+    )
+
+    stats = materialize_investments(config)
+    logging.info(
+        "Investment materialization complete. Components=%d Records=%d Quotes=%d",
+        stats.get("components", 0),
+        stats.get("records", 0),
+        stats.get("quotes", 0),
+    )
+    return 0
+
+
+def _cmd_fixtures_validate(ns: argparse.Namespace) -> int:
+    """Validate that fixture data is sufficient for work graph and investment."""
+    import clickhouse_connect
+    from work_graph.investment.constants import MIN_EVIDENCE_CHARS
+    from work_graph.investment.evidence import build_text_bundle
+    from work_graph.investment.queries import (
+        fetch_commits,
+        fetch_parent_titles,
+        fetch_pull_requests,
+        fetch_work_graph_edges,
+        fetch_work_items,
+    )
+    from work_graph.ids import parse_commit_from_id, parse_pr_from_id
+
+    db_url = ns.db
+    if not db_url.startswith("clickhouse://"):
+        logging.error("Validation only supported for ClickHouse currently.")
+        return 1
+
+    try:
+        client = clickhouse_connect.get_client(dsn=db_url)
+    except Exception as e:
+        logging.error(f"Failed to connect to DB: {e}")
+        return 1
+
+    logging.info("Running fixture validation...")
+
+    # 1. Check raw data counts
+    try:
+        wi_count = int(client.query("SELECT count() FROM work_items").result_rows[0][0])
+        non_epic_wi_count = int(
+            client.query(
+                "SELECT count() FROM work_items WHERE type != 'epic'"
+            ).result_rows[0][0]
+        )
+        pr_count = int(
+            client.query("SELECT count() FROM git_pull_requests").result_rows[0][0]
+        )
+        commit_count = int(
+            client.query("SELECT count() FROM git_commits").result_rows[0][0]
+        )
+        logging.info(
+            f"Raw Counts: WI={wi_count}, PR={pr_count}, Commits={commit_count}"
+        )
+
+        if wi_count < 10 or pr_count < 5 or commit_count < 20:
+            logging.error("FAIL: Insufficient raw data.")
+            return 1
+    except Exception as e:
+        logging.error(f"FAIL: Could not query raw tables: {e}")
+        return 1
+
+    # 2. Check prerequisites
+    try:
+        pr_commit_count = int(
+            client.query("SELECT count() FROM work_graph_pr_commit").result_rows[0][0]
+        )
+        issue_pr_count = int(
+            client.query("SELECT count() FROM work_graph_issue_pr").result_rows[0][0]
+        )
+        logging.info(
+            f"Prereqs: work_graph_pr_commit={pr_commit_count}, work_graph_issue_pr={issue_pr_count}"
+        )
+        if pr_commit_count == 0:
+            logging.error(
+                "FAIL: work_graph_pr_commit is empty (fixtures missing PR->commit prerequisites)."
+            )
+            return 1
+        if issue_pr_count == 0:
+            logging.error(
+                "FAIL: work_graph_issue_pr is empty (fixtures missing issue->PR prerequisites)."
+            )
+            return 1
+
+        linked_non_epic = int(
+            client.query(
+                """
+                SELECT count(DISTINCT wi.repo_id, wi.work_item_id)
+                FROM work_items wi
+                INNER JOIN work_graph_issue_pr l
+                  ON wi.repo_id = l.repo_id AND wi.work_item_id = l.work_item_id
+                WHERE wi.type != 'epic'
+                """
+            ).result_rows[0][0]
+        )
+        coverage = (linked_non_epic / non_epic_wi_count) if non_epic_wi_count else 0.0
+        if coverage < 0.7:
+            logging.error(
+                "FAIL: Issue->PR coverage too low (linked=%.1f%%, target>=70%%).",
+                coverage * 100.0,
+            )
+            return 1
+
+        prs_with_commits = int(
+            client.query(
+                "SELECT count(DISTINCT repo_id, pr_number) FROM work_graph_pr_commit"
+            ).result_rows[0][0]
+        )
+        if prs_with_commits < pr_count:
+            logging.error(
+                "FAIL: Not all PRs have commits in work_graph_pr_commit (prs_with_commits=%d, prs=%d).",
+                prs_with_commits,
+                pr_count,
+            )
+            return 1
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate prerequisites: {e}")
+        return 1
+
+    # 3. Check work_graph_edges + components (Python, deterministic)
+    try:
+        edges = fetch_work_graph_edges(client)
+        if not edges:
+            logging.error(
+                "FAIL: work_graph_edges is empty (run `cli.py work-graph build`)."
+            )
+            return 1
+
+        adjacency: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for edge in edges:
+            source = (str(edge.get("source_type")), str(edge.get("source_id")))
+            target = (str(edge.get("target_type")), str(edge.get("target_id")))
+            adjacency.setdefault(source, []).append(target)
+            adjacency.setdefault(target, []).append(source)
+
+        visited: set[tuple[str, str]] = set()
+        components: list[list[tuple[str, str]]] = []
+        for node in adjacency:
+            if node in visited:
+                continue
+            stack = [node]
+            visited.add(node)
+            group: list[tuple[str, str]] = []
+            while stack:
+                current = stack.pop()
+                group.append(current)
+                for neighbor in adjacency.get(current, []):
+                    if neighbor in visited:
+                        continue
+                    visited.add(neighbor)
+                    stack.append(neighbor)
+            components.append(group)
+
+        component_count = len(components)
+        min_components = min(50, max(2, non_epic_wi_count // 2))
+        logging.info(
+            "WorkUnits (connected components): %d (min_required=%d)",
+            component_count,
+            min_components,
+        )
+        if component_count < min_components:
+            logging.error(
+                "FAIL: WorkUnits too low (components=%d, required>=%d).",
+                component_count,
+                min_components,
+            )
+            return 1
+
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate work graph edges/components: {e}")
+        return 1
+
+    # 4. Evidence sanity (sample bundles)
+    try:
+        sample_needed = 10
+        eligible = []
+        for node_list in components:
+            has_issue = any(nt == "issue" for nt, _ in node_list)
+            has_pr = any(nt == "pr" for nt, _ in node_list)
+            if has_issue and has_pr:
+                eligible.append(node_list)
+            if len(eligible) >= sample_needed:
+                break
+
+        if not eligible:
+            logging.error(
+                "FAIL: No WorkUnits with both issues and PRs; evidence bundles will be empty."
+            )
+            return 1
+
+        for idx, node_list in enumerate(eligible, start=1):
+            issue_ids = [
+                node_id for node_type, node_id in node_list if node_type == "issue"
+            ]
+            pr_ids = [node_id for node_type, node_id in node_list if node_type == "pr"]
+            commit_ids = [
+                node_id for node_type, node_id in node_list if node_type == "commit"
+            ]
+
+            work_items = fetch_work_items(client, work_item_ids=issue_ids)
+            work_item_map = {
+                str(item.get("work_item_id")): item
+                for item in work_items
+                if item.get("work_item_id")
+            }
+
+            pr_repo_numbers: dict[str, list[int]] = {}
+            for pr_id in pr_ids:
+                repo_id, number = parse_pr_from_id(pr_id)
+                if repo_id and number is not None:
+                    pr_repo_numbers.setdefault(str(repo_id), []).append(int(number))
+            prs = fetch_pull_requests(client, repo_numbers=pr_repo_numbers)
+            pr_map: dict[str, dict[str, object]] = {}
+            for pr in prs:
+                repo = str(pr.get("repo_id") or "")
+                number = pr.get("number")
+                if repo and number is not None:
+                    pr_map[f"{repo}#pr{int(number)}"] = pr
+
+            commit_repo_hashes: dict[str, list[str]] = {}
+            for commit_id in commit_ids:
+                repo_id, commit_hash = parse_commit_from_id(commit_id)
+                if repo_id and commit_hash:
+                    commit_repo_hashes.setdefault(str(repo_id), []).append(
+                        str(commit_hash)
+                    )
+            commits = fetch_commits(client, repo_commits=commit_repo_hashes)
+            commit_map: dict[str, dict[str, object]] = {}
+            for commit in commits:
+                repo = str(commit.get("repo_id") or "")
+                commit_hash = str(commit.get("hash") or "")
+                if repo and commit_hash:
+                    commit_map[f"{repo}@{commit_hash}"] = commit
+
+            parent_ids = {
+                str(item.get("parent_id") or "")
+                for item in work_items
+                if item.get("parent_id")
+            }
+            epic_ids = {
+                str(item.get("epic_id") or "")
+                for item in work_items
+                if item.get("epic_id")
+            }
+            parent_titles = fetch_parent_titles(client, work_item_ids=parent_ids)
+            epic_titles = fetch_parent_titles(client, work_item_ids=epic_ids)
+
+            bundle = build_text_bundle(
+                issue_ids=issue_ids,
+                pr_ids=pr_ids,
+                commit_ids=commit_ids,
+                work_item_map=work_item_map,
+                pr_map=pr_map,
+                commit_map=commit_map,
+                parent_titles=parent_titles,
+                epic_titles=epic_titles,
+                work_unit_id=f"validate:{idx}",
+            )
+            if bundle.text_char_count < MIN_EVIDENCE_CHARS:
+                logging.error(
+                    "FAIL: Evidence bundle too small for WorkUnit sample %d (chars=%d, required>=%d).",
+                    idx,
+                    bundle.text_char_count,
+                    MIN_EVIDENCE_CHARS,
+                )
+                return 1
+
+        logging.info(
+            "Evidence sanity: PASS (sampled %d work units, min_chars=%d)",
+            len(eligible),
+            MIN_EVIDENCE_CHARS,
+        )
+    except Exception as e:
+        logging.error(f"FAIL: Evidence sanity check failed: {e}")
+        return 1
+
+    logging.info("PASS: Fixture validation successful.")
     return 0
 
 

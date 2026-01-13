@@ -166,9 +166,59 @@ class InvestmentSubtype(BaseModel):
 
 
 class InvestmentResponse(BaseModel):
-    categories: List[InvestmentCategory]
-    subtypes: List[InvestmentSubtype]
+    theme_distribution: Dict[str, float]
+    subcategory_distribution: Dict[str, float]
+    evidence_quality_distribution: Optional[Dict[str, float]] = None
+    evidence_quality_stats: Optional["EvidenceQualityStats"] = None
+    unit: Optional[str] = None
     edges: Optional[List[Dict[str, Any]]] = None
+
+
+class InvestmentFindingEvidence(BaseModel):
+    """Evidence backing a single finding."""
+
+    theme: str
+    subcategory: Optional[str] = None
+    share_pct: float
+    delta_pct_points: Optional[float] = None
+    evidence_quality_mean: Optional[float] = None
+    evidence_quality_band: Optional[str] = None
+
+
+class InvestmentFinding(BaseModel):
+    """A single finding from the investment mix analysis."""
+
+    finding: str
+    evidence: InvestmentFindingEvidence
+
+
+class InvestmentConfidence(BaseModel):
+    """Confidence metadata for the explanation."""
+
+    level: Literal["high", "moderate", "low", "unknown"]
+    quality_mean: Optional[float] = None
+    quality_stddev: Optional[float] = None
+    band_mix: Dict[str, int] = Field(default_factory=dict)
+    drivers: List[str] = Field(default_factory=list)
+
+
+class InvestmentActionItem(BaseModel):
+    """A suggested action item for follow-up."""
+
+    action: str
+    why: str
+    where: str
+
+
+class InvestmentMixExplanation(BaseModel):
+    """Structured explanation for an investment mix view."""
+
+    summary: str
+    top_findings: List[InvestmentFinding] = Field(default_factory=list)
+    confidence: InvestmentConfidence
+    what_to_check_next: List[InvestmentActionItem] = Field(default_factory=list)
+    anti_claims: List[str] = Field(default_factory=list)
+    status: Optional[Literal["valid", "invalid_json", "invalid_llm_output"]] = None
 
 
 class WorkUnitTimeRange(BaseModel):
@@ -181,24 +231,57 @@ class WorkUnitEffort(BaseModel):
     value: float
 
 
-class WorkUnitConfidence(BaseModel):
-    value: float
-    band: Literal["high", "moderate", "low", "very_low"]
+class EvidenceQuality(BaseModel):
+    value: Optional[float] = None
+    band: Optional[Literal["high", "moderate", "low", "very_low", "unknown"]] = None
+
+
+class EvidenceQualityStats(BaseModel):
+    """Aggregated evidence quality statistics for a slice."""
+
+    mean: Optional[float] = None
+    stddev: Optional[float] = None
+    band_counts: Dict[str, int] = Field(default_factory=dict)
+    quality_drivers: List[str] = Field(default_factory=list)
 
 
 class WorkUnitEvidence(BaseModel):
-    structural: List[Dict[str, Any]] = Field(default_factory=list)
-    temporal: List[Dict[str, Any]] = Field(default_factory=list)
     textual: List[Dict[str, Any]] = Field(default_factory=list)
+    structural: List[Dict[str, Any]] = Field(default_factory=list)
+    contextual: List[Dict[str, Any]] = Field(default_factory=list)
 
 
-class WorkUnitSignal(BaseModel):
+class InvestmentBreakdown(BaseModel):
+    themes: Dict[str, float]
+    subcategories: Dict[str, float]
+
+
+class WorkUnitInvestment(BaseModel):
     work_unit_id: str
     time_range: WorkUnitTimeRange
     effort: WorkUnitEffort
-    categories: Dict[str, float]
-    confidence: WorkUnitConfidence
+    investment: InvestmentBreakdown
+    evidence_quality: EvidenceQuality
     evidence: WorkUnitEvidence
+
+
+class WorkUnitExplanation(BaseModel):
+    """LLM-generated explanation for a work unit's precomputed investment view."""
+
+    work_unit_id: str
+    ai_generated: bool = True
+    summary: str  # Plain text explanation narrative
+    category_rationale: Dict[str, str]  # Why each category leans that way
+    evidence_highlights: List[str]  # Which evidence mattered most
+    uncertainty_disclosure: str  # Where uncertainty exists
+    evidence_quality_limits: str  # Evidence quality statement
+
+
+class InvestmentSunburstSlice(BaseModel):
+    theme: str
+    subcategory: str
+    scope: str
+    value: float
 
 
 class PersonIdentity(BaseModel):
@@ -406,6 +489,11 @@ class SankeyResponse(BaseModel):
     unit: Optional[str] = None
     label: Optional[str] = None
     description: Optional[str] = None
+    team_coverage: Optional[float] = None
+    repo_coverage: Optional[float] = None
+    distinct_team_targets: Optional[int] = None
+    distinct_repo_targets: Optional[int] = None
+    chosen_mode: Optional[str] = None
 
 
 # Aggregated flame graph models (hierarchical tree format)

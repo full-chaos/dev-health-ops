@@ -27,6 +27,8 @@ from metrics.schemas import (
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    WorkUnitInvestmentEvidenceQuoteRecord,
+    WorkUnitInvestmentRecord,
 )
 from metrics.sinks.base import BaseMetricsSink
 import logging
@@ -536,3 +538,17 @@ class MongoMetricsSink(BaseMetricsSink):
             doc["computed_at"] = _dt_to_mongo_datetime(row.computed_at)
             ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
         self.db["issue_type_metrics_daily"].bulk_write(ops, ordered=False)
+
+    def write_work_unit_investments(
+        self, rows: Sequence[WorkUnitInvestmentRecord]
+    ) -> None:
+        raise NotImplementedError(
+            "Work unit investment materialization is not supported for MongoDB"
+        )
+
+    def write_work_unit_investment_quotes(
+        self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
+    ) -> None:
+        raise NotImplementedError(
+            "Work unit investment evidence quotes are not supported for MongoDB"
+        )

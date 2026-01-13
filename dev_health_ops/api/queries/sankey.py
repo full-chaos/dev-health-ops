@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List
 
 from .client import query_dicts
@@ -9,25 +9,27 @@ from .client import query_dicts
 async def fetch_investment_flow_items(
     client: Any,
     *,
-    start_day: date,
-    end_day: date,
+    start_ts: datetime,
+    end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int,
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
-            investment_area AS source,
-            project_stream AS target,
-            sum(delivery_units) AS value
-        FROM investment_metrics_daily
-        WHERE day >= %(start_day)s AND day < %(end_day)s
+            theme_kv.1 AS source,
+            ifNull(r.repo, toString(repo_id)) AS target,
+            sum(theme_kv.2 * effort_value) AS value
+        FROM work_unit_investments
+        LEFT JOIN repos AS r ON r.id = repo_id
+        ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
+        WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s
             {scope_filter}
         GROUP BY source, target
         ORDER BY value DESC
         LIMIT %(limit)s
     """
-    params = {"start_day": start_day, "end_day": end_day, "limit": limit}
+    params = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params.update(scope_params)
     return await query_dicts(client, query, params)
 

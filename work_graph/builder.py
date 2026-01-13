@@ -26,6 +26,7 @@ from work_graph.extractors.text_parser import (
 )
 from work_graph.ids import (
     generate_edge_id,
+    generate_commit_id,
     generate_pr_id,
 )
 from work_graph.models import (
@@ -124,6 +125,8 @@ class WorkGraphBuilder:
             evidence=edge.evidence,
             discovered_at=edge.discovered_at or self._now,
             last_synced=edge.last_synced or self._now,
+            event_ts=edge.event_ts or self._now,
+            day=edge.day or (edge.event_ts or self._now).date(),
         )
 
     def _issue_pr_to_record(self, link: WorkGraphIssuePR) -> WorkGraphIssuePRRecord:
@@ -153,6 +156,19 @@ class WorkGraphBuilder:
         records = [self._issue_pr_to_record(lnk) for lnk in links]
         self.sink.write_work_graph_issue_pr(records)
 
+    @staticmethod
+    def _parse_provenance(value: Optional[str]) -> Provenance:
+        raw = str(value or "").strip().lower()
+        if raw == Provenance.NATIVE.value:
+            return Provenance.NATIVE
+        if raw == Provenance.EXPLICIT_TEXT.value:
+            return Provenance.EXPLICIT_TEXT
+        if raw == Provenance.HEURISTIC.value:
+            return Provenance.HEURISTIC
+        if raw:
+            return Provenance.NATIVE
+        return Provenance.NATIVE
+
     def build(self) -> dict:
         """
         Execute the full work graph build.
@@ -173,18 +189,25 @@ class WorkGraphBuilder:
         # 1. Build issue->issue edges from work_item_dependencies
         stats["issue_issue_edges"] = self._build_issue_issue_edges()
 
-        # 2. Build issue->PR edges from PR title/body text parsing
-        issue_pr_explicit, stats["issue_pr_edges"] = self._build_issue_pr_edges()
+        # 2. Build issue->PR edges from existing fast-path table (prerequisite)
+        issue_pr_existing, stats["issue_pr_edges"] = (
+            self._build_issue_pr_edges_from_fast_path()
+        )
 
-        # 3. Build heuristic issue->PR edges for items not linked explicitly
+        # 3. Build issue->PR edges from PR title/body text parsing (fills fast path)
+        issue_pr_explicit, parsed_count = self._build_issue_pr_edges()
+        stats["issue_pr_edges"] += parsed_count
+        issue_pr_explicit |= issue_pr_existing
+
+        # 4. Build heuristic issue->PR edges for items not linked explicitly
         stats["heuristic_edges"] = self._build_heuristic_issue_pr_edges(
             issue_pr_explicit
         )
 
-        # 4. Build PR->commit edges (if available in work_graph_pr_commit)
-        stats["pr_commit_edges"] = self._count_pr_commit_edges()
+        # 5. Build PR->commit edges from fast-path table (prerequisite)
+        stats["pr_commit_edges"] = self._build_pr_commit_edges_from_fast_path()
 
-        # 5. Commit->file edges are handled by view over git_commit_stats
+        # 6. Commit->file edges are handled by view over git_commit_stats
         stats["commit_file_edges"] = self._count_commit_file_edges()
 
         logger.info(
@@ -208,7 +231,8 @@ class WorkGraphBuilder:
             source_work_item_id,
             target_work_item_id,
             relationship_type,
-            relationship_type_raw
+            relationship_type_raw,
+            last_synced
         FROM work_item_dependencies FINAL
         """
 
@@ -222,7 +246,7 @@ class WorkGraphBuilder:
 
         edges = []
         for row in rows:
-            source_id, target_id, rel_type, rel_type_raw = row
+            source_id, target_id, rel_type, rel_type_raw, last_synced = row
 
             # Map relationship type to EdgeType
             edge_type = DEPENDENCY_TYPE_MAP.get(
@@ -238,6 +262,13 @@ class WorkGraphBuilder:
                 target_id,
             )
 
+            # Ensure timezone
+            event_ts = last_synced
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
             edge = WorkGraphEdge(
                 edge_id=edge_id,
                 source_type=NodeType.ISSUE,
@@ -250,6 +281,7 @@ class WorkGraphBuilder:
                 evidence=rel_type_raw or rel_type or "dependency",
                 discovered_at=self._now,
                 last_synced=self._now,
+                event_ts=event_ts,
             )
             edges.append(edge)
 
@@ -371,6 +403,13 @@ class WorkGraphBuilder:
             if not title:
                 continue
 
+            # Ensure timezone
+            event_ts = created_at
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
             # Extract Jira keys
             jira_refs = extract_jira_keys(title)
             jira_refs_found += len(jira_refs)
@@ -413,6 +452,7 @@ class WorkGraphBuilder:
                             evidence=ref.raw_match,
                             discovered_at=self._now,
                             last_synced=self._now,
+                            event_ts=event_ts,
                         )
                     )
 
@@ -473,6 +513,7 @@ class WorkGraphBuilder:
                             evidence=ref.raw_match,
                             discovered_at=self._now,
                             last_synced=self._now,
+                            event_ts=event_ts,
                         )
                     )
 
@@ -524,6 +565,7 @@ class WorkGraphBuilder:
                             evidence=ref.raw_match,
                             discovered_at=self._now,
                             last_synced=self._now,
+                            event_ts=event_ts,
                         )
                     )
 
@@ -584,6 +626,12 @@ class WorkGraphBuilder:
         FROM work_items FINAL
         WHERE repo_id IS NOT NULL
         """
+        if self.config.from_date:
+            wi_query += f" AND updated_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+        if self.config.to_date:
+            wi_query += f" AND updated_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+        if self.config.repo_id:
+            wi_query += f" AND repo_id = '{self.config.repo_id}'"
         wi_result = self.client.query(wi_query)
         wi_rows = wi_result.result_rows or []
 
@@ -598,6 +646,18 @@ class WorkGraphBuilder:
             created_at
         FROM git_pull_requests FINAL
         """
+        if self.config.from_date:
+            pr_query += f" WHERE created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+        if self.config.to_date:
+            if "WHERE" in pr_query:
+                pr_query += f" AND created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            else:
+                pr_query += f" WHERE created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+        if self.config.repo_id:
+            if "WHERE" in pr_query:
+                pr_query += f" AND repo_id = '{self.config.repo_id}'"
+            else:
+                pr_query += f" WHERE repo_id = '{self.config.repo_id}'"
         pr_result = self.client.query(pr_query)
         pr_rows = pr_result.result_rows or []
 
@@ -616,6 +676,8 @@ class WorkGraphBuilder:
         edges: List[WorkGraphEdge] = []
         fast_path_links: List[WorkGraphIssuePR] = []
 
+        linked_work_items = {work_item_id for work_item_id, _ in explicit_links}
+
         for wi_row in wi_rows:
             repo_id, work_item_id, updated_at = wi_row
             repo_key = str(repo_id)
@@ -623,71 +685,239 @@ class WorkGraphBuilder:
             if repo_key not in prs_by_repo:
                 continue
 
+            if work_item_id in linked_work_items:
+                continue
+
+            best: Optional[Tuple[int, datetime, float]] = None
             for pr_number, pr_created_at in prs_by_repo[repo_key]:
-                # Skip if already linked explicitly
                 if (work_item_id, pr_number) in explicit_links:
                     continue
-
-                # Check time window
                 if not updated_at or not pr_created_at:
                     continue
-
                 time_diff = abs((pr_created_at - updated_at).total_seconds())
-                if time_diff <= window.total_seconds():
-                    pr_id = generate_pr_id(uuid.UUID(repo_key), pr_number)
-                    edge_id = generate_edge_id(
-                        NodeType.PR,
-                        pr_id,
-                        EdgeType.RELATES,
-                        NodeType.ISSUE,
-                        work_item_id,
-                    )
+                if time_diff > window.total_seconds():
+                    continue
+                if best is None or time_diff < best[2]:
+                    best = (pr_number, pr_created_at, time_diff)
 
-                    edges.append(
-                        WorkGraphEdge(
-                            edge_id=edge_id,
-                            source_type=NodeType.PR,
-                            source_id=pr_id,
-                            target_type=NodeType.ISSUE,
-                            target_id=work_item_id,
-                            edge_type=EdgeType.RELATES,
-                            repo_id=uuid.UUID(repo_key),
-                            provenance=Provenance.HEURISTIC,
-                            confidence=self.config.heuristic_confidence,
-                            evidence=f"time_window_{self.config.heuristic_days_window}d",
-                            discovered_at=self._now,
-                            last_synced=self._now,
-                        )
-                    )
+            if best is None:
+                continue
 
-                    fast_path_links.append(
-                        WorkGraphIssuePR(
-                            repo_id=uuid.UUID(repo_key),
-                            work_item_id=work_item_id,
-                            pr_number=pr_number,
-                            confidence=self.config.heuristic_confidence,
-                            provenance=Provenance.HEURISTIC,
-                            evidence=f"time_window_{self.config.heuristic_days_window}d",
-                            last_synced=self._now,
-                        )
-                    )
+            pr_number = best[0]
+            pr_created_at = best[1]
+            
+            # Use max(updated_at, pr_created_at) as event time
+            event_ts = pr_created_at
+            if updated_at and updated_at > event_ts:
+                event_ts = updated_at
+            # Ensure timezone
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            
+            pr_id = generate_pr_id(uuid.UUID(repo_key), pr_number)
+            edge_id = generate_edge_id(
+                NodeType.PR,
+                pr_id,
+                EdgeType.RELATES,
+                NodeType.ISSUE,
+                work_item_id,
+            )
+
+            edges.append(
+                WorkGraphEdge(
+                    edge_id=edge_id,
+                    source_type=NodeType.PR,
+                    source_id=pr_id,
+                    target_type=NodeType.ISSUE,
+                    target_id=work_item_id,
+                    edge_type=EdgeType.RELATES,
+                    repo_id=uuid.UUID(repo_key),
+                    provenance=Provenance.HEURISTIC,
+                    confidence=self.config.heuristic_confidence,
+                    evidence=f"time_window_{self.config.heuristic_days_window}d",
+                    discovered_at=self._now,
+                    last_synced=self._now,
+                    event_ts=event_ts,
+                )
+            )
+
+            fast_path_links.append(
+                WorkGraphIssuePR(
+                    repo_id=uuid.UUID(repo_key),
+                    work_item_id=work_item_id,
+                    pr_number=pr_number,
+                    confidence=self.config.heuristic_confidence,
+                    provenance=Provenance.HEURISTIC,
+                    evidence=f"time_window_{self.config.heuristic_days_window}d",
+                    last_synced=self._now,
+                )
+            )
 
         count = self._write_edges(edges)
         self._write_issue_pr_links(fast_path_links)
         logger.info("Created %d heuristic issue->PR edges", count)
         return count
 
-    def _count_pr_commit_edges(self) -> int:
-        """Count existing PR->commit edges (from processors)."""
-        query = "SELECT count() FROM work_graph_pr_commit"
-        try:
-            result = self.client.query(query)
-            count = result.result_rows[0][0] if result.result_rows else 0
-            logger.info("Found %d existing PR->commit edges", count)
-            return count
-        except Exception as e:
-            logger.warning("Could not count PR->commit edges: %s", e)
+    def _build_issue_pr_edges_from_fast_path(self) -> Tuple[Set[Tuple[str, int]], int]:
+        logger.info("Building issue->PR edges from work_graph_issue_pr...")
+
+        query = """
+        SELECT
+            p.repo_id,
+            p.work_item_id,
+            p.pr_number,
+            p.confidence,
+            p.provenance,
+            p.evidence,
+            p.last_synced,
+            pr.created_at
+        FROM work_graph_issue_pr AS p
+        INNER JOIN git_pull_requests AS pr ON (p.repo_id = pr.repo_id AND p.pr_number = pr.number)
+        """
+        where_parts: List[str] = []
+        if self.config.repo_id:
+            where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
+        if self.config.from_date:
+            where_parts.append(
+                f"pr.created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+            )
+        if self.config.to_date:
+            where_parts.append(
+                f"pr.created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            )
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+
+        result = self.client.query(query)
+        rows = result.result_rows or []
+        logger.info("Found %d rows in work_graph_issue_pr", len(rows))
+        if not rows:
+            return set(), 0
+
+        edges: List[WorkGraphEdge] = []
+        links: Set[Tuple[str, int]] = set()
+        for row in rows:
+            repo_id, work_item_id, pr_number, confidence, provenance, evidence, _synced, created_at = row
+            repo_uuid = uuid.UUID(str(repo_id))
+            pr_id = generate_pr_id(repo_uuid, int(pr_number))
+            edge_id = generate_edge_id(
+                NodeType.PR,
+                pr_id,
+                EdgeType.IMPLEMENTS,
+                NodeType.ISSUE,
+                str(work_item_id),
+            )
+            
+            # Ensure timezone
+            event_ts = created_at
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
+            edges.append(
+                WorkGraphEdge(
+                    edge_id=edge_id,
+                    source_type=NodeType.PR,
+                    source_id=pr_id,
+                    target_type=NodeType.ISSUE,
+                    target_id=str(work_item_id),
+                    edge_type=EdgeType.IMPLEMENTS,
+                    repo_id=repo_uuid,
+                    provenance=self._parse_provenance(provenance),
+                    confidence=float(confidence or 1.0),
+                    evidence=str(evidence or "issue_pr_fast_path"),
+                    discovered_at=self._now,
+                    last_synced=self._now,
+                    event_ts=event_ts,
+                )
+            )
+            links.add((str(work_item_id), int(pr_number)))
+
+        count = self._write_edges(edges)
+        logger.info("Created %d issue->PR edges from fast-path table", count)
+        return links, count
+
+    def _build_pr_commit_edges_from_fast_path(self) -> int:
+        logger.info("Building PR->commit edges from work_graph_pr_commit...")
+
+        query = """
+        SELECT
+            p.repo_id,
+            p.pr_number,
+            p.commit_hash,
+            p.confidence,
+            p.provenance,
+            p.evidence,
+            p.last_synced,
+            c.author_when
+        FROM work_graph_pr_commit AS p
+        INNER JOIN git_commits AS c ON (p.repo_id = c.repo_id AND p.commit_hash = c.hash)
+        """
+        where_parts: List[str] = []
+        if self.config.repo_id:
+            where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
+        if self.config.from_date:
+            where_parts.append(
+                f"c.author_when >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+            )
+        if self.config.to_date:
+            where_parts.append(
+                f"c.author_when <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            )
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+
+        # Optimize for distributed join if needed, but local join is fine here
+        
+        result = self.client.query(query)
+        rows = result.result_rows or []
+        logger.info("Found %d rows in work_graph_pr_commit", len(rows))
+        if not rows:
             return 0
+
+        edges: List[WorkGraphEdge] = []
+        for row in rows:
+            repo_id, pr_number, commit_hash, confidence, provenance, evidence, _synced, author_when = row
+            repo_uuid = uuid.UUID(str(repo_id))
+            pr_id = generate_pr_id(repo_uuid, int(pr_number))
+            commit_id = generate_commit_id(repo_uuid, str(commit_hash))
+            edge_id = generate_edge_id(
+                NodeType.PR,
+                pr_id,
+                EdgeType.CONTAINS,
+                NodeType.COMMIT,
+                commit_id,
+            )
+            
+            # Ensure timezone
+            event_ts = author_when
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
+            edges.append(
+                WorkGraphEdge(
+                    edge_id=edge_id,
+                    source_type=NodeType.PR,
+                    source_id=pr_id,
+                    target_type=NodeType.COMMIT,
+                    target_id=commit_id,
+                    edge_type=EdgeType.CONTAINS,
+                    repo_id=repo_uuid,
+                    provenance=self._parse_provenance(provenance),
+                    confidence=float(confidence or 1.0),
+                    evidence=str(evidence or "pr_commit_fast_path"),
+                    discovered_at=self._now,
+                    last_synced=self._now,
+                    event_ts=event_ts,
+                )
+            )
+
+        count = self._write_edges(edges)
+        logger.info("Created %d PR->commit edges from fast-path table", count)
+        return count
 
     def _count_commit_file_edges(self) -> int:
         """Count commit->file edges from the view."""

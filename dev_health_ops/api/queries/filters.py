@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from .client import query_dicts
+from investment_taxonomy import SUBCATEGORIES, THEMES
 
 
 async def fetch_filter_options(client: Any) -> Dict[str, List[str]]:
@@ -63,17 +64,7 @@ async def fetch_filter_options(client: Any) -> Dict[str, List[str]]:
     )
     options["developers"] = [row["value"] for row in dev_rows if row.get("value")]
 
-    work_rows = await query_dicts(
-        client,
-        """
-        SELECT distinct investment_area AS value
-        FROM investment_metrics_daily
-        WHERE investment_area != ''
-        ORDER BY investment_area
-        """,
-        {},
-    )
-    options["work_category"] = [row["value"] for row in work_rows if row.get("value")]
+    options["work_category"] = sorted(THEMES) + sorted(SUBCATEGORIES)
 
     issue_rows = await query_dicts(
         client,

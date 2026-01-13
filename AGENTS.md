@@ -1,145 +1,244 @@
-# AGENTS.md — Guidance for AI coding agents
+# AGENTS — Single Source of Truth (dev-health-ops)
 
-Purpose: compact, actionable rules for an AI coding agent (Copilot-like) working in this repository.
+This document is the **canonical** agent briefing for this repo: how it works, what not to break, and the minimum rules to move fast without causing architectural regressions. It consolidates prior agent guidance into one set of enforceable constraints.
 
-- Start by reading `cli.py`, `processors/local.py`, and `connectors/__init__.py` to understand boundaries.
-- Prefer minimal, surgical changes. Use `replace` or `write_file` for edits and keep surrounding style.
-- Use `codebase_investigator` for planning complex changes or understanding the system.
-- For python operations use a virtualenv: pyenv activate dev-health
+---
 
-## Architecture & flows
+## 0) Read-first (order matters)
 
-# Gemini Context: dev-health-ops
+1. `cli.py`
+2. `processors/local.py`
+3. `connectors/__init__.py`
 
-This file provides a high-level overview and context for Gemini to understand the `dev-health-ops` project.
+Goal: understand **boundaries** (ingest → normalize → persist → metricize → visualize) before touching anything.
 
-## Project Mission
+---
 
-`dev-health-ops` is an open-source development team operation analytics platform. Its goal is to provide tools and implementations for tracking developer health and operational metrics by integrating with popular tools like GitHub, GitLab, Jira, and local Git repositories.
+## 1) Mission and product intent
 
-## Architecture Overview
+`dev-health-ops` is an OSS analytics platform for **team operating modes** and developer health, backed by provider data (GitHub, GitLab, Jira, local Git) and computed metrics stored in DB sinks.
 
-The project follows a pipeline-like architecture:
+### Investment View is canonical
 
-1.  **Connectors (`connectors/`)**: Fetch raw data from providers (GitHub, GitLab, Jira).
-2.  **Processors (`processors/`)**: Normalize and process the raw data.
-3.  **Storage (`storage.py`, `models/`)**: Persist processed data into various backends (also provides unified read helpers like `get_complexity_snapshots`).
-4.  **Metrics (`metrics/`)**: Compute high-level metrics (e.g., throughput, cycle time, rework, bus factor, predictability) from the stored data.
-5.  **Visualization (`grafana/`)**: Provision Grafana dashboards to visualize the computed metrics.
-    - Investment Areas dashboard filters teams via `match(..., '${team_id:regex}')`.
-    - Dashboard team filters normalize `team_id` with `ifNull(nullIf(team_id, ''), 'unassigned')` to include legacy NULL/empty values.
-    - Investment metrics store NULL team_id for unassigned; the investment flow view casts with `toNullable(team_id)`.
-    - Hotspot Explorer queries should use table format and order by day to satisfy Grafana time sorting.
-    - Hotspot Explorer panel selects the facts frame by requiring `churn_loc_30d` to avoid binding to the sparkline frame.
-    - Hotspot ownership concentration uses `git_blame` max-lines share per file.
-    - Synthetic fixtures cover a broader file set to improve blame/ownership coverage.
-    - IC Drilldown includes a Churn vs Throughput panel filtered by `identity_id`.
-    - Blame-only sync is available via `cli.py sync <local|github|gitlab> --blame-only`.
-    - GitHub/GitLab backfills (`--date/--backfill`) default to unlimited commits unless `--max-commits-per-repo` is set.
-    - Dev Health panel plugin applies a plugin-local Grafana theme (via `createTheme`) with a custom visualization palette.
+* **Signals is retired** (POC only). Do not extend it.
+* The platform answers: **“Where is human effort actually being invested, and what is the cost to people when certain work dominates?”**
 
-## Key Technologies
+---
 
-- **Language**: Python 3.10+
-- **CLI Framework**: Python's `argparse` (implemented in `cli.py`)
-- **Databases**:
-  - **PostgreSQL**: Primary relational store (uses `SQLAlchemy` + `Alembic`).
-  - **ClickHouse**: Analytics store for high-performance metric queries.
-  - **MongoDB**: Document-based store (uses `motor`).
-  - **SQLite**: Local file-based store (uses `aiosqlite`).
-- **APIs**: `PyGithub`, `python-gitlab`, `jira`.
-- **Git**: `GitPython` for local repository analysis.
-- **Validation**: `pydantic`.
+## 2) System architecture (pipeline)
 
-## Project Structure
+### 2.1 Data flow
 
-- `cli.py`: Main entry point for the tool.
-- `storage.py`: Unified storage interface for all supported databases.
-- `connectors/`: Provider-specific logic for data fetching.
-- `metrics/`: Core logic for computing DORA and other team health metrics.
-- `models/`: SQLAlchemy and Pydantic models for data structures (includes `models/teams.py`).
-- `processors/`: Logic to bridge connectors and storage.
-- `providers/`: Mapping and identity management logic.
-- `grafana/`: Configuration for automated Grafana setup.
-- `grafana/plugins/dev-health-panels`: Panel plugin with Developer Landscape, Hotspot Explorer, and Investment Flow views; mode selection happens in panel settings, backed by ClickHouse views in the `stats` schema.
-- ClickHouse view definitions use `WITH ... AS` aliasing (avoid `WITH name = expr` syntax).
-- `alembic/`: Database migration scripts for PostgreSQL.
-- `fixtures/`: Synthetic data generation for testing and demos.
-- `tests/`: Comprehensive test suite covering connectors, metrics, and storage.
+1. **Connectors (`connectors/`)**
 
-## Development Workflow
+   * Fetch raw provider data.
+   * Network I/O should be async and batch-friendly.
 
-- **Syncing Data**: `python cli.py sync <provider> --db <connection_string> ...`
-- **Syncing Teams**: `python cli.py sync teams --provider <config|jira|synthetic> --db <connection_string> ...`
-- **Syncing Work Items**: `python cli.py sync work-items --provider <jira|github|gitlab|synthetic|all> -s "<org/*>" --db <connection_string> ...` (use `--auth` to override `GITHUB_TOKEN`/`GITLAB_TOKEN`)
-- **Planned**: repo filtering for `sync work-items` by tags/settings (beyond name glob).
-- **Computing Metrics**: `python cli.py metrics daily --db <connection_string> ...` (expects work items already synced unless `--provider` is set)
-- **Complexity Metrics**: `python cli.py metrics complexity --repo-path . -s "*" --db <connection_string> ...`
-- **Generating Data**: `python cli.py fixtures generate --db <connection_string> ...`
-- **Visualization**: `python cli.py grafana up` to start the dashboard stack.
-- **Testing**: Run `pytest` to execute the test suite.
+2. **Processors (`processors/`)**
 
-## Important Context
+   * Normalize/transform connector outputs into internal models.
 
-- **Private Repos**: Full support for private GitHub/GitLab repos via tokens.
-- **Batch Processing**: Connectors support pattern matching and concurrent batch processing.
-- **Database Agnostic**: Most commands support switching between DB types using the `--db` flag or `DATABASE_URI` env var.
-- **Metrics Computation**: Can be run daily or backfilled for a period.
-- **Plans & Requirements**: Implementation plans in `docs/project.md`, metrics inventory in `docs/metrics-inventory.md`, the roadmap in `docs/roadmap.md`.
+3. **Storage / Sinks (`metrics/sinks/`)**
 
-## Sink-Based Metrics Architecture
+   * Persist computed outputs.
+   * **No file exports. No debug dumps. No JSON/YAML output paths.**
 
-Metrics are persisted via sink implementations in `metrics/sinks/`:
+4. **Metrics (`metrics/`)**
 
-- `metrics/sinks/base.py`: `BaseMetricsSink` ABC defining the sink contract.
-- `metrics/sinks/factory.py`: `create_sink()` factory, `detect_backend()`, `SinkBackend` enum.
-- `metrics/sinks/clickhouse.py`: ClickHouse implementation using `clickhouse_connect`.
-- `metrics/sinks/sqlite.py`: SQLite implementation using SQLAlchemy Core.
-- `metrics/sinks/postgres.py`: PostgreSQL implementation (subclasses SQLite).
-- `metrics/sinks/mongo.py`: MongoDB implementation using `pymongo`.
+   * Compute higher-level rollups (daily/backfills/etc.) from persisted data.
 
-Backend switching via `DATABASE_URI` env var or `--db` CLI flag.
+5. **Visualization (Grafana + dev-health-web)**
 
-## Developer workflows
+   * UI renders **persisted** data.
+   * `dev-health-web` is visualization-only: it must not become the source of truth.
 
-- Run the sync:
+### 2.2 Storage backends (supported)
 
-```bash
-python cli.py sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo
-```
+* PostgreSQL (SQLAlchemy + Alembic)
+* ClickHouse (analytics store)
+* MongoDB
+* SQLite
 
-- Generate synthetic data:
+Backend selection:
 
-```bash
-python cli.py fixtures generate --db "$DATABASE_URI" --days 30
-```
+* CLI `--db` flag or `DATABASE_URI`
+* Secondary sink via `SECONDARY_DATABASE_URI` when using `sink='both'`.
 
-- Sync work items (provider APIs → work item tables):
+---
 
-```bash
-python cli.py sync work-items --provider github --auth "$GITHUB_TOKEN" -s "org/*" --db "$DATABASE_URI" --date 2025-02-01 --backfill 30
-```
+## 3) The non-negotiable Work Graph + Investment contract
 
-- Compute complexity metrics (batch mode):
+### 3.1 Core contract
 
-```bash
-python cli.py metrics complexity --repo-path . -s "*"
-```
+* **WorkUnits are evidence containers, not categories.**
+* LLM decides **subcategory distributions** at **compute time only**.
+* **Theme roll-up is deterministic** from subcategories.
+* UX renders **only persisted distributions and edges**.
+* LLM explanations may run on-demand but **must not alter persisted decisions**.
+* **Sinks only** for persistence (no output files).
 
-- Run tests: `pytest -q` or `pytest tests/test_github_connector.py -q`.
-- Apply Postgres migrations: `alembic upgrade head` (use docker compose if needed).
+### 3.2 Canonical taxonomy
 
-## Conventions & rules for agents
+#### Themes (fixed)
 
-- CLI args override env vars (`DATABASE_URI`, `GITHUB_TOKEN`, `GITLAB_TOKEN`, `REPO_PATH`).
-- For `sink='both'` mode, set `SECONDARY_DATABASE_URI` for the second sink.
-- Performance knobs: `BATCH_SIZE` and `MAX_WORKERS`.
-- Prefer async batch helpers for network I/O. Respect `RateLimitGate` backoff in connectors/processors.
-- Do not commit secrets. Use environment variables for tokens in examples only.
-- Close SQLAlchemyStore engines in tests (or use context managers) to avoid aiosqlite event-loop teardown warnings.
+* Feature Delivery
+* Operational / Support
+* Maintenance / Tech Debt
+* Quality / Reliability
+* Risk / Security
 
-## When adding code
+Rules:
 
-- Export new connectors in `connectors/__init__.py`.
-- Add unit tests under `tests/` and run `pytest` locally.
-- If changing DB models, add/adjust Alembic migrations and run `alembic upgrade head` in dev.
+* No synonyms.
+* No overrides.
+* No per-team configuration.
+* Provider-native labels/types are **inputs only** and must be normalized away.
+
+#### Subcategories (fixed per theme)
+
+* There is a small curated set per theme.
+* Subcategories provide resolution without fragmenting language.
+* Subcategory probabilities roll up to theme probabilities.
+
+### 3.3 Data model guarantees
+
+For every WorkUnit (evidence container):
+
+* Theme probabilities sum to ~1.0
+* Subcategory probabilities sum to theme probabilities
+* Evidence arrays exist (may be empty)
+* Evidence quality always emitted
+* Categorization never returns “unknown”
+
+---
+
+## 4) LLM usage rules
+
+### 4.1 Compute-time categorization (required)
+
+* Output must be **strict JSON** matching `work_graph/investment/llm_schema.py`.
+* Keys must be from canonical subcategory registry.
+* Probabilities must be normalized and valid.
+* Evidence quotes must be **extractive substrings** from provided inputs.
+* Retry policy: **one repair attempt** only.
+* On failure: mark invalid + apply deterministic fallback.
+* Persist audit fields for every run.
+
+### 4.2 UX-time explanations (allowed, constrained)
+
+* Explanations can only use **persisted distributions and stored evidence**.
+* Explanations must not recompute categories/edges/weights.
+* All explanation output must be labeled AI-generated.
+
+Language constraints:
+
+* Allowed: *appears, leans, suggests*
+* Forbidden: *is, was, detected, determined*
+
+Explanation format:
+
+* SUMMARY (max 3 sentences)
+* REASONS (specific evidence)
+* UNCERTAINTY (limits + evidence quality)
+
+---
+
+## 5) Visualization rules (Grafana + web)
+
+### 5.1 Investment views
+
+* Treemap: **Theme-level by default**
+* Sunburst: Theme → (optional) scope/team → (optional) clusters
+* Sankey: Theme → scope/team pressure flows
+
+### 5.2 Drill-down contract
+
+* Default: Theme-only (leadership readable)
+* Drill: Theme → Subcategory → Evidence (WorkUnits)
+* Never show WorkUnits as peers to themes/subcategories.
+
+### 5.3 Grafana query conventions (when touching dashboards)
+
+* Prefer table format and stable time ordering where required.
+* Handle legacy `team_id` null/empty normalization.
+* Avoid ClickHouse `WITH name = expr` syntax; use `WITH ... AS` aliasing.
+
+(Only modify Grafana provisioning when needed; do not replatform dashboards incidentally.)
+
+---
+
+## 6) Developer workflow (CLI)
+
+### 6.1 Sync data
+
+* Git data (local):
+
+  * `python cli.py sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo`
+
+* Work items:
+
+  * `python cli.py sync work-items --provider <jira|github|gitlab|synthetic|all> -s "org/*" --db "$DATABASE_URI"`
+
+* Teams:
+
+  * `python cli.py sync teams --provider <config|jira|synthetic> --db "$DATABASE_URI"`
+
+### 6.2 Generate synthetic data
+
+* `python cli.py fixtures generate --db "$DATABASE_URI" --days 30`
+
+### 6.3 Compute metrics
+
+* Daily rollups:
+
+  * `python cli.py metrics daily --db "$DATABASE_URI"`
+
+---
+
+## 7) Engineering rules for agents
+
+### 7.1 Change discipline
+
+* Prefer **minimal, surgical** changes.
+* Keep surrounding style; use targeted edits.
+* Add/adjust tests under `tests/` for behavior changes.
+* If DB models change: include Alembic migrations (Postgres).
+
+### 7.2 Correct boundaries
+
+* Connectors fetch. Processors normalize. Metrics compute. Sinks persist.
+* Do not collapse responsibilities into one layer.
+* Do not add “helpful” outputs like file dumps. Persistence goes through sinks only.
+
+### 7.3 Performance and reliability
+
+* Async/batching for network I/O.
+* Respect any existing rate limit/backoff mechanisms.
+* Close SQLAlchemy engines in tests to avoid event-loop teardown warnings.
+
+---
+
+## 8) What to do when you start a task
+
+1. Identify which layer you’re changing (connector, processor, metric, sink, viz).
+2. Re-state the relevant non-negotiables (WorkUnits are evidence; themes/subcats canonical; sinks only).
+3. Make the smallest possible change that achieves the outcome.
+4. Add a test (or update an existing one) for the new behavior.
+5. Ensure no new outputs bypass sinks.
+
+---
+
+## 9) Quick reference
+
+### Hard bans
+
+* Treating WorkUnits as categories
+* User-configurable categories/subcategories
+* “Unknown” categorization output
+* LLM recomputation at UX-time
+* Any persistence path outside `metrics/sinks/*`
+
+### Allowed references to dev-health-web
+
+* Visualization implementation details only (charts, drill-down UX, rendering).
+* Not allowed: redefining taxonomy, recomputing categories, or becoming data source.

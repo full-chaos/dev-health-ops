@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time, timezone
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,7 +16,7 @@ from ..queries.sankey import (
     fetch_state_status_counts,
 )
 from ..queries.scopes import build_scope_filter_multi
-from .filtering import resolve_repo_filter_ids, time_window, work_category_filter
+from .filtering import resolve_repo_filter_ids, time_window
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +199,24 @@ def _team_scope_filter(
     )
 
 
+def _category_theme_filters(filters: MetricFilter) -> List[str]:
+    raw_categories = filters.why.work_category or []
+    themes: List[str] = []
+    for category in raw_categories:
+        if not category:
+            continue
+        category_str = str(category).strip()
+        if not category_str:
+            continue
+        if "." in category_str:
+            theme = category_str.split(".", 1)[0]
+        else:
+            theme = category_str
+        if theme:
+            themes.append(theme)
+    return list(dict.fromkeys(themes))
+
+
 def _work_scope_filter(
     filters: MetricFilter,
     work_scope_column: str = "work_scope_id",
@@ -223,36 +241,35 @@ async def _build_investment_flow(
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if not await _tables_present(
-        client, ["investment_metrics_daily"]
-    ):
+    if not await _tables_present(client, ["work_unit_investments"]):
         return [], []
     if not await _columns_present(
         client,
-        "investment_metrics_daily",
+        "work_unit_investments",
         [
-            "investment_area",
-            "project_stream",
-            "day",
-            "delivery_units",
-            "team_id",
+            "theme_distribution_json",
+            "effort_value",
+            "from_ts",
+            "to_ts",
             "repo_id",
         ],
     ):
         return [], []
-    team_filter, team_params = _team_scope_filter(
-        filters, team_column="ifNull(nullIf(team_id, ''), 'unassigned')"
-    )
     repo_filter, repo_params = await _repo_scope_filter(
         client, filters, repo_column="repo_id"
     )
-    category_filter, category_params = work_category_filter(filters)
-    scope_filter = f"{team_filter}{repo_filter}{category_filter}"
-    scope_params = {**team_params, **repo_params, **category_params}
+    theme_filters = _category_theme_filters(filters)
+    category_filter = " AND theme_kv.1 IN %(themes)s" if theme_filters else ""
+    scope_filter = f"{repo_filter}{category_filter}"
+    scope_params = {**repo_params}
+    if theme_filters:
+        scope_params["themes"] = theme_filters
+    window_start = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
+    window_end = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
     rows = await fetch_investment_flow_items(
         client,
-        start_day=start_day,
-        end_day=end_day,
+        start_ts=window_start,
+        end_ts=window_end,
         scope_filter=scope_filter,
         scope_params=scope_params,
         limit=MAX_INVESTMENT_ITEMS,

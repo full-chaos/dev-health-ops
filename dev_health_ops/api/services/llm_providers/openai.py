@@ -93,6 +93,7 @@ def _categorization_json_schema() -> dict[str, Any]:
             "subcategories": {
                 "type": "object",
                 "additionalProperties": False,
+                "required": keys,
                 "properties": {
                     k: {"type": "number", "minimum": 0, "maximum": 1} for k in keys
                 },
@@ -144,7 +145,7 @@ class OpenAIProvider:
         api_key: str,
         base_url: Optional[str] = None,
         model: str = "gpt-5-mini",
-        max_completion_tokens: int = 1024,
+        max_completion_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:
         cfg = OpenAIProviderConfig(
@@ -152,7 +153,7 @@ class OpenAIProvider:
             base_url=base_url,
             model=model,
             # keep param name stable at the facade; impl maps to correct API param
-            max_output_tokens=max(1024, int(max_completion_tokens)),
+            max_output_tokens=max(4096, int(max_completion_tokens)),
             temperature=float(temperature),
         )
 
@@ -213,10 +214,10 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
         retry_count = 0
         max_retries = 1
 
-        # Explanation payloads are large; start higher than 1024.
+        # Explanation payloads are large; start higher than 4096.
         is_schema_prompt = _is_json_schema_prompt(prompt)
         max_tokens = max(
-            self.cfg.max_output_tokens, 2048 if not is_schema_prompt else 1024
+            self.cfg.max_output_tokens, 4096 if not is_schema_prompt else 2048
         )
 
         while retry_count <= max_retries:
@@ -230,6 +231,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                     text_format: dict[str, Any] = {
                         "format": {
                             "type": "json_schema",
+                            "name": "categorization",
                             "strict": True,
                             "schema": _categorization_json_schema(),
                         }
@@ -332,7 +334,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
 
         retry_count = 0
         max_retries = 1
-        max_tokens = max(self.cfg.max_output_tokens, 1024)
+        max_tokens = max(self.cfg.max_output_tokens, 2048)
 
         while retry_count <= max_retries:
             try:

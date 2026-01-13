@@ -156,11 +156,7 @@ class OpenAIProvider:
             temperature=float(temperature),
         )
 
-        self._impl: _OpenAIProviderBase
-        if _is_gpt5_family(cfg.model):
-            self._impl = OpenAIGPT5Provider(cfg)
-        else:
-            self._impl = OpenAIGPTLegacyProvider(cfg)
+        self._impl = openai_provider_class_for(cfg.model)(cfg)
 
     async def complete(self, prompt: str) -> str:
         return await self._impl.complete(prompt)
@@ -169,6 +165,10 @@ class OpenAIProvider:
 def _is_gpt5_family(model: str) -> bool:
     m = (model or "").strip()
     return m.startswith(("gpt-5", "gpt-6"))
+
+
+def openai_provider_class_for(model: str) -> type[_OpenAIProviderBase]:
+    return OpenAIGPT5Provider if _is_gpt5_family(model) else OpenAIGPTLegacyProvider
 
 
 # -----------------------------------------------------------------------------
@@ -298,8 +298,11 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
 
                 # Final failure: return empty string (caller handles)
                 logger.error(
-                    "Invalid JSON returned from responses API (reason=%s). Sample=%s",
+                    "Invalid JSON returned from responses API (reason=%s, is_schema=%s, p_len=%d, budget=%d). Sample=%s",
                     finish_reason,
+                    is_schema_prompt,
+                    len(prompt),
+                    token_budget,
                     (content.strip()[:200] + "...") if content else "<empty>",
                 )
                 return ""
@@ -382,9 +385,13 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                     await asyncio.sleep(0.5)
                     continue
 
+                is_schema_prompt = _is_json_schema_prompt(prompt)
                 logger.error(
-                    "Invalid JSON returned from chat completions (reason=%s). Sample=%s",
+                    "Invalid JSON returned from chat completions (reason=%s, is_schema=%s, p_len=%d, budget=%d). Sample=%s",
                     finish_reason,
+                    is_schema_prompt,
+                    len(prompt),
+                    max_tokens,
                     (content.strip()[:200] + "...") if content else "<empty>",
                 )
                 return ""

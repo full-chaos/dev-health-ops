@@ -441,7 +441,7 @@ async def work_unit_explain_endpoint(
     start_date: date | None = None,
     end_date: date | None = None,
     llm_provider: str = "auto",
-    llm_model: Optional[str] = None,
+    llm_model: str | None = None,
 ) -> WorkUnitExplanation:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.

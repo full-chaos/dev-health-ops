@@ -97,9 +97,7 @@ def fallback_outcome(reason: str) -> CategorizationOutcome:
     )
 
 
-async def _complete(
-    prompt: str, provider_name: str, model: Optional[str] = None
-) -> str:
+async def _complete(prompt: str, provider_name: str, model: str | None = None) -> str:
     provider = get_provider(provider_name, model=model)
     return await provider.complete(prompt)
 
@@ -122,7 +120,7 @@ async def categorize_text_bundle(
     bundle: TextBundle,
     *,
     llm_provider: str,
-    llm_model: Optional[str] = None,
+    llm_model: str | None = None,
 ) -> CategorizationOutcome:
     prompt = _build_prompt(bundle.source_block)
 

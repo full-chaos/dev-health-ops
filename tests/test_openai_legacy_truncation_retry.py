@@ -48,5 +48,5 @@ async def test_openai_legacy_truncation_retry_success():
     first_call_kwargs = mock_client.chat.completions.create.call_args_list[0].kwargs
     second_call_kwargs = mock_client.chat.completions.create.call_args_list[1].kwargs
 
-    assert first_call_kwargs["max_completion_tokens"] == 1024
-    assert second_call_kwargs["max_completion_tokens"] == 2048
+    assert first_call_kwargs["max_completion_tokens"] == 4096
+    assert second_call_kwargs["max_completion_tokens"] == 8192

@@ -213,7 +213,18 @@ async def explain_investment_mix(
 
     provider = get_provider(llm_provider, model=llm_model)
     raw = await provider.complete(full_prompt)
-    logger.debug(f"Raw LLM response ({len(raw) if raw else 0} chars): {raw!r}")
+    raw_len = len(raw) if raw is not None else 0
+    if logger.isEnabledFor(logging.DEBUG):
+        # Sanitize and truncate the LLM response before logging to avoid log injection.
+        safe_preview = ""
+        if raw:
+            # Remove line breaks to keep the log entry on a single line.
+            safe_preview = raw.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+            # Truncate to a reasonable length to avoid excessively large log entries.
+            max_preview_len = 500
+            if len(safe_preview) > max_preview_len:
+                safe_preview = safe_preview[:max_preview_len] + "...[truncated]"
+        logger.debug("Raw LLM response (%d chars, preview=%r)", raw_len, safe_preview)
     parsed = parse_and_validate_response(
         raw,
         fallback_band_mix=band_counts,

@@ -78,8 +78,13 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     end = candidate.rfind("}")
 
     if start == -1 or end == -1 or end < start:
+        safe_preview = text[:500].replace("\r", "\\r").replace("\n", "\\n")
         logger.warning(
-            f"Failed to find JSON object in LLM response. Full text ({len(text)} chars): {text!r}"
+            "Failed to find JSON object in LLM response. "
+            "Preview of text (%d chars shown, total %d): %r",
+            len(safe_preview),
+            len(text),
+            safe_preview,
         )
         return None
 

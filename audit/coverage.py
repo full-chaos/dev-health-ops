@@ -479,12 +479,6 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
 
 def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
     import logging
-    from audit.coverage import (
-        run_coverage_audit,
-        format_coverage_table,
-        format_coverage_json,
-        parse_provider_list,
-    )
 
     logger = logging.getLogger(__name__)
     try:

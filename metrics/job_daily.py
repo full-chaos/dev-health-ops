@@ -2437,8 +2437,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Sync work items from provider before computing (default: none).",
     )
 
-    from metrics.job_daily import _cmd_metrics_daily
-
     daily.set_defaults(func=_cmd_metrics_daily)
 
 

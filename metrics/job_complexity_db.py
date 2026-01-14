@@ -389,9 +389,6 @@ def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
 
 
 def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
-    import argparse
-    from metrics.job_complexity_db import run_complexity_db_job
-
     return run_complexity_db_job(
         repo_id=ns.repo_id,
         db_url=ns.db,

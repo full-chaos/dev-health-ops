@@ -578,11 +578,6 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
 
 def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
     import logging
-    from audit.completeness import (
-        run_completeness_audit,
-        format_completeness_table,
-        format_completeness_json,
-    )
 
     logger = logging.getLogger(__name__)
     try:

@@ -1,9 +1,16 @@
 import argparse
+import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+import os
+import uuid
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from work_graph.builder import BuildConfig, WorkGraphBuilder
+from work_graph.investment.materialize import (
+    MaterializeConfig,
+    materialize_investments,
+)
 
 
 def _component_count(edges: list[tuple[str, str, str, str]]) -> int:
@@ -36,9 +43,6 @@ def _component_count(edges: list[tuple[str, str, str, str]]) -> int:
 
 def run_work_graph_build(ns: argparse.Namespace) -> int:
     """Build work graph edges from raw data."""
-    import uuid
-    from datetime import datetime, timedelta, timezone
-    from work_graph.builder import BuildConfig, WorkGraphBuilder
 
     # Parse dates
     from_date = None
@@ -146,12 +150,6 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
 
 def run_investment_materialization(ns: argparse.Namespace) -> int:
     """Materialize investment metrics for a given window."""
-    from datetime import date, datetime, time, timedelta, timezone
-
-    from work_graph.investment.materialize import (
-        MaterializeConfig,
-        materialize_investments,
-    )
 
     now = datetime.now(timezone.utc)
     if ns.to_date:
@@ -190,8 +188,6 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
 
     logging.info(f"Materializing investments from {config.from_ts} to {config.to_ts}")
     try:
-        import asyncio
-
         stats = asyncio.run(materialize_investments(config))
         logging.info(
             "Investment materialization complete. Components=%d Records=%d Quotes=%d",
@@ -206,8 +202,6 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    import os
-
     # ---- work-graph ----
     wg = subparsers.add_parser("work-graph", help="Work graph operations.")
     wg_sub = wg.add_subparsers(dest="work_graph_command", required=True)

@@ -540,7 +540,6 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
 
 def _cmd_audit_schema(ns: argparse.Namespace) -> int:
     import logging
-    from audit.schema import run_schema_audit, format_schema_report
 
     logger = logging.getLogger(__name__)
     try:

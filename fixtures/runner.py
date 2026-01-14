@@ -3,7 +3,6 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone, time
-from pathlib import Path
 from typing import List, Optional
 
 from storage import resolve_db_type, run_with_store, SQLAlchemyStore

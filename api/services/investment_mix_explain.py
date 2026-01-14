@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from analytics.investment_mix_explainer import (
@@ -9,6 +12,9 @@ from analytics.investment_mix_explainer import (
     parse_and_validate_response,
 )
 from investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
+
+from metrics.schemas import InvestmentExplanationRecord
+from metrics.sinks.clickhouse import ClickHouseMetricsSink
 
 from ..models.schemas import (
     InvestmentActionItem,
@@ -59,6 +65,27 @@ def _determine_confidence_level(
     return "low"
 
 
+def _compute_cache_key(
+    filters: Any, theme: Optional[str], subcategory: Optional[str]
+) -> str:
+    """Compute a deterministic cache key from filter context."""
+    # Serialize filters to JSON for hashing
+    if hasattr(filters, "model_dump"):
+        filter_data = filters.model_dump(mode="json")
+    elif hasattr(filters, "dict"):
+        filter_data = filters.dict()
+    else:
+        filter_data = str(filters)
+
+    key_parts = {
+        "filters": filter_data,
+        "theme": theme,
+        "subcategory": subcategory,
+    }
+    key_json = json.dumps(key_parts, sort_keys=True, default=str)
+    return hashlib.sha256(key_json.encode()).hexdigest()[:32]
+
+
 async def explain_investment_mix(
     *,
     db_url: str,
@@ -67,6 +94,7 @@ async def explain_investment_mix(
     subcategory: Optional[str] = None,
     llm_provider: str = "auto",
     llm_model: Optional[str] = None,
+    force_refresh: bool = False,
 ) -> InvestmentMixExplanation:
     if theme and theme not in THEMES:
         raise ValueError("Unknown theme")
@@ -74,6 +102,28 @@ async def explain_investment_mix(
         raise ValueError("Unknown subcategory")
     if theme and subcategory and theme_of(subcategory) != theme:
         raise ValueError("Theme/subcategory mismatch")
+
+    # Compute cache key for lookup
+    cache_key = _compute_cache_key(filters, theme, subcategory)
+
+    # Check for cached explanation (unless force_refresh or mock provider)
+    if not force_refresh and llm_provider != "mock":
+        try:
+            if db_url.startswith("clickhouse://"):
+                sink = ClickHouseMetricsSink(db_url)
+                try:
+                    cached = sink.read_investment_explanation(cache_key)
+                    if cached:
+                        logger.info(
+                            "Cache hit for explanation cache_key=%s", cache_key[:8]
+                        )
+                        # Parse and return the cached explanation
+                        cached_data = json.loads(cached.explanation_json)
+                        return InvestmentMixExplanation(**cached_data)
+                finally:
+                    sink.close()
+        except Exception as e:
+            logger.debug("Cache lookup failed: %s", e)
 
     investment = await build_investment_response(db_url=db_url, filters=filters)
     theme_distribution = investment.theme_distribution
@@ -219,7 +269,9 @@ async def explain_investment_mix(
         safe_preview = ""
         if raw:
             # Remove line breaks to keep the log entry on a single line.
-            safe_preview = raw.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+            safe_preview = (
+                raw.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+            )
             # Truncate to a reasonable length to avoid excessively large log entries.
             max_preview_len = 500
             if len(safe_preview) > max_preview_len:
@@ -279,7 +331,7 @@ async def explain_investment_mix(
             status="invalid_llm_output",
         )
 
-    return InvestmentMixExplanation(
+    result = InvestmentMixExplanation(
         summary=parsed["summary"],
         top_findings=[
             InvestmentFinding(
@@ -313,3 +365,29 @@ async def explain_investment_mix(
         anti_claims=parsed["anti_claims"],
         status=parsed["status"],
     )
+
+    # Store explanation in cache (only for ClickHouse backends)
+    if db_url.startswith("clickhouse://") and llm_provider != "mock":
+        try:
+            sink = ClickHouseMetricsSink(db_url)
+            try:
+                explanation_data = (
+                    result.model_dump()
+                    if hasattr(result, "model_dump")
+                    else result.dict()
+                )
+                record = InvestmentExplanationRecord(
+                    cache_key=cache_key,
+                    explanation_json=json.dumps(explanation_data),
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                    computed_at=datetime.now(timezone.utc),
+                )
+                sink.write_investment_explanation(record)
+                logger.info("Cached explanation cache_key=%s", cache_key[:8])
+            finally:
+                sink.close()
+        except Exception as e:
+            logger.debug("Cache storage failed: %s", e)
+
+    return result

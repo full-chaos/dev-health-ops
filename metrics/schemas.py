@@ -516,6 +516,17 @@ class WorkUnitInvestmentEvidenceQuoteRecord:
 
 
 @dataclass(frozen=True)
+class InvestmentExplanationRecord:
+    """Cached LLM-generated explanation for investment mix views."""
+
+    cache_key: str  # Hash of (filter_context + theme + subcategory)
+    explanation_json: str  # Full JSON of InvestmentMixExplanation
+    llm_provider: str
+    llm_model: Optional[str]
+    computed_at: datetime
+
+
+@dataclass(frozen=True)
 class DailyMetricsResult:
     day: date
     repo_metrics: List[RepoMetricsDailyRecord]

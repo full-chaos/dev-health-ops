@@ -168,7 +168,7 @@ class OpenAIProvider:
 
 def _is_gpt5_family(model: str) -> bool:
     m = (model or "").strip()
-    return m.startswith(("gpt-5", "gpt-6"))
+    return m.startswith(("gpt-5", "gpt-6", "openai/gpt-oss"))
 
 
 def openai_provider_class_for(model: str) -> type[_OpenAIProviderBase]:

@@ -985,6 +985,7 @@ async def investment_sunburst(
 async def investment_explain(
     payload: InvestmentExplainRequest,
     llm_provider: str = "auto",
+    force_refresh: bool = False,
 ):
     try:
         logger.info("Generating streaming investment explanation")
@@ -997,6 +998,7 @@ async def investment_explain(
                     subcategory=payload.subcategory,
                     llm_provider=llm_provider,
                     llm_model=payload.llm_model,
+                    force_refresh=force_refresh,
                 )
             ),
             media_type="application/json",

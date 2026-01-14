@@ -104,6 +104,11 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
         return OllamaProvider(model=model)
 
     if name == "lmstudio":
+        if model and model.startswith("openai/gpt-oss"):
+            from .local import LMStudioGPT5Provider
+
+            return LMStudioGPT5Provider(model=model)
+
         from .local import LMStudioProvider
 
         return LMStudioProvider(model=model)

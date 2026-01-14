@@ -20,6 +20,8 @@ DEFAULT_ENDPOINTS = {
     "local": "http://localhost:11434/v1",  # Default to Ollama
 }
 
+from .openai import OpenAIProviderConfig, OpenAIGPT5Provider
+
 
 class LocalProvider:
     """
@@ -177,3 +179,30 @@ class LMStudioProvider(LocalProvider):
             model=model or os.getenv("LMSTUDIO_MODEL", "local-model"),
             **kwargs,
         )
+
+
+class LMStudioGPT5Provider(OpenAIGPT5Provider):
+    """
+    LMStudio provider for openai/gpt-oss* models using the Responses API.
+    These models require the new /v1/responses endpoint schema.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        base_url: Optional[str] = None,
+        max_completion_tokens: int = 4096,
+        temperature: float = 0.3,
+    ) -> None:
+        base_url = base_url or os.getenv(
+            "LMSTUDIO_BASE_URL", DEFAULT_ENDPOINTS["lmstudio"]
+        )
+        # Use dummy API key for local
+        cfg = OpenAIProviderConfig(
+            api_key="lm-studio",
+            base_url=base_url,
+            model=model,
+            max_output_tokens=max_completion_tokens,
+            temperature=temperature,
+        )
+        super().__init__(cfg)

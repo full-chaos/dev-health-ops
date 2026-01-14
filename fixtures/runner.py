@@ -1,39 +1,32 @@
 import argparse
 import asyncio
 import logging
-import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
-
-from storage import resolve_db_type, run_with_store, SQLAlchemyStore
-from utils import BATCH_SIZE, MAX_WORKERS, REPO_ROOT
-from fixtures.generator import SyntheticDataGenerator
 
 from analytics.investment import InvestmentClassifier
 from analytics.issue_types import IssueTypeNormalizer
+from fixtures.generator import SyntheticDataGenerator
 from metrics.compute import compute_daily_metrics
 from metrics.compute_cicd import compute_cicd_metrics_daily
 from metrics.compute_deployments import compute_deploy_metrics_daily
+from metrics.compute_ic import compute_ic_landscape_rolling, compute_ic_metrics_daily
 from metrics.compute_incidents import compute_incident_metrics_daily
 from metrics.compute_wellbeing import compute_team_wellbeing_metrics_daily
 from metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
 from metrics.compute_work_items import compute_work_item_metrics_daily
-from metrics.compute_ic import compute_ic_metrics_daily, compute_ic_landscape_rolling
-from metrics.hotspots import compute_file_hotspots, compute_file_risk_hotspots
-from metrics.knowledge import compute_bus_factor, compute_code_ownership_gini
-from metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
-from metrics.reviews import compute_review_edges_daily
+from metrics.hotspots import compute_file_hotspots
 from metrics.schemas import (
     DailyMetricsResult,
     InvestmentClassificationRecord,
-    InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
 )
 from metrics.sinks.base import BaseMetricsSink
 from providers.identity import load_identity_resolver
 from providers.teams import TeamResolver
+from storage import SQLAlchemyStore, resolve_db_type, run_with_store
+from utils import BATCH_SIZE, MAX_WORKERS, REPO_ROOT
 
 
 async def _insert_batches(
@@ -377,54 +370,39 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         day = datetime.now(timezone.utc).replace(
                             hour=0, minute=0, second=0, microsecond=0
                         ) - timedelta(days=d_idx)
+                        day_date = day.date()
                         start_dt = day
                         end_dt = day + timedelta(days=1)
-
                         day_commit_stats = [
+                            s
+                            for s in commit_stat_rows
+                            if start_dt <= s["committer_when"] < end_dt
+                        ]
+                        day_work_items = [
                             wi
                             for wi in work_items
                             if start_dt <= wi.created_at < end_dt
                         ]
+                        day_transitions = [
+                            t for t in transitions if start_dt <= t.occurred_at < end_dt
+                        ]
 
-                            day_commits = [
-                                c
-                                for c in commits
-                                if start_dt <= c.committer_when < end_dt
-                            ]
-                            day_commit_stats = [
-                                s
-                                for s in commit_stat_rows
-                                if start_dt <= s["committer_when"] < end_dt
-                            ]
-                            day_work_items = [
-                                wi
-                                for wi in work_items
-                                if start_dt <= wi.created_at < end_dt
-                            ]
-                            day_transitions = [
-                                t
-                                for t in transitions
-                                if start_dt <= t.occurred_at < end_dt
-                            ]
+                        day_prs = [
+                            p
+                            for p in pr_rows
+                            if (p["merged_at"] and start_dt <= p["merged_at"] < end_dt)
+                            or (
+                                not p["merged_at"]
+                                and start_dt <= p["created_at"] < end_dt
+                            )
+                        ]
+                        day_reviews = [
+                            r
+                            for r in review_rows
+                            if start_dt <= r["submitted_at"] < end_dt
+                        ]
 
-                            day_prs = [
-                                p
-                                for p in pr_rows
-                                if (
-                                    p["merged_at"]
-                                    and start_dt <= p["merged_at"] < end_dt
-                                )
-                                or (
-                                    not p["merged_at"]
-                                    and start_dt <= p["created_at"] < end_dt
-                                )
-                            ]
-                            day_reviews = [
-                                r
-                                for r in review_rows
-                                if start_dt <= r["submitted_at"] < end_dt
-                            ]
-
+                        try:
                             # 1. Base Metrics (Repo, User, Commit)
                             metrics_result = compute_daily_metrics(
                                 day=day_date,
@@ -485,21 +463,27 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                                         )
                                         or "unassigned",
                                         issue_type_norm=norm_type,
-                                        created_count=1
-                                        if start_dt <= wi.created_at < end_dt
-                                        else 0,
-                                        completed_count=1
-                                        if wi.completed_at
-                                        and start_dt <= wi.completed_at < end_dt
-                                        else 0,
-                                        active_count=1
-                                        if wi.started_at
-                                        and wi.started_at < end_dt
-                                        and (
-                                            not wi.completed_at
-                                            or wi.completed_at >= end_dt
-                                        )
-                                        else 0,
+                                        created_count=(
+                                            1
+                                            if start_dt <= wi.created_at < end_dt
+                                            else 0
+                                        ),
+                                        completed_count=(
+                                            1
+                                            if wi.completed_at
+                                            and start_dt <= wi.completed_at < end_dt
+                                            else 0
+                                        ),
+                                        active_count=(
+                                            1
+                                            if wi.started_at
+                                            and wi.started_at < end_dt
+                                            and (
+                                                not wi.completed_at
+                                                or wi.completed_at >= end_dt
+                                            )
+                                            else 0
+                                        ),
                                         cycle_p50_hours=0.0,
                                         cycle_p90_hours=0.0,
                                         lead_p50_hours=0.0,
@@ -657,6 +641,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 def run_fixtures_validation(ns: argparse.Namespace) -> int:
     """Validate that fixture data is sufficient for work graph and investment."""
     import clickhouse_connect
+
+    from work_graph.ids import parse_commit_from_id, parse_pr_from_id
     from work_graph.investment.constants import MIN_EVIDENCE_CHARS
     from work_graph.investment.evidence import build_text_bundle
     from work_graph.investment.queries import (
@@ -666,7 +652,6 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         fetch_work_graph_edges,
         fetch_work_items,
     )
-    from work_graph.ids import parse_commit_from_id, parse_pr_from_id
 
     db_url = ns.db
     if not db_url.startswith("clickhouse://"):
@@ -923,7 +908,6 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    from utils import _parse_date
     import os
 
     fix = subparsers.add_parser("fixtures", help="Data simulation and fixtures.")

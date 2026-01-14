@@ -257,7 +257,6 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
 
 
 def _cmd_audit_perf(ns: argparse.Namespace) -> int:
-    import logging
 
     logger = logging.getLogger(__name__)
     try:

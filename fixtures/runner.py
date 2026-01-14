@@ -381,9 +381,6 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         start_dt = day
                         end_dt = day + timedelta(days=1)
 
-                        day_commits = [
-                            c for c in commits if start_dt <= c.committer_when < end_dt
-                        ]
                         day_commit_stats = [
                             s
                             for s in commit_stat_rows

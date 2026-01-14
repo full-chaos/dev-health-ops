@@ -4,7 +4,6 @@ import logging
 import os
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
 
 from work_graph.builder import BuildConfig, WorkGraphBuilder
 from work_graph.investment.materialize import (

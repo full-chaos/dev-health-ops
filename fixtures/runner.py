@@ -391,9 +391,6 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                             for wi in work_items
                             if start_dt <= wi.created_at < end_dt
                         ]
-                        day_transitions = [
-                            t for t in transitions if start_dt <= t.occurred_at < end_dt
-                        ]
 
                         try:
                             now = datetime.now(timezone.utc)

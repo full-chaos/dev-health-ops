@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import os
 import subprocess
-from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
-import uuid
 
 
 # Runner and registration modules
@@ -169,8 +168,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if func is None:
         parser.print_help()
         return 2
-
-    if asyncio.iscoroutinefunction(func):
+    if inspect.iscoroutinefunction(func):
         return asyncio.run(func(ns))
     return int(func(ns))
 

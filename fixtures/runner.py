@@ -386,11 +386,6 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                             if start_dt <= wi.created_at < end_dt
                         ]
 
-                        try:
-                            now = datetime.now(timezone.utc)
-                            day_date = day.date()
-
-                            # Filter rows for this day
                             day_commits = [
                                 c
                                 for c in commits

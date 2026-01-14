@@ -41,6 +41,9 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     api.add_argument("--host", default="127.0.0.1", help="Bind host.")
     api.add_argument("--port", type=int, default=8000, help="Bind port.")
     api.add_argument(
+        "--workers", type=int, default=1, help="Number of worker processes."
+    )
+    api.add_argument(
         "--reload",
         action="store_true",
         help="Enable auto-reload for local development.",

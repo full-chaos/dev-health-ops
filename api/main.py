@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import logging
 import os
 from typing import List
@@ -222,18 +222,14 @@ async def keep_alive_wrapper(coro):
             yield " "
     except Exception:
         logger.exception("Streaming error in keep_alive_wrapper")
-        yield json.dumps(
-            {
-                "error": "Streaming error",
-                "detail": "An internal error has occurred.",
-            }
-        )
-        yield json.dumps(
-            {
-                "error": "Streaming error",
-                "detail": "An internal streaming error occurred.",
-            }
-        )
+        yield json.dumps({
+            "error": "Streaming error",
+            "detail": "An internal error has occurred.",
+        })
+        yield json.dumps({
+            "error": "Streaming error",
+            "detail": "An internal streaming error occurred.",
+        })
 
 
 @app.get("/api/v1/meta", response_model=MetaResponse)
@@ -602,7 +598,6 @@ async def flame_aggregated(
         )
 
     # Calculate date window
-    from datetime import timedelta
 
     if end_date is None:
         end_day = date.today()

@@ -1,10 +1,12 @@
+import argparse
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Optional, Iterable, List, Union, Tuple, Set
 
 # Constants
+REPO_ROOT = Path(__file__).resolve().parent
 BATCH_SIZE = 1000
 
 
@@ -74,6 +76,18 @@ def _normalize_datetime(dt: datetime) -> datetime:
     return dt
 
 
+def _parse_date(value: str) -> date:
+    from datetime import date
+    import argparse
+
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid date '{value}', expected YYYY-MM-DD"
+        ) from exc
+
+
 def is_skippable(file_path: str) -> bool:
     """Check if a file should be skipped based on extension or name."""
     skip_dirs = {
@@ -119,6 +133,43 @@ def _parse_since(value: Optional[str]) -> Optional[datetime]:
     else:
         parsed = parsed.astimezone(timezone.utc)
     return parsed
+
+
+def _since_from_date_backfill(day: date, backfill_days: int) -> datetime:
+    """
+    Calculate start datetime from a date and backfill window.
+    """
+    from datetime import timedelta, timezone
+
+    backfill = max(1, int(backfill_days))
+    start_day = day - timedelta(days=backfill - 1)
+    return datetime(
+        start_day.year,
+        start_day.month,
+        start_day.day,
+        tzinfo=timezone.utc,
+    )
+
+
+def _resolve_since(ns: argparse.Namespace) -> Optional[datetime]:
+    """
+    Resolve start datetime from argparse namespace.
+    """
+    if getattr(ns, "date", None) is not None:
+        return _since_from_date_backfill(ns.date, ns.backfill)
+    if int(getattr(ns, "backfill", 1)) != 1:
+        raise SystemExit("--backfill requires --date")
+    return _parse_since(getattr(ns, "since", None))
+
+
+def _resolve_max_commits(ns: argparse.Namespace) -> Optional[int]:
+    """
+    Resolve max commits per repo from argparse namespace.
+    """
+    max_commits = getattr(ns, "max_commits_per_repo", None)
+    if getattr(ns, "date", None) is not None or getattr(ns, "since", None):
+        return max_commits if max_commits is not None else None
+    return max_commits or 100
 
 
 def iter_commits_since(repo, since: Optional[datetime]) -> Iterable:

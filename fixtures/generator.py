@@ -14,7 +14,12 @@ from models.git import (
     Deployment,
     Incident,
 )
-from models.work_items import WorkItem, WorkItemDependency, WorkItemStatusTransition, WorkItemType
+from models.work_items import (
+    WorkItem,
+    WorkItemDependency,
+    WorkItemStatusTransition,
+    WorkItemType,
+)
 from models.teams import Team
 from metrics.schemas import (
     RepoMetricsDailyRecord,
@@ -33,8 +38,10 @@ class SyntheticDataGenerator:
         repo_id: Optional[uuid.UUID] = None,
         provider: str = "synthetic",
         seed: Optional[int] = None,
+        assigned_teams: Optional[List[Team]] = None,
     ):
         self.repo_name = repo_name
+        self.assigned_teams = assigned_teams or []
         if repo_id:
             self.repo_id = repo_id
         else:
@@ -115,38 +122,40 @@ class SyntheticDataGenerator:
         """
         teams = []
         member_map = {}
-        
+
         # Ensure at least 1 author per team if possible, loop if more teams than authors
         # For simplicity, just chunk authors.
         chunk_size = max(1, len(self.authors) // count)
-        
+
         for i in range(count):
             start = i * chunk_size
             # Last team gets the rest
             end = (i + 1) * chunk_size if i < count - 1 else len(self.authors)
             team_members = self.authors[start:end]
-            
+
             # Stable IDs
             if count == 2:
                 team_id = "alpha" if i == 0 else "beta"
                 team_name = "Alpha Team" if i == 0 else "Beta Team"
             else:
-                team_id = f"team-{chr(97+i)}"
-                team_name = f"Team {chr(65+i)}"
-            
+                team_id = f"team-{chr(97 + i)}"
+                team_name = f"Team {chr(65 + i)}"
+
             member_emails = [email for _, email in team_members]
-            
-            teams.append(Team(
-                id=team_id,
-                name=team_name,
-                description=f"Synthetic {team_name}",
-                members=member_emails
-            ))
-            
+
+            teams.append(
+                Team(
+                    id=team_id,
+                    name=team_name,
+                    description=f"Synthetic {team_name}",
+                    members=member_emails,
+                )
+            )
+
             for name, email in team_members:
                 member_map[str(email).strip().lower()] = (team_id, team_name)
                 member_map[str(name).strip().lower()] = (team_id, team_name)
-                
+
         return {"teams": teams, "member_map": member_map}
 
     def generate_teams(self, count: int = 2) -> List[Team]:
@@ -206,7 +215,9 @@ class SyntheticDataGenerator:
         stats = []
         for commit in commits:
             # Each commit touches 1-5 files
-            files_to_touch = random.sample(self.files, random.randint(1, min(5, len(self.files))))
+            files_to_touch = random.sample(
+                self.files, random.randint(1, min(5, len(self.files)))
+            )
             for file_path in files_to_touch:
                 # 80% small changes, 15% medium, 5% large
                 change_type = random.random()
@@ -216,7 +227,7 @@ class SyntheticDataGenerator:
                     additions = random.randint(50, 200)
                 else:
                     additions = random.randint(200, 1000)
-                
+
                 deletions = random.randint(0, additions)
                 stats.append(
                     GitCommitStat(
@@ -352,13 +363,13 @@ class SyntheticDataGenerator:
         while current_date <= end_date:
             daily_count = random.randint(1, max(1, runs_per_day * 2))
             for _ in range(daily_count):
-                queued_at = current_date + timedelta(
-                    minutes=random.randint(0, 60 * 12)
-                )
+                queued_at = current_date + timedelta(minutes=random.randint(0, 60 * 12))
                 started_at = queued_at + timedelta(minutes=random.randint(1, 30))
                 duration_minutes = random.randint(5, 60)
                 finished_at = started_at + timedelta(minutes=duration_minutes)
-                status = random.choices(["success", "failed", "canceled"], weights=[0.7, 0.2, 0.1], k=1)[0]
+                status = random.choices(
+                    ["success", "failed", "canceled"], weights=[0.7, 0.2, 0.1], k=1
+                )[0]
 
                 run_index += 1
                 runs.append(
@@ -375,7 +386,10 @@ class SyntheticDataGenerator:
         return runs
 
     def generate_deployments(
-        self, days: int = 30, deployments_per_day: int = 2, pr_numbers: Optional[List[int]] = None
+        self,
+        days: int = 30,
+        deployments_per_day: int = 2,
+        pr_numbers: Optional[List[int]] = None,
     ) -> List[Deployment]:
         deployments = []
         end_date = datetime.now(timezone.utc)
@@ -392,7 +406,9 @@ class SyntheticDataGenerator:
                 duration_minutes = random.randint(5, 90)
                 finished_at = started_at + timedelta(minutes=duration_minutes)
                 deployed_at = finished_at + timedelta(minutes=random.randint(0, 15))
-                status = random.choices(["success", "failed"], weights=[0.8, 0.2], k=1)[0]
+                status = random.choices(["success", "failed"], weights=[0.8, 0.2], k=1)[
+                    0
+                ]
                 environment = random.choice(["production", "staging"])
                 merged_at = started_at - timedelta(hours=random.randint(1, 72))
                 pr_number = None
@@ -432,7 +448,9 @@ class SyntheticDataGenerator:
                     minutes=random.randint(0, 60 * 20)
                 )
                 resolved_at = started_at + timedelta(hours=random.randint(1, 12))
-                status = random.choices(["resolved", "open"], weights=[0.8, 0.2], k=1)[0]
+                status = random.choices(["resolved", "open"], weights=[0.8, 0.2], k=1)[
+                    0
+                ]
                 if status == "open":
                     resolved_at = None
 
@@ -473,31 +491,29 @@ class SyntheticDataGenerator:
             )
         return reviews
 
-    def generate_complexity_metrics(
-        self, days: int = 30
-    ) -> Dict[str, List[Any]]:
+    def generate_complexity_metrics(self, days: int = 30) -> Dict[str, List[Any]]:
         from metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
-        
+
         snapshots = []
         dailies = []
         end_date = datetime.now(timezone.utc)
-        
+
         for i in range(days):
             day = (end_date - timedelta(days=i)).date()
             computed_at = datetime.now(timezone.utc)
-            
+
             total_loc = 0
             total_cc = 0
             total_high = 0
             total_very_high = 0
-            
+
             for file_path in self.files:
                 # Synthetic complexity values
                 loc = random.randint(50, 500)
                 funcs = random.randint(5, 50)
                 cc_total = random.randint(funcs, funcs * 5)
                 cc_avg = cc_total / funcs
-                
+
                 high = 0
                 very_high = 0
                 if cc_avg > 10:
@@ -505,39 +521,43 @@ class SyntheticDataGenerator:
                 if cc_avg > 20:
                     very_high = random.randint(0, high // 2)
 
-                snapshots.append(FileComplexitySnapshot(
-                    repo_id=self.repo_id,
-                    as_of_day=day,
-                    ref="HEAD",
-                    file_path=file_path,
-                    language="python",
-                    loc=loc,
-                    functions_count=funcs,
-                    cyclomatic_total=cc_total,
-                    cyclomatic_avg=cc_avg,
-                    high_complexity_functions=high,
-                    very_high_complexity_functions=very_high,
-                    computed_at=computed_at
-                ))
-                
+                snapshots.append(
+                    FileComplexitySnapshot(
+                        repo_id=self.repo_id,
+                        as_of_day=day,
+                        ref="HEAD",
+                        file_path=file_path,
+                        language="python",
+                        loc=loc,
+                        functions_count=funcs,
+                        cyclomatic_total=cc_total,
+                        cyclomatic_avg=cc_avg,
+                        high_complexity_functions=high,
+                        very_high_complexity_functions=very_high,
+                        computed_at=computed_at,
+                    )
+                )
+
                 total_loc += loc
                 total_cc += cc_total
                 total_high += high
                 total_very_high += very_high
-            
+
             cc_per_kloc = (total_cc / (total_loc / 1000.0)) if total_loc > 0 else 0.0
-            
-            dailies.append(RepoComplexityDaily(
-                repo_id=self.repo_id,
-                day=day,
-                loc_total=total_loc,
-                cyclomatic_total=total_cc,
-                cyclomatic_per_kloc=cc_per_kloc,
-                high_complexity_functions=total_high,
-                very_high_complexity_functions=total_very_high,
-                computed_at=computed_at
-            ))
-            
+
+            dailies.append(
+                RepoComplexityDaily(
+                    repo_id=self.repo_id,
+                    day=day,
+                    loc_total=total_loc,
+                    cyclomatic_total=total_cc,
+                    cyclomatic_per_kloc=cc_per_kloc,
+                    high_complexity_functions=total_high,
+                    very_high_complexity_functions=total_very_high,
+                    computed_at=computed_at,
+                )
+            )
+
         return {"snapshots": snapshots, "dailies": dailies}
 
     def generate_files(self) -> List[GitFile]:
@@ -547,10 +567,12 @@ class SyntheticDataGenerator:
 
     def generate_blame(
         self, commits: List[GitCommit]
-    ) -> List[Any]: # using Any to avoid circular import issues if GitBlame isn't imported, but it is
+    ) -> List[
+        Any
+    ]:  # using Any to avoid circular import issues if GitBlame isn't imported, but it is
         # We need to import GitBlame inside the method or file level
         from models.git import GitBlame
-        
+
         blame_records = []
         if not commits:
             return blame_records
@@ -558,11 +580,11 @@ class SyntheticDataGenerator:
         for file_path in self.files:
             # Generate random file length
             num_lines = random.randint(10, 200)
-            
+
             for i in range(1, num_lines + 1):
                 # Pick a random commit that "modified" this line
                 commit = random.choice(commits)
-                
+
                 blame_records.append(
                     GitBlame(
                         repo_id=self.repo_id,
@@ -582,38 +604,46 @@ class SyntheticDataGenerator:
     ) -> List[WorkItemMetricsDailyRecord]:
         records = []
         end_date = datetime.now(timezone.utc).date()
+
+        teams_to_use = []
+        if self.assigned_teams:
+            teams_to_use = [(t.id, t.name) for t in self.assigned_teams]
+        else:
+            teams_to_use = [("alpha", "Alpha Team")]
+
         for i in range(days):
             day = end_date - timedelta(days=i)
-            records.append(
-                WorkItemMetricsDailyRecord(
-                    day=day,
-                    provider=self.provider,
-                    work_scope_id=self.repo_name,
-                    team_id="alpha",
-                    team_name="Alpha Team",
-                    items_started=random.randint(2, 8),
-                    items_completed=random.randint(1, 6),
-                    items_started_unassigned=random.randint(0, 2),
-                    items_completed_unassigned=random.randint(0, 1),
-                    wip_count_end_of_day=random.randint(5, 15),
-                    wip_unassigned_end_of_day=random.randint(1, 3),
-                    cycle_time_p50_hours=float(random.randint(24, 72)),
-                    cycle_time_p90_hours=float(random.randint(72, 120)),
-                    lead_time_p50_hours=float(random.randint(48, 96)),
-                    lead_time_p90_hours=float(random.randint(96, 240)),
-                    wip_age_p50_hours=float(random.randint(12, 48)),
-                    wip_age_p90_hours=float(random.randint(48, 168)),
-                    bug_completed_ratio=random.uniform(0.1, 0.4),
-                    story_points_completed=float(random.randint(10, 50)),
-                    # Phase 2 metrics
-                    new_bugs_count=random.randint(0, 3),
-                    new_items_count=random.randint(3, 10),
-                    defect_intro_rate=random.uniform(0.0, 0.3),
-                    wip_congestion_ratio=random.uniform(0.5, 2.0),
-                    predictability_score=random.uniform(0.5, 1.0),
-                    computed_at=datetime.now(timezone.utc),
+            for team_id, team_name in teams_to_use:
+                records.append(
+                    WorkItemMetricsDailyRecord(
+                        day=day,
+                        provider=self.provider,
+                        work_scope_id=self.repo_name,
+                        team_id=team_id,
+                        team_name=team_name,
+                        items_started=random.randint(2, 8),
+                        items_completed=random.randint(1, 6),
+                        items_started_unassigned=random.randint(0, 2),
+                        items_completed_unassigned=random.randint(0, 1),
+                        wip_count_end_of_day=random.randint(5, 15),
+                        wip_unassigned_end_of_day=random.randint(1, 3),
+                        cycle_time_p50_hours=float(random.randint(24, 72)),
+                        cycle_time_p90_hours=float(random.randint(72, 120)),
+                        lead_time_p50_hours=float(random.randint(48, 96)),
+                        lead_time_p90_hours=float(random.randint(96, 240)),
+                        wip_age_p50_hours=float(random.randint(12, 48)),
+                        wip_age_p90_hours=float(random.randint(48, 168)),
+                        bug_completed_ratio=random.uniform(0.1, 0.4),
+                        story_points_completed=float(random.randint(10, 50)),
+                        # Phase 2 metrics
+                        new_bugs_count=random.randint(0, 3),
+                        new_items_count=random.randint(3, 10),
+                        defect_intro_rate=random.uniform(0.0, 0.3),
+                        wip_congestion_ratio=random.uniform(0.5, 2.0),
+                        predictability_score=random.uniform(0.5, 1.0),
+                        computed_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
         return records
 
     def generate_work_item_cycle_times(
@@ -621,13 +651,21 @@ class SyntheticDataGenerator:
     ) -> List[WorkItemCycleTimeRecord]:
         records = []
         end_date = datetime.now(timezone.utc)
+
+        teams_to_use = []
+        if self.assigned_teams:
+            teams_to_use = [(t.id, t.name) for t in self.assigned_teams]
+        else:
+            teams_to_use = [("alpha", "Alpha Team")]
+
         for i in range(count):
             created_at = end_date - timedelta(days=random.randint(0, 60))
             started_at = created_at + timedelta(hours=random.randint(4, 48))
             completed_at = started_at + timedelta(hours=random.randint(24, 168))
 
             cycle_time = (completed_at - started_at).total_seconds() / 3600
-            
+            team_id, team_name = random.choice(teams_to_use)
+
             # Simulate flow efficiency (typically 10-40%)
             efficiency = random.uniform(0.1, 0.6)
             active_hours = cycle_time * efficiency
@@ -639,8 +677,8 @@ class SyntheticDataGenerator:
                     provider=self.provider,
                     day=completed_at.date(),
                     work_scope_id=self.repo_name,
-                    team_id="alpha",
-                    team_name="Alpha Team",
+                    team_id=team_id,
+                    team_name=team_name,
                     assignee=random.choice(self.authors)[0],
                     type=random.choice(["story", "bug", "task"]),
                     status="done",
@@ -692,38 +730,49 @@ class SyntheticDataGenerator:
             prs_merged = random.randint(0, prs_authored)
             pr_cycle_p90 = float(random.randint(24, 120))
             median_pr_cycle = float(random.randint(8, 72))
-            work_items_completed = random.randint(0, 4)
-            work_items_active = random.randint(0, 4)
-            delivery_units = prs_merged + work_items_completed
+            files_changed = random.randint(0, 10)
+            prs = random.randint(0, 3)  # Replaces prs_authored and prs_merged
             records.append(
                 UserMetricsDailyRecord(
                     repo_id=self.repo_id,
                     day=day,
                     author_email=author_email,
+                    identity_id=author_email,
                     commits_count=commits,
                     loc_added=loc_added,
                     loc_deleted=loc_deleted,
-                    files_changed=random.randint(0, 10),
-                    large_commits_count=random.randint(0, 1),
-                    avg_commit_size_loc=float(
-                        (loc_added + loc_deleted) / max(commits, 1)
-                    ),
-                    prs_authored=prs_authored,
-                    prs_merged=prs_merged,
-                    avg_pr_cycle_hours=median_pr_cycle,
-                    median_pr_cycle_hours=median_pr_cycle,
-                    computed_at=computed_at,
-                    pr_cycle_p90_hours=pr_cycle_p90,
-                    team_id=team_id,
-                    team_name=team_name,
-                    identity_id=author_email,
+                    files_changed=files_changed,
+                    large_commits_count=int(commits * 0.1),
+                    avg_commit_size_loc=float(loc_added + loc_deleted) / commits
+                    if commits
+                    else 0.0,
+                    prs_authored=prs,
+                    prs_merged=prs,
+                    avg_pr_cycle_hours=24.0,
+                    median_pr_cycle_hours=24.0,
+                    pr_cycle_p75_hours=24.0,
+                    pr_cycle_p90_hours=24.0,
+                    prs_with_first_review=prs,
+                    pr_first_review_p50_hours=4.0,
+                    pr_first_review_p90_hours=8.0,
+                    pr_review_time_p50_hours=20.0,
+                    pr_pickup_time_p50_hours=2.0,
+                    reviews_given=random.randint(0, 5),
+                    changes_requested_given=random.randint(0, 1),
+                    reviews_received=random.randint(0, 5),
+                    review_reciprocity=0.8,
+                    team_id=team_id or "unassigned",
+                    team_name=team_name or "Unassigned",
+                    active_hours=6.0,
+                    weekend_days=0,
                     loc_touched=loc_added + loc_deleted,
-                    prs_opened=prs_authored,
-                    work_items_completed=work_items_completed,
-                    work_items_active=work_items_active,
-                    delivery_units=delivery_units,
-                    cycle_p50_hours=median_pr_cycle,
-                    cycle_p90_hours=pr_cycle_p90,
+                    prs_opened=prs,
+                    work_items_completed=random.randint(0, 2),
+                    work_items_active=random.randint(0, 3),
+                    delivery_units=random.randint(1, 10),
+                    cycle_p50_hours=48.0,
+                    cycle_p90_hours=72.0,
+                    computed_at=computed_at,
                 )
             )
         return records
@@ -740,19 +789,20 @@ class SyntheticDataGenerator:
             team_id, team_name = self._resolve_team(
                 member_map, author_name, author_email
             )
+            user_identity = author_email or "unknown"
             records.append(
                 WorkItemUserMetricsDailyRecord(
                     day=day,
                     provider=self.provider,
                     work_scope_id=self.repo_name,
-                    user_identity=author_email,
-                    team_id=team_id,
-                    team_name=team_name,
-                    items_started=random.randint(0, 4),
-                    items_completed=random.randint(0, 4),
-                    wip_count_end_of_day=random.randint(0, 6),
-                    cycle_time_p50_hours=float(random.randint(8, 72)),
-                    cycle_time_p90_hours=float(random.randint(24, 120)),
+                    user_identity=user_identity,
+                    team_id=team_id or "unassigned",
+                    team_name=team_name or "Unassigned",
+                    items_started=random.randint(0, 1),
+                    items_completed=random.randint(0, 1),
+                    wip_count_end_of_day=random.randint(0, 3),
+                    cycle_time_p50_hours=48.0,
+                    cycle_time_p90_hours=72.0,
                     computed_at=computed_at,
                 )
             )
@@ -777,11 +827,11 @@ class SyntheticDataGenerator:
             "chore": ["cleanup", "upgrade"],
             "issue": ["feature", "fix"],
         }
-        
+
         # Defaults
         if not projects:
             projects = [self.repo_name]
-        
+
         if not investment_weights:
             investment_weights = {
                 "product": 0.5,
@@ -793,17 +843,56 @@ class SyntheticDataGenerator:
             }
 
         sub_categories_map = {
-            "product": ["feature", "ux", "onboarding", "mobile", "api", "growth", "monetization"],
-            "security": ["auth", "vulnerability", "compliance", "audit", "encryption", "access-control"],
-            "infra": ["k8s", "terraform", "ci-cd", "monitoring", "cost", "network", "database"],
-            "quality": ["testing", "flake", "coverage", "perf", "reliability", "automation"],
+            "product": [
+                "feature",
+                "ux",
+                "onboarding",
+                "mobile",
+                "api",
+                "growth",
+                "monetization",
+            ],
+            "security": [
+                "auth",
+                "vulnerability",
+                "compliance",
+                "audit",
+                "encryption",
+                "access-control",
+            ],
+            "infra": [
+                "k8s",
+                "terraform",
+                "ci-cd",
+                "monitoring",
+                "cost",
+                "network",
+                "database",
+            ],
+            "quality": [
+                "testing",
+                "flake",
+                "coverage",
+                "perf",
+                "reliability",
+                "automation",
+            ],
             "docs": ["api-docs", "user-guide", "tutorial", "readme", "release-notes"],
-            "data": ["pipeline", "schema", "analytics", "warehouse", "etl", "visualization"],
+            "data": [
+                "pipeline",
+                "schema",
+                "analytics",
+                "warehouse",
+                "etl",
+                "visualization",
+            ],
         }
 
         # Normalize weights
         total_weight = sum(investment_weights.values())
-        normalized_weights = {k: v / total_weight for k, v in investment_weights.items()}
+        normalized_weights = {
+            k: v / total_weight for k, v in investment_weights.items()
+        }
         categories = list(normalized_weights.keys())
         weights = list(normalized_weights.values())
 
@@ -813,7 +902,9 @@ class SyntheticDataGenerator:
             project_epics[proj] = []
             # Create 1-3 active epics per project
             for i in range(random.randint(1, 3)):
-                epic_created_at = end_date - timedelta(days=random.randint(days, days + 60))
+                epic_created_at = end_date - timedelta(
+                    days=random.randint(days, days + 60)
+                )
                 epic_number = 9000 + i + 1
                 project_key = proj.split("/")[-1].upper()[:3]
                 if provider_value == "github":
@@ -823,14 +914,16 @@ class SyntheticDataGenerator:
                 elif provider_value == "jira":
                     epic_id = f"jira:{project_key}-{epic_number}"
                 else:
-                    epic_id = f"{proj}-EPIC-{i+1}"
+                    epic_id = f"{proj}-EPIC-{i + 1}"
                 category = random.choices(categories, weights=weights, k=1)[0]
-                
+
                 # Pick a random sub-category for the epic
                 sub_cats = sub_categories_map.get(category, [])
                 sub_category = random.choice(sub_cats) if sub_cats else category
 
-                epic_keywords = description_keywords.get("epic", ["feature", "implement"])
+                epic_keywords = description_keywords.get(
+                    "epic", ["feature", "implement"]
+                )
                 epic_description = (
                     f"{category.title()} epic focused on {sub_category}. "
                     f"{epic_keywords[0].title()} and {epic_keywords[1]} work planned."
@@ -839,7 +932,7 @@ class SyntheticDataGenerator:
                 epic = WorkItem(
                     work_item_id=epic_id,
                     provider=provider_value,
-                    title=f"Epic: {category.title()} - {sub_category.title()} Initiative {i+1}",
+                    title=f"Epic: {category.title()} - {sub_category.title()} Initiative {i + 1}",
                     type="epic",
                     status="in_progress",  # Epics often stay open
                     status_raw="In Progress",
@@ -863,11 +956,11 @@ class SyntheticDataGenerator:
         # Generate standard work items
         # Roughly 2 items per day per project
         total_items = days * 2 * len(projects)
-        
+
         for i in range(total_items):
             project = random.choice(projects)
             author_name, author_email = random.choice(self.authors)
-            
+
             # Random date within range
             created_at = end_date - timedelta(
                 days=random.randint(0, days), hours=random.randint(0, 23)
@@ -875,37 +968,43 @@ class SyntheticDataGenerator:
 
             # Determine Investment Category & Parent
             category = random.choices(categories, weights=weights, k=1)[0]
-            
+
             # Pick a random sub-category
             sub_cats = sub_categories_map.get(category, [])
             sub_category = random.choice(sub_cats) if sub_cats else category
-            
+
             labels = [category, sub_category]
-            
+
             # Link to an Epic if available (50% chance)
             parent_epic_id = None
             if project_epics.get(project) and random.random() > 0.5:
                 parent_epic = random.choice(project_epics[project])
-                # Inherit category from Epic if linked, or keep random? 
+                # Inherit category from Epic if linked, or keep random?
                 # Usually child items relate to Epic. Let's align them often.
                 if random.random() > 0.3:
                     # primary category is the first label
                     category = parent_epic.labels[0]
                     # Try to inherit sub-category or pick a related one
                     if len(parent_epic.labels) > 1:
-                         sub_category = parent_epic.labels[1]
+                        sub_category = parent_epic.labels[1]
                     else:
-                         sub_cats = sub_categories_map.get(category, [])
-                         sub_category = random.choice(sub_cats) if sub_cats else category
-                    
+                        sub_cats = sub_categories_map.get(category, [])
+                        sub_category = random.choice(sub_cats) if sub_cats else category
+
                     labels = [category, sub_category]
 
                 parent_epic_id = parent_epic.work_item_id
 
             # Determine Type
-            is_bug = random.random() > 0.7 if category == "quality" else random.random() > 0.85
-            item_type: WorkItemType = "bug" if is_bug else random.choice(["story", "task"])
-            
+            is_bug = (
+                random.random() > 0.7
+                if category == "quality"
+                else random.random() > 0.85
+            )
+            item_type: WorkItemType = (
+                "bug" if is_bug else random.choice(["story", "task"])
+            )
+
             # For bugs, add 'bug' label
             if is_bug:
                 labels.append("bug")
@@ -927,8 +1026,8 @@ class SyntheticDataGenerator:
                     completed_at = started_at + timedelta(hours=random.randint(4, 168))
                     if completed_at > end_date:
                         completed_at = end_date
-                        status = "in_progress" # Can't be done if date is future
-                    
+                        status = "in_progress"  # Can't be done if date is future
+
             issue_number = i + 100
             project_key = project.split("/")[-1].upper()[:3]
             if provider_value == "github":
@@ -958,7 +1057,9 @@ class SyntheticDataGenerator:
                     description=description,
                     repo_id=self.repo_id,
                     project_id=project,
-                    project_key=project_key if provider_value == "jira" else project, # Jira style
+                    project_key=project_key
+                    if provider_value == "jira"
+                    else project,  # Jira style
                     created_at=created_at,
                     updated_at=updated_at,
                     started_at=started_at,
@@ -968,11 +1069,13 @@ class SyntheticDataGenerator:
                     assignees=[author_email] if random.random() > 0.3 else [],
                     labels=labels,
                     epic_id=parent_epic_id,
-                    parent_id=parent_epic_id, # Simplified: parent is epic
-                    story_points=random.choice([1, 2, 3, 5, 8]) if item_type == "story" else None,
+                    parent_id=parent_epic_id,  # Simplified: parent is epic
+                    story_points=random.choice([1, 2, 3, 5, 8])
+                    if item_type == "story"
+                    else None,
                 )
             )
-            
+
         # Sort by created_at for realism
         items.sort(key=lambda x: x.created_at)
         return items
@@ -985,19 +1088,19 @@ class SyntheticDataGenerator:
         mid = len(self.authors) // 2
         team_alpha = self.authors[:mid]
         team_beta = self.authors[mid:]
-        
+
         return {
             "teams": [
                 {
                     "team_id": "team-alpha",
                     "team_name": "Team Alpha",
-                    "members": [email for _, email in team_alpha]
+                    "members": [email for _, email in team_alpha],
                 },
                 {
                     "team_id": "team-beta",
                     "team_name": "Team Beta",
-                    "members": [email for _, email in team_beta]
-                }
+                    "members": [email for _, email in team_beta],
+                },
             ]
         }
 
@@ -1087,26 +1190,30 @@ class SyntheticDataGenerator:
         dependencies = []
         synced_at = datetime.now(timezone.utc)
         parent_edge_rate = 0.2
-        
+
         # 1. Parent/Child (Epic -> Story)
         # Note: In generate_work_items, we already set parent_id/epic_id on items.
         # We should reflect these as explicit dependencies.
         for item in items:
             if item.parent_id and random.random() < parent_edge_rate:
-                dependencies.append(WorkItemDependency(
-                    source_work_item_id=item.parent_id,
-                    target_work_item_id=item.work_item_id,
-                    relationship_type="parent",
-                    relationship_type_raw="Parent",
-                    last_synced=synced_at
-                ))
-                dependencies.append(WorkItemDependency(
-                    source_work_item_id=item.work_item_id,
-                    target_work_item_id=item.parent_id,
-                    relationship_type="child",
-                    relationship_type_raw="Child",
-                    last_synced=synced_at
-                ))
+                dependencies.append(
+                    WorkItemDependency(
+                        source_work_item_id=item.parent_id,
+                        target_work_item_id=item.work_item_id,
+                        relationship_type="parent",
+                        relationship_type_raw="Parent",
+                        last_synced=synced_at,
+                    )
+                )
+                dependencies.append(
+                    WorkItemDependency(
+                        source_work_item_id=item.work_item_id,
+                        target_work_item_id=item.parent_id,
+                        relationship_type="child",
+                        relationship_type_raw="Child",
+                        last_synced=synced_at,
+                    )
+                )
 
         # 2. Blocks/Blocked By (Random)
         # Randomly pick pairs of items
@@ -1118,21 +1225,25 @@ class SyntheticDataGenerator:
                 target = random.choice(candidates)
                 if source.work_item_id == target.work_item_id:
                     continue
-                
-                dependencies.append(WorkItemDependency(
-                    source_work_item_id=source.work_item_id,
-                    target_work_item_id=target.work_item_id,
-                    relationship_type="blocks",
-                    relationship_type_raw="Blocks",
-                    last_synced=synced_at
-                ))
-                dependencies.append(WorkItemDependency(
-                    source_work_item_id=target.work_item_id,
-                    target_work_item_id=source.work_item_id,
-                    relationship_type="is_blocked_by",
-                    relationship_type_raw="Is Blocked By",
-                    last_synced=synced_at
-                ))
+
+                dependencies.append(
+                    WorkItemDependency(
+                        source_work_item_id=source.work_item_id,
+                        target_work_item_id=target.work_item_id,
+                        relationship_type="blocks",
+                        relationship_type_raw="Blocks",
+                        last_synced=synced_at,
+                    )
+                )
+                dependencies.append(
+                    WorkItemDependency(
+                        source_work_item_id=target.work_item_id,
+                        target_work_item_id=source.work_item_id,
+                        relationship_type="is_blocked_by",
+                        relationship_type_raw="Is Blocked By",
+                        last_synced=synced_at,
+                    )
+                )
 
         return dependencies
 
@@ -1148,37 +1259,37 @@ class SyntheticDataGenerator:
         """
         links = []
         synced_at = datetime.now(timezone.utc)
-        
+
         # Sort commits by date
         commits_sorted = sorted(commits, key=lambda c: c.committer_when)
-        
+
         # For each PR, pick a range of commits that happened before PR merge/close
         # and after PR creation (loosely).
-        
+
         # Shuffle PRs to distribute commits
         shuffled_prs = list(prs)
         random.shuffle(shuffled_prs)
-        
+
         # Naive distribution: each PR gets 1-5 commits
         # If we have more commits than PRs * 5, some commits might be orphaned (which is fine, direct pushes)
         # If we have fewer, we reuse commits? No, commits belong to one PR usually.
-        
+
         available_commits = list(commits_sorted)
-        
+
         for pr in shuffled_prs:
             if not commits_sorted:
                 break
-                
+
             upper = min(5, len(available_commits)) if available_commits else 0
             if upper >= 2:
                 num_commits = random.randint(2, upper)
             else:
                 num_commits = 2
-            
+
             # Pick commits close to PR creation
             # This is O(N^2) effectively if we iterate, but lists are small for fixtures.
             # Let's just pop from available for simplicity in synthetic gen.
-            
+
             pr_commits = []
             for _ in range(num_commits):
                 if not available_commits:
@@ -1187,7 +1298,7 @@ class SyntheticDataGenerator:
                 # PRs are somewhat random in time.
                 # Let's just pick random commits for now, but valid logic would be better.
                 # Given strict requirements, let's just assign.
-                c = available_commits.pop(0) 
+                c = available_commits.pop(0)
                 pr_commits.append(c)
 
             if len(pr_commits) < num_commits:
@@ -1195,7 +1306,7 @@ class SyntheticDataGenerator:
                 need = min(num_commits - len(pr_commits), len(supplement))
                 if need > 0:
                     pr_commits.extend(random.sample(supplement, k=need))
-                
+
             for c in pr_commits:
                 links.append({
                     "repo_id": str(pr.repo_id),
@@ -1204,9 +1315,9 @@ class SyntheticDataGenerator:
                     "confidence": 1.0,
                     "provenance": "synthetic",
                     "evidence": "generated_fixture",
-                    "last_synced": synced_at
+                    "last_synced": synced_at,
                 })
-                
+
         return links
 
     def generate_issue_pr_links(
@@ -1227,7 +1338,9 @@ class SyntheticDataGenerator:
             return []
 
         candidates = [wi for wi in work_items if getattr(wi, "work_item_id", None)]
-        pr_numbers = [int(pr.number) for pr in prs if getattr(pr, "number", None) is not None]
+        pr_numbers = [
+            int(pr.number) for pr in prs if getattr(pr, "number", None) is not None
+        ]
         if not candidates or not pr_numbers:
             return []
 
@@ -1236,7 +1349,9 @@ class SyntheticDataGenerator:
         linked_items = candidates[:target_count]
 
         popular_prs = set(
-            random.sample(pr_numbers, k=max(1, min(len(pr_numbers), len(pr_numbers) // 10)))
+            random.sample(
+                pr_numbers, k=max(1, min(len(pr_numbers), len(pr_numbers) // 10))
+            )
         )
         multi_pr_item_count = max(1, int(len(linked_items) * 0.15))
         multi_pr_items = {
@@ -1268,7 +1383,6 @@ class SyntheticDataGenerator:
                 })
 
         return links
-
 
     def generate_repo_metrics_daily(
         self, days: int = 30

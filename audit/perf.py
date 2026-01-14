@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -100,9 +101,7 @@ def run_perf_audit(
             return report
 
         log_queries = _get_setting_value(client, "log_queries")
-        log_min_ms = _get_setting_value(
-            client, "log_queries_min_query_duration_ms"
-        )
+        log_min_ms = _get_setting_value(client, "log_queries_min_query_duration_ms")
         if log_queries is not None:
             report["log_settings"]["log_queries"] = log_queries
         if log_min_ms is not None:
@@ -143,11 +142,7 @@ def run_perf_audit(
             filters.append("is_initial_query = 1")
 
         where_clause = " AND ".join(filters)
-        sql = (
-            "SELECT "
-            + ", ".join(select_columns)
-            + " FROM system.query_log"
-        )
+        sql = "SELECT " + ", ".join(select_columns) + " FROM system.query_log"
         if where_clause:
             sql += " WHERE " + where_clause
         sql += " ORDER BY query_duration_ms DESC"
@@ -161,20 +156,18 @@ def run_perf_audit(
         for row in rows:
             entry = dict(zip(col_names, row))
             query_text = entry.get("query", "")
-            slow_queries.append(
-                {
-                    "duration_ms": entry.get("query_duration_ms"),
-                    "event_time": entry.get(time_column) if time_column else None,
-                    "query_kind": entry.get("query_kind"),
-                    "read_rows": entry.get("read_rows"),
-                    "read_bytes": entry.get("read_bytes"),
-                    "result_rows": entry.get("result_rows"),
-                    "result_bytes": entry.get("result_bytes"),
-                    "memory_usage": entry.get("memory_usage"),
-                    "exception": entry.get("exception"),
-                    "query": _truncate_query(str(query_text)),
-                }
-            )
+            slow_queries.append({
+                "duration_ms": entry.get("query_duration_ms"),
+                "event_time": entry.get(time_column) if time_column else None,
+                "query_kind": entry.get("query_kind"),
+                "read_rows": entry.get("read_rows"),
+                "read_bytes": entry.get("read_bytes"),
+                "result_rows": entry.get("result_rows"),
+                "result_bytes": entry.get("result_bytes"),
+                "memory_usage": entry.get("memory_usage"),
+                "exception": entry.get("exception"),
+                "query": _truncate_query(str(query_text)),
+            })
 
         report["slow_queries"] = slow_queries
         report["status"] = "slow" if slow_queries else "ok"
@@ -233,3 +226,48 @@ def format_perf_report(report: Dict[str, Any]) -> str:
         lines.append("slow_queries: none")
 
     return "\n".join(lines)
+
+
+def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
+    import argparse
+
+    audit_perf = audit_subparsers.add_parser(
+        "perf", help="Audit database query performance."
+    )
+    audit_perf.add_argument("--db", required=True, help="Database connection string.")
+    audit_perf.add_argument(
+        "--threshold",
+        type=int,
+        default=DEFAULT_THRESHOLD_MS,
+        help=f"Slow query threshold in ms (default: {DEFAULT_THRESHOLD_MS}).",
+    )
+    audit_perf.add_argument(
+        "--lookback",
+        type=int,
+        default=DEFAULT_LOOKBACK_MINUTES,
+        help=f"Lookback in minutes (default: {DEFAULT_LOOKBACK_MINUTES}).",
+    )
+    audit_perf.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        help=f"Max queries to show (default: {DEFAULT_LIMIT}).",
+    )
+    audit_perf.set_defaults(func=_cmd_audit_perf)
+
+
+def _cmd_audit_perf(ns: argparse.Namespace) -> int:
+
+    logger = logging.getLogger(__name__)
+    try:
+        report = run_perf_audit(
+            db_url=ns.db,
+            threshold_ms=ns.threshold,
+            lookback_minutes=ns.lookback,
+            limit=ns.limit,
+        )
+        print(format_perf_report(report))
+        return 0 if report.get("status") == "ok" else 1
+    except Exception as e:
+        logger.error(f"Performance audit failed: {e}")
+        return 1

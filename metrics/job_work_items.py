@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
@@ -496,3 +497,56 @@ def run_work_items_sync_job(
                 s.close()
             except Exception:
                 logger.exception("Error closing sink %s", type(s).__name__)
+
+
+def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
+    wi = sync_subparsers.add_parser(
+        "work-items",
+        help="Sync work tracking facts and compute derived work item tables.",
+    )
+    wi.add_argument("--db", help="Database connection string.")
+    wi.add_argument(
+        "--day",
+        type=date.fromisoformat,
+        default=date.today().isoformat(),
+        help="Target day (YYYY-MM-DD).",
+    )
+    wi.add_argument(
+        "--backfill",
+        type=int,
+        default=1,
+        help="Sync/compute for N days ending at --day.",
+    )
+    wi.add_argument(
+        "--provider",
+        choices=["all", "jira", "github", "gitlab", "synthetic", "none"],
+        default="all",
+        help="Provider to sync from (default: all).",
+    )
+    wi.add_argument(
+        "--sink",
+        choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
+        default="auto",
+    )
+    wi.add_argument("--repo-id", type=uuid.UUID, help="Filter to specific repo ID.")
+    wi.add_argument("--repo-name", help="Filter to specific repo name.")
+    wi.add_argument("-s", "--search", help="Repo name search pattern (glob).")
+    wi.set_defaults(func=_cmd_sync_work_items)
+
+
+def _cmd_sync_work_items(ns: argparse.Namespace) -> int:
+    try:
+        run_work_items_sync_job(
+            db_url=ns.db,
+            day=ns.day,
+            backfill_days=ns.backfill,
+            provider=ns.provider,
+            sink=ns.sink,
+            repo_id=ns.repo_id,
+            repo_name=ns.repo_name,
+            search_pattern=ns.search,
+        )
+        return 0
+    except Exception as e:
+        logger.error(f"Work item sync job failed: {e}")
+        return 1

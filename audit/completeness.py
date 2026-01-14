@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -14,7 +15,9 @@ OPTIONAL_GIT_TABLES = ("deployments", "incidents", "ci_pipeline_runs")
 ALL_GIT_TABLES = REQUIRED_GIT_TABLES + OPTIONAL_GIT_TABLES
 
 
-def build_window(days: int, now: Optional[datetime] = None) -> Tuple[datetime, datetime]:
+def build_window(
+    days: int, now: Optional[datetime] = None
+) -> Tuple[datetime, datetime]:
     window_days = max(1, int(days))
     end = now or datetime.now(timezone.utc)
     if end.tzinfo is None:
@@ -174,9 +177,7 @@ def _max_dt(first: Optional[datetime], second: Any) -> Optional[datetime]:
     return max(first, second_dt)
 
 
-def _build_stat(
-    count: Any, last_synced: Any, window_start: datetime
-) -> Dict[str, Any]:
+def _build_stat(count: Any, last_synced: Any, window_start: datetime) -> Dict[str, Any]:
     count_value = int(count or 0)
     last_synced_dt = _coerce_dt(last_synced)
     stale = last_synced_dt is None or last_synced_dt < window_start
@@ -270,7 +271,9 @@ def compile_report(
         rows = git_rows_by_table.get(table, [])
         by_source = _aggregate_git_rows_by_source(rows, repo_sources, window_start)
         for source in SOURCE_KEYS:
-            git_sources[source][table] = by_source.get(source, _empty_stat(window_start))
+            git_sources[source][table] = by_source.get(
+                source, _empty_stat(window_start)
+            )
 
     providers: Dict[str, Dict[str, Any]] = {}
     for provider in AUDIT_PROVIDERS:
@@ -465,17 +468,15 @@ def format_completeness_table(report: Dict[str, Any]) -> str:
         work_items = entry.get("work_items") or {}
         transitions = entry.get("transitions") or {}
         issues = entry.get("issues") or []
-        provider_rows.append(
-            [
-                provider,
-                str(work_items.get("count", 0)),
-                _format_dt(work_items.get("last_synced")),
-                str(transitions.get("count", 0)),
-                _format_dt(transitions.get("last_synced")),
-                "ok" if entry.get("ok") else "missing",
-                ", ".join(issues) if issues else "-",
-            ]
-        )
+        provider_rows.append([
+            provider,
+            str(work_items.get("count", 0)),
+            _format_dt(work_items.get("last_synced")),
+            str(transitions.get("count", 0)),
+            _format_dt(transitions.get("last_synced")),
+            "ok" if entry.get("ok") else "missing",
+            ", ".join(issues) if issues else "-",
+        ])
 
     table_sections = [
         f"Completeness window: last {days} days ({start} to {end})",
@@ -497,6 +498,7 @@ def format_completeness_table(report: Dict[str, Any]) -> str:
     git_rows: List[List[str]] = []
     for source in SOURCE_KEYS:
         source_entry = git_sources.get(source, {})
+
         def _cell(table: str) -> str:
             stat = source_entry.get(table)
             if stat is None:
@@ -506,35 +508,31 @@ def format_completeness_table(report: Dict[str, Any]) -> str:
         commit_ok = _stat_ok(source_entry.get("git_commits"))
         pr_ok = _stat_ok(source_entry.get("git_pull_requests"))
         git_status = "ok" if (commit_ok or pr_ok) else "missing"
-        git_rows.append(
-            [
-                source,
-                _cell("git_commits"),
-                _cell("git_pull_requests"),
-                _cell("deployments"),
-                _cell("incidents"),
-                _cell("ci_pipeline_runs"),
-                git_status,
-            ]
-        )
+        git_rows.append([
+            source,
+            _cell("git_commits"),
+            _cell("git_pull_requests"),
+            _cell("deployments"),
+            _cell("incidents"),
+            _cell("ci_pipeline_runs"),
+            git_status,
+        ])
 
-    table_sections.extend(
-        [
-            "",
-            _render_table(
-                [
-                    "source",
-                    "commits",
-                    "pull_requests",
-                    "deployments",
-                    "incidents",
-                    "ci_pipeline_runs",
-                    "status",
-                ],
-                git_rows,
-            ),
-        ]
-    )
+    table_sections.extend([
+        "",
+        _render_table(
+            [
+                "source",
+                "commits",
+                "pull_requests",
+                "deployments",
+                "incidents",
+                "ci_pipeline_runs",
+                "status",
+            ],
+            git_rows,
+        ),
+    ])
 
     overall = "ok" if report.get("overall_ok") else "missing"
     table_sections.append("")
@@ -558,3 +556,37 @@ def format_completeness_json(report: Dict[str, Any]) -> str:
 
 def completeness_failed(report: Dict[str, Any]) -> bool:
     return not bool(report.get("overall_ok"))
+
+
+def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
+    import argparse
+
+    audit_completeness = audit_subparsers.add_parser(
+        "completeness", help="Audit data completeness and freshness."
+    )
+    audit_completeness.add_argument(
+        "--db", required=True, help="Database connection string."
+    )
+    audit_completeness.add_argument(
+        "--days", type=int, default=7, help="Window in days (default: 7)."
+    )
+    audit_completeness.add_argument(
+        "--format", choices=["table", "json"], default="table", help="Output format."
+    )
+    audit_completeness.set_defaults(func=_cmd_audit_completeness)
+
+
+def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        report = run_completeness_audit(db_url=ns.db, days=ns.days)
+        if ns.format == "json":
+            print(format_completeness_json(report))
+        else:
+            print(format_completeness_table(report))
+        return 0
+    except Exception as e:
+        logger.error(f"Completeness audit failed: {e}")
+        return 1

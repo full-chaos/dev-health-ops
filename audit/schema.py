@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -68,7 +69,7 @@ def _split_column_definition(definition: str) -> Optional[Tuple[str, str]]:
     parts = stripped.split(None, 1)
     if len(parts) < 2:
         return None
-    name = parts[0].strip("`\"")
+    name = parts[0].strip('`"')
     type_segment = _extract_type_segment(parts[1].strip())
     if not name or not type_segment:
         return None
@@ -81,7 +82,7 @@ def _iter_create_table_blocks(text: str) -> Iterable[Tuple[str, str]]:
         re.IGNORECASE,
     )
     for match in pattern.finditer(text):
-        table = match.group(1).strip("`\"")
+        table = match.group(1).strip('`"')
         start = text.find("(", match.end())
         if start == -1:
             continue
@@ -100,7 +101,7 @@ def _iter_clickhouse_add_columns(text: str) -> Iterable[Tuple[str, str, str]]:
             continue
         table_match = re.search(r"ALTER\s+TABLE\s+([`\"\w\.]+)", line, re.IGNORECASE)
         if table_match:
-            current_table = table_match.group(1).strip("`\"")
+            current_table = table_match.group(1).strip('`"')
         if "ADD COLUMN" not in line.upper():
             continue
         table = current_table
@@ -218,7 +219,9 @@ def _build_sqlalchemy_expected_schema(
     return expected
 
 
-def _query_dicts(client: Any, query: str, parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _query_dicts(
+    client: Any, query: str, parameters: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     result = client.query(query, parameters=parameters)
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])
@@ -425,7 +428,9 @@ def run_schema_audit(*, db_url: str) -> Dict[str, Any]:
 
         db_url_normalized = db_url
         if backend == "postgres":
-            db_url_normalized = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+            db_url_normalized = db_url.replace(
+                "postgresql+asyncpg://", "postgresql://", 1
+            )
         if backend == "sqlite":
             db_url_normalized = db_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
 
@@ -471,9 +476,7 @@ def run_schema_audit(*, db_url: str) -> Dict[str, Any]:
             ),
         })
         base_report["status"] = (
-            "missing"
-            if missing_tables or missing_columns or type_mismatches
-            else "ok"
+            "missing" if missing_tables or missing_columns or type_mismatches else "ok"
         )
         return base_report
 
@@ -490,8 +493,8 @@ def format_schema_report(report: Dict[str, Any]) -> str:
     if missing_tables:
         lines.append("missing_tables:")
         for table in missing_tables:
-            migrations = report.get("migration_hints", {}).get("tables", {}).get(
-                table, []
+            migrations = (
+                report.get("migration_hints", {}).get("tables", {}).get(table, [])
             )
             hint = f" (migrations: {', '.join(migrations)})" if migrations else ""
             lines.append(f"- {table}{hint}")
@@ -502,8 +505,8 @@ def format_schema_report(report: Dict[str, Any]) -> str:
         for table, columns in missing_columns.items():
             for column in columns:
                 key = f"{table}.{column}"
-                migrations = report.get("migration_hints", {}).get("columns", {}).get(
-                    key, []
+                migrations = (
+                    report.get("migration_hints", {}).get("columns", {}).get(key, [])
                 )
                 hint = f" (migrations: {', '.join(migrations)})" if migrations else ""
                 lines.append(f"- {key}{hint}")
@@ -516,10 +519,32 @@ def format_schema_report(report: Dict[str, Any]) -> str:
                 key = f"{table}.{column}"
                 expected = detail.get("expected")
                 actual = detail.get("actual")
-                migrations = report.get("migration_hints", {}).get("columns", {}).get(
-                    key, []
+                migrations = (
+                    report.get("migration_hints", {}).get("columns", {}).get(key, [])
                 )
                 hint = f" (migrations: {', '.join(migrations)})" if migrations else ""
                 lines.append(f"- {key} expected {expected} got {actual}{hint}")
 
     return "\n".join(lines)
+
+
+def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
+    import argparse
+
+    audit_schema = audit_subparsers.add_parser(
+        "schema", help="Verify DB schema is current."
+    )
+    audit_schema.add_argument("--db", required=True, help="Database connection string.")
+    audit_schema.set_defaults(func=_cmd_audit_schema)
+
+
+def _cmd_audit_schema(ns: argparse.Namespace) -> int:
+
+    logger = logging.getLogger(__name__)
+    try:
+        report = run_schema_audit(db_url=ns.db)
+        print(format_schema_report(report))
+        return 0 if report.get("status") == "ok" else 1
+    except Exception as e:
+        logger.error(f"Schema audit failed: {e}")
+        return 1

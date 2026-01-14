@@ -57,6 +57,7 @@ class MaterializeConfig:
     llm_provider: str
     persist_evidence_snippets: bool
     llm_model: Optional[str]
+    force: bool = False
     team_ids: Optional[List[str]] = None
 
 

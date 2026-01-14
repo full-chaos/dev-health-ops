@@ -102,9 +102,13 @@ services:
       context: .
       dockerfile: ./docker/Dockerfile
       target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: dev-health-api
+    command: |
+      --db 'clickhouse://ch:ch@clickhouse:8123/default' --reload --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/stats
+      DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
     depends_on:
       - clickhouse

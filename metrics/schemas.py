@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass, field
 from uuid import UUID
 from datetime import date, datetime
-from typing import List, Optional, TypedDict
+from typing import Dict, List, Optional, TypedDict
 from typing_extensions import NotRequired
 
 
@@ -134,7 +134,7 @@ class UserMetricsDailyRecord:
     team_name: Optional[str] = None
 
     # New IC/Landscape fields
-    identity_id: Optional[str] = None
+    identity_id: str = ""
     loc_touched: int = 0
     prs_opened: int = 0
     work_items_completed: int = 0
@@ -457,6 +457,8 @@ class WorkGraphEdgeRecord:
     evidence: str
     discovered_at: datetime
     last_synced: datetime
+    event_ts: datetime
+    day: date
 
 
 @dataclass(frozen=True)
@@ -479,6 +481,38 @@ class WorkGraphPRCommitRecord:
     provenance: str
     evidence: str
     last_synced: datetime
+
+
+@dataclass(frozen=True)
+class WorkUnitInvestmentRecord:
+    work_unit_id: str
+    from_ts: datetime
+    to_ts: datetime
+    repo_id: Optional[uuid.UUID]
+    provider: Optional[str]
+    effort_metric: str
+    effort_value: float
+    theme_distribution_json: Dict[str, float]
+    subcategory_distribution_json: Dict[str, float]
+    structural_evidence_json: str
+    evidence_quality: float
+    evidence_quality_band: str
+    categorization_status: str
+    categorization_errors_json: str
+    categorization_model_version: str
+    categorization_input_hash: str
+    categorization_run_id: str
+    computed_at: datetime
+
+
+@dataclass(frozen=True)
+class WorkUnitInvestmentEvidenceQuoteRecord:
+    work_unit_id: str
+    quote: str
+    source_type: str
+    source_id: str
+    computed_at: datetime
+    categorization_run_id: str
 
 
 @dataclass(frozen=True)

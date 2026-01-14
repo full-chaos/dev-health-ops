@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -79,12 +79,17 @@ class WorkGraphEdge:
     provider: Optional[str] = None
     discovered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    event_ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    day: Optional[date] = None
 
     def __post_init__(self):
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError(
                 f"confidence must be between 0 and 1, got {self.confidence}"
             )
+        # If day is not provided, derive from event_ts
+        if self.day is None and self.event_ts:
+            object.__setattr__(self, "day", self.event_ts.date())
 
 
 @dataclass(frozen=True)

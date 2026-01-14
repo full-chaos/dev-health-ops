@@ -514,6 +514,7 @@ class GitPullRequest(Base):
     )
     number = Column(Integer, primary_key=True, comment="pull request number")
     title = Column(Text, comment="title of the pull request")
+    body = Column(Text, comment="description/body of the pull request")
     state = Column(Text, comment="state of the pull request (open, closed, merged)")
     author_name = Column(Text, comment="username of the author")
     author_email = Column(Text, comment="email of the author (if available)")

@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 import uuid
 
-from dev_health_ops.audit.rolling_aggregates import (
+from audit.rolling_aggregates import (
     ROLLING_TABLE_SPECS,
     run_rolling_aggregates_audit,
 )

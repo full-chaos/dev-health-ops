@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS git_pull_requests (
     repo_id UUID,
     number UInt32,
     title Nullable(String),
+    body Nullable(String),
     state Nullable(String),
     author_name Nullable(String),
     author_email Nullable(String),

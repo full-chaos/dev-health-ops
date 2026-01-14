@@ -1,0 +1,59 @@
+categories:
+  - feature
+  - maintenance
+  - operational
+  - quality
+
+structural:
+  work_item_type_weights:
+    story: { feature: 1.0 }
+    epic: { feature: 1.0 }
+    task: { feature: 0.7, maintenance: 0.3 }
+    issue: { feature: 0.5, maintenance: 0.5 }
+    chore: { maintenance: 1.0 }
+    bug: { quality: 1.0 }
+    incident: { operational: 1.0 }
+    unknown: { feature: 0.25, maintenance: 0.25, operational: 0.25, quality: 0.25 }
+
+textual:
+  max_modifier: 0.15
+  source_weights:
+    issue_title: 1.0
+    issue_description: 0.8
+    pr_title: 0.9
+    pr_description: 0.7
+    commit_message: 0.5
+  keywords:
+    feature:
+      - { keyword: "feature", weight: 0.05 }
+      - { keyword: "add", weight: 0.02 }
+      - { keyword: "implement", weight: 0.03 }
+      - { keyword: "introduce", weight: 0.02 }
+    maintenance:
+      - { keyword: "refactor", weight: 0.04 }
+      - { keyword: "cleanup", weight: 0.03 }
+      - { keyword: "chore", weight: 0.03 }
+      - { keyword: "upgrade", weight: 0.03 }
+      - { keyword: "deprecate", weight: 0.03 }
+    operational:
+      - { keyword: "incident", weight: 0.05 }
+      - { keyword: "outage", weight: 0.05 }
+      - { keyword: "deploy", weight: 0.03 }
+      - { keyword: "rollback", weight: 0.04 }
+      - { keyword: "hotfix", weight: 0.04 }
+    quality:
+      - { keyword: "bug", weight: 0.05 }
+      - { keyword: "fix", weight: 0.03 }
+      - { keyword: "test", weight: 0.03 }
+      - { keyword: "flake", weight: 0.04 }
+      - { keyword: "reliability", weight: 0.03 }
+
+confidence:
+  weights:
+    provenance: 0.4
+    temporal: 0.2
+    density: 0.2
+    text_agreement: 0.2
+  temporal_window_days: 30
+  temporal_fallback: 0.5
+  text_agreement_fallback: 0.5

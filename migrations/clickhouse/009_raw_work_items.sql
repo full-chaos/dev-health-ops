@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS work_items (
     work_item_id String,
     provider String,
     title String,
+    description Nullable(String),
     type String,
     status String,
     status_raw String,

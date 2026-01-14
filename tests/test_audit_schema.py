@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from dev_health_ops.audit.schema import (
+from audit.schema import (
     _build_clickhouse_expected_schema,
     format_schema_report,
 )

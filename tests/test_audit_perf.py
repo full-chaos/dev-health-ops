@@ -1,4 +1,4 @@
-from dev_health_ops.audit.perf import format_perf_report, run_perf_audit
+from audit.perf import format_perf_report, run_perf_audit
 
 
 def test_perf_audit_unsupported_backend() -> None:

@@ -8,6 +8,7 @@ from models.teams import Team
 from storage import SQLAlchemyStore, MongoStore, ClickHouseStore
 from fixtures.generator import SyntheticDataGenerator
 
+
 @pytest.mark.asyncio
 async def test_team_model():
     """Test Team model instantiation."""
@@ -15,12 +16,13 @@ async def test_team_model():
         id="team-a",
         name="Team Alpha",
         description="A test team",
-        members=["alice@example.com", "bob@example.com"]
+        members=["alice@example.com", "bob@example.com"],
     )
     assert team.id == "team-a"
     assert team.name == "Team Alpha"
     assert "alice@example.com" in team.members
     assert isinstance(team.updated_at, datetime)
+
 
 @pytest.mark.asyncio
 async def test_sqlalchemy_store_teams():
@@ -28,31 +30,32 @@ async def test_sqlalchemy_store_teams():
     store = SQLAlchemyStore("sqlite+aiosqlite:///:memory:")
     async with store:
         await store.ensure_tables()
-        
+
         teams = [
             Team(id="t1", name="Team 1", members=["m1"]),
-            Team(id="t2", name="Team 2", members=["m2", "m3"])
+            Team(id="t2", name="Team 2", members=["m2", "m3"]),
         ]
-        
+
         await store.insert_teams(teams)
-        
+
         retrieved = await store.get_all_teams()
         assert len(retrieved) == 2
         ids = {t.id for t in retrieved}
         assert "t1" in ids
         assert "t2" in ids
-        
+
         # Test update
         updated_team = Team(id="t1", name="Team 1 Updated", members=["m1", "m4"])
         await store.insert_teams([updated_team])
-        
+
         # Expire session to ensure we fetch from DB
         store.session.expire_all()
-        
+
         retrieved = await store.get_all_teams()
         t1 = next(t for t in retrieved if t.id == "t1")
         assert t1.name == "Team 1 Updated"
         assert "m4" in t1.members
+
 
 @pytest.mark.asyncio
 async def test_mongo_store_teams():
@@ -60,10 +63,10 @@ async def test_mongo_store_teams():
     with patch("storage.AsyncIOMotorClient") as mock_client:
         store = MongoStore("mongodb://localhost:27017", db_name="testdb")
         store.db = mock_client.return_value["testdb"]
-        
+
         # Mock insert_teams (uses _upsert_many)
         store.db["teams"].bulk_write = AsyncMock()
-        
+
         teams = [Team(id="t1", name="Team 1")]
         await store.insert_teams(teams)
         assert store.db["teams"].bulk_write.called
@@ -71,13 +74,19 @@ async def test_mongo_store_teams():
         # Mock get_all_teams
         mock_cursor = MagicMock()
         mock_cursor.__aiter__.return_value = [
-            {"id": "t1", "name": "Team 1", "members": ["m1"], "updated_at": datetime.now(timezone.utc)}
+            {
+                "id": "t1",
+                "name": "Team 1",
+                "members": ["m1"],
+                "updated_at": datetime.now(timezone.utc),
+            }
         ]
         store.db["teams"].find.return_value = mock_cursor
-        
+
         retrieved = await store.get_all_teams()
         assert len(retrieved) == 1
         assert retrieved[0].id == "t1"
+
 
 @pytest.mark.asyncio
 async def test_clickhouse_store_teams():
@@ -85,25 +94,33 @@ async def test_clickhouse_store_teams():
     with patch("clickhouse_connect.get_client") as mock_get_client:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
-        
+
         store = ClickHouseStore("clickhouse://localhost")
         await store.__aenter__()
-        
+
         # Mock insert_teams
         teams = [Team(id="t1", name="Team 1")]
         await store.insert_teams(teams)
         assert mock_client.insert.called
-        
+
         # Mock get_all_teams
         mock_result = MagicMock()
         mock_result.result_rows = [
-            ("t1", str(uuid.uuid4()), "Team 1", "Desc", ["m1"], datetime.now(timezone.utc))
+            (
+                "t1",
+                str(uuid.uuid4()),
+                "Team 1",
+                "Desc",
+                ["m1"],
+                datetime.now(timezone.utc),
+            )
         ]
         mock_client.query.return_value = mock_result
-        
+
         retrieved = await store.get_all_teams()
         assert len(retrieved) == 1
         assert retrieved[0].id == "t1"
+
 
 def test_synthetic_teams_generation():
     """Test synthetic team generation."""
@@ -114,23 +131,24 @@ def test_synthetic_teams_generation():
         assert team.id.startswith("team-")
         assert len(team.members) > 0
 
+
 @pytest.mark.asyncio
 async def test_cli_sync_teams_synthetic():
     """Test CLI sync teams command with synthetic provider."""
-    from cli import _cmd_sync_teams
-    
+    from providers.teams import sync_teams as _cmd_sync_teams
+
     with patch("asyncio.run") as mock_run:
-        with patch("cli._resolve_db_type") as mock_resolve:
+        with patch("storage.resolve_db_type") as mock_resolve:
             mock_resolve.return_value = "sqlite"
-            
+
             ns = MagicMock()
             ns.db = "sqlite:///:memory:"
             ns.db_type = None
             ns.provider = "synthetic"
             ns.path = None
-            
+
             result = _cmd_sync_teams(ns)
-            
+
             assert result == 0
             assert mock_run.called
             coro = mock_run.call_args[0][0]

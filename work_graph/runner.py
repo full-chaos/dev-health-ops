@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 from work_graph.builder import BuildConfig, WorkGraphBuilder

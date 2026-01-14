@@ -1,0 +1,76 @@
+name: Fixtures DB Test
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  test-fixtures:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db-type: [sqlite, postgres, mongo, clickhouse]
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'" --health-interval 10s --health-timeout 5s --health-retries 5
+
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        env:
+          CLICKHOUSE_USER: ch
+          CLICKHOUSE_PASSWORD: ch
+          CLICKHOUSE_DB: stats
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --spider -q http://localhost:8123/ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run fixtures generate (SQLite)
+        if: matrix.db-type == 'sqlite'
+        run: python cli.py fixtures generate --db sqlite:///test.db --days 1 --seed 42
+
+      - name: Run fixtures generate (Postgres)
+        if: matrix.db-type == 'postgres'
+        run: python cli.py fixtures generate --db postgresql+asyncpg://postgres:postgres@localhost:5432/test_db --days 1 --seed 42
+
+      - name: Run fixtures generate (Mongo)
+        if: matrix.db-type == 'mongo'
+        run: python cli.py fixtures generate --db mongodb://localhost:27017 --days 1 --seed 42
+
+      - name: Run fixtures generate (ClickHouse)
+        if: matrix.db-type == 'clickhouse'
+        run: python cli.py fixtures generate --db clickhouse://ch:ch@localhost:8123/stats --days 1 --seed 42

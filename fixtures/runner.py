@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import logging
+import os
+import random
 from datetime import datetime, timedelta, timezone
 
 from analytics.investment import InvestmentClassifier
@@ -74,8 +76,7 @@ def _write_metrics_result(sink: BaseMetricsSink, result: DailyMetricsResult) -> 
 
 
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
-    import random
-
+    now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.db, ns.db_type)
 
     async def _handler(store):
@@ -615,7 +616,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                                 sink.write_ic_landscape_rolling(landscape_recs)
                         except Exception as e:
                             logging.warning(
-                                "Failed to compute/write fixture landscape metrics: %s",
+                                "Failed to compute/write fixture metrics for day %s: %s",
+                                day_date,
                                 e,
                             )
 
@@ -626,7 +628,6 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     if ns.with_work_graph and db_type == "clickhouse":
         from work_graph.builder import BuildConfig, WorkGraphBuilder
 
-        now = datetime.now(timezone.utc)
         config = BuildConfig(
             dsn=ns.db, from_date=now - timedelta(days=ns.days), to_date=now
         )

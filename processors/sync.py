@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import os
-from typing import Optional
 
 from storage import resolve_db_type, run_with_store
 from utils import _resolve_since, _resolve_max_commits

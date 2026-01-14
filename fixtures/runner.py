@@ -634,7 +634,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                             # 11. IC Landscape (Rolling)
                             if d_idx == 0:
                                 rolling_stats = sink.get_rolling_30d_user_stats(
-                                    as_of_day=day, repo_id=repo.id
+                                    as_of_day=day_date, repo_id=repo.id
                                 )
                                 landscape_recs = compute_ic_landscape_rolling(
                                     as_of_day=day,

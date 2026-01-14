@@ -134,7 +134,7 @@ class UserMetricsDailyRecord:
     team_name: Optional[str] = None
 
     # New IC/Landscape fields
-    identity_id: Optional[str] = None
+    identity_id: str = ""
     loc_touched: int = 0
     prs_opened: int = 0
     work_items_completed: int = 0

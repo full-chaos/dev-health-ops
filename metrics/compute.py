@@ -312,17 +312,15 @@ def compute_daily_metrics(
                     )
                 if total_loc > 0:
                     repo_pr_sizes.setdefault(pr["repo_id"], []).append(int(total_loc))
-                    repo_pr_loc_totals[pr["repo_id"]] = (
-                        int(repo_pr_loc_totals.get(pr["repo_id"], 0)) + int(total_loc)
-                    )
-                    repo_pr_comment_totals[pr["repo_id"]] = (
-                        int(repo_pr_comment_totals.get(pr["repo_id"], 0))
-                        + int(pr.get("comments_count") or 0)
-                    )
-                    repo_pr_review_totals[pr["repo_id"]] = (
-                        int(repo_pr_review_totals.get(pr["repo_id"], 0))
-                        + int(pr.get("reviews_count") or 0)
-                    )
+                    repo_pr_loc_totals[pr["repo_id"]] = int(
+                        repo_pr_loc_totals.get(pr["repo_id"], 0)
+                    ) + int(total_loc)
+                    repo_pr_comment_totals[pr["repo_id"]] = int(
+                        repo_pr_comment_totals.get(pr["repo_id"], 0)
+                    ) + int(pr.get("comments_count") or 0)
+                    repo_pr_review_totals[pr["repo_id"]] = int(
+                        repo_pr_review_totals.get(pr["repo_id"], 0)
+                    ) + int(pr.get("reviews_count") or 0)
 
                 changes_requested_count = int(pr.get("changes_requested_count") or 0)
                 if changes_requested_count > 0:
@@ -462,9 +460,7 @@ def compute_daily_metrics(
             # Ideally they are, as we filtered during collection.
             # But let's be safe and verify connection to day (UTC).
             # Start/end are already computed at top of function.
-            day_ts = [
-                t for t in ua.activity_timestamps if start <= t <= end
-            ]
+            day_ts = [t for t in ua.activity_timestamps if start <= t <= end]
             if len(day_ts) > 1:
                 min_ts = min(day_ts)
                 max_ts = max(day_ts)
@@ -515,6 +511,7 @@ def compute_daily_metrics(
                 team_name=team_name,
                 active_hours=float(active_hours),
                 weekend_days=int(weekend_days),
+                identity_id=author_identity,
                 computed_at=computed_at_utc,
             )
         )

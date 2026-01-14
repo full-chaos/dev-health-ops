@@ -730,38 +730,49 @@ class SyntheticDataGenerator:
             prs_merged = random.randint(0, prs_authored)
             pr_cycle_p90 = float(random.randint(24, 120))
             median_pr_cycle = float(random.randint(8, 72))
-            work_items_completed = random.randint(0, 4)
-            work_items_active = random.randint(0, 4)
-            delivery_units = prs_merged + work_items_completed
+            files_changed = random.randint(0, 10)
+            prs = random.randint(0, 3)  # Replaces prs_authored and prs_merged
             records.append(
                 UserMetricsDailyRecord(
                     repo_id=self.repo_id,
                     day=day,
                     author_email=author_email,
+                    identity_id=author_email,
                     commits_count=commits,
                     loc_added=loc_added,
                     loc_deleted=loc_deleted,
-                    files_changed=random.randint(0, 10),
-                    large_commits_count=random.randint(0, 1),
-                    avg_commit_size_loc=float(
-                        (loc_added + loc_deleted) / max(commits, 1)
-                    ),
-                    prs_authored=prs_authored,
-                    prs_merged=prs_merged,
-                    avg_pr_cycle_hours=median_pr_cycle,
-                    median_pr_cycle_hours=median_pr_cycle,
-                    computed_at=computed_at,
-                    pr_cycle_p90_hours=pr_cycle_p90,
-                    team_id=team_id,
-                    team_name=team_name,
-                    identity_id=author_email,
+                    files_changed=files_changed,
+                    large_commits_count=int(commits * 0.1),
+                    avg_commit_size_loc=float(loc_added + loc_deleted) / commits
+                    if commits
+                    else 0.0,
+                    prs_authored=prs,
+                    prs_merged=prs,
+                    avg_pr_cycle_hours=24.0,
+                    median_pr_cycle_hours=24.0,
+                    pr_cycle_p75_hours=24.0,
+                    pr_cycle_p90_hours=24.0,
+                    prs_with_first_review=prs,
+                    pr_first_review_p50_hours=4.0,
+                    pr_first_review_p90_hours=8.0,
+                    pr_review_time_p50_hours=20.0,
+                    pr_pickup_time_p50_hours=2.0,
+                    reviews_given=random.randint(0, 5),
+                    changes_requested_given=random.randint(0, 1),
+                    reviews_received=random.randint(0, 5),
+                    review_reciprocity=0.8,
+                    team_id=team_id or "unassigned",
+                    team_name=team_name or "Unassigned",
+                    active_hours=6.0,
+                    weekend_days=0,
                     loc_touched=loc_added + loc_deleted,
-                    prs_opened=prs_authored,
-                    work_items_completed=work_items_completed,
-                    work_items_active=work_items_active,
-                    delivery_units=delivery_units,
-                    cycle_p50_hours=median_pr_cycle,
-                    cycle_p90_hours=pr_cycle_p90,
+                    prs_opened=prs,
+                    work_items_completed=random.randint(0, 2),
+                    work_items_active=random.randint(0, 3),
+                    delivery_units=random.randint(1, 10),
+                    cycle_p50_hours=48.0,
+                    cycle_p90_hours=72.0,
+                    computed_at=computed_at,
                 )
             )
         return records
@@ -778,19 +789,20 @@ class SyntheticDataGenerator:
             team_id, team_name = self._resolve_team(
                 member_map, author_name, author_email
             )
+            user_identity = author_email or "unknown"
             records.append(
                 WorkItemUserMetricsDailyRecord(
                     day=day,
                     provider=self.provider,
                     work_scope_id=self.repo_name,
-                    user_identity=author_email,
-                    team_id=team_id,
-                    team_name=team_name,
-                    items_started=random.randint(0, 4),
-                    items_completed=random.randint(0, 4),
-                    wip_count_end_of_day=random.randint(0, 6),
-                    cycle_time_p50_hours=float(random.randint(8, 72)),
-                    cycle_time_p90_hours=float(random.randint(24, 120)),
+                    user_identity=user_identity,
+                    team_id=team_id or "unassigned",
+                    team_name=team_name or "Unassigned",
+                    items_started=random.randint(0, 1),
+                    items_completed=random.randint(0, 1),
+                    wip_count_end_of_day=random.randint(0, 3),
+                    cycle_time_p50_hours=48.0,
+                    cycle_time_p90_hours=72.0,
                     computed_at=computed_at,
                 )
             )

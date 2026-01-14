@@ -1004,8 +1004,16 @@ class ClickHouseMetricsSink(BaseMetricsSink):
         start_day = as_of_day - timedelta(days=29)
 
         params = {
-            "start": start_day.isoformat(),
-            "end": as_of_day.isoformat(),
+            "start": (
+                start_day.strftime("%Y-%m-%d")
+                if hasattr(start_day, "strftime")
+                else str(start_day)
+            ),
+            "end": (
+                as_of_day.strftime("%Y-%m-%d")
+                if hasattr(as_of_day, "strftime")
+                else str(as_of_day)
+            ),
         }
         where = ["day >= toDate(%(start)s)", "day <= toDate(%(end)s)"]
         if repo_id:

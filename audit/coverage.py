@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from pathlib import Path
@@ -236,7 +237,9 @@ def _migration_tables(repo_root: Path, tables: Sequence[str]) -> List[str]:
     return [table for table, present in found.items() if not present]
 
 
-def _query_dicts(client: Any, query: str, parameters: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _query_dicts(
+    client: Any, query: str, parameters: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     result = client.query(query, parameters=parameters)
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])
@@ -415,17 +418,15 @@ def format_coverage_table(report: Dict[str, Any]) -> str:
     rows: List[List[str]] = []
     for provider in providers:
         entry = providers.get(provider, {})
-        rows.append(
-            [
-                provider,
-                entry.get("collector", {}).get("status", "missing"),
-                entry.get("config", {}).get("status", "missing"),
-                entry.get("schema", {}).get("status", "missing"),
-                entry.get("sink", {}).get("status", "missing"),
-                entry.get("commands", {}).get("status", "missing"),
-                entry.get("overall", "missing"),
-            ]
-        )
+        rows.append([
+            provider,
+            entry.get("collector", {}).get("status", "missing"),
+            entry.get("config", {}).get("status", "missing"),
+            entry.get("schema", {}).get("status", "missing"),
+            entry.get("sink", {}).get("status", "missing"),
+            entry.get("commands", {}).get("status", "missing"),
+            entry.get("overall", "missing"),
+        ])
 
     return _render_table(
         [
@@ -455,3 +456,45 @@ def format_coverage_json(report: Dict[str, Any]) -> str:
 
 def coverage_failed(report: Dict[str, Any]) -> bool:
     return not bool(report.get("overall_ok"))
+
+
+def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
+    import argparse
+
+    audit_coverage = audit_subparsers.add_parser(
+        "coverage", help="Audit provider implementation coverage."
+    )
+    audit_coverage.add_argument(
+        "--db", required=True, help="Database connection string."
+    )
+    audit_coverage.add_argument(
+        "--provider",
+        help="Comma-separated list of providers to audit (default: all).",
+    )
+    audit_coverage.add_argument(
+        "--format", choices=["table", "json"], default="table", help="Output format."
+    )
+    audit_coverage.set_defaults(func=_cmd_audit_coverage)
+
+
+def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
+    import logging
+    from audit.coverage import (
+        run_coverage_audit,
+        format_coverage_table,
+        format_coverage_json,
+        parse_provider_list,
+    )
+
+    logger = logging.getLogger(__name__)
+    try:
+        providers = parse_provider_list(ns.provider)
+        report = run_coverage_audit(db_url=ns.db, providers=providers)
+        if ns.format == "json":
+            print(format_coverage_json(report))
+        else:
+            print(format_coverage_table(report))
+        return 0 if report.get("overall_ok") else 1
+    except Exception as e:
+        logger.error(f"Coverage audit failed: {e}")
+        return 1

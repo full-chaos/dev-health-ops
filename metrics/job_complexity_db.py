@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import logging
 import os
@@ -252,9 +253,7 @@ def run_complexity_db_job(
                         sink.client, repo_uuid, remaining
                     )
                     missing_paths = [
-                        path
-                        for path in missing_paths
-                        if scanner.should_process(path)
+                        path for path in missing_paths if scanner.should_process(path)
                     ]
                     if missing_paths:
                         blame_files = _load_blame_contents(
@@ -270,9 +269,7 @@ def run_complexity_db_job(
                         "Repo %s has no git_files contents; falling back to git_blame.",
                         repo_label,
                     )
-                files = _load_blame_contents(
-                    sink.client, repo_uuid, None, remaining
-                )
+                files = _load_blame_contents(sink.client, repo_uuid, None, remaining)
 
             files = _filter_files(scanner, files, max_files)
             if not files:
@@ -355,3 +352,53 @@ def _build_snapshots(
     )
 
     return snapshots, repo_daily
+
+
+def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
+    complexity = metrics_subparsers.add_parser(
+        "complexity",
+        help="Compute file complexity metrics from DB (git_files/git_blame).",
+    )
+    complexity.add_argument("--db", help="Database connection string.")
+    complexity.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        default=date.today().isoformat(),
+        help="Target day (YYYY-MM-DD).",
+    )
+    complexity.add_argument(
+        "--backfill",
+        type=int,
+        default=1,
+        help="Compute for N days ending at --date.",
+    )
+    complexity.add_argument(
+        "--repo-id", type=uuid.UUID, help="Filter to specific repo."
+    )
+    complexity.add_argument("-s", "--search", help="Repo name search pattern (glob).")
+    complexity.add_argument(
+        "--lang", action="append", help="Include language globs (e.g. *.py)."
+    )
+    complexity.add_argument(
+        "--exclude", action="append", help="Exclude language globs (e.g. */tests/*)."
+    )
+    complexity.add_argument(
+        "--max-files", type=int, help="Limit number of files scanned per repo."
+    )
+    complexity.set_defaults(func=_cmd_metrics_complexity)
+
+
+def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
+    import argparse
+    from metrics.job_complexity_db import run_complexity_db_job
+
+    return run_complexity_db_job(
+        repo_id=ns.repo_id,
+        db_url=ns.db,
+        date=ns.date,
+        backfill_days=ns.backfill,
+        language_globs=ns.lang,
+        max_files=ns.max_files,
+        search_pattern=ns.search,
+        exclude_globs=ns.exclude,
+    )

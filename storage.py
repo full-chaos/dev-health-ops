@@ -141,6 +141,21 @@ def create_store(
     if db_type is None:
         db_type = detect_db_type(conn_string)
 
+    # Normalize connection string for async drivers if using SQLAlchemyStore
+    if db_type in ("postgres", "postgresql", "sqlite"):
+        if conn_string.startswith("sqlite://") and not conn_string.startswith(
+            "sqlite+aiosqlite://"
+        ):
+            conn_string = conn_string.replace("sqlite://", "sqlite+aiosqlite://", 1)
+        elif conn_string.startswith("postgresql://") and not conn_string.startswith(
+            "postgresql+asyncpg://"
+        ):
+            conn_string = conn_string.replace(
+                "postgresql://", "postgresql+asyncpg://", 1
+            )
+        elif conn_string.startswith("postgres://"):
+            conn_string = conn_string.replace("postgres://", "postgresql+asyncpg://", 1)
+
     db_type = db_type.lower()
 
     if db_type == "mongo":
@@ -154,6 +169,34 @@ def create_store(
             f"Unsupported database type: {db_type}. "
             f"Supported types: postgres, sqlite, mongo, clickhouse"
         )
+
+
+def resolve_db_type(db_url: str, db_type: Optional[str]) -> str:
+    """
+    Resolve database type from URL or explicit type.
+    """
+    if db_type:
+        resolved = db_type.lower()
+    else:
+        try:
+            resolved = detect_db_type(db_url)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+
+    if resolved not in {"postgres", "mongo", "sqlite", "clickhouse"}:
+        raise SystemExit(
+            "DB_TYPE must be 'postgres', 'mongo', 'sqlite', or 'clickhouse'"
+        )
+    return resolved
+
+
+async def run_with_store(db_url: str, db_type: str, handler: Callable) -> None:
+    """
+    Helper to create a store and run a handler within its context.
+    """
+    store = create_store(db_url, db_type)
+    async with store:
+        await handler(store)
 
 
 def _serialize_value(value: Any) -> Any:

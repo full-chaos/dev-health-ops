@@ -9,6 +9,12 @@ import pytest
 from git import Repo as GitRepo
 
 
+@pytest.fixture(autouse=True)
+def setup_test_env(monkeypatch):
+    """Ensure a default DATABASE_URI is set for tests."""
+    monkeypatch.setenv("DATABASE_URI", "sqlite:///:memory:")
+
+
 @pytest.fixture
 def repo_path():
     """Return the path to the current repository for testing."""

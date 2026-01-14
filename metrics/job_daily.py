@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -2396,3 +2397,64 @@ def _load_sqlite_incidents(
         logger.warning("Skipping SQLite incidents: %s", exc)
         return []
     return rows
+
+
+def register_commands(subparsers: argparse._SubParsersAction) -> None:
+    daily = subparsers.add_parser(
+        "daily", help="Compute daily metrics for a given day."
+    )
+    daily.add_argument("--db", help="Database connection string.")
+    daily.add_argument(
+        "--day",
+        type=date.fromisoformat,
+        default=date.today().isoformat(),
+        help="Target day (YYYY-MM-DD).",
+    )
+    daily.add_argument(
+        "--backfill",
+        type=int,
+        default=1,
+        help="Compute metrics for N days ending at --day.",
+    )
+    daily.add_argument("--repo-id", type=uuid.UUID, help="Filter to specific repo ID.")
+    daily.add_argument("--repo-name", help="Filter to specific repo name.")
+    daily.add_argument(
+        "--no-commits",
+        dest="commit_metrics",
+        action="store_false",
+        help="Skip commit-level metrics.",
+    )
+    daily.set_defaults(commit_metrics=True)
+    daily.add_argument(
+        "--sink",
+        choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
+        default="auto",
+    )
+    daily.add_argument(
+        "--provider",
+        choices=["all", "jira", "github", "gitlab", "none"],
+        default="none",
+        help="Sync work items from provider before computing (default: none).",
+    )
+
+    from metrics.job_daily import _cmd_metrics_daily
+
+    daily.set_defaults(func=_cmd_metrics_daily)
+
+
+def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
+    try:
+        run_daily_metrics_job(
+            db_url=ns.db,
+            day=ns.day,
+            backfill_days=ns.backfill,
+            repo_id=ns.repo_id,
+            repo_name=ns.repo_name,
+            include_commit_metrics=ns.commit_metrics,
+            sink=ns.sink,
+            provider=ns.provider,
+        )
+        return 0
+    except Exception as e:
+        logger.error(f"Daily metrics job failed: {e}")
+        return 1

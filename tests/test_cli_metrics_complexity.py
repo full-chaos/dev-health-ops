@@ -17,6 +17,8 @@ def _make_ns(**overrides):
         "max_files": None,
         "include_glob": None,
         "exclude_glob": None,
+        "lang": None,
+        "exclude": None,
     }
     data.update(overrides)
     return SimpleNamespace(**data)
@@ -51,7 +53,7 @@ def test_complexity_cli_does_not_touch_git_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "is_dir", _guard_is_dir)
 
     ns = _make_ns(repo_path=str(repo_path))
-    rc = cli._cmd_metrics_complexity(ns)
+    rc = job._cmd_metrics_complexity(ns)
 
     assert rc == 0
     assert len(calls) == 1

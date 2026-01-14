@@ -593,13 +593,14 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                                     inc.started_at
                                     and start_dt <= inc.started_at < end_dt
                                 ):
-                                    day_incidents.append({
+                                    day_incident = {
                                         "repo_id": inc.repo_id,
                                         "incident_id": str(inc.incident_id),
                                         "status": inc.status,
                                         "started_at": inc.started_at,
                                         "resolved_at": inc.resolved_at,
-                                    })
+                                    }
+                                    day_incidents.append(day_incident)
                             if day_incidents:
                                 incident_recs = compute_incident_metrics_daily(
                                     day=day_date,

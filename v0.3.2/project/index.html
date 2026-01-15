@@ -1,0 +1,1757 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+        <link rel="prev" href="../roadmap/">
+      
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Project Plan - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#part-1-existing-platforms-what-they-measure" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Project Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CONNECTOR_USAGE/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PRIVATE_REPO_TESTING/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grafana/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Grafana
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#system-flow-connect-sync-calculate" class="md-nav__link">
+    <span class="md-ellipsis">
+      System Flow (Connect → Sync → Calculate)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#linearb-flow-team-efficiency" class="md-nav__link">
+    <span class="md-ellipsis">
+      LinearB — Flow &amp; Team Efficiency
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gitprime-pluralsight-flow-engineering-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitPrime / Pluralsight Flow — Engineering Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gitlab-analytics-value-stream-devops" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitLab Analytics — Value Stream &amp; DevOps
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#typeappapp-cognitive-load-well-being" class="md-nav__link">
+    <span class="md-ellipsis">
+      typeapp.app — Cognitive Load &amp; Well-being
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#system-flow-connect-sync-calculate" class="md-nav__link">
+    <span class="md-ellipsis">
+      System Flow (Connect → Sync → Calculate)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#linearb-flow-team-efficiency" class="md-nav__link">
+    <span class="md-ellipsis">
+      LinearB — Flow &amp; Team Efficiency
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gitprime-pluralsight-flow-engineering-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitPrime / Pluralsight Flow — Engineering Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gitlab-analytics-value-stream-devops" class="md-nav__link">
+    <span class="md-ellipsis">
+      GitLab Analytics — Value Stream &amp; DevOps
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#typeappapp-cognitive-load-well-being" class="md-nav__link">
+    <span class="md-ellipsis">
+      typeapp.app — Cognitive Load &amp; Well-being
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="part-1-existing-platforms-what-they-measure">Part 1 — Existing Platforms: What They Measure<a class="headerlink" href="#part-1-existing-platforms-what-they-measure" title="Permanent link">&para;</a></h1>
+<h2 id="system-flow-connect-sync-calculate">System Flow (Connect → Sync → Calculate)<a class="headerlink" href="#system-flow-connect-sync-calculate" title="Permanent link">&para;</a></h2>
+<ul>
+<li>connect: Github, GitLab, IDEs, CI/CD, SCM, Databases</li>
+<li>sync: code events, PRs, reviews, issues, deployments</li>
+<li>calculate: metrics, scores, trends, risk indicators, health signals</li>
+</ul>
+<hr />
+<h2 id="linearb-flow-team-efficiency">LinearB — Flow &amp; Team Efficiency<a class="headerlink" href="#linearb-flow-team-efficiency" title="Permanent link">&para;</a></h2>
+<p>Focus: flow, predictability, PR health, resource allocation.</p>
+<p><strong>Metrics</strong></p>
+<ul>
+<li>
+<p>Cycle Time</p>
+</li>
+<li>
+<p>Coding Time</p>
+</li>
+<li>Pickup Time</li>
+<li>Review Time</li>
+<li>
+<p>Deploy Time</p>
+</li>
+<li>
+<p>Deployment Frequency</p>
+</li>
+<li>Lead Time for Changes</li>
+<li>
+<p>Work Breakdown</p>
+</li>
+<li>
+<p>New work vs rework vs unplanned vs refactor</p>
+</li>
+<li>
+<p>Investment Profile</p>
+</li>
+<li>
+<p>Strategic work %</p>
+</li>
+<li>Maintenance %</li>
+<li>
+<p>Unplanned work %</p>
+</li>
+<li>
+<p>PR Process Health</p>
+</li>
+<li>
+<p>PR size</p>
+</li>
+<li>Review depth</li>
+<li>Review response time</li>
+<li>
+<p>Time-to-approve</p>
+</li>
+<li>
+<p>Bottlenecks</p>
+</li>
+<li>
+<p>Review congestion</p>
+</li>
+<li>
+<p>Idle WIP</p>
+</li>
+<li>
+<p>Review Silos / Single-reviewer dependencies</p>
+</li>
+</ul>
+<hr />
+<h2 id="gitprime-pluralsight-flow-engineering-behavior">GitPrime / Pluralsight Flow — Engineering Behavior<a class="headerlink" href="#gitprime-pluralsight-flow-engineering-behavior" title="Permanent link">&para;</a></h2>
+<p>Focus: individual contribution patterns and risk.</p>
+<p><strong>Metrics</strong></p>
+<ul>
+<li>Impact Score (weighted contribution proxy)</li>
+<li>Efficiency (merged vs reworked code)</li>
+<li>
+<p>Code Fundamentals</p>
+</li>
+<li>
+<p>Active days</p>
+</li>
+<li>Commits/day</li>
+<li>PRs opened/merged</li>
+<li>Lines changed</li>
+<li>Rework rate</li>
+<li>
+<p>Churn %</p>
+</li>
+<li>
+<p>Collaboration</p>
+</li>
+<li>
+<p>Review load</p>
+</li>
+<li>
+<p>Review turnaround</p>
+</li>
+<li>
+<p>Risk Indicators</p>
+</li>
+<li>
+<p>High-churn files</p>
+</li>
+<li>
+<p>Ownership hotspots</p>
+</li>
+<li>
+<p>Health Signals</p>
+</li>
+<li>
+<p>Sustained intensity</p>
+</li>
+<li>Weekend / off-hours work</li>
+<li>Irregular contribution patterns</li>
+</ul>
+<hr />
+<h2 id="gitlab-analytics-value-stream-devops">GitLab Analytics — Value Stream &amp; DevOps<a class="headerlink" href="#gitlab-analytics-value-stream-devops" title="Permanent link">&para;</a></h2>
+<p>Focus: delivery pipeline and DORA.</p>
+<p><strong>Metrics</strong></p>
+<ul>
+<li>Lead Time for Changes</li>
+<li>
+<p>Value Stream Stages</p>
+</li>
+<li>
+<p>Issue → Code → Review → Merge → Deploy</p>
+</li>
+<li>
+<p>Merge Request Analytics</p>
+</li>
+<li>
+<p>MR size</p>
+</li>
+<li>Approval count</li>
+<li>Discussion count</li>
+<li>
+<p>Time to merge</p>
+</li>
+<li>
+<p>CI/CD</p>
+</li>
+<li>
+<p>Pipeline duration</p>
+</li>
+<li>Success rate</li>
+<li>MTTR</li>
+<li>
+<p>Change failure rate</p>
+</li>
+<li>
+<p>Contribution Analytics</p>
+</li>
+<li>Security / Vulnerability introduction rate</li>
+</ul>
+<hr />
+<h2 id="typeappapp-cognitive-load-well-being">typeapp.app — Cognitive Load &amp; Well-being<a class="headerlink" href="#typeappapp-cognitive-load-well-being" title="Permanent link">&para;</a></h2>
+<p>Focus: IDE-level behavior and burnout risk.</p>
+<p><strong>Metrics</strong></p>
+<ul>
+<li>Flow State Duration</li>
+<li>
+<p>Context Switching</p>
+</li>
+<li>
+<p>File switches</p>
+</li>
+<li>Tab switches</li>
+<li>
+<p>Project switches</p>
+</li>
+<li>
+<p>Typing Behavior</p>
+</li>
+<li>
+<p>Error rate</p>
+</li>
+<li>
+<p>Undo/redo density</p>
+</li>
+<li>
+<p>Distraction Index</p>
+</li>
+<li>
+<p>Wellness Signals</p>
+</li>
+<li>
+<p>Late-night streaks</p>
+</li>
+<li>
+<p>Burst–burnout cycles</p>
+</li>
+<li>
+<p>Cognitive Load Index</p>
+</li>
+</ul>
+<hr />
+<h1 id="part-2-unified-metrics-framework">Part 2 — Unified Metrics Framework<a class="headerlink" href="#part-2-unified-metrics-framework" title="Permanent link">&para;</a></h1>
+<h2 id="1-delivery-velocity">1. Delivery &amp; Velocity<a class="headerlink" href="#1-delivery-velocity" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Coding Time</li>
+<li>Review Time</li>
+<li>Rework Time</li>
+<li>Deploy Time</li>
+<li>Deployment Frequency</li>
+<li>Throughput (PRs, issues, story points)</li>
+<li>Work Composition</li>
+<li>Investment Profile (Strategic vs Maintenance)</li>
+</ul>
+<hr />
+<h2 id="2-code-quality-risk">2. Code Quality &amp; Risk<a class="headerlink" href="#2-code-quality-risk" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Code Risk Index</li>
+<li>Churn</li>
+<li>Ownership concentration</li>
+<li>Hotspots</li>
+<li>Cyclomatic Complexity (radon; snapshots persisted and loaded via <code>store.get_complexity_snapshots()</code>)</li>
+<li>Rework Rate</li>
+<li>
+<p>PR Quality</p>
+</li>
+<li>
+<p>Size distribution</p>
+</li>
+<li>Comment density</li>
+<li>
+<p>Rejection rate</p>
+</li>
+<li>
+<p>Stability</p>
+</li>
+<li>
+<p>Bugs introduced</p>
+</li>
+<li>Defect escape rate</li>
+</ul>
+<hr />
+<h2 id="3-collaboration-team-dynamics">3. Collaboration &amp; Team Dynamics<a class="headerlink" href="#3-collaboration-team-dynamics" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Review Responsiveness</li>
+<li>Reviewer Load</li>
+<li>Review Network Graph</li>
+<li>
+<p>Knowledge Distribution</p>
+</li>
+<li>
+<p>Bus factor</p>
+</li>
+<li>
+<p>Contribution entropy</p>
+</li>
+<li>
+<p>Communication Density</p>
+</li>
+</ul>
+<hr />
+<h2 id="4-developer-health-cognitive-load">4. Developer Health &amp; Cognitive Load<a class="headerlink" href="#4-developer-health-cognitive-load" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Context Switching Score</li>
+<li>Focus Time Index</li>
+<li>
+<p>Work Pattern Health</p>
+</li>
+<li>
+<p>Late-night activity</p>
+</li>
+<li>
+<p>Weekend work</p>
+</li>
+<li>
+<p>Editing &amp; Typing Behavior</p>
+</li>
+</ul>
+<hr />
+<h2 id="5-systemic-process-health">5. Systemic &amp; Process Health<a class="headerlink" href="#5-systemic-process-health" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Bottleneck Index</li>
+<li>WIP Congestion</li>
+<li>Stale Work Detection</li>
+<li>Predictability Index</li>
+</ul>
+<hr />
+<h1 id="part-3-developer-health-model">Part 3 — Developer Health Model<a class="headerlink" href="#part-3-developer-health-model" title="Permanent link">&para;</a></h1>
+<p><strong>Four Dimensions</strong></p>
+<ol>
+<li>Delivery — speed, throughput, predictability</li>
+<li>Durability — quality, stability, long-term risk</li>
+<li>Developer Well-being — flow, burnout risk, load</li>
+<li>Dynamics — collaboration, knowledge spread</li>
+</ol>
+<p>This framework fully covers and extends LinearB, GitPrime, GitLab, and typeapp.app with a single coherent analytics model.</p>
+<p>Absolutely — I’ll continue <em>without pause</em> and expand the entire system:</p>
+<ul>
+<li><strong>Data model</strong></li>
+<li><strong>Events and ingestion</strong></li>
+<li><strong>Scoring &amp; formulas</strong></li>
+<li><strong>Detailed metric definitions</strong></li>
+<li><strong>Architecture</strong></li>
+<li><strong>Dashboards &amp; views</strong></li>
+<li><strong>Roadmap</strong></li>
+</ul>
+<p>This will give you a complete <strong>draft developer health platform</strong> capable of rivaling LinearB, GitPrime, TypeApp, and GitLab Analytics <em>in one unified product</em>.</p>
+<hr />
+<h1 id="part-4-detailed-data-model">🚧 PART 4 — Detailed Data Model<a class="headerlink" href="#part-4-detailed-data-model" title="Permanent link">&para;</a></h1>
+<ol>
+<li><strong>Git Events</strong> (commits, branches, PRs, reviews)</li>
+<li><strong>Issue/Task Events</strong> (create, update, close, transitions)</li>
+<li><strong>CI/CD Events</strong> (pipelines, deploys, failures, restores)</li>
+<li><strong>IDE Telemetry Events</strong> (typing, context switching, focus time)</li>
+</ol>
+<hr />
+<h1 id="part-5-metric-definitions-formulas">🧮 PART 5 — Metric Definitions &amp; Formulas<a class="headerlink" href="#part-5-metric-definitions-formulas" title="Permanent link">&para;</a></h1>
+<p>Everything the earlier platforms measure + extended metrics.</p>
+<hr />
+<h1 id="1-delivery-metrics-flow-velocity">1️⃣ DELIVERY METRICS (Flow &amp; Velocity)<a class="headerlink" href="#1-delivery-metrics-flow-velocity" title="Permanent link">&para;</a></h1>
+<h2 id="cycle-time"><strong>Cycle Time</strong><a class="headerlink" href="#cycle-time" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>cycle_time = merged_at - first_commit_timestamp_in_branch
+</code></pre></div>
+<h3 id="coding-time"><strong>Coding Time</strong><a class="headerlink" href="#coding-time" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>coding_time = pr_created_at - first_commit_timestamp
+</code></pre></div>
+<h3 id="review-time"><strong>Review Time</strong><a class="headerlink" href="#review-time" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>review_time = first_review_timestamp - pr_created_at
+</code></pre></div>
+<h3 id="rework-time"><strong>Rework Time</strong><a class="headerlink" href="#rework-time" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>rework_time = merged_at - first_approval_timestamp
+</code></pre></div>
+<h3 id="deploy-time"><strong>Deploy Time</strong><a class="headerlink" href="#deploy-time" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>deploy_time = first_prod_deploy_timestamp - merged_at
+</code></pre></div>
+<hr />
+<h2 id="throughput"><strong>Throughput</strong><a class="headerlink" href="#throughput" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>features_completed = count(tasks.type==&quot;feature&quot;)
+bugs_fixed = count(tasks.type==&quot;bug&quot;)
+prs_merged = count(prs where state=&quot;merged&quot;)
+</code></pre></div>
+<hr />
+<h2 id="work-mix"><strong>Work Mix</strong><a class="headerlink" href="#work-mix" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>rework_percent = churn_loc_last_30_days / total_loc_last_30_days
+new_work_percent = new_features_loc / total_loc
+bugfix_percent = bugfix_loc / total_loc
+refactor_percent = refactor_loc / total_loc
+</code></pre></div>
+<hr />
+<h2 id="dora-metrics"><strong>DORA Metrics</strong><a class="headerlink" href="#dora-metrics" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Deployment frequency = deploy_count / time_period</li>
+<li>Lead time for changes = average(coding_time + review_time + deploy_time)</li>
+<li>MTTR = mean(time_from_incident_to_restore)</li>
+<li>Change failure rate = failed_deploys / total_deploys</li>
+</ul>
+<hr />
+<h1 id="2-code-quality-risk-metrics">2️⃣ CODE QUALITY &amp; RISK METRICS<a class="headerlink" href="#2-code-quality-risk-metrics" title="Permanent link">&para;</a></h1>
+<h2 id="churn"><strong>Churn</strong><a class="headerlink" href="#churn" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>commit_churn = (loc_added + loc_deleted)
+rework_rate = churn_in_30_days / total_loc_touched
+</code></pre></div>
+<h2 id="hotspot-risk"><strong>Hotspot Risk</strong><a class="headerlink" href="#hotspot-risk" title="Permanent link">&para;</a></h2>
+<p>A weighted model:</p>
+<div class="highlight"><pre><span></span><code>hotspot_score = file_churn * number_of_contributors * commit_frequency
+</code></pre></div>
+<h2 id="pr-size"><strong>PR Size</strong><a class="headerlink" href="#pr-size" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>pr_size = lines_added + lines_deleted
+</code></pre></div>
+<h2 id="review-quality"><strong>Review Quality</strong><a class="headerlink" href="#review-quality" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>comments_per_review = total_review_comments / number_of_reviews
+review_coverage = files_reviewed / files_changed
+</code></pre></div>
+<hr />
+<h1 id="3-collaboration-team-dynamics_1">3️⃣ COLLABORATION &amp; TEAM DYNAMICS<a class="headerlink" href="#3-collaboration-team-dynamics_1" title="Permanent link">&para;</a></h1>
+<h2 id="review-responsiveness"><strong>Review Responsiveness</strong><a class="headerlink" href="#review-responsiveness" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>time_to_first_review = min(review.submitted_at) - pr_created_at
+</code></pre></div>
+<h2 id="collaboration-network"><strong>Collaboration Network</strong><a class="headerlink" href="#collaboration-network" title="Permanent link">&para;</a></h2>
+<p>Track edges:
+<code>author → reviewer</code></p>
+<p>Metrics:</p>
+<ul>
+<li>reciprocity</li>
+<li>centrality</li>
+<li>isolated contributors</li>
+<li>bottleneck reviewers</li>
+</ul>
+<h2 id="knowledge-distribution-bus-factor"><strong>Knowledge Distribution (Bus Factor)</strong><a class="headerlink" href="#knowledge-distribution-bus-factor" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>ownership_score(file) = commits_by_user / total_commits_on_file
+bus_factor = number_of_files_with_ownership&gt;0.75
+</code></pre></div>
+<hr />
+<h1 id="4-developer-health-cognitive-load_1">4️⃣ DEVELOPER HEALTH &amp; COGNITIVE LOAD<a class="headerlink" href="#4-developer-health-cognitive-load_1" title="Permanent link">&para;</a></h1>
+<h2 id="flow-score-0100"><strong>Flow Score (0–100)</strong><a class="headerlink" href="#flow-score-0100" title="Permanent link">&para;</a></h2>
+<p>Uses editor telemetry:</p>
+<div class="highlight"><pre><span></span><code>focus_blocks = sequences of 10+ min uninterrupted editing
+context_switch_penalty = file_switches + tab_switches
+flow_score = focus_blocks * 10 - context_switch_penalty * 2
+</code></pre></div>
+<h2 id="cognitive-load"><strong>Cognitive Load</strong><a class="headerlink" href="#cognitive-load" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>load_index = (avg_time_between_edits + tab_switch_rate + undo_density)
+</code></pre></div>
+<h2 id="burnout-indicators"><strong>Burnout Indicators</strong><a class="headerlink" href="#burnout-indicators" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>late_night_activity = activity between 12am–5am
+weekend_activity = sat/sun commits
+burst_cycles = # of commit storms within &lt;2h
+risk_score = weighted_sum(late_night, weekend, bursts)
+</code></pre></div>
+<hr />
+<h1 id="5-system-health-metrics">5️⃣ SYSTEM HEALTH METRICS<a class="headerlink" href="#5-system-health-metrics" title="Permanent link">&para;</a></h1>
+<h2 id="wip-congestion"><strong>WIP Congestion</strong><a class="headerlink" href="#wip-congestion" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>stale_prs = prs open &gt; X days
+queued_reviews = prs waiting for review &gt; Y hours
+build_queue_length = count(pipelines waiting)
+</code></pre></div>
+<h2 id="predictability"><strong>Predictability</strong><a class="headerlink" href="#predictability" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>estimate_accuracy = |estimate - actual| / estimate
+cycle_time_variance = variance(cycle_time)
+</code></pre></div>
+<hr />
+<h1 id="part-7-dashboard-drafts">📊 PART 7 — Dashboard Drafts<a class="headerlink" href="#part-7-dashboard-drafts" title="Permanent link">&para;</a></h1>
+<h2 id="1-org-dashboard">1. <strong>Org Dashboard</strong><a class="headerlink" href="#1-org-dashboard" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Cycle Time</li>
+<li>Deployment Frequency</li>
+<li>Hotspot files</li>
+<li>Bottleneck teams</li>
+<li>Investment Profile</li>
+<li>Predictability Index</li>
+</ul>
+<h2 id="2-team-dashboard">2. <strong>Team Dashboard</strong><a class="headerlink" href="#2-team-dashboard" title="Permanent link">&para;</a></h2>
+<ul>
+<li>PR review health</li>
+<li>Collaboration graph</li>
+<li>Throughput</li>
+<li>Roadmap completion forecast</li>
+<li>Team burnout risk</li>
+</ul>
+<h2 id="3-developer-dashboard">3. <strong>Developer Dashboard</strong><a class="headerlink" href="#3-developer-dashboard" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Flow score</li>
+<li>Deep work patterns</li>
+<li>Impact score</li>
+<li>Review contribution</li>
+<li>Churn &amp; rework (healthy or high)</li>
+</ul>
+<h2 id="4-repo-dashboard">4. <strong>Repo Dashboard</strong><a class="headerlink" href="#4-repo-dashboard" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Hotspots</li>
+<li>Bus factor</li>
+<li>Risky files</li>
+<li>Churn trends</li>
+<li>Contribution activity</li>
+</ul>
+<hr />
+<h1 id="developer-health-platform-full-draft-specification">Developer Health Platform – Full Draft Specification<a class="headerlink" href="#developer-health-platform-full-draft-specification" title="Permanent link">&para;</a></h1>
+<h2 id="1-metric-formulations-weights">1. Metric formulations &amp; weights<a class="headerlink" href="#1-metric-formulations-weights" title="Permanent link">&para;</a></h2>
+<h3 id="11-normalization-scoring-pattern">1.1 Normalization &amp; scoring pattern<a class="headerlink" href="#11-normalization-scoring-pattern" title="Permanent link">&para;</a></h3>
+<p>General pattern (so everything fits into 0–100):</p>
+<ul>
+<li><strong>Raw metric</strong> → normalize into [0,1] using either</li>
+<li>min–max based on historical window, or</li>
+<li>percentile within org/team.</li>
+<li><strong>Direction</strong>: some metrics “lower is better”.</li>
+<li>If lower is better: <code>score = 1 - normalized_value</code></li>
+<li>If higher is better: <code>score = normalized_value</code></li>
+<li><strong>Metric Score (0–100)</strong>: <code>metric_score = score * 100</code></li>
+</ul>
+<p>All metrics below follow: <strong>raw formula → normalized score</strong> and then roll into dimension scores.</p>
+<hr />
+<h3 id="12-delivery-metrics-flow-dora">1.2 Delivery metrics (Flow &amp; DORA)<a class="headerlink" href="#12-delivery-metrics-flow-dora" title="Permanent link">&para;</a></h3>
+<h4 id="121-cycle-time">1.2.1 Cycle time<a class="headerlink" href="#121-cycle-time" title="Permanent link">&para;</a></h4>
+<p>Per PR:</p>
+<div class="highlight"><pre><span></span><code>cycle_time(pr) = merged_at - first_commit_time_on_branch(pr)
+</code></pre></div>
+<p>Normalized (lower = better):</p>
+<div class="highlight"><pre><span></span><code>ct_norm = clip( (cycle_time - CT_min) / (CT_max - CT_min), 0, 1 )
+ct_score = (1 - ct_norm) * 100
+</code></pre></div>
+<h4 id="122-coding-review-deploy-times">1.2.2 Coding / Review / Deploy times<a class="headerlink" href="#122-coding-review-deploy-times" title="Permanent link">&para;</a></h4>
+<p>For each PR:</p>
+<div class="highlight"><pre><span></span><code>coding_time  = pr_created_at - first_commit_time
+review_time  = time_of_first_review - pr_created_at
+rework_time  = merged_at - time_of_first_approval
+deploy_time  = first_prod_deploy_at - merged_at
+</code></pre></div>
+<p>Flow Balance score (detect one-stage dominance):</p>
+<div class="highlight"><pre><span></span><code>flow_balance_ratio = max(coding_time, review_time, rework_time, deploy_time) / cycle_time
+# If one stage &gt; 60% of total, that’s a bottleneck
+balance_norm = clip( (flow_balance_ratio - 0.25) / (0.75 - 0.25), 0, 1 )
+flow_balance_score = (1 - balance_norm) * 100
+</code></pre></div>
+<h4 id="123-deployment-frequency">1.2.3 Deployment frequency<a class="headerlink" href="#123-deployment-frequency" title="Permanent link">&para;</a></h4>
+<p>For a team in a period T (e.g., 14 days):</p>
+<div class="highlight"><pre><span></span><code>deploy_freq = number_of_prod_deploys / T_days
+</code></pre></div>
+<p>Normalize vs org history:</p>
+<div class="highlight"><pre><span></span><code>df_norm = clip( (deploy_freq - DF_min) / (DF_max - DF_min), 0, 1 )
+deploy_freq_score = df_norm * 100
+</code></pre></div>
+<h4 id="124-dora-metrics">1.2.4 DORA metrics<a class="headerlink" href="#124-dora-metrics" title="Permanent link">&para;</a></h4>
+<ul>
+<li>
+<p><strong>Lead time for changes</strong> = average cycle_time for prod-bound PRs → same pattern as cycle time.</p>
+</li>
+<li>
+<p><strong>MTTR</strong> (Mean Time To Restore):</p>
+</li>
+</ul>
+<div class="highlight"><pre><span></span><code>MTTR = avg(incident_resolved_at - incident_detected_at)
+mttr_norm, mttr_score = lower-is-better normalization
+</code></pre></div>
+<ul>
+<li><strong>Change failure rate</strong>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code>change_failure_rate = failed_deploys / total_deploys
+cfr_norm = clip( (change_failure_rate - CFR_min) / (CFR_max - CFR_min), 0, 1 )
+cfr_score = (1 - cfr_norm) * 100
+</code></pre></div>
+<h4 id="125-delivery-dimension-score">1.2.5 Delivery Dimension Score<a class="headerlink" href="#125-delivery-dimension-score" title="Permanent link">&para;</a></h4>
+<p>For a team or org:</p>
+<ul>
+<li><code>Cycle Time score</code> (CT)</li>
+<li><code>Deploy Frequency score</code> (DF)</li>
+<li><code>Lead Time score</code> (LT)</li>
+<li><code>MTTR score</code> (MT)</li>
+<li><code>Change Failure Rate score</code> (CF)</li>
+</ul>
+<p>Weights (example):</p>
+<div class="highlight"><pre><span></span><code>DeliveryScore = 0.30*CT + 0.20*DF + 0.20*LT + 0.15*MT + 0.15*CF
+</code></pre></div>
+<hr />
+<h3 id="13-code-quality-risk-metrics">1.3 Code quality &amp; risk metrics<a class="headerlink" href="#13-code-quality-risk-metrics" title="Permanent link">&para;</a></h3>
+<h4 id="131-churn-rework">1.3.1 Churn &amp; rework<a class="headerlink" href="#131-churn-rework" title="Permanent link">&para;</a></h4>
+<p>Per file over window W (e.g., 30 days):</p>
+<div class="highlight"><pre><span></span><code>loc_touched = Σ(|loc_added| + |loc_deleted|)
+loc_reworked_soon = Σ(loc_modified_within_30d_of_being_added)
+
+rework_rate = loc_reworked_soon / loc_touched
+</code></pre></div>
+<p>Normalize (lower is better):</p>
+<div class="highlight"><pre><span></span><code>rw_norm = clip( (rework_rate - RW_min) / (RW_max - RW_min), 0, 1 )
+rework_score = (1 - rw_norm) * 100
+</code></pre></div>
+<h4 id="132-file-hotspot-score">1.3.2 File hotspot score<a class="headerlink" href="#132-file-hotspot-score" title="Permanent link">&para;</a></h4>
+<p>For each file f:</p>
+<div class="highlight"><pre><span></span><code>churn_f        = loc_touched_in_W
+contributors_f = number_of_distinct_authors_in_W
+commit_freq_f  = commits_touching_file_in_W / days_in_W
+
+hotspot_raw = α*log(1 + churn_f) + β*contributors_f + γ*commit_freq_f
+# α,β,γ ~ 0.4, 0.3, 0.3 initially
+</code></pre></div>
+<p>Normalize across files:</p>
+<div class="highlight"><pre><span></span><code>hs_norm = (hotspot_raw - HS_min) / (HS_max - HS_min)
+hotspot_score_file = hs_norm * 100
+</code></pre></div>
+<p>Team-level <strong>Code Risk score</strong> can be e.g. 80th percentile of hotspot scores in that team’s modules, inverted:</p>
+<div class="highlight"><pre><span></span><code>risk_raw = P80(hotspot_score_file_for_team)
+risk_score = 100 - risk_raw
+</code></pre></div>
+<p>Ownership concentration (for hotspot drivers) is derived from git blame data:</p>
+<div class="highlight"><pre><span></span><code>ownership_concentration = max(lines_by_author) / total_lines
+</code></pre></div>
+<p>Synthetic fixtures include an expanded file set to improve blame-driven ownership coverage.
+Blame-only sync is available via <code>cli.py sync blame --provider &lt;local|github|gitlab&gt;</code>.</p>
+<h4 id="133-pr-size">1.3.3 PR Size<a class="headerlink" href="#133-pr-size" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>pr_size = loc_added + loc_deleted
+</code></pre></div>
+<p>Normalize with a sweet spot (e.g. 20–400 LOC):</p>
+<div class="highlight"><pre><span></span><code>if pr_size &lt; target_min:
+    size_score = 40 + 60*(pr_size / target_min)   # Very tiny PRs not ideal
+elif pr_size &lt;= target_max:
+    size_score = 100
+else:
+    overflow = min(pr_size - target_max, cap)
+    size_score = max(40, 100 - overflow / scale) # penalize very large ones
+</code></pre></div>
+<h4 id="134-review-depth-coverage">1.3.4 Review depth &amp; coverage<a class="headerlink" href="#134-review-depth-coverage" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>review_comments_per_pr = total_comments_on_pr / 1
+review_coverage = reviewed_files_count / files_changed
+</code></pre></div>
+<p>Combined <strong>PR Review Health score</strong>:</p>
+<div class="highlight"><pre><span></span><code>depth_score = sigmoid( a * (review_comments_per_pr - target_comments) )
+coverage_score = review_coverage * 100
+
+review_health_score = 0.4*size_score + 0.3*depth_score + 0.3*coverage_score
+</code></pre></div>
+<p>Where <code>sigmoid(x) = 100 / (1 + exp(-x))</code> scaled to [0,100].</p>
+<h4 id="135-quality-durability-dimension-score">1.3.5 Quality &amp; Durability Dimension Score<a class="headerlink" href="#135-quality-durability-dimension-score" title="Permanent link">&para;</a></h4>
+<p>Metrics:</p>
+<ul>
+<li>Rework score</li>
+<li>Code risk score</li>
+<li>Review health score</li>
+<li>Defect introduction rate score</li>
+</ul>
+<p>Weights:</p>
+<div class="highlight"><pre><span></span><code>DurabilityScore = 0.35*ReworkScore + 0.30*CodeRiskScore
+                  + 0.20*ReviewHealthScore + 0.15*DefectRateScore
+</code></pre></div>
+<hr />
+<h3 id="14-collaboration-team-dynamics-metrics">1.4 Collaboration &amp; team dynamics metrics<a class="headerlink" href="#14-collaboration-team-dynamics-metrics" title="Permanent link">&para;</a></h3>
+<h4 id="141-review-responsiveness">1.4.1 Review responsiveness<a class="headerlink" href="#141-review-responsiveness" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>time_to_first_review = avg( first_review_timestamp - pr_created_at )
+
+# lower better
+resp_norm = (time_to_first_review - RESP_min) / (RESP_max - RESP_min)
+ReviewResponsivenessScore = (1 - resp_norm) * 100
+</code></pre></div>
+<h4 id="142-review-load-reciprocity">1.4.2 Review load &amp; reciprocity<a class="headerlink" href="#142-review-load-reciprocity" title="Permanent link">&para;</a></h4>
+<p>For each user u in window W:</p>
+<div class="highlight"><pre><span></span><code>reviews_given_u  = count(reviews where reviewer_id = u)
+reviews_received_u = count(prs authored_by_u that had reviews)
+review_balance_u = reviews_given_u / (reviews_received_u + 1)
+</code></pre></div>
+<p>Team reciprocity via dispersion:</p>
+<div class="highlight"><pre><span></span><code>team_balance = variance(review_balance_u across team)
+ReciprocityScore = 100 - normalized_variance(team_balance)
+</code></pre></div>
+<h4 id="143-knowledge-distribution-bus-factor">1.4.3 Knowledge distribution / Bus factor<a class="headerlink" href="#143-knowledge-distribution-bus-factor" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Bus Factor (Truck Factor)</strong>: The smallest number of developers that account for &gt;= 50% of the total code churn in the window.</li>
+<li><strong>Code Ownership Gini</strong>: Gini coefficient of code contribution (churn) distribution. 0.0 = perfect equality, 1.0 = perfect inequality.</li>
+</ul>
+<div class="highlight"><pre><span></span><code>bus_factor = number_of_devs_contributing_50_percent_churn
+gini = (2 * sum(i * y_i) / (n * sum(y_i))) - (n + 1) / n
+</code></pre></div>
+<h4 id="144-dynamics-dimension-score">1.4.4 Dynamics Dimension Score<a class="headerlink" href="#144-dynamics-dimension-score" title="Permanent link">&para;</a></h4>
+<p>Use:</p>
+<ul>
+<li>ReviewResponsivenessScore</li>
+<li>ReciprocityScore</li>
+<li>BusFactorScore</li>
+<li>Cross-team-review score (optional)</li>
+</ul>
+<div class="highlight"><pre><span></span><code>DynamicsScore = 0.30*ReviewResponsivenessScore
+              + 0.25*ReciprocityScore
+              + 0.30*BusFactorScore
+              + 0.15*CrossTeamReviewScore
+</code></pre></div>
+<hr />
+<h3 id="15-developer-well-being-cognitive-load-metrics">1.5 Developer well-being &amp; cognitive load metrics<a class="headerlink" href="#15-developer-well-being-cognitive-load-metrics" title="Permanent link">&para;</a></h3>
+<h4 id="151-flow-score">1.5.1 Flow Score<a class="headerlink" href="#151-flow-score" title="Permanent link">&para;</a></h4>
+<p>From editor events:</p>
+<div class="highlight"><pre><span></span><code>focus_block = a continuous period ≥ 10 min
+              with no context_switch events (tab/file/project) and
+              active edits every ≤ 2 min
+
+num_blocks   = count(focus_block) in day
+avg_block_len = avg(duration of focus_block)
+context_switches = count(context_switch events per hour)
+interruptions = count(non-editor-window-focus events per hour)
+
+flow_raw = w1*num_blocks + w2*avg_block_len - w3*context_switches - w4*interruptions
+</code></pre></div>
+<p>Normalize:</p>
+<div class="highlight"><pre><span></span><code>flow_norm = (flow_raw - FLOW_min) / (FLOW_max - FLOW_min)
+FlowScore = clip(flow_norm, 0, 1) * 100
+</code></pre></div>
+<p>Start with <code>w1=2, w2=0.1, w3=1, w4=1</code> as tunables.</p>
+<h4 id="152-cognitive-load-index">1.5.2 Cognitive load index<a class="headerlink" href="#152-cognitive-load-index" title="Permanent link">&para;</a></h4>
+<p>Signals:</p>
+<ul>
+<li>avg time between edits in same file</li>
+<li>undo/redo density</li>
+<li>error bursts (rapid changes + reverts)</li>
+</ul>
+<p>Example:</p>
+<div class="highlight"><pre><span></span><code>avg_edit_gap = avg(time_between_edits_same_file)
+undo_density = total_undo_ops / total_edits
+switch_density = tab_switches / hour
+
+load_raw = a1*avg_edit_gap + a2*undo_density + a3*switch_density
+LoadScore = (1 - normalized(load_raw)) * 100
+</code></pre></div>
+<p>Higher score = better (manageable load).</p>
+<h4 id="153-burnout-risk-score">1.5.3 Burnout risk score<a class="headerlink" href="#153-burnout-risk-score" title="Permanent link">&para;</a></h4>
+<p>Signals in last 14–30 days:</p>
+<div class="highlight"><pre><span></span><code>late_night_ratio = commits_or_edits_between_00_05 / total_commits_or_edits
+weekend_ratio    = weekend_commits / total_commits
+streak_length    = longest_consecutive_days_with_activity
+burst_index      = fraction_of_commits_in_top_20% busiest_hours
+</code></pre></div>
+<p>Combine:</p>
+<div class="highlight"><pre><span></span><code>burnout_raw = b1*late_night_ratio + b2*weekend_ratio + b3*streak_length_norm + b4*burst_index
+BurnoutRiskScore = (1 - normalized(burnout_raw)) * 100
+</code></pre></div>
+<p>(High score = low risk.)</p>
+<h4 id="154-well-being-dimension-score">1.5.4 Well-being Dimension Score<a class="headerlink" href="#154-well-being-dimension-score" title="Permanent link">&para;</a></h4>
+<p>Combine:</p>
+<div class="highlight"><pre><span></span><code>WellBeingScore = 0.40*FlowScore + 0.25*LoadScore + 0.35*BurnoutRiskScore
+</code></pre></div>
+<hr />
+<h3 id="16-system-process-health-metrics">1.6 System &amp; process health metrics<a class="headerlink" href="#16-system-process-health-metrics" title="Permanent link">&para;</a></h3>
+<h4 id="161-bottleneck-index">1.6.1 Bottleneck index<a class="headerlink" href="#161-bottleneck-index" title="Permanent link">&para;</a></h4>
+<p>For each stage s in {coding, review, qa, deploy}:</p>
+<div class="highlight"><pre><span></span><code>stage_time_s = avg(time_spent_in_stage_s)
+stage_fraction_s = stage_time_s / total_cycle_time
+bottleneck_raw = max(stage_fraction_s)
+BottleneckScore = (1 - normalized(bottleneck_raw)) * 100
+</code></pre></div>
+<h4 id="162-wip-congestion">1.6.2 WIP congestion<a class="headerlink" href="#162-wip-congestion" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>stale_prs_ratio = stale_prs / total_open_prs
+queue_length    = queued_reviews / team_size
+build_queue     = queued_builds / historical_median
+
+congestion_raw = c1*stale_prs_ratio + c2*queue_length + c3*build_queue
+CongestionScore = (1 - normalized(congestion_raw)) * 100
+</code></pre></div>
+<h4 id="163-predictability">1.6.3 Predictability<a class="headerlink" href="#163-predictability" title="Permanent link">&para;</a></h4>
+<p>Defined as <strong>Completion Rate</strong> (how well the team clears its plate).</p>
+<div class="highlight"><pre><span></span><code>predictability_score = items_completed / (items_completed + wip_count_end_of_day)
+</code></pre></div>
+<h4 id="164-system-health-dimension-score">1.6.4 System Health Dimension Score<a class="headerlink" href="#164-system-health-dimension-score" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>SystemHealthScore = 0.40*BottleneckScore
+                  + 0.30*CongestionScore
+                  + 0.30*PredictabilityScore
+</code></pre></div>
+<hr />
+<h2 id="2-healthy-vs-unhealthy-thresholds-initial-draft">2. Healthy vs unhealthy thresholds (initial draft)<a class="headerlink" href="#2-healthy-vs-unhealthy-thresholds-initial-draft" title="Permanent link">&para;</a></h2>
+<p>These are initial org-agnostic defaults; tune them to your context.</p>
+<h3 id="delivery">Delivery<a class="headerlink" href="#delivery" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Cycle time (PR → deploy)</strong></p>
+</li>
+<li>
+<p>Excellent: &lt; 24h</p>
+</li>
+<li>Healthy: 24–72h</li>
+<li>At risk: 3–7 days</li>
+<li>
+<p>Unhealthy: &gt; 7 days</p>
+</li>
+<li>
+<p><strong>Time to first review</strong></p>
+</li>
+<li>
+<p>Excellent: &lt; 2h</p>
+</li>
+<li>Healthy: 2–8h</li>
+<li>At risk: 8–24h</li>
+<li>
+<p>Unhealthy: &gt; 24h</p>
+</li>
+<li>
+<p><strong>Deployment frequency</strong></p>
+</li>
+<li>
+<p>Excellent: multiple times per day</p>
+</li>
+<li>Healthy: daily–few times/week</li>
+<li>At risk: &lt; 1/week</li>
+<li>
+<p>Unhealthy: &lt; 1/month</p>
+</li>
+<li>
+<p><strong>Change failure rate</strong></p>
+</li>
+<li>Excellent: &lt; 10%</li>
+<li>Healthy: 10–20%</li>
+<li>At risk: 20–30%</li>
+<li>Unhealthy: &gt; 30%</li>
+</ul>
+<h3 id="code-quality-risk">Code Quality &amp; Risk<a class="headerlink" href="#code-quality-risk" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Rework rate (loc re-touched within 30 days)</strong></p>
+</li>
+<li>
+<p>Excellent: &lt; 10%</p>
+</li>
+<li>Healthy: 10–20%</li>
+<li>At risk: 20–35%</li>
+<li>
+<p>Unhealthy: &gt; 35%</p>
+</li>
+<li>
+<p><strong>Average PR size (median)</strong></p>
+</li>
+<li>
+<p>Healthy: 50–300 LOC</p>
+</li>
+<li>At risk: 300–600 LOC</li>
+<li>
+<p>Unhealthy: &gt; 600 LOC regularly</p>
+</li>
+<li>
+<p><strong>Hotspot concentration (files with high risk)</strong></p>
+</li>
+<li>Healthy: &lt; 5% of files</li>
+<li>At risk: 5–15%</li>
+<li>Unhealthy: &gt; 15%</li>
+</ul>
+<h3 id="dynamics-collaboration">Dynamics &amp; Collaboration<a class="headerlink" href="#dynamics-collaboration" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Bus factor (single-owner files &gt;75%)</strong></p>
+</li>
+<li>
+<p>Healthy: &lt; 25% of team files</p>
+</li>
+<li>At risk: 25–50%</li>
+<li>
+<p>Unhealthy: &gt; 50%</p>
+</li>
+<li>
+<p><strong>Review reciprocity</strong></p>
+</li>
+<li>Healthy: most devs in [.5, 2] given/received ratio</li>
+<li>Unhealthy: many devs only receiving or only giving</li>
+</ul>
+<h3 id="well-being">Well-being<a class="headerlink" href="#well-being" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Late-night ratio</strong></p>
+</li>
+<li>
+<p>Healthy: &lt; 5%</p>
+</li>
+<li>At risk: 5–15%</li>
+<li>
+<p>Unhealthy: &gt; 15%</p>
+</li>
+<li>
+<p><strong>Weekend ratio</strong></p>
+</li>
+<li>
+<p>Healthy: &lt; 5–10%</p>
+</li>
+<li>At risk: 10–25%</li>
+<li>
+<p>Unhealthy: &gt; 25%</p>
+</li>
+<li>
+<p><strong>Flow time</strong> (uninterrupted focus per day)</p>
+</li>
+<li>Excellent: ≥ 2–3 hours</li>
+<li>Healthy: 1–2 hours</li>
+<li>At risk: &lt; 1 hour</li>
+<li>Unhealthy: mostly fragmented 10–15 min blocks</li>
+</ul>
+<hr />
+<h2 id="3-org-wide-developer-health-score">3. Org-wide “Developer Health Score”<a class="headerlink" href="#3-org-wide-developer-health-score" title="Permanent link">&para;</a></h2>
+<p>Use the <strong>4D model</strong>:</p>
+<ol>
+<li><strong>DeliveryScore</strong></li>
+<li><strong>DurabilityScore</strong></li>
+<li><strong>WellBeingScore</strong></li>
+<li><strong>DynamicsScore</strong></li>
+</ol>
+<p>Optionally add <strong>SystemHealthScore</strong> as a 5th dimension.</p>
+<h3 id="31-dimension-aggregation">3.1 Dimension aggregation<a class="headerlink" href="#31-dimension-aggregation" title="Permanent link">&para;</a></h3>
+<p>Example weights:</p>
+<div class="highlight"><pre><span></span><code>DH_Delivery   = DeliveryScore
+DH_Durability = DurabilityScore
+DH_WellBeing  = WellBeingScore
+DH_Dynamics   = DynamicsScore
+DH_System     = SystemHealthScore
+
+DeveloperHealthScore = 0.25*DH_Delivery
+                      + 0.25*DH_Durability
+                      + 0.20*DH_WellBeing
+                      + 0.20*DH_Dynamics
+                      + 0.10*DH_System
+</code></pre></div>
+<p>Compute per org, per team, per repo, per individual (with some metric substitutions).</p>
+<hr />
+<h2 id="7-predictive-ai-models">7. Predictive AI models<a class="headerlink" href="#7-predictive-ai-models" title="Permanent link">&para;</a></h2>
+<h3 id="71-delivery-risk-prediction-pr-level">7.1 Delivery risk prediction (PR-level)<a class="headerlink" href="#71-delivery-risk-prediction-pr-level" title="Permanent link">&para;</a></h3>
+<p><strong>Goal:</strong> Predict whether a PR will be “slow” or “problematic” at creation time.</p>
+<ul>
+<li><strong>Label:</strong> <code>slow_pr = cycle_time &gt; org_p75_cycle_time</code> (binary)</li>
+<li><strong>Features:</strong> PR size, file count, hotspot involvement, author historical cycle time, team WIP, time-of-day/day-of-week, reviewer count</li>
+<li><strong>Model:</strong> Gradient boosting (XGBoost/LightGBM) or logistic regression</li>
+<li><strong>Output:</strong> <code>P(slow_pr)</code> + suggested mitigations (split PR, add reviewer, etc.)</li>
+</ul>
+<h3 id="72-burnout-risk-prediction-user-level">7.2 Burnout risk prediction (user-level)<a class="headerlink" href="#72-burnout-risk-prediction-user-level" title="Permanent link">&para;</a></h3>
+<p><strong>Goal:</strong> Predict burnout risk for each dev next 2–4 weeks.</p>
+<ul>
+<li><strong>Label:</strong> Proxy: future spike in late-night/weekend + drop in FlowScore (or HR flag if integrated)</li>
+<li><strong>Features:</strong> late-night ratio, weekend ratio, FlowScore mean/variance, streak length, review load, context switching, team stress/incident load</li>
+<li><strong>Model:</strong> time-series classification or GBM on rolling window features</li>
+<li><strong>Output:</strong> <code>BurnoutRiskProbability</code> 0–1 → 0–100 display</li>
+</ul>
+<h3 id="73-expected-cycle-time-delivery-date">7.3 Expected cycle time / delivery date<a class="headerlink" href="#73-expected-cycle-time-delivery-date" title="Permanent link">&para;</a></h3>
+<p><strong>Goal:</strong> Predict cycle time for a new PR or task.</p>
+<ul>
+<li><strong>Label:</strong> numeric cycle time</li>
+<li><strong>Features:</strong> 7.1 + repo/component + team throughput context</li>
+<li><strong>Model:</strong> regression (GBM, random forest, or linear w/ interactions)</li>
+<li><strong>Output:</strong> predicted cycle time + confidence interval</li>
+</ul>
+<h3 id="74-hotspot-evolution">7.4 Hotspot evolution<a class="headerlink" href="#74-hotspot-evolution" title="Permanent link">&para;</a></h3>
+<p><strong>Goal:</strong> Predict which files will become high-risk hotspots soon.</p>
+<ul>
+<li><strong>Label:</strong> <code>future_hotspot = hotspot_score_file &gt; threshold in next W</code></li>
+<li><strong>Features:</strong> churn, entropy, commit frequency, bug density, ownership volatility</li>
+<li><strong>Model:</strong> GBM / logistic regression</li>
+<li><strong>Output:</strong> “emerging risky modules” highlights</li>
+</ul>
+<hr />
+<h2 id="8-dashboard-mockups-textual-figma">8. Dashboard mockups (textual Figma)<a class="headerlink" href="#8-dashboard-mockups-textual-figma" title="Permanent link">&para;</a></h2>
+<h3 id="81-org-dashboard-executive-view">8.1 Org Dashboard (“Executive View”)<a class="headerlink" href="#81-org-dashboard-executive-view" title="Permanent link">&para;</a></h3>
+<p><strong>Top bar</strong></p>
+<ul>
+<li>Time range selector (Last 7 / 30 / 90 days)</li>
+<li>Org dropdown</li>
+<li>Overall Developer Health Score pill (e.g. 82/100) + sparkline</li>
+</ul>
+<p><strong>Row 1: 4 dimension cards</strong></p>
+<ul>
+<li>Delivery: score + median cycle time, deploy frequency, change failure rate</li>
+<li>Durability: score + rework %, hotspot count, defect rate</li>
+<li>Well-being: score + flow hrs/dev/day, burnout risk index</li>
+<li>Dynamics: score + review responsiveness, bus factor</li>
+</ul>
+<p><strong>Row 2: Charts</strong></p>
+<ul>
+<li>Cycle Time Breakdown (stacked: coding, review, deploy) over time</li>
+<li>Deploy Frequency vs Change Failure Rate (dual-axis)</li>
+</ul>
+<p><strong>Row 3: Tables</strong></p>
+<ul>
+<li>Teams ranked by Developer Health Score</li>
+<li>Top 10 hotspot repos/services</li>
+</ul>
+<h3 id="82-team-dashboard-eng-lead-view">8.2 Team Dashboard (“Eng Lead View”)<a class="headerlink" href="#82-team-dashboard-eng-lead-view" title="Permanent link">&para;</a></h3>
+<p><strong>Header</strong></p>
+<ul>
+<li>Team name + date range + Team Health Score</li>
+</ul>
+<p><strong>Row 1: KPIs</strong></p>
+<ul>
+<li>Delivery: cycle time, time to first review, deploys/week</li>
+<li>Quality: rework %, defect rate, top hotspots</li>
+<li>Well-being: flow hrs/dev/day, late-night %, burnout risk</li>
+<li>Dynamics: review delay, bus factor, review balance</li>
+</ul>
+<p><strong>Row 2: Charts</strong></p>
+<ul>
+<li>PR Flow Timeline (scatter: PRs by age vs cycle time, colored by size)</li>
+<li>Team Review Network (graph: nodes=devs, edges=reviews)</li>
+</ul>
+<p><strong>Row 3: People table</strong></p>
+<ul>
+<li>Dev, Impact proxy, FlowScore, BurnoutRisk, ReviewLoad, Churn%</li>
+<li>Flags: high review load, high late-night work, isolation</li>
+</ul>
+<h3 id="83-developer-dashboard-personal-view">8.3 Developer Dashboard (“Personal View”)<a class="headerlink" href="#83-developer-dashboard-personal-view" title="Permanent link">&para;</a></h3>
+<p><strong>Header</strong></p>
+<ul>
+<li>Dev name + “Your Health this month: 78/100”</li>
+</ul>
+<p><strong>Row 1: Summary</strong></p>
+<ul>
+<li>Delivery vs team, Quality vs team, Flow, Burnout risk</li>
+</ul>
+<p><strong>Row 2: Charts</strong></p>
+<ul>
+<li>Flow over time</li>
+<li>Work mix (new vs bugfix vs refactor)</li>
+</ul>
+<p><strong>Row 3: Suggestions</strong></p>
+<ul>
+<li>Auto-generated coaching insights (split PRs, protect focus blocks, reduce late-night pattern, etc.)</li>
+</ul>
+<h3 id="84-repo-service-dashboard">8.4 Repo / Service Dashboard<a class="headerlink" href="#84-repo-service-dashboard" title="Permanent link">&para;</a></h3>
+<p><strong>Header</strong></p>
+<ul>
+<li>Repo name + risk indicator</li>
+</ul>
+<p><strong>Row 1: Risk &amp; Quality</strong></p>
+<ul>
+<li>Risk gauge</li>
+<li>Hotspot file count</li>
+<li>Defects tied to repo</li>
+</ul>
+<p><strong>Row 2: Hotspots table</strong></p>
+<ul>
+<li>file path, risk, churn, contributors, linked bugs</li>
+</ul>
+<p><strong>Row 3: Ownership &amp; Bus factor</strong></p>
+<ul>
+<li>contributor distribution</li>
+<li>single-owner file visualization</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

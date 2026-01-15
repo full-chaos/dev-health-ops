@@ -24,11 +24,11 @@ class LLMProvider(Protocol):
         Returns:
             The generated completion text
         """
-        pass
+        ...
 
     async def aclose(self) -> None:
         """Close the underlying client and release resources."""
-        pass
+        ...
 
 
 def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider:
@@ -44,6 +44,9 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
               - "local": Generic OpenAI-compatible local server
               - "ollama": Ollama server (localhost:11434)
               - "lmstudio": LMStudio server (localhost:1234)
+              - "qwen": Official Qwen / DashScope API
+              - "qwen-local": Local Qwen (Ollama)
+              - "qwen-lmstudio": LM Studio Qwen
               - "mock": Deterministic mock for testing
         model: Optional model name to override provider default.
 
@@ -66,6 +69,8 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
                 name = "anthropic"
             elif os.getenv("LOCAL_LLM_BASE_URL"):
                 name = "local"
+            elif os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY"):
+                name = "qwen"
             elif os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL"):
                 name = "ollama"
             else:
@@ -120,6 +125,21 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
         from .local import LMStudioProvider
 
         return LMStudioProvider(model=model)
+
+    if name == "qwen":
+        from .qwen import QwenProvider
+
+        return QwenProvider(model=model)
+
+    if name == "qwen-local":
+        from .qwen import QwenLocalProvider
+
+        return QwenLocalProvider(model=model)
+
+    if name == "qwen-lmstudio":
+        from .qwen import QwenLMStudioProvider
+
+        return QwenLMStudioProvider(model=model)
 
     raise ValueError(f"Unknown LLM provider: {name}")
 

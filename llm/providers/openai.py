@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 
 
-def _is_json_schema_prompt(prompt: str) -> bool:
+def is_json_schema_prompt(prompt: str) -> bool:
     """Heuristic: categorization prompts include the fixed schema keys."""
     text = prompt or ""
     return (
@@ -38,8 +38,8 @@ def _is_json_schema_prompt(prompt: str) -> bool:
     )
 
 
-def _system_message(prompt: str) -> str:
-    if _is_json_schema_prompt(prompt):
+def system_message(prompt: str) -> str:
+    if is_json_schema_prompt(prompt):
         return (
             "You are a specialized JSON generator.\n"
             "Return ONLY valid JSON.\n"
@@ -54,7 +54,7 @@ def _system_message(prompt: str) -> str:
     )
 
 
-def _validate_json_or_empty(s: str) -> str:
+def validate_json_or_empty(s: str) -> str:
     """Return a compact JSON string if valid; otherwise return empty."""
     if not s or not s.strip():
         return ""
@@ -65,7 +65,7 @@ def _validate_json_or_empty(s: str) -> str:
         return ""
 
 
-def _categorization_json_schema() -> dict[str, Any]:
+def categorization_json_schema() -> dict[str, Any]:
     """Strict schema for categorization outputs."""
     keys = [
         "feature_delivery.customer",
@@ -222,7 +222,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
         max_retries = 1
 
         # Explanation payloads are large; start higher than 4096.
-        is_schema_prompt = _is_json_schema_prompt(prompt)
+        is_schema_prompt = is_json_schema_prompt(prompt)
         max_tokens = max(
             self.cfg.max_output_tokens, 4096 if not is_schema_prompt else 2048
         )
@@ -231,7 +231,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
             token_budget = max_tokens
 
             try:
-                sys_msg = _system_message(prompt)
+                sys_msg = system_message(prompt)
 
                 # Response formatting
                 if is_schema_prompt:
@@ -240,7 +240,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                             "type": "json_schema",
                             "name": "categorization",
                             "strict": True,
-                            "schema": _categorization_json_schema(),
+                            "schema": categorization_json_schema(),
                         }
                     }
                 else:
@@ -276,7 +276,7 @@ class OpenAIGPT5Provider(_OpenAIProviderBase):
                 )
                 finish_reason = incomplete_reason or "completed"
 
-                cleaned = _validate_json_or_empty(content)
+                cleaned = validate_json_or_empty(content)
 
                 logger.info(
                     "OpenAI completion (responses): model=%s, finish_reason=%s, content_length=%d, tokens=%d",
@@ -345,7 +345,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
 
         while retry_count <= max_retries:
             try:
-                sys_msg = _system_message(prompt)
+                sys_msg = system_message(prompt)
 
                 kwargs: dict[str, Any] = {
                     "model": self.cfg.model,
@@ -366,7 +366,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                 content = choice.message.content or ""
                 finish_reason = getattr(choice, "finish_reason", "unknown")
 
-                cleaned = _validate_json_or_empty(content)
+                cleaned = validate_json_or_empty(content)
 
                 logger.info(
                     "OpenAI completion (chat): model=%s, finish_reason=%s, content_length=%d, tokens=%d",
@@ -394,7 +394,7 @@ class OpenAIGPTLegacyProvider(_OpenAIProviderBase):
                     await asyncio.sleep(0.5)
                     continue
 
-                is_schema_prompt = _is_json_schema_prompt(prompt)
+                is_schema_prompt = is_json_schema_prompt(prompt)
                 logger.error(
                     "Invalid JSON returned from chat completions (reason=%s, is_schema=%s, p_len=%d, budget=%d). Sample=%s",
                     finish_reason,

@@ -46,5 +46,5 @@ async def test_gpt5_truncation_retry_logic():
     assert first_call_kwargs["max_output_tokens"] == 4096
     assert second_call_kwargs["max_output_tokens"] == 8192
 
-    # Verify _validate_json_or_empty output is compact (json.dumps)
+    # Verify validate_json_or_empty output is compact (json.dumps)
     assert result_json == json.dumps(result)

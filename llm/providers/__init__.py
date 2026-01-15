@@ -24,11 +24,11 @@ class LLMProvider(Protocol):
         Returns:
             The generated completion text
         """
-        ...
+        raise NotImplementedError()
 
     async def aclose(self) -> None:
         """Close the underlying client and release resources."""
-        ...
+        raise NotImplementedError()
 
 
 def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider:

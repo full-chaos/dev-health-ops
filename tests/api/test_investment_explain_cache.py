@@ -145,7 +145,7 @@ async def test_explain_investment_mix_mock_provider_skips_cache():
         filters = MockFilters()
 
         # Call with mock provider
-        result = await explain_investment_mix(
+        await explain_investment_mix(
             db_url="clickhouse://localhost:9000/test",
             filters=filters,
             llm_provider="mock",

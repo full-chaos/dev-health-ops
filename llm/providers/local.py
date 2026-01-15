@@ -20,7 +20,14 @@ DEFAULT_ENDPOINTS = {
     "local": "http://localhost:11434/v1",  # Default to Ollama
 }
 
-from .openai import OpenAIProviderConfig, OpenAIGPT5Provider
+from .openai import (
+    OpenAIProviderConfig,
+    OpenAIGPT5Provider,
+    is_json_schema_prompt,
+    system_message,
+    categorization_json_schema,
+    validate_json_or_empty,
+)
 
 
 class LocalProvider:
@@ -100,46 +107,61 @@ class LocalProvider:
         """
         client = self._get_client()
 
-        try:
-            is_json_prompt = (
-                "Output schema" in (prompt or "")
-                and '"subcategories"' in (prompt or "")
-                and '"evidence_quotes"' in (prompt or "")
-                and '"uncertainty"' in (prompt or "")
-            )
-            system_message = (
-                "You are a JSON generator. Return a single JSON object only. "
-                "Do not output markdown, code fences, comments, or extra text."
-                if is_json_prompt
-                else (
-                    "You are an assistant that explains precomputed work analytics. "
-                    "Use probabilistic language (appears, leans, suggests). "
-                    "Never use definitive language (is, was, detected, determined)."
-                )
-            )
-            # Build the request payload.  When the prompt contains a JSON
-            # schema we enable OpenAI's strict JSON mode.  The schema is
-            # embedded in the prompt by callers via ``build_explanation_prompt``.
-            payload: dict = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_completion_tokens": self.max_completion_tokens,
-                "temperature": self.temperature,
+        # Retry once on 400 errors (which often indicate unsupported response_format)
+        retry_count = 0
+        max_retries = 1
+        
+        is_schema_prompt = is_json_schema_prompt(prompt)
+        sys_msg = system_message(prompt)
+
+        # Start with a modern response_format if it's a JSON prompt
+        response_format: Optional[dict] = None
+        if is_schema_prompt:
+            # Try Structured Outputs if the server supports it
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "categorization",
+                    "schema": categorization_json_schema(),
+                    "strict": True,
+                },
             }
 
-            if is_json_prompt:
-                payload["response_format"] = {"type": "json_object"}
+        while retry_count <= max_retries:
+            try:
+                payload: dict = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": sys_msg},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_completion_tokens": self.max_completion_tokens,
+                    "temperature": self.temperature,
+                }
 
-            response = await client.chat.completions.create(**payload)  # type: ignore
+                if response_format:
+                    payload["response_format"] = response_format
 
-            return response.choices[0].message.content or ""
+                response = await client.chat.completions.create(**payload)  # type: ignore
 
-        except Exception as e:
-            logger.error("Local LLM API error (%s): %s", self.base_url, e)
-            raise
+                content = response.choices[0].message.content or ""
+                return validate_json_or_empty(content) if is_schema_prompt else content
+
+            except Exception as e:
+                # If we get a 400 error, it's likely that the server doesn't support
+                # the requested response_format (common with local OpenAI-compatible APIs).
+                if "400" in str(e) and response_format and retry_count < max_retries:
+                    logger.warning(
+                        "Local LLM API error (likely unsupported response_format). Retrying with text format. Error: %s",
+                        e,
+                    )
+                    # Fallback to plain text JSON request
+                    response_format = {"type": "text"}
+                    retry_count += 1
+                    continue
+                
+                logger.error("Local LLM API error (%s): %s", self.base_url, e)
+                raise
 
     async def aclose(self) -> None:
         if self._client:

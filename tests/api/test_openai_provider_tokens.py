@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from api.services.llm_providers.openai import OpenAIProvider
+from llm.providers.openai import OpenAIProvider
 
 
 class _StubResponse:

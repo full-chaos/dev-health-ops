@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock
-from api.services.llm_providers.openai import OpenAIProvider
+from llm.providers.openai import OpenAIProvider
 
 
 @pytest.mark.asyncio

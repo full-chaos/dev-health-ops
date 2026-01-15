@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, List
 
-from api.services.llm_providers import get_provider, LLMProvider
+from llm import get_provider, LLMProvider
 from work_graph.investment.llm_schema import (
     EvidenceQuote,
     LLMValidationResult,

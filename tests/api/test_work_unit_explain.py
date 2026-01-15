@@ -18,8 +18,8 @@ from api.models.schemas import (
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
-from api.services.llm_providers import get_provider
-from api.services.llm_providers.mock import MockProvider
+from llm import get_provider
+from llm.providers.mock import MockProvider
 from api.services.work_unit_explain import explain_work_unit
 
 

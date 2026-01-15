@@ -28,6 +28,7 @@ from metrics.schemas import (
     FileHotspotDaily,
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
+    InvestmentExplanationRecord,
     IssueTypeMetricsRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
@@ -750,6 +751,57 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "categorization_run_id",
             ],
             rows,
+        )
+
+    def write_investment_explanation(self, record: InvestmentExplanationRecord) -> None:
+        """Write or replace an investment explanation to the cache."""
+        self._insert_rows(
+            "investment_explanations",
+            [
+                "cache_key",
+                "explanation_json",
+                "llm_provider",
+                "llm_model",
+                "computed_at",
+            ],
+            [record],
+        )
+
+    def read_investment_explanation(
+        self, cache_key: str
+    ) -> Optional[InvestmentExplanationRecord]:
+        """
+        Read a cached investment explanation by cache_key.
+
+        Uses FINAL to ensure we get the latest version from ReplacingMergeTree.
+        Returns None if no cached explanation exists.
+        """
+        result = self.client.query(
+            """
+            SELECT
+                cache_key,
+                explanation_json,
+                llm_provider,
+                llm_model,
+                computed_at
+            FROM investment_explanations FINAL
+            WHERE cache_key = {cache_key:String}
+            LIMIT 1
+            """,
+            parameters={"cache_key": cache_key},
+        )
+        rows = result.result_rows or []
+        if not rows:
+            return None
+        row = rows[0]
+        return InvestmentExplanationRecord(
+            cache_key=str(row[0]),
+            explanation_json=str(row[1]),
+            llm_provider=str(row[2]),
+            llm_model=str(row[3]) if row[3] else None,
+            computed_at=row[4]
+            if isinstance(row[4], datetime)
+            else datetime.now(timezone.utc),
         )
 
     # -------------------------------------------------------------------------

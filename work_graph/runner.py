@@ -297,7 +297,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         default=[],
         help="Filter to specific team identifier(s).",
     )
-    from cli_shared import add_llm_arguments
+    from llm.cli import add_llm_arguments
 
     add_llm_arguments(investment_materialize)
     investment_materialize.add_argument(

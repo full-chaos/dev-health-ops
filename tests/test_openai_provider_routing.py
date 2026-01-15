@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from api.services.llm_providers.openai import (
+from llm.providers.openai import (
     OpenAIProvider,
     OpenAIGPT5Provider,
     OpenAIGPTLegacyProvider,

@@ -15,13 +15,13 @@ import logging
 import re
 from typing import Dict, List, Optional
 
-from analytics.work_unit_explainer import (
+from llm.explainers.work_unit_explainer import (
     build_explanation_prompt,
     extract_allowed_inputs,
     validate_explanation_language,
 )
 from ..models.schemas import EvidenceQuality, WorkUnitExplanation, WorkUnitInvestment
-from .llm_providers import get_provider
+from llm import get_provider
 
 logger = logging.getLogger(__name__)
 

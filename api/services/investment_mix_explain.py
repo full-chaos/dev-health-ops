@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from analytics.investment_mix_explainer import (
+from llm.explainers.investment_mix_explainer import (
     build_prompt,
     load_prompt,
     parse_and_validate_response,
@@ -24,7 +24,7 @@ from ..models.schemas import (
     InvestmentMixExplanation,
 )
 from .investment import build_investment_response
-from .llm_providers import get_provider
+from llm import get_provider
 from .work_units import build_work_unit_investments
 
 logger = logging.getLogger(__name__)

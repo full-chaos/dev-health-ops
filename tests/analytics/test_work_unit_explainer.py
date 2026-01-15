@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from analytics.work_unit_explainer import (
+from llm.explainers.work_unit_explainer import (
     CANONICAL_EXPLANATION_PROMPT,
     FORBIDDEN_WORDS,
     ExplanationInputs,
@@ -85,7 +85,11 @@ def test_extract_allowed_inputs_excludes_raw_text():
         "textual": [
             # These raw keywords should NOT appear in the output
             {"category": "feature_delivery", "keyword": "add login", "weight": 0.02},
-            {"category": "feature_delivery", "keyword": "implement auth", "weight": 0.03},
+            {
+                "category": "feature_delivery",
+                "keyword": "implement auth",
+                "weight": 0.03,
+            },
         ],
     }
 
@@ -109,6 +113,7 @@ def test_extract_allowed_inputs_excludes_raw_text():
     assert "feature_delivery" in inputs.evidence_summary.get("textual", {}).get(
         "categories_with_matches", []
     )
+
 
 def test_prompt_includes_evidence_quality_band():
     """Verify that evidence quality band is included in the prompt."""

@@ -89,6 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("LOG_LEVEL", "INFO"),
         help="Logging level (DEBUG, INFO, WARNING). Defaults to env LOG_LEVEL or INFO.",
     )
+    from llm.cli import add_llm_arguments
+
+    add_llm_arguments(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     # ---- sync ----

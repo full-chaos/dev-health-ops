@@ -54,18 +54,26 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
         ValueError: If the specified provider is not available
     """
     if name == "auto":
-        # Auto-detect based on environment variables
-        if os.getenv("OPENAI_API_KEY"):
-            name = "openai"
-        elif os.getenv("ANTHROPIC_API_KEY"):
-            name = "anthropic"
-        elif os.getenv("LOCAL_LLM_BASE_URL"):
-            name = "local"
-        elif os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL"):
-            name = "ollama"
+        # Check LLM_PROVIDER env var first
+        env_name = os.getenv("LLM_PROVIDER")
+        if env_name and env_name != "auto":
+            name = env_name
         else:
-            # Fall back to mock for development/testing
-            name = "mock"
+            # Auto-detect based on other environment variables
+            if os.getenv("OPENAI_API_KEY"):
+                name = "openai"
+            elif os.getenv("ANTHROPIC_API_KEY"):
+                name = "anthropic"
+            elif os.getenv("LOCAL_LLM_BASE_URL"):
+                name = "local"
+            elif os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL"):
+                name = "ollama"
+            else:
+                # Fall back to mock for development/testing
+                name = "mock"
+
+    if model is None:
+        model = os.getenv("LLM_MODEL")
 
     if name == "mock":
         from .mock import MockProvider
@@ -104,6 +112,11 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
         return OllamaProvider(model=model)
 
     if name == "lmstudio":
+        if model and model.startswith("openai/gpt-oss"):
+            from .local import LMStudioGPT5Provider
+
+            return LMStudioGPT5Provider(model=model)
+
         from .local import LMStudioProvider
 
         return LMStudioProvider(model=model)

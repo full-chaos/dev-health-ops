@@ -5,7 +5,9 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 
-PROMPT_PATH = Path(__file__).with_name("investment_mix_explain_prompt.txt")
+PROMPT_PATH = (
+    Path(__file__).parent.parent / "prompts" / "investment_mix_explain_prompt.txt"
+)
 logger = logging.getLogger(__name__)
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 import pytest
 
-from api.services.llm_providers.openai import OpenAIProvider
+from llm.providers.openai import OpenAIProvider
 
 
 class _StubResponse:

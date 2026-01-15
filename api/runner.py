@@ -9,6 +9,12 @@ def run_api_server(ns: argparse.Namespace) -> int:
     if ns.db:
         os.environ["DATABASE_URI"] = ns.db
 
+    # Propagate LLM settings to the API process
+    if hasattr(ns, "llm_provider"):
+        os.environ["LLM_PROVIDER"] = ns.llm_provider
+    if hasattr(ns, "model"):
+        os.environ["LLM_MODEL"] = ns.model or ""
+
     log_level = str(getattr(ns, "log_level", "") or "INFO").upper()
 
     config = uvicorn.Config(
@@ -48,4 +54,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Enable auto-reload for local development.",
     )
+    from llm.cli import add_llm_arguments
+
+    add_llm_arguments(api)
     api.set_defaults(func=run_api_server)

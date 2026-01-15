@@ -178,7 +178,7 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         from_ts=from_ts,
         to_ts=to_ts,
         repo_ids=repo_ids or None,
-        llm_provider=getattr(ns, "llm_provider", None),
+        llm_provider=getattr(ns, "llm_provider", "auto") or "auto",
         persist_evidence_snippets=getattr(ns, "persist_evidence_snippets", False),
         llm_model=getattr(ns, "model", None),
         team_ids=team_ids or None,
@@ -297,20 +297,13 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         default=[],
         help="Filter to specific team identifier(s).",
     )
-    investment_materialize.add_argument(
-        "--llm-provider",
-        default="auto",
-        help="LLM provider (auto, openai, anthropic, local, mock).",
-    )
+    from cli_shared import add_llm_arguments
+
+    add_llm_arguments(investment_materialize)
     investment_materialize.add_argument(
         "--persist-evidence-snippets",
         action="store_true",
         help="Persist extractive evidence quotes for work units.",
-    )
-    investment_materialize.add_argument(
-        "--model",
-        default=None,
-        help="Override model version label for audit fields.",
     )
     investment_materialize.add_argument(
         "--force", action="store_true", help="Force re-materialization."

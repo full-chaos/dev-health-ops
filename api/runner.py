@@ -48,4 +48,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Enable auto-reload for local development.",
     )
+    from cli_shared import add_llm_arguments
+
+    add_llm_arguments(api)
     api.set_defaults(func=run_api_server)

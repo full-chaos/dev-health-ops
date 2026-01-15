@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-import json
 
 from api.services.investment_mix_explain import (
     _compute_cache_key,

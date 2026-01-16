@@ -1,0 +1,23 @@
+{
+    "schema_version": "1.0",
+    "queries": [
+        {
+            "id": "catalog-dimensions",
+            "description": "Fetch catalog with available dimensions and measures",
+            "schema_version": "1.0",
+            "query": "query CatalogDimensions($orgId: String!) { catalog(orgId: $orgId) { dimensions { name description } measures { name description } limits { maxDays maxBuckets maxTopN } } }"
+        },
+        {
+            "id": "team-values",
+            "description": "Fetch distinct team values for catalog",
+            "schema_version": "1.0",
+            "query": "query TeamValues($orgId: String!) { catalog(orgId: $orgId, dimension: TEAM) { values { value count } } }"
+        },
+        {
+            "id": "repo-values",
+            "description": "Fetch distinct repo values for catalog",
+            "schema_version": "1.0",
+            "query": "query RepoValues($orgId: String!) { catalog(orgId: $orgId, dimension: REPO) { values { value count } } }"
+        }
+    ]
+}

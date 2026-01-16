@@ -7,6 +7,7 @@ from ..models.filters import MetricFilter
 from ..models.schemas import SankeyLink, SankeyNode, SankeyResponse
 from ..queries.client import clickhouse_client
 from ..queries.investment import (
+    fetch_investment_repo_team_edges,
     fetch_investment_subcategory_edges,
     fetch_investment_team_edges,
 )
@@ -160,4 +161,105 @@ async def build_investment_flow_response(
         distinct_team_targets=distinct_team_targets,
         distinct_repo_targets=distinct_repo_targets,
         chosen_mode=chosen_mode,
+    )
+
+
+async def build_investment_repo_team_flow_response(
+    *,
+    db_url: str,
+    filters: MetricFilter,
+    theme: Optional[str] = None,
+) -> SankeyResponse:
+    start_day, end_day, _, _ = time_window(filters)
+    start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
+    end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
+
+    theme_filters, subcategory_filters = _split_category_filters(filters)
+    if theme:
+        theme_filters = [theme]
+
+    async with clickhouse_client(db_url) as client:
+        if not await _tables_present(client, ["work_unit_investments"]):
+            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+
+        required_cols = [
+            "from_ts",
+            "to_ts",
+            "repo_id",
+            "effort_value",
+            "subcategory_distribution_json",
+            "structural_evidence_json",
+        ]
+        if not await _columns_present(client, "work_unit_investments", required_cols):
+            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+
+        scope_filter, scope_params = "", {}
+        if filters.scope.level in {"team", "repo"}:
+            repo_ids = await resolve_repo_filter_ids(client, filters)
+            scope_filter, scope_params = build_scope_filter_multi(
+                "repo", repo_ids, repo_column="repo_id"
+            )
+
+        rows = await fetch_investment_repo_team_edges(
+            client,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            scope_filter=scope_filter,
+            scope_params=scope_params,
+            themes=theme_filters or None,
+            subcategories=subcategory_filters or None,
+        )
+
+    nodes_by_name: Dict[str, SankeyNode] = {}
+    links: List[SankeyLink] = []
+
+    def add_node(name: str, group: str) -> None:
+        if name not in nodes_by_name:
+            nodes_by_name[name] = SankeyNode(name=name, group=group, value=0.0)
+
+    for row in rows:
+        sub_key = str(row.get("subcategory") or "")
+        if not sub_key:
+            continue
+        value = float(row.get("value") or 0.0)
+        if value <= 0:
+            continue
+        source_label = _format_subcategory_label(sub_key)
+        add_node(source_label, "subcategory")
+        nodes_by_name[source_label].value = (
+            nodes_by_name[source_label].value or 0.0
+        ) + value
+
+        repo_label = str(row.get("repo") or "unassigned")
+        team_label = str(row.get("team") or "").strip() or "unassigned"
+
+        if repo_label == "unassigned" and team_label != "unassigned":
+            add_node(team_label, "team")
+            nodes_by_name[team_label].value = (
+                nodes_by_name[team_label].value or 0.0
+            ) + value
+            links.append(SankeyLink(source=source_label, target=team_label, value=value))
+            continue
+
+        add_node(repo_label, "repo")
+        nodes_by_name[repo_label].value = (
+            nodes_by_name[repo_label].value or 0.0
+        ) + value
+        links.append(SankeyLink(source=source_label, target=repo_label, value=value))
+
+        if team_label != "unassigned":
+            add_node(team_label, "team")
+            nodes_by_name[team_label].value = (
+                nodes_by_name[team_label].value or 0.0
+            ) + value
+            links.append(SankeyLink(source=repo_label, target=team_label, value=value))
+
+    return SankeyResponse(
+        mode="investment",
+        nodes=list(nodes_by_name.values()),
+        links=links,
+        unit=None,
+        label="Subcategory → Repo → Team",
+        description="Allocation flow with repo-to-team mapping from work items.",
+        chosen_mode="repo_team",
     )

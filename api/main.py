@@ -59,7 +59,10 @@ from .services.explain import build_explain_response
 from .services.filtering import scope_filter_for_metric, time_window
 from .services.home import build_home_response
 from .services.investment import build_investment_response, build_investment_sunburst
-from .services.investment_flow import build_investment_flow_response
+from .services.investment_flow import (
+    build_investment_flow_response,
+    build_investment_repo_team_flow_response,
+)
 from .services.investment_mix_explain import explain_investment_mix
 from .services.opportunities import build_opportunities_response
 from .services.people import (
@@ -1022,6 +1025,19 @@ async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
         )
     except Exception as exc:
         logger.exception("Investment flow failed")
+        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+
+
+@app.post("/api/v1/investment/flow/repo-team", response_model=SankeyResponse)
+async def investment_flow_repo_team(payload: InvestmentFlowRequest) -> SankeyResponse:
+    try:
+        return await build_investment_repo_team_flow_response(
+            db_url=_db_url(),
+            filters=payload.filters,
+            theme=payload.theme,
+        )
+    except Exception as exc:
+        logger.exception("Investment repo-team flow failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 

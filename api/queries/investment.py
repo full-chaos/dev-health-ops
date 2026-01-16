@@ -158,6 +158,53 @@ async def fetch_investment_team_edges(
     return await query_dicts(client, query, params)
 
 
+async def fetch_investment_repo_team_edges(
+    client: Any,
+    *,
+    start_ts: datetime,
+    end_ts: datetime,
+    scope_filter: str,
+    scope_params: Dict[str, Any],
+    themes: Optional[List[str]] = None,
+    subcategories: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    filters: List[str] = []
+    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    params.update(scope_params)
+    if themes:
+        filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
+        params["themes"] = themes
+    if subcategories:
+        filters.append("subcategory_kv.1 IN %(subcategories)s")
+        params["subcategories"] = subcategories
+    category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    query = f"""
+        SELECT
+            subcategory_kv.1 AS subcategory,
+            ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
+            ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
+            sum(subcategory_kv.2 * effort_value) AS value
+        FROM work_unit_investments
+        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN (
+            SELECT
+                work_item_id,
+                argMax(team_id, computed_at) AS team_id,
+                argMax(team_name, computed_at) AS team_name
+            FROM work_item_cycle_times
+            GROUP BY work_item_id
+        ) AS t ON t.work_item_id = arrayElement(JSONExtract(structural_evidence_json, 'issues', 'Array(String)'), 1)
+        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+        WHERE work_unit_investments.from_ts < %(end_ts)s
+          AND work_unit_investments.to_ts >= %(start_ts)s
+        {scope_filter}
+        {category_filter}
+        GROUP BY subcategory, repo, team
+        ORDER BY value DESC
+    """
+    return await query_dicts(client, query, params)
+
+
 async def fetch_investment_sunburst(
     client: Any,
     *,

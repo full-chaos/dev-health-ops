@@ -10,9 +10,11 @@ class StubProvider:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = 0
+        self.prompts = []
 
     async def complete(self, prompt: str) -> str:
         self.calls += 1
+        self.prompts.append(prompt)
         return self.responses[self.calls - 1]
 
 
@@ -62,4 +64,5 @@ def test_repaired_status(monkeypatch):
     )
     outcome = asyncio.run(categorize_text_bundle(_bundle(), llm_provider="mock"))
     assert provider.calls == 2
+    assert "Output schema" in provider.prompts[1]
     assert outcome.status == "repaired"

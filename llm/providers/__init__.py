@@ -38,9 +38,11 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
     Args:
         name: Provider name:
               - "auto": Detect from environment (OPENAI_API_KEY, ANTHROPIC_API_KEY,
-                        LOCAL_LLM_BASE_URL, or fall back to mock)
+                        GEMINI_API_KEY, LOCAL_LLM_BASE_URL, DASHSCOPE_API_KEY/QWEN_API_KEY,
+                        OLLAMA_* or fall back to mock)
               - "openai": OpenAI API
               - "anthropic": Anthropic API
+              - "gemini": Google Gemini 3 API (OpenAI-compatible)
               - "local": Generic OpenAI-compatible local server
               - "ollama": Ollama server (localhost:11434)
               - "lmstudio": LMStudio server (localhost:1234)
@@ -67,6 +69,8 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
                 name = "openai"
             elif os.getenv("ANTHROPIC_API_KEY"):
                 name = "anthropic"
+            elif os.getenv("GEMINI_API_KEY"):
+                name = "gemini"
             elif os.getenv("LOCAL_LLM_BASE_URL"):
                 name = "local"
             elif os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY"):
@@ -105,6 +109,11 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
         return AnthropicProvider(
             api_key=api_key, model=model or "claude-3-haiku-20240307"
         )
+
+    if name == "gemini":
+        from .gemini import GeminiProvider
+
+        return GeminiProvider(model=model)
 
     if name == "local":
         from .local import LocalProvider

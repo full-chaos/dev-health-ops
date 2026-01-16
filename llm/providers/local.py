@@ -51,7 +51,7 @@ class LocalProvider:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
-        max_completion_tokens: int = 1024,
+        max_completion_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:
         """

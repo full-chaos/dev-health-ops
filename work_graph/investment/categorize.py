@@ -120,7 +120,7 @@ def _build_prompt(source_block: str) -> str:
 def _build_repair_prompt(errors: List[str], source_block: str) -> str:
     errors_text = "\n".join(f"- {err}" for err in errors)
     repair = REPAIR_PROMPT.format(errors=errors_text)
-    return f"{repair}\n\nSource text:\n{source_block}"
+    return f"{repair}\n\n{_build_prompt(source_block)}"
 
 
 async def categorize_text_bundle(

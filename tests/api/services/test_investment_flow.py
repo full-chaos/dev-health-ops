@@ -233,3 +233,152 @@ async def test_build_investment_repo_team_flow_direct_team_when_repo_missing():
         assert response.label == "Subcategory → Repo → Team"
         assert any(link.target == "Core Team" for link in response.links)
         assert not any(node.name == "unassigned" and node.group == "repo" for node in response.nodes)
+
+
+@pytest.mark.asyncio
+async def test_build_investment_flow_team_category_repo_mode_rolls_up_repos():
+    rows = [
+        {"team": "Alpha", "category": "feature_delivery", "repo": "repo-1", "value": 5},
+        {"team": "Alpha", "category": "feature_delivery", "repo": "repo-2", "value": 3},
+        {"team": "unassigned", "category": "operational", "repo": "unassigned", "value": 2},
+    ]
+
+    filters = MagicMock(spec=MetricFilter)
+    filters.scope = MagicMock()
+    filters.scope.level = "organization"
+
+    with (
+        patch(
+            "api.services.investment_flow.time_window",
+            return_value=(date(2024, 1, 1), date(2024, 1, 31), None, None),
+        ),
+        patch(
+            "api.services.investment_flow._split_category_filters",
+            return_value=([], []),
+        ),
+        patch(
+            "api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
+        patch(
+            "api.services.investment_flow._tables_present",
+            return_value=True,
+        ),
+        patch(
+            "api.services.investment_flow._columns_present",
+            return_value=True,
+        ),
+        patch(
+            "api.services.investment_flow.fetch_investment_team_category_repo_edges",
+            return_value=rows,
+        ),
+        patch(
+            "api.services.investment_flow.fetch_investment_unassigned_counts",
+            return_value={"missing_team": 1, "missing_repo": 1},
+        ),
+    ):
+        mock_client = MagicMock()
+        mock_client_cm.return_value.__aenter__.return_value = mock_client
+
+        response = await build_investment_flow_response(
+            db_url="mock://",
+            filters=filters,
+            flow_mode="team_category_repo",
+            top_n_repos=1,
+        )
+
+        assert response.flow_mode == "team_category_repo"
+        assert response.label == "Team → Category → Repo"
+        assert response.team_coverage == 0.8
+        assert response.repo_coverage == 0.8
+        assert response.coverage == {"team_coverage": 0.8, "repo_coverage": 0.8}
+        assert response.unassigned_reasons == {"missing_team": 1, "missing_repo": 1}
+        assert any(node.name == "Other repos" and node.group == "repo" for node in response.nodes)
+        assert any(node.name == "Unassigned team" and node.group == "team" for node in response.nodes)
+        assert any(node.name == "Unassigned repo" and node.group == "repo" for node in response.nodes)
+
+
+@pytest.mark.asyncio
+async def test_build_investment_flow_team_subcategory_repo_mode_requires_drill():
+    filters = MagicMock(spec=MetricFilter)
+    filters.scope = MagicMock()
+    filters.scope.level = "organization"
+
+    with (
+        patch(
+            "api.services.investment_flow.time_window",
+            return_value=(date(2024, 1, 1), date(2024, 1, 31), None, None),
+        ),
+        patch(
+            "api.services.investment_flow._split_category_filters",
+            return_value=([], []),
+        ),
+    ):
+        with pytest.raises(ValueError):
+            await build_investment_flow_response(
+                db_url="mock://",
+                filters=filters,
+                flow_mode="team_subcategory_repo",
+            )
+
+
+@pytest.mark.asyncio
+async def test_build_investment_flow_team_subcategory_repo_mode():
+    rows = [
+        {
+            "team": "Alpha",
+            "subcategory": "feature_delivery.customer",
+            "repo": "repo-1",
+            "value": 5,
+        }
+    ]
+
+    filters = MagicMock(spec=MetricFilter)
+    filters.scope = MagicMock()
+    filters.scope.level = "organization"
+
+    with (
+        patch(
+            "api.services.investment_flow.time_window",
+            return_value=(date(2024, 1, 1), date(2024, 1, 31), None, None),
+        ),
+        patch(
+            "api.services.investment_flow._split_category_filters",
+            return_value=([], []),
+        ),
+        patch(
+            "api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
+        patch(
+            "api.services.investment_flow._tables_present",
+            return_value=True,
+        ),
+        patch(
+            "api.services.investment_flow._columns_present",
+            return_value=True,
+        ),
+        patch(
+            "api.services.investment_flow.fetch_investment_team_subcategory_repo_edges",
+            return_value=rows,
+        ),
+        patch(
+            "api.services.investment_flow.fetch_investment_unassigned_counts",
+            return_value={"missing_team": 0, "missing_repo": 0},
+        ),
+    ):
+        mock_client = MagicMock()
+        mock_client_cm.return_value.__aenter__.return_value = mock_client
+
+        response = await build_investment_flow_response(
+            db_url="mock://",
+            filters=filters,
+            flow_mode="team_subcategory_repo",
+            drill_category="Feature Delivery",
+        )
+
+        assert response.flow_mode == "team_subcategory_repo"
+        assert response.label == "Team → Subcategory → Repo"
+        assert any(
+            node.name == "Feature Delivery · Customer"
+            and node.group == "subcategory"
+            for node in response.nodes
+        )

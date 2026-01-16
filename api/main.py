@@ -1027,7 +1027,12 @@ async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
             db_url=_db_url(),
             filters=payload.filters,
             theme=payload.theme,
+            flow_mode=payload.flow_mode,
+            drill_category=payload.drill_category,
+            top_n_repos=payload.top_n_repos,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Investment flow failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc

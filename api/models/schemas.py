@@ -494,6 +494,11 @@ class SankeyResponse(BaseModel):
     distinct_team_targets: Optional[int] = None
     distinct_repo_targets: Optional[int] = None
     chosen_mode: Optional[str] = None
+    coverage: Optional[Dict[str, float]] = None
+    unassigned_reasons: Optional[Dict[str, int]] = None
+    flow_mode: Optional[str] = None
+    drill_category: Optional[str] = None
+    top_n_repos: Optional[int] = None
 
 
 # Aggregated flame graph models (hierarchical tree format)

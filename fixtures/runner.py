@@ -244,7 +244,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
     if ns.with_metrics:
         # Use the production daily metrics job so fixtures match real outputs.
-        run_daily_metrics_job(
+        await asyncio.to_thread(
+            run_daily_metrics_job,
             db_url=ns.db,
             day=now.date(),
             backfill_days=ns.days,

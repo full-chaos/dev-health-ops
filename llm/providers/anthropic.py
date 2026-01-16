@@ -19,7 +19,7 @@ class AnthropicProvider:
         self,
         api_key: str,
         model: str = "claude-3-haiku-20240307",
-        max_tokens: int = 1024,
+        max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:
         """

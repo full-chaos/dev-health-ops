@@ -44,6 +44,7 @@ dependencies = [
   "radon",
   "openai",
   "anthropic",
+  "strawberry-graphql[fastapi]",
 ]
 
 [project.optional-dependencies]
@@ -95,6 +96,11 @@ packages = [
   "work_graph.extractors",
   "work_graph.investment",
   "work_graph.writers",
+  "api.graphql",
+  "api.graphql.sql",
+  "api.graphql.models",
+  "api.graphql.resolvers",
+  "api.graphql.loaders",
 ]
 py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
 

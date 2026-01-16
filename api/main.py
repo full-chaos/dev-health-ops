@@ -76,6 +76,7 @@ from .services.quadrant import build_quadrant_response
 from .services.sankey import build_sankey_response
 from .services.work_units import build_work_unit_investments
 from .services.work_unit_explain import explain_work_unit
+from .graphql.app import create_graphql_app
 
 HOME_CACHE = TTLCache(ttl_seconds=60)
 EXPLAIN_CACHE = TTLCache(ttl_seconds=120)
@@ -178,6 +179,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount GraphQL analytics endpoint
+graphql_app = create_graphql_app()
+app.include_router(graphql_app, prefix="/graphql")
 
 
 @app.get("/api/v1/health", response_model=HealthResponse)

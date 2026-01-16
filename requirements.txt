@@ -27,3 +27,4 @@ uvicorn
 radon
 openai
 anthropic
+strawberry-graphql[fastapi]

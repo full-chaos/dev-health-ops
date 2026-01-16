@@ -41,7 +41,7 @@ _CACHE_LOADED = False
 
 def _load_registry() -> None:
     """Load the persisted query registry from disk."""
-    global _QUERY_CACHE, _CACHE_LOADED
+    global _CACHE_LOADED
 
     if _CACHE_LOADED:
         return

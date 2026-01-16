@@ -299,12 +299,12 @@ class TestCompileCatalogValues:
 class TestDimensionDbColumn:
     """Tests for Dimension.db_column mapping."""
 
-    def test_all_dimensions_have_columns(self):
+    @pytest.mark.parametrize("dim", list(Dimension))
+    def test_all_dimensions_have_columns(self, dim):
         """Test that all dimensions map to database columns."""
-        for dim in Dimension:
-            col = Dimension.db_column(dim)
-            assert col is not None
-            assert len(col) > 0
+        col = Dimension.db_column(dim)
+        assert col is not None
+        assert len(col) > 0
 
     def test_specific_mappings(self):
         """Test specific dimension to column mappings."""
@@ -319,12 +319,12 @@ class TestDimensionDbColumn:
 class TestMeasureDbExpression:
     """Tests for Measure.db_expression mapping."""
 
-    def test_all_measures_have_expressions(self):
+    @pytest.mark.parametrize("measure", list(Measure))
+    def test_all_measures_have_expressions(self, measure):
         """Test that all measures map to SQL expressions."""
-        for measure in Measure:
-            expr = Measure.db_expression(measure)
-            assert expr is not None
-            assert len(expr) > 0
+        expr = Measure.db_expression(measure)
+        assert expr is not None
+        assert len(expr) > 0
 
     def test_specific_expressions(self):
         """Test specific measure to SQL expression mappings."""

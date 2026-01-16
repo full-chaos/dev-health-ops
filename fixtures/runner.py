@@ -380,12 +380,10 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                             if start_dt <= s["committer_when"] < end_dt
                         ]
                         day_work_items = [
-                            wi
-                            for wi in work_items
-                            if start_dt <= wi.created_at < end_dt
+                            wi for wi in work_items if wi.created_at < end_dt
                         ]
                         day_transitions = [
-                            t for t in transitions if start_dt <= t.occurred_at < end_dt
+                            t for t in transitions if t.occurred_at < end_dt
                         ]
 
                         day_prs = [

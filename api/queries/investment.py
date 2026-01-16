@@ -179,21 +179,41 @@ async def fetch_investment_repo_team_edges(
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
     query = f"""
+        WITH unit_team AS (
+            SELECT
+                work_unit_id,
+                argMax(team, cnt) AS team
+            FROM (
+                SELECT
+                    work_unit_investments.work_unit_id AS work_unit_id,
+                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
+                    count() AS cnt
+                FROM work_unit_investments
+                ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
+                LEFT JOIN (
+                    SELECT
+                        work_item_id,
+                        argMax(team_id, computed_at) AS team_id,
+                        argMax(team_name, computed_at) AS team_name
+                    FROM work_item_cycle_times
+                    GROUP BY work_item_id
+                ) AS t ON t.work_item_id = issue_id
+                WHERE work_unit_investments.from_ts < %(end_ts)s
+                  AND work_unit_investments.to_ts >= %(start_ts)s
+                {scope_filter}
+                {category_filter}
+                GROUP BY work_unit_id, team
+            )
+            GROUP BY work_unit_id
+        )
         SELECT
             subcategory_kv.1 AS subcategory,
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
-            ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
+            ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
         LEFT JOIN repos AS r ON r.id = repo_id
-        LEFT JOIN (
-            SELECT
-                work_item_id,
-                argMax(team_id, computed_at) AS team_id,
-                argMax(team_name, computed_at) AS team_name
-            FROM work_item_cycle_times
-            GROUP BY work_item_id
-        ) AS t ON t.work_item_id = arrayElement(JSONExtract(structural_evidence_json, 'issues', 'Array(String)'), 1)
+        LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s

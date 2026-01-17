@@ -118,10 +118,11 @@ async def query_dicts(
             f"Invalid ClickHouse client: {type(client).__name__} (no 'query' method)"
         )
 
+    safe_params = {k: _sanitize_for_log(v) for k, v in (params or {}).items()}
     logger.debug(
         "Executing query: %s with params %s",
         _sanitize_for_log(query),
-        params,
+        safe_params,
     )
     result = client.query(query, parameters=params)
     if inspect.isawaitable(result):

@@ -23,6 +23,24 @@ def _rows_to_dicts(result: Any) -> List[Dict[str, Any]]:
     return [dict(zip(col_names, row)) for row in rows]
 
 
+def _sanitize_for_log(value: Any) -> Any:
+    """
+    Best-effort sanitization of values for safe logging.
+
+    Removes CR/LF characters from strings to prevent log injection and applies
+    the same recursively to containers. Non-container, non-string values are
+    returned unchanged.
+    """
+    if isinstance(value, str):
+        return value.replace("\r", "").replace("\n", "")
+    if isinstance(value, dict):
+        return {k: _sanitize_for_log(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        sanitized_seq = [_sanitize_for_log(v) for v in value]
+        return type(value)(sanitized_seq)
+    return value
+
+
 def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
     """
     Sanitize a value for safe logging by removing newlines and truncating long strings.
@@ -87,7 +105,8 @@ async def close_global_client() -> None:
                 await close()
             else:
                 close()
-    _SHARED_CLIENT = None
+    safe_params = _sanitize_for_log(params)
+    logger.debug("Executing query: %s with params %s", query, safe_params)
     _SHARED_DSN = None
 
 

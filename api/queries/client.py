@@ -30,7 +30,8 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
       spaces, and strings longer than ``max_length`` are truncated with a
       ``"...[truncated]"`` suffix.
     - Dicts, lists, and tuples: values/elements are sanitized recursively.
-    - Other types are returned unchanged.
+    - Other types are converted to strings and sanitized in the same way
+      as regular strings.
     """
     if isinstance(value, str):
         cleaned = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
@@ -42,7 +43,8 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
             k: _sanitize_for_log(v, max_length=max_length) for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
-        sanitized_seq = [_sanitize_for_log(v, max_length=max_length) for v in value]
+    # For non-string scalars, log a sanitized string representation
+    return _sanitize_for_log(str(value), max_length=max_length)
         return type(value)(sanitized_seq)
     return value
 
@@ -111,8 +113,8 @@ async def query_dicts(
             f"Invalid ClickHouse client: {type(client).__name__} (no 'query' method)"
         )
 
-    safe_params = {k: _sanitize_for_log(v) for k, v in (params or {}).items()}
-    logger.debug(
+        query,
+        _sanitize_for_log(safe_params),
         "Executing query: %s with params %s",
         _sanitize_for_log(params),
         safe_params,

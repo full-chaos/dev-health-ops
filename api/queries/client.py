@@ -21,36 +21,28 @@ def _rows_to_dicts(result: Any) -> List[Dict[str, Any]]:
     return [dict(zip(col_names, row)) for row in rows]
 
 
-def _sanitize_for_log(value: Any) -> Any:
-    """
-    Best-effort sanitization of values for safe logging.
-
-    Removes CR/LF characters from strings to prevent log injection and applies
-    the same recursively to containers. Non-container, non-string values are
-    returned unchanged.
-    """
-    if isinstance(value, str):
-        return value.replace("\r", "").replace("\n", "")
-    if isinstance(value, dict):
-        return {k: _sanitize_for_log(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        sanitized_seq = [_sanitize_for_log(v) for v in value]
-        return type(value)(sanitized_seq)
-    return value
-
-
 def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
     """
-    Sanitize a value for safe logging by removing newlines and truncating long strings.
+    Sanitize a value for safe logging by removing CR/LF characters and
+    truncating long strings. Applies recursively to common container types.
 
-    Non-string values are returned unchanged.
+    - Strings: newline and carriage-return characters are replaced with
+      spaces, and strings longer than ``max_length`` are truncated with a
+      ``"...[truncated]"`` suffix.
+    - Dicts, lists, and tuples: values/elements are sanitized recursively.
+    - Other types are returned unchanged.
     """
-    if not isinstance(value, str):
-        return value
-    cleaned = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-    if len(cleaned) > max_length:
-        cleaned = cleaned[:max_length] + "...[truncated]"
-    return cleaned
+    if isinstance(value, str):
+        cleaned = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+        if len(cleaned) > max_length:
+            cleaned = cleaned[:max_length] + "...[truncated]"
+        return cleaned
+    if isinstance(value, dict):
+        return {k: _sanitize_for_log(v, max_length=max_length) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        sanitized_seq = [_sanitize_for_log(v, max_length=max_length) for v in value]
+        return type(value)(sanitized_seq)
+    return value
 
 
 async def get_global_client(dsn: str) -> Any:
@@ -103,8 +95,6 @@ async def close_global_client() -> None:
                 await close()
             else:
                 close()
-    safe_params = _sanitize_for_log(params)
-    logger.debug("Executing query: %s with params %s", query, safe_params)
     _SHARED_DSN = None
 
 
@@ -121,7 +111,7 @@ async def query_dicts(
     safe_params = {k: _sanitize_for_log(v) for k, v in (params or {}).items()}
     logger.debug(
         "Executing query: %s with params %s",
-        _sanitize_for_log(query),
+        _sanitize_for_log(params),
         safe_params,
     )
     result = client.query(query, parameters=params)

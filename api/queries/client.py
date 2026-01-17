@@ -29,23 +29,37 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
     - Strings: newline and carriage-return characters are replaced with
       spaces, and strings longer than ``max_length`` are truncated with a
       ``"...[truncated]"`` suffix.
-    - Dicts, lists, and tuples: values/elements are sanitized recursively.
+    - Dicts: keys and values are sanitized recursively.
+    - Lists, tuples, and sets: elements are sanitized recursively and
+      returned as a list.
     - Other types are converted to strings and sanitized in the same way
       as regular strings.
     """
-    if isinstance(value, str):
-        cleaned = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    def _clean_scalar(text: str) -> str:
+        cleaned = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
         if len(cleaned) > max_length:
             cleaned = cleaned[:max_length] + "...[truncated]"
         return cleaned
+
+    if isinstance(value, str):
+        return _clean_scalar(value)
+
     if isinstance(value, dict):
-        return {
-            k: _sanitize_for_log(v, max_length=max_length) for k, v in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        # For non-string scalars, log a sanitized string representation
-        return _sanitize_for_log(str(value), max_length=max_length)
-    return value
+        sanitized_dict: Dict[Any, Any] = {}
+        for k, v in value.items():
+            # Sanitize keys via their string representation to avoid
+            # introducing control characters into log output.
+            sanitized_key = _clean_scalar(str(k))
+            sanitized_dict[sanitized_key] = _sanitize_for_log(v, max_length=max_length)
+        return sanitized_dict
+
+    if isinstance(value, (list, tuple, set)):
+        # Preserve order where applicable but always sanitize elements.
+        return [_sanitize_for_log(elem, max_length=max_length) for elem in value]
+
+    # Fallback for scalars and other objects: log a sanitized string
+    # representation to ensure no control characters appear in logs.
+    return _clean_scalar(str(value))
 
 
 async def get_global_client(dsn: str) -> Any:

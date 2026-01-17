@@ -61,7 +61,6 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
     # representation to ensure no control characters appear in logs.
     return _clean_scalar(str(value))
 
-
 async def get_global_client(dsn: str) -> Any:
     """Get the shared ClickHouse client, initializing if needed."""
     global _SHARED_CLIENT, _SHARED_DSN
@@ -121,6 +120,10 @@ async def query_dicts(
 ) -> List[Dict[str, Any]]:
     if client is None:
         raise RuntimeError("ClickHouse client is None")
+    if not hasattr(client, "query"):
+        raise RuntimeError(
+            f"Invalid ClickHouse client: {type(client).__name__} (no 'query' method)"
+        )
     safe_query = _sanitize_for_log(query)
     safe_params = {
         _sanitize_for_log(k): _sanitize_for_log(v) for k, v in (params or {}).items()

@@ -108,12 +108,12 @@ async def query_dicts(
 ) -> List[Dict[str, Any]]:
     if client is None:
         raise RuntimeError("ClickHouse client is None")
-    if not hasattr(client, "query"):
-        raise RuntimeError(
-            f"Invalid ClickHouse client: {type(client).__name__} (no 'query' method)"
-        )
-
-        query,
+    safe_query = _sanitize_for_log(query)
+    safe_params = {
+        _sanitize_for_log(k): _sanitize_for_log(v)
+        for k, v in (params or {}).items()
+    }
+    logger.debug("Executing query: %s with params %s", safe_query, safe_params)
         _sanitize_for_log(safe_params),
         "Executing query: %s with params %s",
         _sanitize_for_log(params),

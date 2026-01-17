@@ -6,7 +6,9 @@ Tests the LLM explanation service and mock provider.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -128,21 +130,9 @@ def test_mock_provider_avoids_forbidden_language():
 
 def test_get_provider_returns_mock_without_api_keys():
     """Test that get_provider returns mock when no API keys are set."""
-    import os
-
-    # Ensure no API keys are set
-    old_openai = os.environ.pop("OPENAI_API_KEY", None)
-    old_anthropic = os.environ.pop("ANTHROPIC_API_KEY", None)
-
-    try:
+    with patch.dict(os.environ, {}, clear=True):
         provider = get_provider("auto")
         assert isinstance(provider, MockProvider)
-    finally:
-        # Restore
-        if old_openai:
-            os.environ["OPENAI_API_KEY"] = old_openai
-        if old_anthropic:
-            os.environ["ANTHROPIC_API_KEY"] = old_anthropic
 
 
 def test_get_provider_explicit_mock():

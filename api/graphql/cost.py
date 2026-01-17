@@ -17,9 +17,9 @@ class CostLimits:
     prevent abuse of the analytics API.
     """
 
-    max_days: int = 365
+    max_days: int = 3650
     max_buckets: int = 100
-    max_top_n: int = 50
+    max_top_n: int = 100
     max_sankey_nodes: int = 100
     max_sankey_edges: int = 500
     max_sub_requests: int = 10

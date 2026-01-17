@@ -9,8 +9,8 @@ from typing import Optional
 from fastapi import Request
 from strawberry.fastapi import GraphQLRouter
 
-from .context import GraphQLContext, build_context
-from .persisted import get_schema_version, load_persisted_query
+from .context import GraphQLContext
+from .persisted import get_schema_version
 from .schema import schema
 
 
@@ -23,6 +23,7 @@ async def get_context(request: Request) -> GraphQLContext:
 
     Extracts org_id from headers or query params, and sets up DB connection.
     """
+    logger.debug("Entering get_context")
     # Get org_id from header or query param
     org_id = request.headers.get("X-Org-Id", "")
     if not org_id:
@@ -44,10 +45,11 @@ async def get_context(request: Request) -> GraphQLContext:
 
     # Get ClickHouse client
     try:
-        from api.queries.client import clickhouse_client
+        from api.queries.client import get_global_client
+        import asyncio
 
-        async with clickhouse_client(db_url) as client:
-            context.client = client
+        logger.debug("Getting ClickHouse client for %s", db_url)
+        context.client = await asyncio.wait_for(get_global_client(db_url), timeout=5.0)
     except Exception as e:
         logger.warning("Failed to get ClickHouse client: %s", e)
         context.client = None
@@ -55,7 +57,9 @@ async def get_context(request: Request) -> GraphQLContext:
     return context
 
 
-def create_graphql_app(db_url: Optional[str] = None) -> GraphQLRouter:
+def create_graphql_app(
+    db_url: Optional[str] = None,
+) -> GraphQLRouter[GraphQLContext, None]:
     """
     Create the GraphQL router for the analytics API.
 

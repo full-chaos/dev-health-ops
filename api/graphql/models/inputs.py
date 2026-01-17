@@ -77,6 +77,7 @@ class SankeyRequestInput:
     date_range: DateRangeInput
     max_nodes: int = 100
     max_edges: int = 500
+    use_investment: Optional[bool] = None
 
 
 @strawberry.input
@@ -86,3 +87,4 @@ class AnalyticsRequestInput:
     timeseries: List[TimeseriesRequestInput] = strawberry.field(default_factory=list)
     breakdowns: List[BreakdownRequestInput] = strawberry.field(default_factory=list)
     sankey: Optional[SankeyRequestInput] = None
+    use_investment: Optional[bool] = None

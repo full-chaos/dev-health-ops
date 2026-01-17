@@ -6,6 +6,8 @@ Column names are validated against allowlists before being inserted.
 
 from __future__ import annotations
 
+from typing import Any, List
+
 from .validate import BucketInterval, Dimension, Measure
 
 
@@ -13,115 +15,91 @@ def timeseries_template(
     dimension: Dimension,
     measure: Measure,
     interval: BucketInterval,
+    source_table: str = "investment_metrics_daily",
+    date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
+    extra_clauses: str = "",
+    use_investment: bool = False,
 ) -> str:
-    """
-    Generate SQL template for timeseries query.
-
-    The template uses ClickHouse date_trunc for bucketing and
-    expects parameters: org_id, start_date, end_date.
-
-    Args:
-        dimension: Validated dimension enum.
-        measure: Validated measure enum.
-        interval: Validated bucket interval enum.
-
-    Returns:
-        Parameterized SQL string.
-    """
-    dim_col = Dimension.db_column(dimension)
-    measure_expr = Measure.db_expression(measure)
+    """Generate SQL template for timeseries query."""
+    dim_col = Dimension.db_column(dimension, use_investment=use_investment)
+    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
     trunc_unit = BucketInterval.date_trunc_unit(interval)
+
+    # Extract date column from filter for truncating
+    date_col = date_filter.split(" ")[0]
 
     return f"""
 SELECT
-    date_trunc('{trunc_unit}', event_date) AS bucket,
+    date_trunc('{trunc_unit}', {date_col}) AS bucket,
     {dim_col} AS dimension_value,
     {measure_expr} AS value
-FROM work_unit_daily
-WHERE org_id = {{org_id:String}}
-  AND event_date >= {{start_date:Date}}
-  AND event_date <= {{end_date:Date}}
+FROM {source_table}
+{extra_clauses}
+WHERE {date_filter}
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC
-SETTINGS max_execution_time = {{timeout:UInt32}}
+SETTINGS max_execution_time = %(timeout)s
 """
 
 
 def breakdown_template(
     dimension: Dimension,
     measure: Measure,
+    source_table: str = "investment_metrics_daily",
+    date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
+    extra_clauses: str = "",
+    use_investment: bool = False,
 ) -> str:
-    """
-    Generate SQL template for breakdown (top-N aggregation) query.
-
-    The template expects parameters: org_id, start_date, end_date, top_n.
-
-    Args:
-        dimension: Validated dimension enum.
-        measure: Validated measure enum.
-
-    Returns:
-        Parameterized SQL string.
-    """
-    dim_col = Dimension.db_column(dimension)
-    measure_expr = Measure.db_expression(measure)
+    """Generate SQL template for breakdown (top-N aggregation) query."""
+    dim_col = Dimension.db_column(dimension, use_investment=use_investment)
+    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
 
     return f"""
 SELECT
     {dim_col} AS dimension_value,
     {measure_expr} AS value
-FROM work_unit_daily
-WHERE org_id = {{org_id:String}}
-  AND event_date >= {{start_date:Date}}
-  AND event_date <= {{end_date:Date}}
+FROM {source_table}
+{extra_clauses}
+WHERE {date_filter}
 GROUP BY dimension_value
 ORDER BY value DESC
-LIMIT {{top_n:UInt32}}
-SETTINGS max_execution_time = {{timeout:UInt32}}
+LIMIT %(top_n)s
+SETTINGS max_execution_time = %(timeout)s
 """
 
 
 def sankey_nodes_template(
-    dimensions: list[Dimension],
+    dimensions: List[Dimension],
     measure: Measure,
+    source_table: str = "investment_metrics_daily",
+    date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
+    extra_clauses: str = "",
+    use_investment: bool = False,
 ) -> str:
-    """
-    Generate SQL template for Sankey nodes query.
+    """Generate SQL template for Sankey nodes query."""
+    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
 
-    Fetches distinct values for each dimension in the path.
-    The template expects parameters: org_id, start_date, end_date, limit_per_dim.
-
-    Args:
-        dimensions: List of validated dimension enums.
-        measure: Validated measure enum.
-
-    Returns:
-        Parameterized SQL string.
-    """
-    # Build UNION ALL for each dimension
     union_parts = []
-    for i, dim in enumerate(dimensions):
-        dim_col = Dimension.db_column(dim)
-        measure_expr = Measure.db_expression(measure)
+    for dim in dimensions:
+        dim_col = Dimension.db_column(dim, use_investment=use_investment)
         part = f"""
 SELECT
-    '{dim.value}' AS dimension,
-    {dim_col} AS node_id,
+    '{dim.value.upper()}' AS dimension,
+    toString({dim_col}) AS node_id,
     {measure_expr} AS value
-FROM work_unit_daily
-WHERE org_id = {{org_id:String}}
-  AND event_date >= {{start_date:Date}}
-  AND event_date <= {{end_date:Date}}
+FROM {source_table}
+{extra_clauses}
+WHERE {date_filter}
 GROUP BY node_id
 ORDER BY value DESC
-LIMIT {{limit_per_dim:UInt32}}
+LIMIT %(limit_per_dim)s
 """
         union_parts.append(part)
 
     template = " UNION ALL ".join(union_parts)
     return f"""
 {template}
-SETTINGS max_execution_time = {{timeout:UInt32}}
+SETTINGS max_execution_time = %(timeout)s
 """
 
 
@@ -129,68 +107,55 @@ def sankey_edges_template(
     source_dim: Dimension,
     target_dim: Dimension,
     measure: Measure,
+    source_table: str = "investment_metrics_daily",
+    date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
+    extra_clauses: str = "",
+    use_investment: bool = False,
 ) -> str:
-    """
-    Generate SQL template for Sankey edges query.
-
-    Computes aggregated flow between source and target dimensions.
-    The template expects parameters: org_id, start_date, end_date, max_edges.
-
-    Args:
-        source_dim: Source dimension enum.
-        target_dim: Target dimension enum.
-        measure: Validated measure enum.
-
-    Returns:
-        Parameterized SQL string.
-    """
-    source_col = Dimension.db_column(source_dim)
-    target_col = Dimension.db_column(target_dim)
-    measure_expr = Measure.db_expression(measure)
+    """Generate SQL template for Sankey edges query."""
+    source_col = Dimension.db_column(source_dim, use_investment=use_investment)
+    target_col = Dimension.db_column(target_dim, use_investment=use_investment)
+    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
 
     return f"""
 SELECT
-    {source_col} AS source,
-    {target_col} AS target,
+    '{source_dim.value.upper()}' AS source_dimension,
+    '{target_dim.value.upper()}' AS target_dimension,
+    toString({source_col}) AS source,
+    toString({target_col}) AS target,
     {measure_expr} AS value
-FROM work_unit_daily
-WHERE org_id = {{org_id:String}}
-  AND event_date >= {{start_date:Date}}
-  AND event_date <= {{end_date:Date}}
+FROM {source_table}
+{extra_clauses}
+WHERE {date_filter}
   AND {source_col} IS NOT NULL
   AND {target_col} IS NOT NULL
 GROUP BY source, target
 ORDER BY value DESC
-LIMIT {{max_edges:UInt32}}
-SETTINGS max_execution_time = {{timeout:UInt32}}
+LIMIT %(max_edges)s
+SETTINGS max_execution_time = %(timeout)s
 """
 
 
-def catalog_values_template(dimension: Dimension) -> str:
-    """
-    Generate SQL template for fetching distinct dimension values.
-
-    Used by the catalog resolver to show available values.
-    The template expects parameters: org_id, limit.
-
-    Args:
-        dimension: Validated dimension enum.
-
-    Returns:
-        Parameterized SQL string.
-    """
-    dim_col = Dimension.db_column(dimension)
+def catalog_values_template(
+    dimension: Dimension,
+    source_table: str = "investment_metrics_daily",
+    extra_clauses: str = "",
+    use_investment: bool = False,
+    **kwargs: Any,
+) -> str:
+    """Generate SQL template for fetching distinct dimension values."""
+    dim_col = Dimension.db_column(dimension, use_investment=use_investment)
 
     return f"""
 SELECT
-    {dim_col} AS value,
+    toString({dim_col}) AS value,
     COUNT(*) AS count
-FROM work_unit_daily
-WHERE org_id = {{org_id:String}}
-  AND {dim_col} IS NOT NULL
+FROM {source_table}
+{extra_clauses}
+WHERE {dim_col} IS NOT NULL
   AND {dim_col} != ''
 GROUP BY value
 ORDER BY count DESC
-LIMIT {{limit:UInt32}}
-SETTINGS max_execution_time = {{timeout:UInt32}}
+LIMIT %(limit)s
+SETTINGS max_execution_time = %(timeout)s
 """

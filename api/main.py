@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 import logging
 import os
-from typing import List
+from typing import List, Literal, cast
 
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -59,7 +59,10 @@ from .services.explain import build_explain_response
 from .services.filtering import scope_filter_for_metric, time_window
 from .services.home import build_home_response
 from .services.investment import build_investment_response, build_investment_sunburst
-from .services.investment_flow import build_investment_flow_response
+from .services.investment_flow import (
+    build_investment_flow_response,
+    build_investment_repo_team_flow_response,
+)
 from .services.investment_mix_explain import explain_investment_mix
 from .services.opportunities import build_opportunities_response
 from .services.people import (
@@ -139,7 +142,12 @@ def _filters_from_query(
             start_date=start_date,
             end_date=end_date,
         ),
-        scope=ScopeFilter(level=scope_type, ids=[scope_id] if scope_id else []),
+        scope=ScopeFilter(
+            level=cast(
+                Literal["org", "team", "repo", "service", "developer"], scope_type
+            ),
+            ids=[scope_id] if scope_id else [],
+        ),
     )
 
 
@@ -273,6 +281,7 @@ async def meta() -> MetaResponse | JSONResponse:
                 "/api/v1/sankey",
                 "/api/v1/investment",
                 "/api/v1/opportunities",
+                "/graphql",
             ],
         )
     except Exception as exc:
@@ -479,7 +488,7 @@ async def work_unit_explain_endpoint(
     end_date: date | None = None,
     llm_provider: str = "auto",
     llm_model: str | None = None,
-) -> WorkUnitExplanation:
+) -> WorkUnitExplanation | StreamingResponse:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
 
@@ -1024,9 +1033,27 @@ async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
             db_url=_db_url(),
             filters=payload.filters,
             theme=payload.theme,
+            flow_mode=payload.flow_mode,
+            drill_category=payload.drill_category,
+            top_n_repos=payload.top_n_repos,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Investment flow failed")
+        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+
+
+@app.post("/api/v1/investment/flow/repo-team", response_model=SankeyResponse)
+async def investment_flow_repo_team(payload: InvestmentFlowRequest) -> SankeyResponse:
+    try:
+        return await build_investment_repo_team_flow_response(
+            db_url=_db_url(),
+            filters=payload.filters,
+            theme=payload.theme,
+        )
+    except Exception as exc:
+        logger.exception("Investment repo-team flow failed")
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 

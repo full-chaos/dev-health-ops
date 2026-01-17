@@ -43,9 +43,8 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
             k: _sanitize_for_log(v, max_length=max_length) for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
-    # For non-string scalars, log a sanitized string representation
-    return _sanitize_for_log(str(value), max_length=max_length)
-        return type(value)(sanitized_seq)
+        # For non-string scalars, log a sanitized string representation
+        return _sanitize_for_log(str(value), max_length=max_length)
     return value
 
 
@@ -110,15 +109,9 @@ async def query_dicts(
         raise RuntimeError("ClickHouse client is None")
     safe_query = _sanitize_for_log(query)
     safe_params = {
-        _sanitize_for_log(k): _sanitize_for_log(v)
-        for k, v in (params or {}).items()
+        _sanitize_for_log(k): _sanitize_for_log(v) for k, v in (params or {}).items()
     }
     logger.debug("Executing query: %s with params %s", safe_query, safe_params)
-        _sanitize_for_log(safe_params),
-        "Executing query: %s with params %s",
-        _sanitize_for_log(params),
-        safe_params,
-    )
     result = client.query(query, parameters=params)
     if inspect.isawaitable(result):
         result = await result

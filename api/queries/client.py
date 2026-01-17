@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 _SHARED_CLIENT: Any = None
 _SHARED_DSN: str | None = None
-_CLIENT_LOCK = asyncio.Lock()
 
 
 def _rows_to_dicts(result: Any) -> List[Dict[str, Any]]:

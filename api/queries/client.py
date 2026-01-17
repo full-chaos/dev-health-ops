@@ -23,6 +23,20 @@ def _rows_to_dicts(result: Any) -> List[Dict[str, Any]]:
     return [dict(zip(col_names, row)) for row in rows]
 
 
+def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
+    """
+    Sanitize a value for safe logging by removing newlines and truncating long strings.
+
+    Non-string values are returned unchanged.
+    """
+    if not isinstance(value, str):
+        return value
+    cleaned = value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length] + "...[truncated]"
+    return cleaned
+
+
 async def get_global_client(dsn: str) -> Any:
     """Get the shared ClickHouse client, initializing if needed."""
     global _SHARED_CLIENT, _SHARED_DSN
@@ -87,7 +101,11 @@ async def query_dicts(
             f"Invalid ClickHouse client: {type(client).__name__} (no 'query' method)"
         )
 
-    logger.debug("Executing query: %s with params %s", query, params)
+    logger.debug(
+        "Executing query: %s with params %s",
+        _sanitize_for_log(query),
+        params,
+    )
     result = client.query(query, parameters=params)
     if inspect.isawaitable(result):
         result = await result

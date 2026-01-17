@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 import logging
 import os
-from typing import List
+from typing import List, Literal, cast
 
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -142,7 +142,12 @@ def _filters_from_query(
             start_date=start_date,
             end_date=end_date,
         ),
-        scope=ScopeFilter(level=scope_type, ids=[scope_id] if scope_id else []),
+        scope=ScopeFilter(
+            level=cast(
+                Literal["org", "team", "repo", "service", "developer"], scope_type
+            ),
+            ids=[scope_id] if scope_id else [],
+        ),
     )
 
 
@@ -276,6 +281,7 @@ async def meta() -> MetaResponse | JSONResponse:
                 "/api/v1/sankey",
                 "/api/v1/investment",
                 "/api/v1/opportunities",
+                "/graphql",
             ],
         )
     except Exception as exc:
@@ -482,7 +488,7 @@ async def work_unit_explain_endpoint(
     end_date: date | None = None,
     llm_provider: str = "auto",
     llm_model: str | None = None,
-) -> WorkUnitExplanation:
+) -> WorkUnitExplanation | StreamingResponse:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
 

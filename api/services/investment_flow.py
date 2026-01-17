@@ -82,9 +82,9 @@ def _get_repo_rollup_map(
         repo_totals[repo] = repo_totals.get(repo, 0.0) + value
     top_repos = {
         repo
-        for repo, _ in sorted(repo_totals.items(), key=lambda item: item[1], reverse=True)[
-            : max(1, top_n_repos)
-        ]
+        for repo, _ in sorted(
+            repo_totals.items(), key=lambda item: item[1], reverse=True
+        )[: max(1, top_n_repos)]
     }
     rollup_map: Dict[str, str] = {}
     for repo in repo_totals:
@@ -112,9 +112,7 @@ def _build_team_burden_sankey(
 
     for row in rows:
         team_raw = str(row.get("team") or UNASSIGNED_TEAM)
-        team_label = (
-            UNASSIGNED_TEAM_LABEL if team_raw == UNASSIGNED_TEAM else team_raw
-        )
+        team_label = UNASSIGNED_TEAM_LABEL if team_raw == UNASSIGNED_TEAM else team_raw
         category_raw = str(row.get(category_key) or "")
         repo_raw = str(row.get("repo") or UNASSIGNED_REPO)
         value = float(row.get("value") or 0.0)
@@ -129,7 +127,9 @@ def _build_team_burden_sankey(
         category_label = category_label_fn(category_raw)
 
         add_node(team_label, "team")
-        add_node(category_label, "category" if category_key == "category" else "subcategory")
+        add_node(
+            category_label, "category" if category_key == "category" else "subcategory"
+        )
         add_node(repo_label, "repo")
 
         link_totals[(team_label, category_label)] = (
@@ -152,6 +152,82 @@ def _build_team_burden_sankey(
 
     return list(nodes_by_name.values()), links
 
+
+def _build_team_theme_subcategory_repo_sankey(
+    rows: List[Dict[str, object]],
+    *,
+    top_n_repos: int,
+) -> tuple[List[SankeyNode], List[SankeyLink]]:
+    nodes_by_name: Dict[str, SankeyNode] = {}
+    link_totals: Dict[tuple[str, str], float] = {}
+    incoming: Dict[str, float] = {}
+    outgoing: Dict[str, float] = {}
+
+    def add_node(name: str, group: str) -> None:
+        if name not in nodes_by_name:
+            nodes_by_name[name] = SankeyNode(name=name, group=group, value=0.0)
+
+    rollup_map = _get_repo_rollup_map(rows, top_n_repos)
+
+    for row in rows:
+        team_raw = str(row.get("team") or UNASSIGNED_TEAM)
+        team_label = UNASSIGNED_TEAM_LABEL if team_raw == UNASSIGNED_TEAM else team_raw
+        subcategory_raw = str(row.get("subcategory") or "")
+        repo_raw = str(row.get("repo") or UNASSIGNED_REPO)
+        value = float(row.get("value") or 0.0)
+
+        if not subcategory_raw or value <= 0:
+            continue
+
+        # Parse Theme and Subcategory from "theme.subcategory"
+        if "." in subcategory_raw:
+            theme_key, sub_key = subcategory_raw.split(".", 1)
+            theme_label = _format_theme_label(theme_key)
+            subcategory_label = _title_case(sub_key)
+        else:
+            theme_label = _title_case(subcategory_raw)  # Fallback if no dot
+            subcategory_label = (
+                subcategory_raw  # Should ideally not happen if data is strict
+            )
+
+        repo_label = (
+            UNASSIGNED_REPO_LABEL
+            if repo_raw == UNASSIGNED_REPO
+            else rollup_map.get(repo_raw, repo_raw)
+        )
+
+        add_node(team_label, "team")
+        add_node(theme_label, "category")
+        add_node(subcategory_label, "subcategory")
+        add_node(repo_label, "repo")
+
+        # Team -> Theme
+        link_totals[(team_label, theme_label)] = (
+            link_totals.get((team_label, theme_label), 0.0) + value
+        )
+        # Theme -> Subcategory
+        link_totals[(theme_label, subcategory_label)] = (
+            link_totals.get((theme_label, subcategory_label), 0.0) + value
+        )
+        # Subcategory -> Repo
+        link_totals[(subcategory_label, repo_label)] = (
+            link_totals.get((subcategory_label, repo_label), 0.0) + value
+        )
+
+    links: List[SankeyLink] = []
+    for (source, target), value in link_totals.items():
+        if value <= 0:
+            continue
+        links.append(SankeyLink(source=source, target=target, value=value))
+        outgoing[source] = outgoing.get(source, 0.0) + value
+        incoming[target] = incoming.get(target, 0.0) + value
+
+    for name, node in nodes_by_name.items():
+        node.value = max(incoming.get(name, 0.0), outgoing.get(name, 0.0))
+
+    return list(nodes_by_name.values()), links
+
+
 async def build_investment_flow_response(
     *,
     db_url: str,
@@ -170,7 +246,11 @@ async def build_investment_flow_response(
         theme_filters = [theme]
     normalized_drill = _normalize_theme_key(drill_category)
 
-    if flow_mode in {"team_category_repo", "team_subcategory_repo"}:
+    if flow_mode in {
+        "team_category_repo",
+        "team_subcategory_repo",
+        "team_category_subcategory_repo",
+    }:
         if flow_mode == "team_subcategory_repo" and not normalized_drill:
             raise ValueError("drill_category is required for team_subcategory_repo")
         if normalized_drill:
@@ -189,7 +269,9 @@ async def build_investment_flow_response(
                 "subcategory_distribution_json",
                 "structural_evidence_json",
             ]
-            if not await _columns_present(client, "work_unit_investments", required_cols):
+            if not await _columns_present(
+                client, "work_unit_investments", required_cols
+            ):
                 return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
             scope_filter, scope_params = "", {}
@@ -217,6 +299,22 @@ async def build_investment_flow_response(
                 )
                 label = "Team → Category → Repo"
                 description = "Team burden flow with category rollups."
+            elif flow_mode == "team_category_subcategory_repo":
+                rows = await fetch_investment_team_subcategory_repo_edges(
+                    client,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    themes=theme_filters or None,
+                    subcategories=subcategory_filters or None,
+                )
+                nodes, links = _build_team_theme_subcategory_repo_sankey(
+                    rows,
+                    top_n_repos=top_n_repos,
+                )
+                label = "Team → Category → Subcategory → Repo"
+                description = "Full 4-level team burden flow."
             else:
                 rows = await fetch_investment_team_subcategory_repo_edges(
                     client,
@@ -234,9 +332,7 @@ async def build_investment_flow_response(
                     top_n_repos=top_n_repos,
                 )
                 label = "Team → Subcategory → Repo"
-                description = (
-                    f"Showing subcategories within {_format_theme_label(normalized_drill or '')}."
-                )
+                description = f"Showing subcategories within {_format_theme_label(normalized_drill or '')}."
 
             unassigned_counts = await fetch_investment_unassigned_counts(
                 client,
@@ -261,20 +357,16 @@ async def build_investment_flow_response(
         )
         team_coverage = assigned_team_value / total_value if total_value > 0 else 0.0
         repo_coverage = assigned_repo_value / total_value if total_value > 0 else 0.0
-        distinct_team_targets = len(
-            {
-                str(row.get("team"))
-                for row in rows
-                if str(row.get("team") or UNASSIGNED_TEAM) != UNASSIGNED_TEAM
-            }
-        )
-        distinct_repo_targets = len(
-            {
-                str(row.get("repo"))
-                for row in rows
-                if str(row.get("repo") or UNASSIGNED_REPO) != UNASSIGNED_REPO
-            }
-        )
+        distinct_team_targets = len({
+            str(row.get("team"))
+            for row in rows
+            if str(row.get("team") or UNASSIGNED_TEAM) != UNASSIGNED_TEAM
+        })
+        distinct_repo_targets = len({
+            str(row.get("repo"))
+            for row in rows
+            if str(row.get("repo") or UNASSIGNED_REPO) != UNASSIGNED_REPO
+        })
 
         return SankeyResponse(
             mode="investment",
@@ -492,7 +584,9 @@ async def build_investment_repo_team_flow_response(
             nodes_by_name[team_label].value = (
                 nodes_by_name[team_label].value or 0.0
             ) + value
-            links.append(SankeyLink(source=source_label, target=team_label, value=value))
+            links.append(
+                SankeyLink(source=source_label, target=team_label, value=value)
+            )
             continue
 
         add_node(repo_label, "repo")

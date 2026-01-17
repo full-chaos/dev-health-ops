@@ -70,7 +70,11 @@ class InvestmentFlowRequest(BaseModel):
     filters: MetricFilter = Field(default_factory=MetricFilter)
     theme: Optional[str] = None
     flow_mode: Optional[
-        Literal["team_category_repo", "team_subcategory_repo"]
+        Literal[
+            "team_category_repo",
+            "team_subcategory_repo",
+            "team_category_subcategory_repo",
+        ]
     ] = None
     drill_category: Optional[str] = None
     top_n_repos: int = 12

@@ -23,16 +23,26 @@ class Dimension(str, Enum):
         return [d.value for d in cls]
 
     @classmethod
-    def db_column(cls, dim: "Dimension") -> str:
-        """Map dimension to database column name."""
-        mapping = {
-            cls.TEAM: "team_id",
-            cls.REPO: "repo_id",
-            cls.AUTHOR: "author_id",
-            cls.WORK_TYPE: "work_item_type",
-            cls.THEME: "theme",
-            cls.SUBCATEGORY: "subcategory",
-        }
+    def db_column(cls, dim: "Dimension", use_investment: bool = False) -> str:
+        """Get the database column name for a dimension."""
+        if use_investment:
+            mapping = {
+                cls.TEAM: "ut.team_label",
+                cls.REPO: "ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id)))",
+                cls.AUTHOR: "author_id",
+                cls.WORK_TYPE: "work_item_type",
+                cls.THEME: "splitByChar('.', subcategory_kv.1)[1]",
+                cls.SUBCATEGORY: "subcategory_kv.1",
+            }
+        else:
+            mapping = {
+                cls.TEAM: "team_id",
+                cls.REPO: "repo_id",
+                cls.AUTHOR: "author_id",
+                cls.WORK_TYPE: "work_item_type",
+                cls.THEME: "investment_area",
+                cls.SUBCATEGORY: "project_stream",
+            }
         return mapping[dim]
 
 
@@ -49,14 +59,22 @@ class Measure(str, Enum):
         return [m.value for m in cls]
 
     @classmethod
-    def db_expression(cls, measure: "Measure") -> str:
+    def db_expression(cls, measure: "Measure", use_investment: bool = False) -> str:
         """Map measure to SQL expression."""
-        mapping = {
-            cls.COUNT: "COUNT(*)",
-            cls.CHURN_LOC: "SUM(churn_loc)",
-            cls.CYCLE_TIME_HOURS: "AVG(cycle_time_hours)",
-            cls.THROUGHPUT: "COUNT(DISTINCT work_unit_id)",
-        }
+        if use_investment:
+            mapping = {
+                cls.COUNT: "SUM(subcategory_kv.2 * effort_value)",
+                cls.CHURN_LOC: "SUM(churn_loc)",
+                cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
+                cls.THROUGHPUT: "SUM(throughput)",
+            }
+        else:
+            mapping = {
+                cls.COUNT: "SUM(work_items_completed)",
+                cls.CHURN_LOC: "SUM(churn_loc)",
+                cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
+                cls.THROUGHPUT: "SUM(work_items_completed)",
+            }
         return mapping[measure]
 
 

@@ -38,7 +38,9 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
             cleaned = cleaned[:max_length] + "...[truncated]"
         return cleaned
     if isinstance(value, dict):
-        return {k: _sanitize_for_log(v, max_length=max_length) for k, v in value.items()}
+        return {
+            k: _sanitize_for_log(v, max_length=max_length) for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         sanitized_seq = [_sanitize_for_log(v, max_length=max_length) for v in value]
         return type(value)(sanitized_seq)
@@ -95,6 +97,7 @@ async def close_global_client() -> None:
                 await close()
             else:
                 close()
+    _SHARED_CLIENT = None
     _SHARED_DSN = None
 
 

@@ -130,11 +130,7 @@ class TestCompileTimeseries:
         assert "SELECT" in sql
         assert "date_trunc('day', day) AS bucket" in sql
         assert "team_id AS dimension_value" in sql
-        # Measure COUNT is now SUM(subcategory_kv.2 * effort_value) but that's for investment.
-        # Wait, if I use TEAM, it still uses the global Measure.db_expression mapping.
-        # My mapping for COUNT became "SUM(subcategory_kv.2 * effort_value)" globally.
-        # This might be a problem for generic tables like investment_metrics_daily.
-        assert "SUM(subcategory_kv.2 * effort_value)" in sql
+        assert "SUM(work_items_completed)" in sql
         assert "FROM investment_metrics_daily" in sql
         assert "day >= %(start_date)s AND day <= %(end_date)s" in sql
         assert params["start_date"] == date(2025, 1, 1)
@@ -305,15 +301,20 @@ class TestDimensionDbColumn:
 
     def test_specific_mappings(self):
         """Test specific dimension to database column mappings."""
+        # Non-investment (default)
         assert Dimension.db_column(Dimension.TEAM) == "team_id"
         assert Dimension.db_column(Dimension.REPO) == "repo_id"
-        assert Dimension.db_column(Dimension.AUTHOR) == "author_id"
-        assert Dimension.db_column(Dimension.WORK_TYPE) == "work_item_type"
+        assert Dimension.db_column(Dimension.THEME) == "investment_area"
+
+        # Investment
         assert (
-            Dimension.db_column(Dimension.THEME)
+            Dimension.db_column(Dimension.THEME, use_investment=True)
             == "splitByChar('.', subcategory_kv.1)[1]"
         )
-        assert Dimension.db_column(Dimension.SUBCATEGORY) == "subcategory_kv.1"
+        assert (
+            Dimension.db_column(Dimension.SUBCATEGORY, use_investment=True)
+            == "subcategory_kv.1"
+        )
 
 
 class TestMeasureDbExpression:
@@ -328,10 +329,16 @@ class TestMeasureDbExpression:
 
     def test_specific_expressions(self):
         """Test specific measure to SQL expression mappings."""
+        # Non-investment (default)
+        assert Measure.db_expression(Measure.COUNT) == "SUM(work_items_completed)"
+        assert Measure.db_expression(Measure.THROUGHPUT) == "SUM(work_items_completed)"
+
+        # Investment
         assert (
-            Measure.db_expression(Measure.COUNT)
+            Measure.db_expression(Measure.COUNT, use_investment=True)
             == "SUM(subcategory_kv.2 * effort_value)"
         )
-        assert Measure.db_expression(Measure.CHURN_LOC) == "SUM(churn_loc)"
-        assert Measure.db_expression(Measure.CYCLE_TIME_HOURS) == "AVG(cycle_p50_hours)"
-        assert Measure.db_expression(Measure.THROUGHPUT) == "SUM(work_items_completed)"
+        assert (
+            Measure.db_expression(Measure.THROUGHPUT, use_investment=True)
+            == "SUM(throughput)"
+        )

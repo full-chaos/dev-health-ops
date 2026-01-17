@@ -6,7 +6,7 @@ Column names are validated against allowlists before being inserted.
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 
 from .validate import BucketInterval, Dimension, Measure
 
@@ -141,6 +141,7 @@ def catalog_values_template(
     source_table: str = "investment_metrics_daily",
     extra_clauses: str = "",
     use_investment: bool = False,
+    **kwargs: Any,
 ) -> str:
     """Generate SQL template for fetching distinct dimension values."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)

@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from fixtures.generator import SyntheticDataGenerator
+from work_graph.runner import materialize_fixture_investments
 from metrics.job_daily import run_daily_metrics_job
 from storage import SQLAlchemyStore, resolve_db_type, run_with_store
 from utils import BATCH_SIZE, MAX_WORKERS
@@ -261,6 +262,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         builder = WorkGraphBuilder(config)
         try:
             builder.build()
+            await materialize_fixture_investments(
+                db_url=ns.db,
+                from_ts=config.from_date,
+                to_ts=config.to_date,
+            )
         finally:
             builder.close()
     return 0

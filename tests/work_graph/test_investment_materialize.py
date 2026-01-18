@@ -143,6 +143,9 @@ async def test_materialize_invokes_sink(monkeypatch):
     stats = await materialize_investments(config)
     assert stats["records"] == 1
     assert len(sink.investment_rows) == 1
+    record = sink.investment_rows[0]
+    assert record.work_unit_type == "incident"
+    assert record.work_unit_name == "Fix login outage"
 
 
 @pytest.mark.asyncio

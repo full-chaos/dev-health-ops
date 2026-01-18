@@ -34,6 +34,13 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
+def _clean_optional_text(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]]:
     themes: List[str] = []
     subcategories: List[str] = []
@@ -276,6 +283,8 @@ async def build_work_unit_investments(
         results.append(
             WorkUnitInvestment(
                 work_unit_id=unit_id,
+                work_unit_type=_clean_optional_text(row.get("work_unit_type")),
+                work_unit_name=_clean_optional_text(row.get("work_unit_name")),
                 time_range=WorkUnitTimeRange(start=from_ts, end=to_ts),
                 effort=WorkUnitEffort(metric=effort_metric, value=effort_value),
                 investment=InvestmentBreakdown(

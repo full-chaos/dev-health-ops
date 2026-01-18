@@ -714,6 +714,8 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "work_unit_investments",
             [
                 "work_unit_id",
+                "work_unit_type",
+                "work_unit_name",
                 "from_ts",
                 "to_ts",
                 "repo_id",

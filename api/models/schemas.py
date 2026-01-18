@@ -258,6 +258,8 @@ class InvestmentBreakdown(BaseModel):
 
 class WorkUnitInvestment(BaseModel):
     work_unit_id: str
+    work_unit_type: Optional[str] = None
+    work_unit_name: Optional[str] = None
     time_range: WorkUnitTimeRange
     effort: WorkUnitEffort
     investment: InvestmentBreakdown

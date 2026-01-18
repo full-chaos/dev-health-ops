@@ -486,6 +486,8 @@ class WorkGraphPRCommitRecord:
 @dataclass(frozen=True)
 class WorkUnitInvestmentRecord:
     work_unit_id: str
+    work_unit_type: Optional[str]
+    work_unit_name: Optional[str]
     from_ts: datetime
     to_ts: datetime
     repo_id: Optional[uuid.UUID]

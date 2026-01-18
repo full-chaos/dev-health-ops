@@ -32,6 +32,8 @@ async def fetch_work_unit_investments(
     query = f"""
         SELECT
             work_unit_id,
+            argMax(work_unit_type, work_unit_investments.computed_at) AS work_unit_type,
+            argMax(work_unit_name, work_unit_investments.computed_at) AS work_unit_name,
             argMax(from_ts, work_unit_investments.computed_at) AS from_ts,
             argMax(to_ts, work_unit_investments.computed_at) AS to_ts,
             argMax(repo_id, work_unit_investments.computed_at) AS repo_id,

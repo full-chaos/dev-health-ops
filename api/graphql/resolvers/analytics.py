@@ -99,7 +99,9 @@ async def resolve_analytics(
             use_investment=batch.use_investment,
         )
 
-        sql, params = compile_timeseries(request, org_id, timeout)
+        sql, params = compile_timeseries(
+            request, org_id, timeout, filters=batch.filters
+        )
 
         try:
             rows = await query_dicts(client, sql, params)
@@ -148,7 +150,7 @@ async def resolve_analytics(
             use_investment=batch.use_investment,
         )
 
-        sql, params = compile_breakdown(request, org_id, timeout)
+        sql, params = compile_breakdown(request, org_id, timeout, filters=batch.filters)
 
         try:
             rows = await query_dicts(client, sql, params)
@@ -191,7 +193,9 @@ async def resolve_analytics(
             else batch.use_investment,
         )
 
-        nodes_queries, edges_queries = compile_sankey(request, org_id, timeout)
+        nodes_queries, edges_queries = compile_sankey(
+            request, org_id, timeout, filters=batch.filters
+        )
 
         nodes: List[SankeyNode] = []
         edges: List[SankeyEdge] = []
@@ -267,20 +271,20 @@ async def resolve_analytics(
                 joins = ""
                 if request.use_investment:
                     joins = """
-                        LEFT JOIN (SELECT id, name as team_label FROM organizations_teams WHERE org_id = %(org_id)s) t 
+                        LEFT JOIN (SELECT id, name as team_label FROM organizations_teams WHERE org_id = %(org_id)s) t
                         ON work_unit_investments.team_id = t.id
                         LEFT JOIN (
-                            SELECT start_date, work_unit_id, grand_parent_name, parent_name, name 
-                            FROM investment_hierarchy 
+                            SELECT start_date, work_unit_id, grand_parent_name, parent_name, name
+                            FROM investment_hierarchy
                             WHERE org_id = %(org_id)s
-                        ) ih ON work_unit_investments.work_unit_id = ih.work_unit_id 
+                        ) ih ON work_unit_investments.work_unit_id = ih.work_unit_id
                         AND work_unit_investments.active_date = ih.start_date
                         LEFT JOIN (SELECT id, name as repo_name FROM organizations_repos WHERE org_id = %(org_id)s) r
                         ON work_unit_investments.repo_id = r.id
                         """
 
                 coverage_sql = f"""
-                    SELECT 
+                    SELECT
                         count() as total,
                         countIf({team_col} != 'Unassigned') as assigned_team,
                         countIf({repo_col} != 'Unassigned') as assigned_repo

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -23,6 +23,9 @@ from ..models.outputs import (
 )
 from ..sql.validate import Dimension, Measure
 
+if TYPE_CHECKING:
+    from ..models.inputs import FilterInput
+
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,7 @@ logger = logging.getLogger(__name__)
 async def resolve_catalog(
     context: GraphQLContext,
     dimension: Optional[DimensionInput] = None,
+    filters: Optional["FilterInput"] = None,  # NEW: Filter support
 ) -> CatalogResult:
     """
     Resolve catalog query.
@@ -40,6 +44,7 @@ async def resolve_catalog(
     Args:
         context: GraphQL request context with org_id.
         dimension: Optional dimension to fetch values for.
+        filters: Optional filters to narrow down dimension values.
 
     Returns:
         CatalogResult with dimensions, measures, limits, and optional values.
@@ -79,6 +84,7 @@ async def resolve_catalog(
                 dimension=dimension.value,
                 org_id=org_id,
                 limit=100,
+                filters=filters,
             )
             values = [
                 CatalogValueItem(value=v["value"], count=v["count"]) for v in raw_values

@@ -19,6 +19,7 @@ def timeseries_template(
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
     use_investment: bool = False,
+    filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for timeseries query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
@@ -36,6 +37,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
+{filter_clause}
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC
 SETTINGS max_execution_time = %(timeout)s
@@ -49,6 +51,7 @@ def breakdown_template(
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
     use_investment: bool = False,
+    filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for breakdown (top-N aggregation) query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
@@ -61,6 +64,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
+{filter_clause}
 GROUP BY dimension_value
 ORDER BY value DESC
 LIMIT %(top_n)s
@@ -75,6 +79,7 @@ def sankey_nodes_template(
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
     use_investment: bool = False,
+    filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey nodes query."""
     measure_expr = Measure.db_expression(measure, use_investment=use_investment)
@@ -90,6 +95,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
+{filter_clause}
 GROUP BY node_id
 ORDER BY value DESC
 LIMIT %(limit_per_dim)s
@@ -111,6 +117,7 @@ def sankey_edges_template(
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
     use_investment: bool = False,
+    filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey edges query."""
     source_col = Dimension.db_column(source_dim, use_investment=use_investment)
@@ -127,6 +134,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
+{filter_clause}
   AND {source_col} IS NOT NULL
   AND {target_col} IS NOT NULL
 GROUP BY source, target
@@ -141,6 +149,7 @@ def catalog_values_template(
     source_table: str = "investment_metrics_daily",
     extra_clauses: str = "",
     use_investment: bool = False,
+    filter_clause: str = "",  # NEW: scope/category filters
     **kwargs: Any,
 ) -> str:
     """Generate SQL template for fetching distinct dimension values."""
@@ -153,7 +162,8 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {dim_col} IS NOT NULL
-  AND {dim_col} != ''
+  AND toString({dim_col}) != ''
+{filter_clause}
 GROUP BY value
 ORDER BY count DESC
 LIMIT %(limit)s

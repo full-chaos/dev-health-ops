@@ -250,7 +250,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             db_url=ns.db,
             day=now.date(),
             backfill_days=ns.days,
-            provider="none",
+            provider="synthetic",
         )
 
     if ns.with_work_graph and db_type == "clickhouse":

@@ -4,7 +4,7 @@ import argparse
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
@@ -31,6 +31,35 @@ class TeamResolver:
         return team[0], team[1]
 
 
+def _build_member_to_team(teams_data: List) -> Dict[str, Tuple[str, str]]:
+    """Shared helper to build identity map from a list of team-like objects or dicts."""
+    member_to_team: Dict[str, Tuple[str, str]] = {}
+    for team in teams_data:
+        # Handle both objects (models) and dicts (from YAML)
+        team_id = str(
+            getattr(team, "id", None)
+            or (team.get("team_id") if isinstance(team, dict) else None)
+            or ""
+        ).strip()
+        team_name = str(
+            getattr(team, "name", None)
+            or (team.get("team_name") if isinstance(team, dict) else team_id)
+        ).strip()
+
+        if not team_id:
+            continue
+
+        members = getattr(team, "members", []) or (
+            team.get("members") if isinstance(team, dict) else []
+        )
+        for member in members:
+            key = _norm_key(str(member))
+            if not key:
+                continue
+            member_to_team[key] = (team_id, team_name)
+    return member_to_team
+
+
 def load_team_resolver(path: Optional[Path] = None) -> TeamResolver:
     raw_path = os.getenv("TEAM_MAPPING_PATH")
     if raw_path:
@@ -43,19 +72,22 @@ def load_team_resolver(path: Optional[Path] = None) -> TeamResolver:
     except FileNotFoundError:
         payload = {}
 
-    member_to_team: Dict[str, Tuple[str, str]] = {}
-    for entry in payload.get("teams") or []:
-        team_id = str(entry.get("team_id") or "").strip()
-        team_name = str(entry.get("team_name") or team_id).strip()
-        if not team_id:
-            continue
-        for member in entry.get("members") or []:
-            key = _norm_key(str(member))
-            if not key:
-                continue
-            member_to_team[key] = (team_id, team_name)
-
+    teams_list = payload.get("teams") or []
+    member_to_team = _build_member_to_team(teams_list)
     return TeamResolver(member_to_team=member_to_team)
+
+
+async def load_team_resolver_from_store(store: Any) -> TeamResolver:
+    """Load team mappings from the database store."""
+    try:
+        teams = await store.get_all_teams()
+        member_to_team = _build_member_to_team(teams)
+        return TeamResolver(member_to_team=member_to_team)
+    except Exception as e:
+        import logging
+
+        logging.warning(f"Failed to load teams from store: {e}")
+        return TeamResolver(member_to_team={})
 
 
 def sync_teams(ns: argparse.Namespace) -> int:

@@ -25,7 +25,7 @@ from metrics.compute_ic import (
     compute_ic_metrics_daily,
     compute_ic_landscape_rolling,
 )
-from metrics.identity import load_team_map
+from metrics.identity import load_team_map, init_team_resolver
 from metrics.hotspots import compute_file_hotspots, compute_file_risk_hotspots
 from metrics.knowledge import compute_bus_factor, compute_code_ownership_gini
 from metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
@@ -211,6 +211,11 @@ def run_daily_metrics_job(
                 logger.info("Ensuring SQLite tables")
                 s.ensure_tables()
 
+        # Initialize team resolver from database if possible
+        import asyncio
+
+        asyncio.run(init_team_resolver(primary_sink))
+
         work_items: List[Any] = []
         work_item_transitions: List[Any] = []
         if provider_set:
@@ -326,6 +331,29 @@ def run_daily_metrics_job(
                     work_item_transitions.extend(syn_transitions)
                 except Exception as exc:
                     logger.warning("Skipping synthetic work items fetch: %s", exc)
+
+            # Fallback: if we still have no work items but we have a provider set (or it was 'none' but we want metrics),
+            # try loading them from the database.
+            if not work_items and (provider_set or provider in {"none", "off", "skip"}):
+                logger.info(
+                    "No work items fetched from providers, attempting to load from database..."
+                )
+                db_work_items, db_transitions = _load_raw_work_items(
+                    backend=backend,
+                    primary_sink=primary_sink,
+                    start=since_dt,
+                    end=datetime.combine(max(days), time.max, tzinfo=timezone.utc),
+                    repo_id=repo_id,
+                    repo_name=repo_name,
+                )
+                if db_work_items:
+                    logger.info(
+                        "Loaded %d work items and %d transitions from database",
+                        len(db_work_items),
+                        len(db_transitions),
+                    )
+                    work_items.extend(db_work_items)
+                    work_item_transitions.extend(db_transitions)
 
             logger.info("Work items ready for compute: %d", len(work_items))
             logger.info(
@@ -1367,6 +1395,108 @@ def _load_clickhouse_rows(
     return commit_rows, pr_rows
 
 
+def _load_clickhouse_work_items(
+    client: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID],
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    from models.work_items import WorkItem, WorkItemStatusTransition
+
+    params: Dict[str, Any] = {"start": _naive_utc(start), "end": _naive_utc(end)}
+    repo_filter = ""
+    if repo_id is not None:
+        params["repo_id"] = str(repo_id)
+        repo_filter = " AND repo_id = {repo_id:UUID}"
+    elif repo_name is not None:
+        params["repo_name"] = repo_name
+        # Note: work_items might not have repo_id if provider is Jira,
+        # but they might have work_scope_id.
+        # For fixtures, we usually have repo_id.
+        repo_filter = ""  # Simplified for now
+
+    # Load items created or updated during the window, or that were open/active
+    # For daily metrics, we need items created before 'end' and (not completed or completed after 'start')
+    item_query = f"""
+    SELECT * FROM work_items 
+    WHERE created_at < {{end:DateTime}} 
+      AND (completed_at IS NULL OR completed_at >= {{start:DateTime}})
+    {repo_filter}
+    """
+    item_rows = _clickhouse_query_dicts(client, item_query, params)
+
+    # Load ALL transitions for the items we found
+    item_ids = [r["work_item_id"] for r in item_rows]
+    trans_rows = []
+    if item_ids:
+        trans_query = """
+        SELECT * FROM work_item_transitions 
+        WHERE work_item_id IN {item_ids:Array(String)}
+        """
+        trans_rows = _clickhouse_query_dicts(
+            client, trans_query, {"item_ids": item_ids}
+        )
+
+    work_items = [WorkItem(**r) for r in item_rows]
+    transitions = [WorkItemStatusTransition(**r) for r in trans_rows]
+    return work_items, transitions
+
+
+def _load_sqlite_work_items(
+    engine: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID],
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    from sqlalchemy import select, or_
+    from models.work_items import WorkItem as WorkItemModel
+    from models.work_items import WorkItemStatusTransition as TransitionModel
+    from models.work_items import WorkItem, WorkItemStatusTransition
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as session:
+        # Items active during the day
+        stmt = select(WorkItemModel).where(
+            WorkItemModel.created_at < end,
+            or_(
+                WorkItemModel.completed_at == None, WorkItemModel.completed_at >= start
+            ),
+        )
+        if repo_id:
+            stmt = stmt.where(WorkItemModel.repo_id == repo_id)
+
+        db_items = session.execute(stmt).scalars().all()
+        item_ids = [i.work_item_id for i in db_items]
+
+        db_trans = []
+        if item_ids:
+            trans_stmt = select(TransitionModel).where(
+                TransitionModel.work_item_id.in_(item_ids)
+            )
+            db_trans = session.execute(trans_stmt).scalars().all()
+
+        # Convert to dataclasses
+        work_items = [
+            WorkItem.from_orm(i)
+            if hasattr(WorkItem, "from_orm")
+            else WorkItem(**{c.name: getattr(i, c.name) for c in i.__table__.columns})
+            for i in db_items
+        ]
+        transitions = [
+            WorkItemStatusTransition.from_orm(t)
+            if hasattr(WorkItemStatusTransition, "from_orm")
+            else WorkItemStatusTransition(**{
+                c.name: getattr(t, c.name) for c in t.__table__.columns
+            })
+            for t in db_trans
+        ]
+        return work_items, transitions
+
+
 def _load_clickhouse_blame_concentration(
     client: Any,
     *,
@@ -1629,6 +1759,74 @@ def _load_mongo_blame_concentration(
             continue
         by_repo.setdefault(repo_uuid, {})[str(file_path)] = float(value)
     return by_repo
+
+
+def _load_mongo_work_items(
+    db: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID],
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    from models.work_items import WorkItem, WorkItemStatusTransition
+
+    start_naive = _naive_utc(start)
+    end_naive = _naive_utc(end)
+
+    item_filter: Dict[str, Any] = {
+        "created_at": {"$lt": end_naive},
+        "$or": [{"completed_at": None}, {"completed_at": {"$gte": start_naive}}],
+    }
+    if repo_id:
+        item_filter["repo_id"] = str(repo_id)
+
+    item_docs = list(db["work_items"].find(item_filter))
+    item_ids = [d["work_item_id"] for d in item_docs]
+
+    trans_docs = []
+    if item_ids:
+        trans_docs = list(
+            db["work_item_transitions"].find({"work_item_id": {"$in": item_ids}})
+        )
+
+    work_items = [WorkItem(**d) for d in item_docs]
+    transitions = [WorkItemStatusTransition(**d) for d in trans_docs]
+    return work_items, transitions
+
+
+def _load_raw_work_items(
+    backend: str,
+    primary_sink: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID] = None,
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    if backend == "clickhouse":
+        return _load_clickhouse_work_items(
+            primary_sink.client,
+            start=start,
+            end=end,
+            repo_id=repo_id,
+            repo_name=repo_name,
+        )
+    if backend in {"sqlite", "postgres"}:
+        return _load_sqlite_work_items(
+            primary_sink.engine,
+            start=start,
+            end=end,
+            repo_id=repo_id,
+            repo_name=repo_name,
+        )
+    return _load_mongo_work_items(
+        primary_sink.db,
+        start=start,
+        end=end,
+        repo_id=repo_id,
+        repo_name=repo_name,
+    )
 
 
 def _load_sqlite_rows(

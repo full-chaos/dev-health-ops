@@ -51,7 +51,6 @@ class Query:
         context = get_context(info)
         # Override org_id from argument (the schema requires it)
         context.org_id = org_id
-        logger.debug("Entered resolve_catalog with dimension=%s", dimension)
         return await resolve_catalog(context, dimension, filters=filters)
 
     @strawberry.field(description="Run batch analytics queries")

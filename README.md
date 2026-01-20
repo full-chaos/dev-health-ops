@@ -123,6 +123,8 @@ asyncio.run(main())
 
 ## Developer Health Metrics (Work + Git) + Grafana ✅
 
+> **DEPRECATION NOTICE**: The Grafana panels and plugin integration have been moved to a separate repository (`dev-health-panels`) and are being superseded by the full-stack web application [`dev-health-web`](../dev-health-web).
+
 This repo can compute daily “developer health” metrics and provision Grafana dashboards on top of:
 
 - **Git + PR/MR facts** (from GitHub/GitLab/local syncs)

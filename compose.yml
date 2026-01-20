@@ -34,8 +34,6 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: true
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: true
-      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: chrisgeorge-devhealth-panel
-      GF_LOG_FILTERS: plugin.devhealth-devhealthpanels-panel:debug
       GF_LOG_LEVEL: debug
       GF_DATAPROXY_LOGGING: 1
       GF_RENDERING_SERVER_URL: http://renderer:8081/render
@@ -48,7 +46,6 @@ services:
       - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - ./grafana/plugins/dev-health-panels:/var/lib/grafana/plugins/dev-health-panels
   mongo:
     image: mongo:latest
     container_name: mongo

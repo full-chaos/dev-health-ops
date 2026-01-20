@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import date
 
+from api.graphql.models.inputs import (
+    FilterInput,
     WhoFilterInput,
     WhatFilterInput,
     WhyFilterInput,
     ScopeFilterInput,
     ScopeLevelInput,
 )
+
 from api.graphql.sql.compiler import (
     TimeseriesRequest,
     BreakdownRequest,

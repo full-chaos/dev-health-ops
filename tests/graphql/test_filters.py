@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import date
 
-import pytest
-
 from api.graphql.models.inputs import (
     FilterInput,
     WhoFilterInput,

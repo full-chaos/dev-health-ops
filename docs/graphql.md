@@ -138,6 +138,30 @@ query FullAnalytics {
 }
 ```
 
+#### Curl example (Sankey coverage)
+
+```bash
+curl -s -X POST "http://localhost:8000/graphql?org_id=default" \
+  -H "Content-Type: application/json" \
+  -H "X-Org-Id: default" \
+  -d '{
+    "query": "query CoverageSankey($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { sankey { coverage { teamCoverage repoCoverage } nodes { id label dimension value } edges { source target value } } } }",
+    "variables": {
+      "orgId": "default",
+      "batch": {
+        "useInvestment": true,
+        "timeseries": [],
+        "breakdowns": [],
+        "sankey": {
+          "path": ["WORK_TYPE", "REPO", "TEAM"],
+          "measure": "COUNT",
+          "dateRange": { "startDate": "2026-01-01", "endDate": "2026-01-31" }
+        }
+      }
+    }
+  }'
+```
+
 ---
 
 ## Available Dimensions

@@ -268,35 +268,58 @@ async def resolve_analytics(
                 )
 
                 base_table = table
+                date_filter = "day >= %(start_date)s AND day <= %(end_date)s"
                 joins = ""
                 if request.use_investment:
+                    date_filter = (
+                        "work_unit_investments.from_ts < %(end_date)s "
+                        "AND work_unit_investments.to_ts >= %(start_date)s"
+                    )
                     joins = """
-                        LEFT JOIN (SELECT id, name as team_label FROM organizations_teams WHERE org_id = %(org_id)s) t
-                        ON work_unit_investments.team_id = t.id
                         LEFT JOIN (
-                            SELECT start_date, work_unit_id, grand_parent_name, parent_name, name
-                            FROM investment_hierarchy
-                            WHERE org_id = %(org_id)s
-                        ) ih ON work_unit_investments.work_unit_id = ih.work_unit_id
-                        AND work_unit_investments.active_date = ih.start_date
-                        LEFT JOIN (SELECT id, name as repo_name FROM organizations_repos WHERE org_id = %(org_id)s) r
-                        ON work_unit_investments.repo_id = r.id
+                            SELECT
+                                work_unit_id,
+                                argMax(team, cnt) AS team_label
+                            FROM (
+                                SELECT
+                                    work_unit_investments.work_unit_id AS work_unit_id,
+                                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
+                                    count() AS cnt
+                                FROM work_unit_investments
+                                ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
+                                LEFT JOIN (
+                                    SELECT
+                                        work_item_id,
+                                        argMax(team_id, computed_at) AS team_id,
+                                        argMax(team_name, computed_at) AS team_name
+                                    FROM work_item_cycle_times
+                                    GROUP BY work_item_id
+                                ) AS t ON t.work_item_id = issue_id
+                                GROUP BY work_unit_id, team
+                            )
+                            GROUP BY work_unit_id
+                        ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
+                        LEFT JOIN repos AS r ON r.id = repo_id
                         """
+
+                assigned_team_expr = (
+                    f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
+                )
+                assigned_repo_expr = f"{repo_col} IS NOT NULL"
+                if request.use_investment:
+                    assigned_repo_expr = f"lower({repo_col}) != 'unassigned'"
 
                 coverage_sql = f"""
                     SELECT
                         count() as total,
-                        countIf({team_col} != 'Unassigned') as assigned_team,
-                        countIf({repo_col} != 'Unassigned') as assigned_repo
+                        countIf({assigned_team_expr}) as assigned_team,
+                        countIf({assigned_repo_expr}) as assigned_repo
                     FROM {base_table}
                     {joins}
-                    WHERE org_id = %(org_id)s
-                    AND active_date >= %(start_date)s
-                    AND active_date <= %(end_date)s
+                    WHERE {date_filter}
                 """
 
                 cov_params = {
-                    "org_id": org_id,
                     "start_date": request.start_date,
                     "end_date": request.end_date,
                 }

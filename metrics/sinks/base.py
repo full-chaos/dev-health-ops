@@ -9,7 +9,7 @@ SQLite, and PostgreSQL backends.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Any, List, Sequence
 
 from metrics.schemas import (
     CICDMetricsDailyRecord,
@@ -259,10 +259,14 @@ class BaseMetricsSink(ABC):
             f"{self.__class__.__name__} does not support work graph issue↔PR links"
         )
 
-    def write_work_graph_pr_commit(
-        self, rows: Sequence[WorkGraphPRCommitRecord]
-    ) -> None:
-        """Write derived PR↔commit link rows."""
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support work graph PR↔commit links"
-        )
+    # -------------------------------------------------------------------------
+    # Team resolution / identity support
+    # -------------------------------------------------------------------------
+
+    async def get_all_teams(self) -> List[Any]:
+        """Fetch all teams from the database for identity resolution."""
+        return []
+
+    async def insert_teams(self, teams: List[Any]) -> None:
+        """Insert or update teams in the database."""
+        pass

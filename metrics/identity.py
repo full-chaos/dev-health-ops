@@ -64,3 +64,11 @@ async def init_team_resolver(store: Any) -> None:
     """Initialize or update the global team resolver from a database store."""
     global _TEAM_RESOLVER
     _TEAM_RESOLVER = await load_team_resolver_from_store(store)
+
+
+def get_team_resolver() -> Any:
+    """Get the current global team resolver, initializing from config if needed."""
+    global _TEAM_RESOLVER
+    if _TEAM_RESOLVER is None:
+        _TEAM_RESOLVER = _load_team_resolver()
+    return _TEAM_RESOLVER

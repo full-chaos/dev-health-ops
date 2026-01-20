@@ -29,6 +29,8 @@ python cli.py metrics daily --db "<DB_CONN>"
 python cli.py metrics complexity --repo-path . -s "*" --db "<DB_CONN>"
 ```
 
+`metrics daily` defaults to `--provider auto`, which loads work items from the database only.
+
 ### Fixtures
 
 ```bash

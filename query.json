@@ -1,0 +1,17 @@
+{
+  "query": "query Sankey($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { sankey { nodes { id label dimension value } edges { source target value } } } }",
+  "variables": {
+    "orgId": "default",
+    "batch": {
+      "useInvestment": true,
+      "sankey": {
+        "path": ["SUBCATEGORY", "REPO", "TEAM"],
+        "measure": "COUNT",
+        "dateRange": { "startDate": "2026-01-06", "endDate": "2026-01-20" },
+        "maxNodes": 50,
+        "maxEdges": 200
+      },
+      "filters": { "scope": { "level": "ORG", "ids": [] } }
+    }
+  }
+}

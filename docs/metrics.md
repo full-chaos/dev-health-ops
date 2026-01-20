@@ -21,6 +21,7 @@ Git facts must already exist in the backend you point the job at:
 
 Work tracking facts should be synced from provider APIs via `python cli.py sync work-items ...`.
 See `docs/task_trackers.md` for configuration. (`metrics daily --provider ...` still exists as a convenience/backward-compatible path.)
+`--provider auto` (default) loads work items from the database only and skips provider API calls.
 
 CI/CD pipeline facts are synced from GitHub/GitLab via the `sync cicd` job:
 

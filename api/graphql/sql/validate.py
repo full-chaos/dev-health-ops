@@ -27,7 +27,7 @@ class Dimension(str, Enum):
         """Get the database column name for a dimension."""
         if use_investment:
             mapping = {
-                cls.TEAM: "ut.team_label",
+                cls.TEAM: "ifNull(nullIf(ut.team_label, ''), 'unassigned')",
                 cls.REPO: "ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id)))",
                 cls.AUTHOR: "author_id",
                 cls.WORK_TYPE: "work_item_type",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
+
 import json
 import logging
 import os
@@ -25,7 +25,7 @@ from metrics.compute_ic import (
     compute_ic_metrics_daily,
     compute_ic_landscape_rolling,
 )
-from metrics.identity import load_team_map
+from metrics.identity import load_team_map, init_team_resolver, get_team_resolver
 from metrics.hotspots import compute_file_hotspots, compute_file_risk_hotspots
 from metrics.knowledge import compute_bus_factor, compute_code_ownership_gini
 from metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
@@ -46,6 +46,10 @@ from metrics.schemas import (
 from analytics.complexity import FileComplexity
 from analytics.investment import InvestmentClassifier
 from analytics.issue_types import IssueTypeNormalizer
+from models.work_items import (
+    WorkItem,
+    WorkItemStatusTransition,
+)
 from metrics.work_items import (
     DiscoveredRepo,
     fetch_github_project_v2_items,
@@ -79,7 +83,7 @@ def _date_range(end_day: date, backfill_days: int) -> List[date]:
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
 
 
-def run_daily_metrics_job(
+async def run_daily_metrics_job(
     *,
     db_url: Optional[str] = None,
     day: date,
@@ -88,7 +92,7 @@ def run_daily_metrics_job(
     repo_name: Optional[str] = None,
     include_commit_metrics: bool = True,
     sink: str = "auto",  # auto|clickhouse|mongo|sqlite|both
-    provider: str = "none",  # all|jira|github|gitlab|none
+    provider: str = "auto",  # auto|all|jira|github|gitlab|synthetic|none
 ) -> None:
     """
     Compute and persist daily metrics into ClickHouse/MongoDB/Postgres (and SQLite for dev).
@@ -162,12 +166,15 @@ def run_daily_metrics_job(
     )
 
     # Optional work tracking fetch (provider APIs).
-    provider = (provider or "all").strip().lower()
+    provider = (provider or "auto").strip().lower()
+    if provider == "none":
+        provider = "auto"
     provider_set = set()
     provider_strict = provider in {"jira", "github", "gitlab"}
+    load_from_db = provider == "auto"
     if provider in {"all", "*"}:
         provider_set = {"jira", "github", "gitlab", "synthetic"}
-    elif provider in {"none", "off", "skip"}:
+    elif provider in {"auto", "off", "skip"}:
         provider_set = set()
     else:
         provider_set = {provider}
@@ -211,41 +218,47 @@ def run_daily_metrics_job(
                 logger.info("Ensuring SQLite tables")
                 s.ensure_tables()
 
+        # Initialize team resolver from database if possible
+        await init_team_resolver(primary_sink)
+        team_resolver = get_team_resolver()
+
         work_items: List[Any] = []
         work_item_transitions: List[Any] = []
-        if provider_set:
+        if provider_set or load_from_db:
             since_dt = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
-            logger.info(
-                "Fetching work items since %s (providers=%s)",
-                since_dt.isoformat(),
-                sorted(provider_set),
-            )
-            discovered_repos = _discover_repos(
-                backend=backend,
-                primary_sink=primary_sink,
-                repo_id=repo_id,
-                repo_name=repo_name,
-            )
-            logger.info(
-                "Discovered %d repos from backend for work item ingestion",
-                len(discovered_repos),
-            )
-
-            # Inject a default synthetic repo if 'synthetic' is requested but no synthetic repo exists
-            if "synthetic" in provider_set and not any(
-                r.source == "synthetic" for r in discovered_repos
-            ):
+            discovered_repos: List[DiscoveredRepo] = []
+            if provider_set:
                 logger.info(
-                    "Injecting default 'synthetic/demo-repo' for synthetic data generation"
+                    "Fetching work items since %s (providers=%s)",
+                    since_dt.isoformat(),
+                    sorted(provider_set),
                 )
-                discovered_repos.append(
-                    DiscoveredRepo(
-                        repo_id=uuid.uuid4(),
-                        full_name="synthetic/demo-repo",
-                        source="synthetic",
-                        settings={},
+                discovered_repos = _discover_repos(
+                    backend=backend,
+                    primary_sink=primary_sink,
+                    repo_id=repo_id,
+                    repo_name=repo_name,
+                )
+                logger.info(
+                    "Discovered %d repos from backend for work item ingestion",
+                    len(discovered_repos),
+                )
+
+                # Inject a default synthetic repo if 'synthetic' is requested but no synthetic repo exists
+                if "synthetic" in provider_set and not any(
+                    r.source == "synthetic" for r in discovered_repos
+                ):
+                    logger.info(
+                        "Injecting default 'synthetic/demo-repo' for synthetic data generation"
                     )
-                )
+                    discovered_repos.append(
+                        DiscoveredRepo(
+                            repo_id=uuid.uuid4(),
+                            full_name="synthetic/demo-repo",
+                            source="synthetic",
+                            settings={},
+                        )
+                    )
 
             if "jira" in provider_set:
                 try:
@@ -326,6 +339,29 @@ def run_daily_metrics_job(
                     work_item_transitions.extend(syn_transitions)
                 except Exception as exc:
                     logger.warning("Skipping synthetic work items fetch: %s", exc)
+
+            # Fallback: if we still have no work items but we want metrics,
+            # try loading them from the database.
+            if not work_items and (provider_set or load_from_db):
+                logger.info(
+                    "No work items fetched from providers, attempting to load from database..."
+                )
+                db_work_items, db_transitions = _load_raw_work_items(
+                    backend=backend,
+                    primary_sink=primary_sink,
+                    start=since_dt,
+                    end=datetime.combine(max(days), time.max, tzinfo=timezone.utc),
+                    repo_id=repo_id,
+                    repo_name=repo_name,
+                )
+                if db_work_items:
+                    logger.info(
+                        "Loaded %d work items and %d transitions from database",
+                        len(db_work_items),
+                        len(db_transitions),
+                    )
+                    work_items.extend(db_work_items)
+                    work_item_transitions.extend(db_transitions)
 
             logger.info("Work items ready for compute: %d", len(work_items))
             logger.info(
@@ -586,7 +622,7 @@ def run_daily_metrics_job(
                 # Work items are expected to be synced separately via `sync work-items`.
                 # We only need user-level aggregates here to enrich IC metrics.
                 try:
-                    wi_user_metrics = _load_work_item_user_metrics_daily(
+                    wi_user_metrics = await _load_work_item_user_metrics_daily(
                         db_url=db_url, day=d
                     )
                 except Exception as exc:
@@ -619,7 +655,7 @@ def run_daily_metrics_job(
 
             # --- Complexity & Risk Hotspots ---
             risk_hotspots: List[FileHotspotDaily] = []
-            complexity_by_repo = _load_complexity_snapshots(
+            complexity_by_repo = await _load_complexity_snapshots(
                 db_url=db_url,
                 as_of_day=d,
                 repo_id=repo_id,
@@ -1156,7 +1192,7 @@ def _clickhouse_query_dicts(
     return [dict(zip(col_names, row)) for row in rows]
 
 
-def _load_complexity_snapshots(
+async def _load_complexity_snapshots(
     *,
     db_url: str,
     as_of_day: date,
@@ -1173,14 +1209,7 @@ def _load_complexity_snapshots(
                 repo_name=repo_name,
             )
 
-    try:
-        snapshots = asyncio.run(_fetch())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        try:
-            snapshots = loop.run_until_complete(_fetch())
-        finally:
-            loop.close()
+    snapshots = await _fetch()
 
     by_repo: Dict[uuid.UUID, Dict[str, FileComplexitySnapshot]] = {}
     for snap in snapshots:
@@ -1221,7 +1250,7 @@ def _load_blame_concentration(
     )
 
 
-def _load_work_item_user_metrics_daily(
+async def _load_work_item_user_metrics_daily(
     *,
     db_url: str,
     day: date,
@@ -1232,14 +1261,7 @@ def _load_work_item_user_metrics_daily(
         async with store:
             return await store.get_work_item_user_metrics_daily(day=day)
 
-    try:
-        return asyncio.run(_fetch())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(_fetch())
-        finally:
-            loop.close()
+    return await _fetch()
 
 
 def _load_clickhouse_rows(
@@ -1365,6 +1387,199 @@ def _load_clickhouse_rows(
         })
 
     return commit_rows, pr_rows
+
+
+def _load_clickhouse_work_items(
+    client: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID],
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    from models.work_items import WorkItem, WorkItemStatusTransition
+
+    params: Dict[str, Any] = {"start": _naive_utc(start), "end": _naive_utc(end)}
+    repo_filter = ""
+    if repo_id is not None:
+        params["repo_id"] = str(repo_id)
+        repo_filter = " AND repo_id = {repo_id:UUID}"
+    elif repo_name is not None:
+        params["repo_name"] = repo_name
+        # Note: work_items might not have repo_id if provider is Jira,
+        # but they might have work_scope_id.
+        # For fixtures, we usually have repo_id.
+        repo_filter = ""  # Simplified for now
+
+    # Load items created or updated during the window, or that were open/active
+    # For daily metrics, we need items created before 'end' and (not completed or completed after 'start')
+    item_query = f"""
+    SELECT * FROM work_items 
+    WHERE created_at < {{end:DateTime}} 
+      AND (completed_at IS NULL OR completed_at >= {{start:DateTime}})
+    {repo_filter}
+    """
+    item_rows = _clickhouse_query_dicts(client, item_query, params)
+
+    # Load ALL transitions for the items we found
+    item_ids = [r["work_item_id"] for r in item_rows]
+    trans_rows = []
+    if item_ids:
+        trans_query = """
+        SELECT * FROM work_item_transitions 
+        WHERE work_item_id IN {item_ids:Array(String)}
+        """
+        trans_rows = _clickhouse_query_dicts(
+            client, trans_query, {"item_ids": item_ids}
+        )
+
+    work_items = []
+    for r in item_rows:
+        work_items.append(
+            WorkItem(
+                work_item_id=str(r["work_item_id"]),
+                provider=r["provider"],
+                title=r["title"],
+                type=r["type"],
+                status=r["status"],
+                status_raw=r.get("status_raw"),
+                description=r.get("description"),
+                repo_id=_parse_uuid(r.get("repo_id")),
+                project_key=r.get("project_key"),
+                project_id=r.get("project_id"),
+                assignees=r.get("assignees") or [],
+                reporter=r.get("reporter"),
+                created_at=_to_utc(r["created_at"]),
+                updated_at=_to_utc(r["updated_at"]),
+                started_at=_to_utc(r["started_at"]) if r.get("started_at") else None,
+                completed_at=_to_utc(r["completed_at"])
+                if r.get("completed_at")
+                else None,
+                closed_at=_to_utc(r["closed_at"]) if r.get("closed_at") else None,
+                labels=r.get("labels") or [],
+                story_points=r.get("story_points"),
+                sprint_id=r.get("sprint_id"),
+                sprint_name=r.get("sprint_name"),
+                parent_id=r.get("parent_id"),
+                epic_id=r.get("epic_id"),
+                url=r.get("url"),
+                priority_raw=r.get("priority_raw"),
+                service_class=r.get("service_class"),
+                due_at=_to_utc(r["due_at"]) if r.get("due_at") else None,
+            )
+        )
+
+    transitions = []
+    for r in trans_rows:
+        transitions.append(
+            WorkItemStatusTransition(
+                work_item_id=str(r["work_item_id"]),
+                provider=r["provider"],
+                occurred_at=_to_utc(r["occurred_at"]),
+                from_status=r["from_status"],
+                to_status=r["to_status"],
+                from_status_raw=r.get("from_status_raw"),
+                to_status_raw=r.get("to_status_raw"),
+                actor=r.get("actor"),
+            )
+        )
+    return work_items, transitions
+
+
+def _load_sqlite_work_items(
+    engine: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID],
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    from sqlalchemy import Table, MetaData, Column, String, DateTime, select, or_
+    from sqlalchemy.orm import Session
+
+    metadata = MetaData()
+    work_item_table = Table(
+        "work_items",
+        metadata,
+        Column("work_item_id", String, primary_key=True),
+        Column("repo_id", String),
+        Column("provider", String),
+        Column("title", String),
+        Column("type", String),
+        Column("status", String),
+        Column("created_at", DateTime(timezone=True)),
+        Column("updated_at", DateTime(timezone=True)),
+        Column("completed_at", DateTime(timezone=True)),
+    )
+    transition_table = Table(
+        "work_item_transitions",
+        metadata,
+        Column("work_item_id", String, primary_key=True),
+        Column("occurred_at", DateTime(timezone=True)),
+    )
+
+    with Session(engine) as session:
+        # Items active during the day
+        stmt = select(work_item_table).where(
+            work_item_table.c.created_at < end,
+            or_(
+                work_item_table.c.completed_at.is_(None),
+                work_item_table.c.completed_at >= start,
+            ),
+        )
+        if repo_id:
+            stmt = stmt.where(work_item_table.c.repo_id == str(repo_id))
+
+        res = session.execute(stmt)
+        db_items_raw = res.fetchall()
+        item_ids = [str(r[0]) for r in db_items_raw]
+
+        db_trans_raw = []
+        if item_ids:
+            trans_stmt = select(transition_table).where(
+                transition_table.c.work_item_id.in_(item_ids)
+            )
+            db_trans_raw = session.execute(trans_stmt).fetchall()
+
+    from models.work_items import WorkItem, WorkItemStatusTransition
+
+    # Simplified conversion from Row to dataclass.
+    # We only populate the core fields needed for metrics.
+    work_items = []
+    for r in db_items_raw:
+        # Map row to WorkItem dataclass
+        # Note: r._mapping provides dict-like access
+        m = r._mapping
+        work_items.append(
+            WorkItem(
+                work_item_id=str(m["work_item_id"]),
+                provider=m["provider"],
+                title=m["title"],
+                type=m["type"],
+                status=m["status"],
+                status_raw=None,
+                created_at=m["created_at"],
+                updated_at=m["updated_at"],
+                completed_at=m["completed_at"],
+                repo_id=uuid.UUID(m["repo_id"]) if m["repo_id"] else None,
+            )
+        )
+
+    transitions = []
+    for r in db_trans_raw:
+        m = r._mapping
+        transitions.append(
+            WorkItemStatusTransition(
+                work_item_id=str(m["work_item_id"]),
+                provider="jira",  # Will be enriched during processing
+                occurred_at=m["occurred_at"],
+                from_status="unknown",
+                to_status="unknown",
+                from_status_raw=None,
+                to_status_raw=None,
+            )
+        )
+    return work_items, transitions
 
 
 def _load_clickhouse_blame_concentration(
@@ -1629,6 +1844,74 @@ def _load_mongo_blame_concentration(
             continue
         by_repo.setdefault(repo_uuid, {})[str(file_path)] = float(value)
     return by_repo
+
+
+def _load_mongo_work_items(
+    db: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID],
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    from models.work_items import WorkItem, WorkItemStatusTransition
+
+    start_naive = _naive_utc(start)
+    end_naive = _naive_utc(end)
+
+    item_filter: Dict[str, Any] = {
+        "created_at": {"$lt": end_naive},
+        "$or": [{"completed_at": None}, {"completed_at": {"$gte": start_naive}}],
+    }
+    if repo_id:
+        item_filter["repo_id"] = str(repo_id)
+
+    item_docs = list(db["work_items"].find(item_filter))
+    item_ids = [d["work_item_id"] for d in item_docs]
+
+    trans_docs = []
+    if item_ids:
+        trans_docs = list(
+            db["work_item_transitions"].find({"work_item_id": {"$in": item_ids}})
+        )
+
+    work_items = [WorkItem(**d) for d in item_docs]
+    transitions = [WorkItemStatusTransition(**d) for d in trans_docs]
+    return work_items, transitions
+
+
+def _load_raw_work_items(
+    backend: str,
+    primary_sink: Any,
+    *,
+    start: datetime,
+    end: datetime,
+    repo_id: Optional[uuid.UUID] = None,
+    repo_name: Optional[str] = None,
+) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    if backend == "clickhouse":
+        return _load_clickhouse_work_items(
+            primary_sink.client,
+            start=start,
+            end=end,
+            repo_id=repo_id,
+            repo_name=repo_name,
+        )
+    if backend in {"sqlite", "postgres"}:
+        return _load_sqlite_work_items(
+            primary_sink.engine,
+            start=start,
+            end=end,
+            repo_id=repo_id,
+            repo_name=repo_name,
+        )
+    return _load_mongo_work_items(
+        primary_sink.db,
+        start=start,
+        end=end,
+        repo_id=repo_id,
+        repo_name=repo_name,
+    )
 
 
 def _load_sqlite_rows(
@@ -2432,17 +2715,20 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     daily.add_argument(
         "--provider",
-        choices=["all", "jira", "github", "gitlab", "none"],
-        default="none",
-        help="Sync work items from provider before computing (default: none).",
+        choices=["auto", "all", "jira", "github", "gitlab", "synthetic", "none"],
+        default="auto",
+        help=(
+            "Work item source: auto (DB only), all, jira, github, gitlab, "
+            "synthetic, none (alias of auto)."
+        ),
     )
 
     daily.set_defaults(func=_cmd_metrics_daily)
 
 
-def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
+async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
     try:
-        run_daily_metrics_job(
+        await run_daily_metrics_job(
             db_url=ns.db,
             day=ns.day,
             backfill_days=ns.backfill,

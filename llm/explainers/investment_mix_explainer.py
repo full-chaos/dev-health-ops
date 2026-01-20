@@ -222,6 +222,9 @@ def parse_and_validate_response(
         return None
 
     summary = parsed.get("summary")
+    if isinstance(summary, dict):
+        summary = summary.get("statement")
+
     if not isinstance(summary, str) or not summary.strip():
         logger.warning("Missing or empty 'summary' in LLM response")
         return None

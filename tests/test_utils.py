@@ -271,6 +271,19 @@ class TestBatchProcessingCLIArguments:
 
         assert args.use_async is False
 
+    def test_metrics_daily_provider_default_is_auto(self):
+        """Test that metrics daily defaults to provider=auto."""
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "metrics",
+                "daily",
+                "--db",
+                "sqlite+aiosqlite:///:memory:",
+            ]
+        )
+        assert args.provider == "auto"
+
     def test_use_async_flag_when_provided(self):
         """Test that --use-async flag is True when provided."""
         parser = build_parser()

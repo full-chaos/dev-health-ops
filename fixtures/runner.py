@@ -5,30 +5,11 @@ import os
 import random
 from datetime import datetime, timedelta, timezone
 
-from analytics.investment import InvestmentClassifier
-from analytics.issue_types import IssueTypeNormalizer
 from fixtures.generator import SyntheticDataGenerator
-from metrics.compute import compute_daily_metrics
-from metrics.compute_cicd import compute_cicd_metrics_daily
-from metrics.compute_deployments import compute_deploy_metrics_daily
-from metrics.compute_ic import compute_ic_landscape_rolling, compute_ic_metrics_daily
-from metrics.compute_incidents import compute_incident_metrics_daily
-from metrics.compute_wellbeing import compute_team_wellbeing_metrics_daily
-from metrics.compute_work_item_state_durations import (
-    compute_work_item_state_durations_daily,
-)
-from metrics.compute_work_items import compute_work_item_metrics_daily
-from metrics.hotspots import compute_file_hotspots
-from metrics.schemas import (
-    DailyMetricsResult,
-    InvestmentClassificationRecord,
-    IssueTypeMetricsRecord,
-)
-from metrics.sinks.base import BaseMetricsSink
-from providers.identity import load_identity_resolver
-from providers.teams import TeamResolver
+from work_graph.runner import materialize_fixture_investments
+from metrics.job_daily import run_daily_metrics_job
 from storage import SQLAlchemyStore, resolve_db_type, run_with_store
-from utils import BATCH_SIZE, MAX_WORKERS, REPO_ROOT
+from utils import BATCH_SIZE, MAX_WORKERS
 
 
 async def _insert_batches(
@@ -51,30 +32,6 @@ async def _insert_batches(
     await asyncio.gather(*(_run(batch) for batch in batches))
 
 
-def _write_metrics_result(sink: BaseMetricsSink, result: DailyMetricsResult) -> None:
-    """Helper to write the DailyMetricsResult to any BaseMetricsSink implementation."""
-    if result.repo_metrics:
-        sink.write_repo_metrics(result.repo_metrics)
-    if result.user_metrics:
-        sink.write_user_metrics(result.user_metrics)
-    if result.commit_metrics:
-        sink.write_commit_metrics(result.commit_metrics)
-    if result.team_metrics:
-        sink.write_team_metrics(result.team_metrics)
-    if result.file_metrics:
-        sink.write_file_metrics(result.file_metrics)
-    if result.work_item_metrics:
-        sink.write_work_item_metrics(result.work_item_metrics)
-    if result.work_item_user_metrics:
-        sink.write_work_item_user_metrics(result.work_item_user_metrics)
-    if result.work_item_cycle_times:
-        sink.write_work_item_cycle_times(result.work_item_cycle_times)
-    if result.work_item_state_durations:
-        sink.write_work_item_state_durations(result.work_item_state_durations)
-    if result.review_edges:
-        sink.write_review_edges(result.review_edges)
-
-
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.db, ns.db_type)
@@ -93,6 +50,30 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             logging.info("Inserted %d synthetic teams.", len(all_teams))
 
         allow_parallel_inserts = not isinstance(store, SQLAlchemyStore)
+        sink = None
+        if ns.with_metrics:
+            from metrics.job_daily import (
+                ClickHouseMetricsSink,
+                MongoMetricsSink,
+                PostgresMetricsSink,
+                SQLiteMetricsSink,
+                _normalize_sqlite_url,
+            )
+
+            if db_type == "clickhouse":
+                sink = ClickHouseMetricsSink(ns.db)
+            elif db_type == "sqlite":
+                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.db))
+            elif db_type == "mongo":
+                sink = MongoMetricsSink(ns.db)
+            elif db_type == "postgres":
+                sink = PostgresMetricsSink(ns.db)
+
+            if sink:
+                if isinstance(sink, MongoMetricsSink):
+                    sink.ensure_indexes()
+                else:
+                    sink.ensure_tables()
 
         for i in range(repo_count):
             r_name = base_name if repo_count == 1 else f"{base_name}-{i + 1}"
@@ -252,378 +233,24 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             )
 
             # 8. Metrics
-            if ns.with_metrics:
-                from metrics.job_daily import (
-                    ClickHouseMetricsSink,
-                    MongoMetricsSink,
-                    PostgresMetricsSink,
-                    SQLiteMetricsSink,
-                )
-
-                sink = None
-                if db_type == "clickhouse":
-                    sink = ClickHouseMetricsSink(ns.db)
-                elif db_type == "sqlite":
-                    from metrics.job_daily import _normalize_sqlite_url
-
-                    sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.db))
-                elif db_type == "mongo":
-                    sink = MongoMetricsSink(ns.db)
-                elif db_type == "postgres":
-                    sink = PostgresMetricsSink(ns.db)
-
-                if sink:
-                    if isinstance(sink, MongoMetricsSink):
-                        sink.ensure_indexes()
-                    else:
-                        sink.ensure_tables()
-
-                    comp_data = generator.generate_complexity_metrics(days=ns.days)
-                    complexity_by_day = {}
-                    for snapshot in comp_data["snapshots"]:
-                        complexity_by_day.setdefault(snapshot.as_of_day, {})[
-                            snapshot.file_path
-                        ] = snapshot
-
-                    if hasattr(sink, "write_file_complexity_snapshots"):
-                        if comp_data["snapshots"]:
-                            sink.write_file_complexity_snapshots(comp_data["snapshots"])
-                        if comp_data["dailies"]:
-                            sink.write_repo_complexity_daily(comp_data["dailies"])
-
-                    blame_concentration = {}
-                    if blame_data:
-                        blame_by_file = {}
-                        for row in blame_data:
-                            author = (
-                                getattr(row, "author_email", None)
-                                or getattr(row, "author_name", None)
-                                or "unknown"
-                            )
-                            path = getattr(row, "path", None)
-                            if path:
-                                blame_by_file.setdefault(path, {})[author] = (
-                                    blame_by_file.setdefault(path, {}).get(author, 0)
-                                    + 1
-                                )
-                        for path, counts in blame_by_file.items():
-                            total = sum(counts.values())
-                            if total:
-                                blame_concentration[path] = max(
-                                    counts.values()
-                                ) / float(total)
-
-                    investment_classifier = InvestmentClassifier(
-                        REPO_ROOT / "config/investment_areas.yaml"
-                    )
-                    issue_type_normalizer = IssueTypeNormalizer(
-                        REPO_ROOT / "config/issue_type_mapping.yaml"
-                    )
-                    identity_resolver = load_identity_resolver()
-                    team_resolver = TeamResolver(
-                        member_to_team=team_assignment["member_map"]
-                    )
-                    team_map = {
-                        k: v[0] for k, v in team_assignment["member_map"].items()
-                    }
-
-                    commit_by_hash = {c.hash: c for c in commits}
-                    commit_stat_rows = []
-                    for stat in stats:
-                        c = commit_by_hash.get(stat.commit_hash)
-                        if c:
-                            commit_stat_rows.append({
-                                "repo_id": stat.repo_id,
-                                "commit_hash": stat.commit_hash,
-                                "author_email": c.author_email,
-                                "author_name": c.author_name,
-                                "committer_when": c.committer_when,
-                                "file_path": stat.file_path,
-                                "additions": stat.additions,
-                                "deletions": stat.deletions,
-                            })
-
-                    pr_rows = []
-                    for pr in prs:
-                        pr_rows.append({
-                            "repo_id": pr.repo_id,
-                            "number": pr.number,
-                            "author_email": pr.author_email,
-                            "author_name": pr.author_name,
-                            "created_at": pr.created_at,
-                            "merged_at": pr.merged_at,
-                            "additions": pr.additions,
-                            "deletions": pr.deletions,
-                            "changed_files": pr.changed_files,
-                        })
-
-                    review_rows = []
-                    for rev in all_reviews:
-                        review_rows.append({
-                            "repo_id": rev.repo_id,
-                            "number": rev.number,
-                            "reviewer": rev.reviewer,
-                            "submitted_at": rev.submitted_at,
-                            "state": rev.state,
-                        })
-
-                    for d_idx in range(ns.days):
-                        day = datetime.now(timezone.utc).replace(
-                            hour=0, minute=0, second=0, microsecond=0
-                        ) - timedelta(days=d_idx)
-                        day_date = day.date()
-                        start_dt = day
-                        end_dt = day + timedelta(days=1)
-                        day_commit_stats = [
-                            s
-                            for s in commit_stat_rows
-                            if start_dt <= s["committer_when"] < end_dt
-                        ]
-                        day_work_items = [
-                            wi
-                            for wi in work_items
-                            if start_dt <= wi.created_at < end_dt
-                        ]
-                        day_transitions = [
-                            t for t in transitions if start_dt <= t.occurred_at < end_dt
-                        ]
-
-                        day_prs = [
-                            p
-                            for p in pr_rows
-                            if (p["merged_at"] and start_dt <= p["merged_at"] < end_dt)
-                            or (
-                                not p["merged_at"]
-                                and start_dt <= p["created_at"] < end_dt
-                            )
-                        ]
-                        day_reviews = [
-                            r
-                            for r in review_rows
-                            if start_dt <= r["submitted_at"] < end_dt
-                        ]
-
-                        try:
-                            # 1. Base Metrics (Repo, User, Commit)
-                            metrics_result = compute_daily_metrics(
-                                day=day_date,
-                                commit_stat_rows=day_commit_stats,
-                                pull_request_rows=day_prs,
-                                pull_request_review_rows=day_reviews,
-                                computed_at=now,
-                                identity_resolver=identity_resolver,
-                                team_resolver=team_resolver,
-                            )
-                            _write_metrics_result(sink, metrics_result)
-
-                            # 2. Work Item Metrics
-                            wi_recs, wi_user_recs, wi_cycle_recs = (
-                                compute_work_item_metrics_daily(
-                                    day=day_date,
-                                    work_items=day_work_items,
-                                    transitions=day_transitions,
-                                    computed_at=now,
-                                    team_resolver=team_resolver,
-                                )
-                            )
-                            sink.write_work_item_metrics(wi_recs)
-                            sink.write_work_item_user_metrics(wi_user_recs)
-                            sink.write_work_item_cycle_times(wi_cycle_recs)
-
-                            # 3. IC Metrics (Enriched User Metrics)
-                            ic_metrics = compute_ic_metrics_daily(
-                                git_metrics=metrics_result.user_metrics,
-                                wi_metrics=wi_user_recs,
-                                team_map=team_map,
-                            )
-                            sink.write_user_metrics(ic_metrics)  # Enriched ones
-
-                            # 4. State Duration Metrics
-                            sd_recs = compute_work_item_state_durations_daily(
-                                day=day_date,
-                                work_items=day_work_items,
-                                transitions=day_transitions,
-                                computed_at=now,
-                                team_resolver=team_resolver,
-                            )
-                            sink.write_work_item_state_durations(sd_recs)
-
-                            # 5. Issue Types (Simplified aggregation for fixtures)
-                            it_recs = []
-                            for wi in day_work_items:
-                                norm_type = issue_type_normalizer.normalize(
-                                    wi.provider, wi.type or "task", wi.labels or []
-                                )
-                                it_recs.append(
-                                    IssueTypeMetricsRecord(
-                                        repo_id=repo.id,
-                                        day=day_date,
-                                        provider=wi.provider,
-                                        team_id=team_map.get(
-                                            wi.assignees[0] if wi.assignees else ""
-                                        )
-                                        or "unassigned",
-                                        issue_type_norm=norm_type,
-                                        created_count=(
-                                            1
-                                            if start_dt <= wi.created_at < end_dt
-                                            else 0
-                                        ),
-                                        completed_count=(
-                                            1
-                                            if wi.completed_at
-                                            and start_dt <= wi.completed_at < end_dt
-                                            else 0
-                                        ),
-                                        active_count=(
-                                            1
-                                            if wi.started_at
-                                            and wi.started_at < end_dt
-                                            and (
-                                                not wi.completed_at
-                                                or wi.completed_at >= end_dt
-                                            )
-                                            else 0
-                                        ),
-                                        cycle_p50_hours=0.0,
-                                        cycle_p90_hours=0.0,
-                                        lead_p50_hours=0.0,
-                                        computed_at=now,
-                                    )
-                                )
-                            if it_recs:
-                                sink.write_issue_type_metrics(it_recs)
-
-                            # 6. Investment
-                            inv_recs = []
-                            for wi in day_work_items:
-                                area_result = investment_classifier.classify({
-                                    "title": wi.title or "",
-                                    "description": wi.description or "",
-                                    "labels": wi.labels or [],
-                                    "paths": [],  # We don't have easy path mapping here
-                                    "component": "",
-                                    "epic": "",
-                                })
-                                inv_recs.append(
-                                    InvestmentClassificationRecord(
-                                        repo_id=repo.id,
-                                        day=day_date,
-                                        artifact_type="work_item",
-                                        artifact_id=wi.work_item_id,
-                                        provider=wi.provider,
-                                        investment_area=area_result.investment_area,
-                                        project_stream=area_result.project_stream,
-                                        confidence=area_result.confidence,
-                                        rule_id=area_result.rule_id,
-                                        computed_at=now,
-                                    )
-                                )
-                            if inv_recs:
-                                sink.write_investment_classifications(inv_recs)
-
-                            # 7. Quality & Knowledge
-                            hotspots = compute_file_hotspots(
-                                repo_id=repo.id,
-                                day=day_date,
-                                window_stats=day_commit_stats,
-                                computed_at=now,
-                            )
-                            # hotspots is List[FileMetricsRecord]
-                            sink.write_file_metrics(hotspots)
-
-                            # 8. CI/CD & Deployments
-                            day_pipeline_runs = []
-                            for p in pipeline_runs:
-                                if p.started_at and start_dt <= p.started_at < end_dt:
-                                    day_pipeline_runs.append({
-                                        "repo_id": p.repo_id,
-                                        "run_id": str(p.run_id),
-                                        "status": p.status,
-                                        "queued_at": p.queued_at,
-                                        "started_at": p.started_at,
-                                        "finished_at": p.finished_at,
-                                    })
-                            if day_pipeline_runs:
-                                cicd_recs = compute_cicd_metrics_daily(
-                                    day=day_date,
-                                    pipeline_runs=day_pipeline_runs,
-                                    computed_at=now,
-                                )
-                                sink.write_cicd_metrics(cicd_recs)
-
-                            day_deployments = []
-                            for d in deployments:
-                                if d.started_at and start_dt <= d.started_at < end_dt:
-                                    day_deployments.append({
-                                        "repo_id": d.repo_id,
-                                        "deployment_id": str(d.deployment_id),
-                                        "status": d.status,
-                                        "environment": d.environment,
-                                        "started_at": d.started_at,
-                                        "finished_at": d.finished_at,
-                                        "deployed_at": d.deployed_at or d.finished_at,
-                                    })
-                            if day_deployments:
-                                deploy_recs = compute_deploy_metrics_daily(
-                                    day=day_date,
-                                    deployments=day_deployments,
-                                    computed_at=now,
-                                )
-                                sink.write_deploy_metrics(deploy_recs)
-
-                            day_incidents = []
-                            for inc in incidents:
-                                if (
-                                    inc.started_at
-                                    and start_dt <= inc.started_at < end_dt
-                                ):
-                                    day_incident = {
-                                        "repo_id": inc.repo_id,
-                                        "incident_id": str(inc.incident_id),
-                                        "status": inc.status,
-                                        "started_at": inc.started_at,
-                                        "resolved_at": inc.resolved_at,
-                                    }
-                                    day_incidents.append(day_incident)
-                            if day_incidents:
-                                incident_recs = compute_incident_metrics_daily(
-                                    day=day_date,
-                                    incidents=day_incidents,
-                                    computed_at=now,
-                                )
-                                sink.write_incident_metrics(incident_recs)
-
-                            # 9. Wellbeing
-                            wb_recs = compute_team_wellbeing_metrics_daily(
-                                day=day_date,
-                                commit_stat_rows=day_commit_stats,
-                                team_resolver=team_resolver,
-                                computed_at=now,
-                            )
-                            sink.write_team_metrics(wb_recs)
-
-                            # 11. IC Landscape (Rolling)
-                            if d_idx == 0:
-                                rolling_stats = sink.get_rolling_30d_user_stats(
-                                    as_of_day=day_date, repo_id=repo.id
-                                )
-                                landscape_recs = compute_ic_landscape_rolling(
-                                    as_of_day=day,
-                                    rolling_stats=rolling_stats,
-                                    team_map=team_map,
-                                )
-                                sink.write_ic_landscape_rolling(landscape_recs)
-                        except Exception as e:
-                            logging.warning(
-                                "Failed to compute/write fixture metrics for day %s: %s",
-                                day_date,
-                                e,
-                            )
-
-                    logging.info("Generated fixtures metrics for %s", r_name)
+            if ns.with_metrics and sink:
+                comp_data = generator.generate_complexity_metrics(days=ns.days)
+                if hasattr(sink, "write_file_complexity_snapshots"):
+                    if comp_data["snapshots"]:
+                        sink.write_file_complexity_snapshots(comp_data["snapshots"])
+                    if comp_data["dailies"]:
+                        sink.write_repo_complexity_daily(comp_data["dailies"])
 
     await run_with_store(ns.db, db_type, _handler)
+
+    if ns.with_metrics:
+        # Use the production daily metrics job so fixtures match real outputs.
+        await run_daily_metrics_job(
+            db_url=ns.db,
+            day=now.date(),
+            backfill_days=ns.days,
+            provider="auto",
+        )
 
     if ns.with_work_graph and db_type == "clickhouse":
         from work_graph.builder import BuildConfig, WorkGraphBuilder
@@ -634,6 +261,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         builder = WorkGraphBuilder(config)
         try:
             builder.build()
+            await materialize_fixture_investments(
+                db_url=ns.db,
+                from_ts=config.from_date,
+                to_ts=config.to_date,
+            )
         finally:
             builder.close()
     return 0
@@ -667,6 +299,17 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
     logging.info("Running fixture validation...")
 
+    def _table_exists(name: str) -> bool:
+        try:
+            result = client.query(
+                "SELECT count() FROM system.tables "
+                "WHERE database = currentDatabase() AND name = {name:String}",
+                parameters={"name": name},
+            )
+            return int(result.result_rows[0][0]) > 0
+        except Exception:
+            return False
+
     # 1. Check raw data counts
     try:
         wi_count = int(client.query("SELECT count() FROM work_items").result_rows[0][0])
@@ -690,6 +333,48 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             return 1
     except Exception as e:
         logging.error(f"FAIL: Could not query raw tables: {e}")
+        return 1
+
+    # 1b. Check team mappings in derived work item metrics
+    try:
+        if not _table_exists("teams"):
+            logging.error("FAIL: teams table missing (sync teams or fixtures generate).")
+            return 1
+        if not _table_exists("work_item_cycle_times"):
+            logging.error(
+                "FAIL: work_item_cycle_times missing (run fixtures with --with-metrics)."
+            )
+            return 1
+
+        team_count = int(
+            client.query("SELECT count() FROM teams").result_rows[0][0]
+        )
+        cycle_count = int(
+            client.query("SELECT count() FROM work_item_cycle_times").result_rows[0][0]
+        )
+        assigned_count = int(
+            client.query(
+                "SELECT count() FROM work_item_cycle_times "
+                "WHERE lower(ifNull(nullIf(team_id, ''), 'unassigned')) != 'unassigned'"
+            ).result_rows[0][0]
+        )
+        logging.info(
+            "Team mappings: teams=%d, cycle_times=%d, assigned_cycle_times=%d",
+            team_count,
+            cycle_count,
+            assigned_count,
+        )
+        if team_count == 0 or cycle_count == 0 or assigned_count == 0:
+            logging.error(
+                "FAIL: Missing team mappings in work_item_cycle_times "
+                "(teams=%d, cycle_times=%d, assigned=%d).",
+                team_count,
+                cycle_count,
+                assigned_count,
+            )
+            return 1
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate team mappings: {e}")
         return 1
 
     # 2. Check prerequisites

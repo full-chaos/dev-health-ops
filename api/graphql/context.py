@@ -7,8 +7,11 @@ from typing import Any
 import uuid
 
 
+from strawberry.fastapi import BaseContext
+
+
 @dataclass
-class GraphQLContext:
+class GraphQLContext(BaseContext):
     """
     Context passed to all GraphQL resolvers.
 

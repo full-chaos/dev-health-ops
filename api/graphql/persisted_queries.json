@@ -18,6 +18,18 @@
             "description": "Fetch distinct repo values for catalog",
             "schema_version": "1.0",
             "query": "query RepoValues($orgId: String!) { catalog(orgId: $orgId, dimension: REPO) { values { value count } } }"
+        },
+        {
+            "id": "investment-breakdown",
+            "description": "Fetch theme and subcategory breakdowns for Investment view",
+            "schema_version": "1.0",
+            "query": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { breakdowns { dimension measure items { key value } } } }"
+        },
+        {
+            "id": "investment-sankey",
+            "description": "Fetch Sankey flow data for Investment view",
+            "schema_version": "1.0",
+            "query": "query InvestmentSankey($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { sankey { nodes { id label dimension value } edges { source target value } } } }"
         }
     ]
 }

@@ -227,9 +227,9 @@ class TestCostLimitsDataclass:
 
     def test_default_limits(self):
         """Test that default limits are set correctly."""
-        assert DEFAULT_LIMITS.max_days == 365
+        assert DEFAULT_LIMITS.max_days == 3650
         assert DEFAULT_LIMITS.max_buckets == 100
-        assert DEFAULT_LIMITS.max_top_n == 50
+        assert DEFAULT_LIMITS.max_top_n == 100
         assert DEFAULT_LIMITS.max_sankey_nodes == 100
         assert DEFAULT_LIMITS.max_sankey_edges == 500
         assert DEFAULT_LIMITS.max_sub_requests == 10
@@ -241,4 +241,4 @@ class TestCostLimitsDataclass:
         assert custom.max_days == 30
         assert custom.max_buckets == 50
         # Other fields should still have defaults
-        assert custom.max_top_n == 50
+        assert custom.max_top_n == 100

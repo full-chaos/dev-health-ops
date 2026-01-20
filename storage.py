@@ -13,8 +13,10 @@ from pymongo import UpdateOne
 from pymongo.errors import ConfigurationError
 from sqlalchemy import (
     Column,
+    DateTime,
     Float,
     Integer,
+    JSON,
     MetaData,
     String,
     Table,
@@ -45,6 +47,18 @@ from models.teams import Team
 
 from metrics.schemas import FileComplexitySnapshot
 from metrics.schemas import WorkItemUserMetricsDailyRecord
+
+
+def _register_sqlite_datetime_adapters() -> None:
+    try:
+        import sqlite3
+    except Exception:
+        return
+    sqlite3.register_adapter(date, lambda value: value.isoformat())
+    sqlite3.register_adapter(datetime, lambda value: value.isoformat(" "))
+
+
+_register_sqlite_datetime_adapters()
 
 
 def _parse_date_value(value: Any) -> Optional[date]:
@@ -236,6 +250,53 @@ class SQLAlchemyStore:
             self.engine, expire_on_commit=False, class_=AsyncSession
         )
         self.session: Optional[AsyncSession] = None
+        self._work_item_metadata = MetaData()
+        self._work_items_table = Table(
+            "work_items",
+            self._work_item_metadata,
+            Column("work_item_id", String, primary_key=True),
+            Column("repo_id", String),
+            Column("provider", String),
+            Column("title", String),
+            Column("description", String),
+            Column("type", String),
+            Column("status", String),
+            Column("status_raw", String),
+            Column("project_key", String),
+            Column("project_id", String),
+            Column("assignees", JSON),
+            Column("reporter", String),
+            Column("created_at", DateTime(timezone=True)),
+            Column("updated_at", DateTime(timezone=True)),
+            Column("started_at", DateTime(timezone=True)),
+            Column("completed_at", DateTime(timezone=True)),
+            Column("closed_at", DateTime(timezone=True)),
+            Column("labels", JSON),
+            Column("story_points", Float),
+            Column("sprint_id", String),
+            Column("sprint_name", String),
+            Column("parent_id", String),
+            Column("epic_id", String),
+            Column("url", String),
+            Column("priority_raw", String),
+            Column("service_class", String),
+            Column("due_at", DateTime(timezone=True)),
+            Column("last_synced", DateTime(timezone=True)),
+        )
+        self._work_item_transitions_table = Table(
+            "work_item_transitions",
+            self._work_item_metadata,
+            Column("work_item_id", String, primary_key=True),
+            Column("occurred_at", DateTime(timezone=True), primary_key=True),
+            Column("repo_id", String),
+            Column("provider", String),
+            Column("from_status", String),
+            Column("to_status", String),
+            Column("from_status_raw", String),
+            Column("to_status_raw", String),
+            Column("actor", String),
+            Column("last_synced", DateTime(timezone=True)),
+        )
 
     def _insert_for_dialect(self, model: Any):
         dialect = self.engine.dialect.name
@@ -256,9 +317,14 @@ class SQLAlchemyStore:
             return
         assert self.session is not None
 
+        def _column(obj: Any, name: str) -> Any:
+            if hasattr(obj, "c"):
+                return obj.c[name]
+            return getattr(obj, name)
+
         stmt = self._insert_for_dialect(model)
         stmt = stmt.on_conflict_do_update(
-            index_elements=[getattr(model, col) for col in conflict_columns],
+            index_elements=[_column(model, col) for col in conflict_columns],
             set_={col: getattr(stmt.excluded, col) for col in update_columns},
         )
         await self.session.execute(stmt, rows)
@@ -273,6 +339,7 @@ class SQLAlchemyStore:
 
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(self._work_item_metadata.create_all)
 
         return self
 
@@ -288,6 +355,7 @@ class SQLAlchemyStore:
 
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(self._work_item_metadata.create_all)
 
     async def insert_repo(self, repo: Repo) -> None:
         assert self.session is not None
@@ -954,6 +1022,139 @@ class SQLAlchemyStore:
                 "status",
                 "started_at",
                 "resolved_at",
+                "last_synced",
+            ],
+        )
+
+    async def insert_work_items(self, work_items: List["WorkItem"]) -> None:
+        if not work_items:
+            return
+
+        synced_at_default = datetime.now(timezone.utc)
+        rows: List[Dict[str, Any]] = []
+        for item in work_items:
+            is_dict = isinstance(item, dict)
+            get = (
+                item.get
+                if is_dict
+                else lambda k, default=None: getattr(item, k, default)
+            )
+            repo_id_val = get("repo_id")
+            if repo_id_val:
+                repo_id_val = str(repo_id_val)
+
+            rows.append({
+                "work_item_id": str(get("work_item_id")),
+                "repo_id": repo_id_val,
+                "provider": str(get("provider") or ""),
+                "title": str(get("title") or ""),
+                "description": get("description"),
+                "type": str(get("type") or ""),
+                "status": str(get("status") or ""),
+                "status_raw": str(get("status_raw") or ""),
+                "project_key": str(get("project_key") or ""),
+                "project_id": str(get("project_id") or ""),
+                "assignees": get("assignees") or [],
+                "reporter": str(get("reporter") or ""),
+                "created_at": get("created_at"),
+                "updated_at": get("updated_at"),
+                "started_at": get("started_at"),
+                "completed_at": get("completed_at"),
+                "closed_at": get("closed_at"),
+                "labels": get("labels") or [],
+                "story_points": float(get("story_points"))
+                if get("story_points") is not None
+                else None,
+                "sprint_id": str(get("sprint_id") or ""),
+                "sprint_name": str(get("sprint_name") or ""),
+                "parent_id": str(get("parent_id") or ""),
+                "epic_id": str(get("epic_id") or ""),
+                "url": str(get("url") or ""),
+                "priority_raw": str(get("priority_raw") or ""),
+                "service_class": str(get("service_class") or ""),
+                "due_at": get("due_at"),
+                "last_synced": get("last_synced") or synced_at_default,
+            })
+
+        await self._upsert_many(
+            self._work_items_table,
+            rows,
+            conflict_columns=["work_item_id"],
+            update_columns=[
+                "repo_id",
+                "provider",
+                "title",
+                "description",
+                "type",
+                "status",
+                "status_raw",
+                "project_key",
+                "project_id",
+                "assignees",
+                "reporter",
+                "created_at",
+                "updated_at",
+                "started_at",
+                "completed_at",
+                "closed_at",
+                "labels",
+                "story_points",
+                "sprint_id",
+                "sprint_name",
+                "parent_id",
+                "epic_id",
+                "url",
+                "priority_raw",
+                "service_class",
+                "due_at",
+                "last_synced",
+            ],
+        )
+
+    async def insert_work_item_transitions(
+        self, transitions: List["WorkItemStatusTransition"]
+    ) -> None:
+        if not transitions:
+            return
+
+        synced_at_default = datetime.now(timezone.utc)
+        rows: List[Dict[str, Any]] = []
+        for item in transitions:
+            is_dict = isinstance(item, dict)
+            get = (
+                item.get
+                if is_dict
+                else lambda k, default=None: getattr(item, k, default)
+            )
+            repo_id_val = get("repo_id")
+            if repo_id_val:
+                repo_id_val = str(repo_id_val)
+
+            rows.append({
+                "work_item_id": str(get("work_item_id")),
+                "occurred_at": get("occurred_at"),
+                "repo_id": repo_id_val,
+                "provider": str(get("provider") or ""),
+                "from_status": str(get("from_status") or ""),
+                "to_status": str(get("to_status") or ""),
+                "from_status_raw": str(get("from_status_raw") or ""),
+                "to_status_raw": str(get("to_status_raw") or ""),
+                "actor": str(get("actor") or ""),
+                "last_synced": get("last_synced") or synced_at_default,
+            })
+
+        await self._upsert_many(
+            self._work_item_transitions_table,
+            rows,
+            conflict_columns=["work_item_id", "occurred_at"],
+            update_columns=[
+                "repo_id",
+                "provider",
+                "from_status",
+                "to_status",
+                "from_status_raw",
+                "to_status_raw",
+                "actor",
                 "last_synced",
             ],
         )

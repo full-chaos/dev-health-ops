@@ -216,6 +216,61 @@ def _collect_provider(
     return None
 
 
+def _clean_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return text.strip()
+
+
+def _resolve_work_unit_label(
+    *,
+    issue_ids: Iterable[str],
+    pr_ids: Iterable[str],
+    commit_ids: Iterable[str],
+    work_item_map: Dict[str, Dict[str, object]],
+    pr_map: Dict[str, Dict[str, object]],
+    commit_map: Dict[str, Dict[str, object]],
+) -> Tuple[Optional[str], Optional[str]]:
+    for issue_id in sorted(issue_ids):
+        item = work_item_map.get(issue_id) or {}
+        title = _clean_text(item.get("title"))
+        if title:
+            item_type = _clean_text(item.get("type")) or "issue"
+            return item_type, title
+
+    for pr_id in sorted(pr_ids):
+        pr = pr_map.get(pr_id) or {}
+        title = _clean_text(pr.get("title"))
+        if title:
+            return "pr", title
+
+    for commit_id in sorted(commit_ids):
+        commit = commit_map.get(commit_id) or {}
+        message = _clean_text(commit.get("message"))
+        if message:
+            return "commit", _first_line(message)
+
+    if issue_ids:
+        for issue_id in sorted(issue_ids):
+            item = work_item_map.get(issue_id) or {}
+            item_type = _clean_text(item.get("type"))
+            return (item_type or "issue"), None
+        return "issue", None
+    if pr_ids:
+        return "pr", None
+    if commit_ids:
+        return "commit", None
+    return None, None
+
+
 def _resolve_repo_ids(
     client: object,
     repo_ids: Optional[List[str]],
@@ -379,10 +434,20 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 repo_id = _parse_repo_id(repo_candidates[0])
 
             provider = _collect_provider(issue_node_ids, work_item_map)
+            work_unit_type, work_unit_name = _resolve_work_unit_label(
+                issue_ids=issue_node_ids,
+                pr_ids=pr_node_ids,
+                commit_ids=commit_node_ids,
+                work_item_map=work_item_map,
+                pr_map=pr_map,
+                commit_map=commit_map,
+            )
 
             records.append(
                 WorkUnitInvestmentRecord(
                     work_unit_id=unit_id,
+                    work_unit_type=work_unit_type,
+                    work_unit_name=work_unit_name,
                     from_ts=bounds.start,
                     to_ts=bounds.end,
                     repo_id=repo_id,

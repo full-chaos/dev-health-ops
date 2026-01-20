@@ -116,31 +116,25 @@ class TestCompileTimeseries:
     """Tests for compile_timeseries."""
 
     def test_basic_timeseries(self):
-        """Test basic timeseries compilation."""
+        """Test basic timeseries SQL generation."""
+        # Use TEAM as it points to the default table
         request = TimeseriesRequest(
             dimension="team",
             measure="count",
             interval="day",
             start_date=date(2025, 1, 1),
-            end_date=date(2025, 1, 31),
+            end_date=date(2025, 1, 7),
         )
-        org_id = "test-org"
+        sql, params = compile_timeseries(request, org_id="org1")
 
-        sql, params = compile_timeseries(request, org_id)
-
-        # Check SQL structure
         assert "SELECT" in sql
-        assert "date_trunc" in sql
-        assert "team_id" in sql
-        assert "COUNT(*)" in sql
-        assert "work_unit_daily" in sql
-        assert "{org_id:String}" in sql
-        assert "GROUP BY" in sql
-
-        # Check params
-        assert params["org_id"] == org_id
+        assert "date_trunc('day', day) AS bucket" in sql
+        assert "team_id AS dimension_value" in sql
+        assert "SUM(work_items_completed)" in sql
+        assert "FROM investment_metrics_daily" in sql
+        assert "day >= %(start_date)s AND day <= %(end_date)s" in sql
         assert params["start_date"] == date(2025, 1, 1)
-        assert params["end_date"] == date(2025, 1, 31)
+        assert params["end_date"] == date(2025, 1, 7)
         assert "timeout" in params
 
     def test_invalid_dimension(self):
@@ -174,27 +168,24 @@ class TestCompileBreakdown:
     """Tests for compile_breakdown."""
 
     def test_basic_breakdown(self):
-        """Test basic breakdown compilation."""
+        """Test basic breakdown SQL generation."""
+        # Use THEME to trigger investment logic
         request = BreakdownRequest(
             dimension="theme",
-            measure="throughput",
+            measure="count",
             start_date=date(2025, 1, 1),
-            end_date=date(2025, 1, 31),
+            end_date=date(2025, 1, 7),
             top_n=20,
         )
-        org_id = "test-org"
+        sql, params = compile_breakdown(request, org_id="org1")
 
-        sql, params = compile_breakdown(request, org_id)
-
-        # Check SQL structure
         assert "SELECT" in sql
-        assert "theme" in sql
-        assert "COUNT(DISTINCT work_unit_id)" in sql
-        assert "LIMIT" in sql
-        assert "{top_n:UInt32}" in sql
-
-        # Check params
-        assert params["org_id"] == org_id
+        assert "splitByChar('.', subcategory_kv.1)[1] AS dimension_value" in sql
+        assert "SUM(subcategory_kv.2 * effort_value)" in sql
+        assert "FROM work_unit_investments" in sql
+        assert "ARRAY JOIN" in sql
+        assert "work_unit_investments.from_ts < %(end_date)s" in sql
+        assert params["org_id"] == "org1"
         assert params["top_n"] == 20
 
     def test_org_id_always_in_params(self):
@@ -239,6 +230,7 @@ class TestCompileSankey:
         assert "repo_id" in nodes_sql
         assert "team_id" in nodes_sql
         assert nodes_params["org_id"] == org_id
+        assert "investment_metrics_daily" in nodes_sql
 
         # Check edges queries
         for edge_sql, edge_params in edges_queries:
@@ -279,6 +271,7 @@ class TestCompileCatalogValues:
         assert "team_id" in sql
         assert "COUNT(*)" in sql
         assert "GROUP BY" in sql
+        assert "investment_metrics_daily" in sql
         assert "LIMIT" in sql
 
         # Check params
@@ -307,13 +300,21 @@ class TestDimensionDbColumn:
         assert len(col) > 0
 
     def test_specific_mappings(self):
-        """Test specific dimension to column mappings."""
+        """Test specific dimension to database column mappings."""
+        # Non-investment (default)
         assert Dimension.db_column(Dimension.TEAM) == "team_id"
         assert Dimension.db_column(Dimension.REPO) == "repo_id"
-        assert Dimension.db_column(Dimension.AUTHOR) == "author_id"
-        assert Dimension.db_column(Dimension.WORK_TYPE) == "work_item_type"
-        assert Dimension.db_column(Dimension.THEME) == "theme"
-        assert Dimension.db_column(Dimension.SUBCATEGORY) == "subcategory"
+        assert Dimension.db_column(Dimension.THEME) == "investment_area"
+
+        # Investment
+        assert (
+            Dimension.db_column(Dimension.THEME, use_investment=True)
+            == "splitByChar('.', subcategory_kv.1)[1]"
+        )
+        assert (
+            Dimension.db_column(Dimension.SUBCATEGORY, use_investment=True)
+            == "subcategory_kv.1"
+        )
 
 
 class TestMeasureDbExpression:
@@ -328,11 +329,16 @@ class TestMeasureDbExpression:
 
     def test_specific_expressions(self):
         """Test specific measure to SQL expression mappings."""
-        assert Measure.db_expression(Measure.COUNT) == "COUNT(*)"
-        assert Measure.db_expression(Measure.CHURN_LOC) == "SUM(churn_loc)"
+        # Non-investment (default)
+        assert Measure.db_expression(Measure.COUNT) == "SUM(work_items_completed)"
+        assert Measure.db_expression(Measure.THROUGHPUT) == "SUM(work_items_completed)"
+
+        # Investment
         assert (
-            Measure.db_expression(Measure.CYCLE_TIME_HOURS) == "AVG(cycle_time_hours)"
+            Measure.db_expression(Measure.COUNT, use_investment=True)
+            == "SUM(subcategory_kv.2 * effort_value)"
         )
         assert (
-            Measure.db_expression(Measure.THROUGHPUT) == "COUNT(DISTINCT work_unit_id)"
+            Measure.db_expression(Measure.THROUGHPUT, use_investment=True)
+            == "SUM(throughput)"
         )

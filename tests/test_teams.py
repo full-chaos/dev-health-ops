@@ -154,3 +154,24 @@ async def test_cli_sync_teams_synthetic():
             coro = mock_run.call_args[0][0]
             assert asyncio.iscoroutine(coro)
             coro.close()
+
+
+@pytest.mark.asyncio
+async def test_load_team_resolver_from_store_accepts_id_name_dicts():
+    """Ensure team resolver handles dicts keyed by id/name."""
+    from providers.teams import load_team_resolver_from_store
+
+    class FakeStore:
+        async def get_all_teams(self):
+            return [
+                {
+                    "id": "team-a",
+                    "name": "Team Alpha",
+                    "members": ["alice@example.com"],
+                }
+            ]
+
+    resolver = await load_team_resolver_from_store(FakeStore())
+    team_id, team_name = resolver.resolve("alice@example.com")
+    assert team_id == "team-a"
+    assert team_name == "Team Alpha"

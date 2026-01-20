@@ -57,33 +57,14 @@ def test_qwen_api_key_precedence():
 
 def test_qwen_auto_detection():
     # Test auto-detection via QWEN_API_KEY
-    with patch.dict(os.environ, {"QWEN_API_KEY": "test-key"}):
-        # Clear other keys that might trigger different providers
-        with patch.dict(
-            os.environ, {"OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": ""}, clear=False
-        ):
-            if "OPENAI_API_KEY" in os.environ:
-                del os.environ["OPENAI_API_KEY"]
-            if "ANTHROPIC_API_KEY" in os.environ:
-                del os.environ["ANTHROPIC_API_KEY"]
-            p = get_provider("auto")
-            assert isinstance(p, QwenProvider)
+    with patch.dict(os.environ, {"QWEN_API_KEY": "test-key"}, clear=True):
+        p = get_provider("auto")
+        assert isinstance(p, QwenProvider)
 
     # Test auto-detection via DASHSCOPE_API_KEY
-    with patch.dict(os.environ, {"DASHSCOPE_API_KEY": "test-key"}):
-        with patch.dict(
-            os.environ,
-            {"OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": "", "QWEN_API_KEY": ""},
-            clear=False,
-        ):
-            if "OPENAI_API_KEY" in os.environ:
-                del os.environ["OPENAI_API_KEY"]
-            if "ANTHROPIC_API_KEY" in os.environ:
-                del os.environ["ANTHROPIC_API_KEY"]
-            if "QWEN_API_KEY" in os.environ:
-                del os.environ["QWEN_API_KEY"]
-            p = get_provider("auto")
-            assert isinstance(p, QwenProvider)
+    with patch.dict(os.environ, {"DASHSCOPE_API_KEY": "test-key"}, clear=True):
+        p = get_provider("auto")
+        assert isinstance(p, QwenProvider)
 
 
 @pytest.mark.asyncio

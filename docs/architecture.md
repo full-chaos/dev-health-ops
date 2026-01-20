@@ -25,3 +25,8 @@ The project follows a pipeline-style architecture that separates data collection
 ## CLI entry points
 
 The CLI is implemented with argparse in `cli.py` and orchestrates sync, metrics, and Grafana workflows.
+
+## Work unit investment payload
+
+The Work Unit Investment API payloads include optional `work_unit_type` and `work_unit_name`
+fields for UI labels. These fields are intended to be exposed through GraphQL later unchanged.

@@ -28,7 +28,7 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "8123"
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-stats}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ch}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
       GF_AUTH_ANONYMOUS_ENABLED: true
@@ -78,7 +78,7 @@ services:
       CLICKHOUSE_LISTEN_HOST: 0.0.0.0
       CLICKHOUSE_USER: ch
       CLICKHOUSE_PASSWORD: ch
-      CLICKHOUSE_DB: stats
+      CLICKHOUSE_DB: default
     ports:
       - "8123:8123"
       - "9000:9000"

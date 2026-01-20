@@ -63,11 +63,20 @@ class SankeyEdge:
 
 
 @strawberry.type
+class SankeyCoverage:
+    """Coverage metrics for the Sankey flow."""
+
+    team_coverage: float
+    repo_coverage: float
+
+
+@strawberry.type
 class SankeyResult:
     """Result of a Sankey flow query."""
 
     nodes: List[SankeyNode]
     edges: List[SankeyEdge]
+    coverage: Optional[SankeyCoverage] = None
 
 
 @strawberry.type

@@ -200,6 +200,34 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         return 1
 
 
+async def materialize_fixture_investments(
+    *,
+    db_url: str,
+    from_ts: datetime,
+    to_ts: datetime,
+    repo_ids: list[str] | None = None,
+    team_ids: list[str] | None = None,
+) -> dict[str, int]:
+    """Materialize fixture investments using the mock LLM provider."""
+    config = MaterializeConfig(
+        dsn=db_url,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        repo_ids=repo_ids,
+        llm_provider="mock",
+        persist_evidence_snippets=False,
+        llm_model=None,
+        team_ids=team_ids,
+        force=True,
+    )
+    logging.info(
+        "Materializing fixture investments from %s to %s",
+        config.from_ts,
+        config.to_ts,
+    )
+    return await materialize_investments(config)
+
+
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     # ---- work-graph ----
     wg = subparsers.add_parser("work-graph", help="Work graph operations.")

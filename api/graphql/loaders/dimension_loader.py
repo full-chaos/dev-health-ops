@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..sql.compiler import CatalogValuesRequest, compile_catalog_values
 from ..sql.validate import Dimension
+
+if TYPE_CHECKING:
+    from ..models.inputs import FilterInput
 
 
 logger = logging.getLogger(__name__)
@@ -18,6 +21,7 @@ async def load_dimension_values(
     org_id: str,
     limit: int = 100,
     timeout: int = 30,
+    filters: Optional["FilterInput"] = None,  # NEW: Filter support
 ) -> List[Dict[str, Any]]:
     """
     Load distinct values for a dimension.
@@ -28,6 +32,7 @@ async def load_dimension_values(
         org_id: Organization ID for scoping.
         limit: Maximum number of values to return.
         timeout: Query timeout in seconds.
+        filters: Optional FilterInput to narrow down dimension values.
 
     Returns:
         List of dicts with 'value' and 'count' keys.
@@ -39,13 +44,14 @@ async def load_dimension_values(
         limit=limit,
     )
 
-    sql, params = compile_catalog_values(request, org_id, timeout)
+    sql, params = compile_catalog_values(request, org_id, timeout, filters=filters)
 
     logger.debug(
-        "Loading dimension values for %s, org_id=%s, limit=%d",
+        "Loading dimension values for %s, org_id=%s, limit=%d, filters=%s",
         dimension,
         org_id,
         limit,
+        filters,
     )
 
     try:

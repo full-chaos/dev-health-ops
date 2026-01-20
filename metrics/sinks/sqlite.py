@@ -145,6 +145,16 @@ class SQLiteMetricsSink(BaseMetricsSink):
             )
             """,
             """
+            CREATE TABLE IF NOT EXISTS teams (
+              id TEXT NOT NULL PRIMARY KEY,
+              team_uuid TEXT UNIQUE,
+              name TEXT NOT NULL,
+              description TEXT,
+              members TEXT, -- JSON array of member identities
+              updated_at TEXT NOT NULL
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS team_metrics_daily (
               day TEXT NOT NULL,
               team_id TEXT NOT NULL,
@@ -1751,3 +1761,74 @@ class SQLiteMetricsSink(BaseMetricsSink):
         raise NotImplementedError(
             "Work unit investment evidence quotes are not supported for SQLite"
         )
+
+    # -------------------------------------------------------------------------
+    # Team resolution / identity support
+    # -------------------------------------------------------------------------
+
+    async def get_all_teams(self) -> List[Dict[str, Any]]:
+        """Fetch all teams from the database for identity resolution."""
+        with self.engine.connect() as conn:
+            result = conn.execute(text("SELECT id, name, members FROM teams"))
+            teams = []
+            for row in result:
+                members_raw = row[2]
+                try:
+                    import json
+
+                    members = json.loads(members_raw) if members_raw else []
+                except Exception:
+                    members = []
+
+                teams.append({"id": row[0], "name": row[1], "members": members})
+            return teams
+
+    async def insert_teams(self, teams: List[Any]) -> None:
+        """Insert or update teams in the database."""
+        import json
+
+        with self.engine.begin() as conn:
+            for team in teams:
+                # Handle both objects and dicts
+                t_id = getattr(team, "id", None) or (
+                    team.get("id") if isinstance(team, dict) else None
+                )
+                t_name = getattr(team, "name", None) or (
+                    team.get("name") if isinstance(team, dict) else ""
+                )
+                t_members = getattr(team, "members", []) or (
+                    team.get("members") if isinstance(team, dict) else []
+                )
+                t_uuid = getattr(team, "team_uuid", None) or (
+                    team.get("team_uuid") if isinstance(team, dict) else None
+                )
+                t_desc = getattr(team, "description", None) or (
+                    team.get("description") if isinstance(team, dict) else None
+                )
+                t_updated = getattr(team, "updated_at", None) or (
+                    team.get("updated_at")
+                    if isinstance(team, dict)
+                    else datetime.now(timezone.utc)
+                )
+
+                conn.execute(
+                    text("""
+                        INSERT INTO teams (id, team_uuid, name, description, members, updated_at)
+                        VALUES (:id, :uuid, :name, :desc, :members, :updated)
+                        ON CONFLICT(id) DO UPDATE SET
+                            name=excluded.name,
+                            description=excluded.description,
+                            members=excluded.members,
+                            updated_at=excluded.updated_at
+                    """),
+                    {
+                        "id": t_id,
+                        "uuid": str(t_uuid) if t_uuid else None,
+                        "name": t_name,
+                        "desc": t_desc,
+                        "members": json.dumps(t_members),
+                        "updated": _dt_to_sqlite(t_updated)
+                        if isinstance(t_updated, datetime)
+                        else str(t_updated),
+                    },
+                )

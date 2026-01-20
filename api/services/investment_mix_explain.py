@@ -101,7 +101,13 @@ async def explain_investment_mix(
     if subcategory and subcategory not in SUBCATEGORIES:
         raise ValueError("Unknown subcategory")
     if theme and subcategory and theme_of(subcategory) != theme:
-        raise ValueError("Theme/subcategory mismatch")
+        logger.warning(
+            "Theme/subcategory mismatch: theme=%s, subcategory=%s. Using theme '%s' from subcategory.",
+            theme,
+            subcategory,
+            theme_of(subcategory),
+        )
+        theme = theme_of(subcategory)
 
     # Compute cache key for lookup
     cache_key = _compute_cache_key(filters, theme, subcategory)

@@ -38,11 +38,13 @@ def _build_member_to_team(teams_data: List) -> Dict[str, Tuple[str, str]]:
         # Handle both objects (models) and dicts (from YAML)
         team_id = str(
             getattr(team, "id", None)
+            or (team.get("id") if isinstance(team, dict) else None)
             or (team.get("team_id") if isinstance(team, dict) else None)
             or ""
         ).strip()
         team_name = str(
             getattr(team, "name", None)
+            or (team.get("name") if isinstance(team, dict) else None)
             or (team.get("team_name") if isinstance(team, dict) else team_id)
         ).strip()
 

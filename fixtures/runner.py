@@ -249,7 +249,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             db_url=ns.db,
             day=now.date(),
             backfill_days=ns.days,
-            provider="synthetic",
+            provider="auto",
         )
 
     if ns.with_work_graph and db_type == "clickhouse":
@@ -299,6 +299,17 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
     logging.info("Running fixture validation...")
 
+    def _table_exists(name: str) -> bool:
+        try:
+            result = client.query(
+                "SELECT count() FROM system.tables "
+                "WHERE database = currentDatabase() AND name = {name:String}",
+                parameters={"name": name},
+            )
+            return int(result.result_rows[0][0]) > 0
+        except Exception:
+            return False
+
     # 1. Check raw data counts
     try:
         wi_count = int(client.query("SELECT count() FROM work_items").result_rows[0][0])
@@ -322,6 +333,48 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             return 1
     except Exception as e:
         logging.error(f"FAIL: Could not query raw tables: {e}")
+        return 1
+
+    # 1b. Check team mappings in derived work item metrics
+    try:
+        if not _table_exists("teams"):
+            logging.error("FAIL: teams table missing (sync teams or fixtures generate).")
+            return 1
+        if not _table_exists("work_item_cycle_times"):
+            logging.error(
+                "FAIL: work_item_cycle_times missing (run fixtures with --with-metrics)."
+            )
+            return 1
+
+        team_count = int(
+            client.query("SELECT count() FROM teams").result_rows[0][0]
+        )
+        cycle_count = int(
+            client.query("SELECT count() FROM work_item_cycle_times").result_rows[0][0]
+        )
+        assigned_count = int(
+            client.query(
+                "SELECT count() FROM work_item_cycle_times "
+                "WHERE lower(ifNull(nullIf(team_id, ''), 'unassigned')) != 'unassigned'"
+            ).result_rows[0][0]
+        )
+        logging.info(
+            "Team mappings: teams=%d, cycle_times=%d, assigned_cycle_times=%d",
+            team_count,
+            cycle_count,
+            assigned_count,
+        )
+        if team_count == 0 or cycle_count == 0 or assigned_count == 0:
+            logging.error(
+                "FAIL: Missing team mappings in work_item_cycle_times "
+                "(teams=%d, cycle_times=%d, assigned=%d).",
+                team_count,
+                cycle_count,
+                assigned_count,
+            )
+            return 1
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate team mappings: {e}")
         return 1
 
     # 2. Check prerequisites

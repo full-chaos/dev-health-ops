@@ -8,6 +8,7 @@ import uuid
 
 import clickhouse_connect
 import logging
+import asyncio
 from metrics.schemas import (
     CommitMetricsRecord,
     RepoMetricsDailyRecord,
@@ -83,6 +84,19 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 e,
                 exc_info=True,
             )
+
+    async def get_all_teams(self) -> List[Dict[str, Any]]:
+        """Fetch all teams from ClickHouse for identity resolution."""
+        query = "SELECT id, name, members FROM teams FINAL"
+        result = await asyncio.to_thread(self.client.query, query)
+        teams: List[Dict[str, Any]] = []
+        for row in (result.result_rows or []):
+            teams.append({
+                "id": row[0],
+                "name": row[1],
+                "members": row[2] or [],
+            })
+        return teams
 
     def _apply_sql_migrations(self) -> None:
         migrations_dir = (

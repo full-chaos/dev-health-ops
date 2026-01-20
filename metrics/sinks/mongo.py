@@ -71,6 +71,7 @@ class MongoMetricsSink(BaseMetricsSink):
             logging.warning("Failed to close MongoDB client: %s", e)
 
     def ensure_indexes(self) -> None:
+        self.db["teams"].create_index([("id", 1)], unique=True)
         self.db["repo_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["user_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["user_metrics_daily"].create_index([
@@ -151,6 +152,50 @@ class MongoMetricsSink(BaseMetricsSink):
         ])
         self.db["investment_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["issue_type_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
+
+    async def get_all_teams(self) -> List[Dict[str, Any]]:
+        """Fetch all teams from MongoDB for identity resolution."""
+        rows = list(self.db["teams"].find({}, {"_id": 0}))
+        teams: List[Dict[str, Any]] = []
+        for row in rows:
+            teams.append({
+                "id": row.get("id") or row.get("team_id"),
+                "name": row.get("name") or row.get("team_name"),
+                "members": row.get("members") or [],
+            })
+        return teams
+
+    async def insert_teams(self, teams: List[Any]) -> None:
+        """Insert or update teams in MongoDB."""
+        if not teams:
+            return
+        ops: List[ReplaceOne] = []
+        for team in teams:
+            if isinstance(team, dict):
+                team_id = team.get("id") or team.get("team_id")
+                doc = {
+                    "id": team_id,
+                    "name": team.get("name") or team.get("team_name"),
+                    "members": team.get("members") or [],
+                    "description": team.get("description"),
+                    "updated_at": _dt_to_mongo_datetime(
+                        team.get("updated_at") or datetime.now(timezone.utc)
+                    ),
+                }
+            else:
+                team_id = getattr(team, "id", None)
+                doc = {
+                    "id": team_id,
+                    "name": getattr(team, "name", None),
+                    "members": getattr(team, "members", []) or [],
+                    "description": getattr(team, "description", None),
+                    "updated_at": _dt_to_mongo_datetime(
+                        getattr(team, "updated_at", None) or datetime.now(timezone.utc)
+                    ),
+                }
+            ops.append(ReplaceOne({"id": team_id}, doc, upsert=True))
+        if ops:
+            self.db["teams"].bulk_write(ops, ordered=False)
 
     def ensure_schema(self) -> None:
         """Create MongoDB indexes for efficient querying."""

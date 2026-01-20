@@ -92,7 +92,7 @@ async def run_daily_metrics_job(
     repo_name: Optional[str] = None,
     include_commit_metrics: bool = True,
     sink: str = "auto",  # auto|clickhouse|mongo|sqlite|both
-    provider: str = "none",  # all|jira|github|gitlab|none
+    provider: str = "auto",  # auto|all|jira|github|gitlab|synthetic|none
 ) -> None:
     """
     Compute and persist daily metrics into ClickHouse/MongoDB/Postgres (and SQLite for dev).
@@ -166,12 +166,15 @@ async def run_daily_metrics_job(
     )
 
     # Optional work tracking fetch (provider APIs).
-    provider = (provider or "all").strip().lower()
+    provider = (provider or "auto").strip().lower()
+    if provider == "none":
+        provider = "auto"
     provider_set = set()
     provider_strict = provider in {"jira", "github", "gitlab"}
+    load_from_db = provider == "auto"
     if provider in {"all", "*"}:
         provider_set = {"jira", "github", "gitlab", "synthetic"}
-    elif provider in {"none", "off", "skip"}:
+    elif provider in {"auto", "off", "skip"}:
         provider_set = set()
     else:
         provider_set = {provider}
@@ -221,39 +224,41 @@ async def run_daily_metrics_job(
 
         work_items: List[Any] = []
         work_item_transitions: List[Any] = []
-        if provider_set:
+        if provider_set or load_from_db:
             since_dt = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
-            logger.info(
-                "Fetching work items since %s (providers=%s)",
-                since_dt.isoformat(),
-                sorted(provider_set),
-            )
-            discovered_repos = _discover_repos(
-                backend=backend,
-                primary_sink=primary_sink,
-                repo_id=repo_id,
-                repo_name=repo_name,
-            )
-            logger.info(
-                "Discovered %d repos from backend for work item ingestion",
-                len(discovered_repos),
-            )
-
-            # Inject a default synthetic repo if 'synthetic' is requested but no synthetic repo exists
-            if "synthetic" in provider_set and not any(
-                r.source == "synthetic" for r in discovered_repos
-            ):
+            discovered_repos: List[DiscoveredRepo] = []
+            if provider_set:
                 logger.info(
-                    "Injecting default 'synthetic/demo-repo' for synthetic data generation"
+                    "Fetching work items since %s (providers=%s)",
+                    since_dt.isoformat(),
+                    sorted(provider_set),
                 )
-                discovered_repos.append(
-                    DiscoveredRepo(
-                        repo_id=uuid.uuid4(),
-                        full_name="synthetic/demo-repo",
-                        source="synthetic",
-                        settings={},
+                discovered_repos = _discover_repos(
+                    backend=backend,
+                    primary_sink=primary_sink,
+                    repo_id=repo_id,
+                    repo_name=repo_name,
+                )
+                logger.info(
+                    "Discovered %d repos from backend for work item ingestion",
+                    len(discovered_repos),
+                )
+
+                # Inject a default synthetic repo if 'synthetic' is requested but no synthetic repo exists
+                if "synthetic" in provider_set and not any(
+                    r.source == "synthetic" for r in discovered_repos
+                ):
+                    logger.info(
+                        "Injecting default 'synthetic/demo-repo' for synthetic data generation"
                     )
-                )
+                    discovered_repos.append(
+                        DiscoveredRepo(
+                            repo_id=uuid.uuid4(),
+                            full_name="synthetic/demo-repo",
+                            source="synthetic",
+                            settings={},
+                        )
+                    )
 
             if "jira" in provider_set:
                 try:
@@ -335,9 +340,9 @@ async def run_daily_metrics_job(
                 except Exception as exc:
                     logger.warning("Skipping synthetic work items fetch: %s", exc)
 
-            # Fallback: if we still have no work items but we have a provider set (or it was 'none' but we want metrics),
+            # Fallback: if we still have no work items but we want metrics,
             # try loading them from the database.
-            if not work_items and (provider_set or provider in {"none", "off", "skip"}):
+            if not work_items and (provider_set or load_from_db):
                 logger.info(
                     "No work items fetched from providers, attempting to load from database..."
                 )
@@ -2710,9 +2715,12 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     daily.add_argument(
         "--provider",
-        choices=["all", "jira", "github", "gitlab", "none"],
-        default="none",
-        help="Sync work items from provider before computing (default: none).",
+        choices=["auto", "all", "jira", "github", "gitlab", "synthetic", "none"],
+        default="auto",
+        help=(
+            "Work item source: auto (DB only), all, jira, github, gitlab, "
+            "synthetic, none (alias of auto)."
+        ),
     )
 
     daily.set_defaults(func=_cmd_metrics_daily)

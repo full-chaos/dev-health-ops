@@ -162,6 +162,28 @@ curl -s -X POST "http://localhost:8000/graphql?org_id=default" \
   }'
 ```
 
+#### Curl example (Investment breakdowns via dev-health-web)
+
+```bash
+curl -s -X POST "http://localhost:3000/graphql?org_id=default" \
+  -H "Content-Type: application/json" \
+  -H "X-Org-Id: default" \
+  -d '{
+    "query": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { breakdowns { dimension measure items { key value } } } }",
+    "variables": {
+      "orgId": "default",
+      "batch": {
+        "useInvestment": true,
+        "breakdowns": [
+          { "dimension": "THEME", "measure": "COUNT", "dateRange": { "startDate": "2026-01-06", "endDate": "2026-01-20" }, "topN": 50 },
+          { "dimension": "SUBCATEGORY", "measure": "COUNT", "dateRange": { "startDate": "2026-01-06", "endDate": "2026-01-20" }, "topN": 100 }
+        ],
+        "filters": { "scope": { "level": "ORG", "ids": [] } }
+      }
+    }
+  }'
+```
+
 ---
 
 ## Available Dimensions

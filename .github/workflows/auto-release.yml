@@ -92,11 +92,3 @@ jobs:
       - name: Publish to PyPI (OIDC)
         if: env.PYPI_API_TOKEN == ''
         uses: pypa/gh-action-pypi-publish@release/v1
-
-  call-release-plugin:
-    needs: tag-and-release
-    uses: ./.github/workflows/release-grafana-plugin.yml
-    with:
-      tag: ${{ needs.tag-and-release.outputs.new_tag }}
-      source_branch: ${{ github.event.pull_request.head.ref }}
-    secrets: inherit

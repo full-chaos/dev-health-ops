@@ -237,7 +237,6 @@ def test_aggregated_flame_throughput_tree_structure():
 
 def test_aggregated_flame_milestone_approximation():
     """Verify cycle_breakdown fallback to milestones when status durations are missing."""
-    import pytest
     from unittest.mock import patch, MagicMock
     from datetime import date
     from api.services.aggregated_flame import (

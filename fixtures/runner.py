@@ -594,7 +594,6 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    import os
 
     fix = subparsers.add_parser("fixtures", help="Data simulation and fixtures.")
     fix_sub = fix.add_subparsers(dest="fixtures_command", required=True)

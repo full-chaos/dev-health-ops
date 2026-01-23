@@ -19,9 +19,7 @@ from .templates import (
     timeseries_template,
 )
 from .validate import (
-    BucketInterval,
     Dimension,
-    Measure,
     validate_bucket_interval,
     validate_dimension,
     validate_measure,

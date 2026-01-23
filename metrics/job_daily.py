@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-import json
 import logging
 import os
 import uuid
@@ -43,7 +42,6 @@ from metrics.schemas import (
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
 )
-from analytics.complexity import FileComplexity
 from analytics.investment import InvestmentClassifier
 from analytics.issue_types import IssueTypeNormalizer
 from models.work_items import (

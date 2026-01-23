@@ -281,7 +281,6 @@ def test_jira_comments_limit_with_limit() -> None:
 
 def test_jira_comments_error_handling() -> None:
     """Test that comment fetch errors are handled gracefully and don't halt sync."""
-    import os
     from unittest.mock import MagicMock, patch
     from metrics.work_items import fetch_jira_work_items_with_extras
     

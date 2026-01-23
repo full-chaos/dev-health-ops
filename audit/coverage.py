@@ -459,7 +459,6 @@ def coverage_failed(report: Dict[str, Any]) -> bool:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-    import argparse
 
     audit_coverage = audit_subparsers.add_parser(
         "coverage", help="Audit provider implementation coverage."

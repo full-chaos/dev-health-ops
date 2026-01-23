@@ -229,7 +229,6 @@ def format_perf_report(report: Dict[str, Any]) -> str:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-    import argparse
 
     audit_perf = audit_subparsers.add_parser(
         "perf", help="Audit database query performance."

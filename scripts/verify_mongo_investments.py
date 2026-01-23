@@ -69,7 +69,7 @@ def main():
         "work_unit_id": "verify-test-001"
     })
     assert quote_doc is not None, "Quote document not found!"
-    print(f"✓ Quote found")
+    print("✓ Quote found")
 
     print("Cleaning up...")
     sink.db["work_unit_investments"].delete_many({"work_unit_id": "verify-test-001"})

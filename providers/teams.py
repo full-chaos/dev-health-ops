@@ -96,10 +96,8 @@ def sync_teams(ns: argparse.Namespace) -> int:
     """
     Sync teams from various providers (config, Jira, synthetic) to the database.
     """
-    import argparse
     import asyncio
     import logging
-    from typing import List
     from models.teams import Team
     from storage import resolve_db_type, run_with_store
 

@@ -676,7 +676,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     @abstractmethod
     def _table_has_column(conn, table: str, column: str) -> bool:
         """Check if a table has a specific column. Backend-specific implementation."""
-        ...
+        raise NotImplementedError("Subclasses must implement _table_has_column")
 
     def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
         if not rows:

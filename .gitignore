@@ -12,3 +12,4 @@ demo-data**
 .flake8
 # **/.terraform*
 **/.trunk/**
+**/.beads/**

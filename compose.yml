@@ -143,3 +143,38 @@ services:
       start_period: 30s
   renderer:
     image: grafana/grafana-image-renderer:latest
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+  celery-worker:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    container_name: celery-worker
+    command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    working_dir: /app
+

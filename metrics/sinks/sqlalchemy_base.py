@@ -53,7 +53,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     @abstractmethod
     def backend_type(self) -> str:
         """Return backend identifier: 'sqlite' or 'postgres'."""
-        ...
+        raise NotImplementedError("Subclasses of SQLAlchemyMetricsSink must implement 'backend_type'")
 
     def __init__(self, db_url: str) -> None:
         """Initialize with SQLAlchemy engine.

@@ -1577,13 +1577,6 @@ class MongoStore:
             rows,
         )
 
-    async def insert_deployments(self, deployments: List[Deployment]) -> None:
-        await self._upsert_many(
-            "deployments",
-            deployments,
-            lambda obj: f"{getattr(obj, 'repo_id')}:{getattr(obj, 'deployment_id')}",
-        )
-
     async def insert_incidents(self, incidents: List[Incident]) -> None:
         await self._upsert_many(
             "incidents",
@@ -1592,7 +1585,6 @@ class MongoStore:
         )
 
     async def insert_teams(self, teams: List["Team"]) -> None:
-        from models.teams import Team
 
         await self._upsert_many(
             "teams",
@@ -2576,7 +2568,6 @@ class ClickHouseStore:
         if not teams:
             return
         # Note: Imports inside method to avoid circular deps if models imports storage
-        from models.teams import Team
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
         rows: List[Dict[str, Any]] = []

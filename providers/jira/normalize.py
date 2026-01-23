@@ -187,7 +187,10 @@ def detect_reopen_events(
 ) -> List[WorkItemReopenEvent]:
     events: List[WorkItemReopenEvent] = []
     for transition in transitions:
-        if transition.from_status in {"done", "canceled"} and transition.to_status not in {
+        if transition.from_status in {
+            "done",
+            "canceled",
+        } and transition.to_status not in {
             "done",
             "canceled",
         }:
@@ -277,7 +280,9 @@ def jira_issue_to_work_item(
     sprint_field = sprint_field or os.getenv("JIRA_SPRINT_FIELD") or "customfield_10020"
     epic_link_field = epic_link_field or os.getenv("JIRA_EPIC_LINK_FIELD")
 
-    key = (issue.get("key") if isinstance(issue, dict) else getattr(issue, "key", None)) or ""
+    key = (
+        issue.get("key") if isinstance(issue, dict) else getattr(issue, "key", None)
+    ) or ""
     work_item_id = f"jira:{key}"
 
     project = _get_field(issue, "project")
@@ -294,10 +299,18 @@ def jira_issue_to_work_item(
     status_obj = _get_field(issue, "status")
     if isinstance(status_obj, dict):
         status_raw = status_obj.get("name")
-        status_category_key = ((status_obj.get("statusCategory") or {}) if isinstance(status_obj.get("statusCategory"), dict) else {}).get("key")
+        status_category_key = (
+            (status_obj.get("statusCategory") or {})
+            if isinstance(status_obj.get("statusCategory"), dict)
+            else {}
+        ).get("key")
     else:
         status_raw = getattr(status_obj, "name", None) if status_obj else None
-        status_category_key = getattr(getattr(status_obj, "statusCategory", None), "key", None) if status_obj else None
+        status_category_key = (
+            getattr(getattr(status_obj, "statusCategory", None), "key", None)
+            if status_obj
+            else None
+        )
 
     issue_type_obj = _get_field(issue, "issuetype")
     if isinstance(issue_type_obj, dict):
@@ -322,7 +335,14 @@ def jira_issue_to_work_item(
         labels=labels,
     )
     # Jira statusCategory=done is a strong hint that the issue is completed even if the status name is custom.
-    if normalized_status in {"unknown", "todo", "in_progress", "in_review", "blocked", "backlog"}:
+    if normalized_status in {
+        "unknown",
+        "todo",
+        "in_progress",
+        "in_review",
+        "blocked",
+        "backlog",
+    }:
         if str(status_category_key or "").lower() == "done":
             normalized_status = "done"
     normalized_type = status_mapping.normalize_type(
@@ -353,7 +373,9 @@ def jira_issue_to_work_item(
             display_name=getattr(reporter_obj, "displayName", None),
         )
 
-    created_at = _parse_datetime(_get_field(issue, "created")) or datetime.now(timezone.utc)
+    created_at = _parse_datetime(_get_field(issue, "created")) or datetime.now(
+        timezone.utc
+    )
     updated_at = _parse_datetime(_get_field(issue, "updated")) or created_at
     closed_at = _parse_datetime(_get_field(issue, "resolutiondate"))
 
@@ -390,7 +412,9 @@ def jira_issue_to_work_item(
     # Changelog transitions for started/completed derivation.
     transitions: List[WorkItemStatusTransition] = []
     if isinstance(issue, dict):
-        changelog = issue.get("changelog") if isinstance(issue.get("changelog"), dict) else None
+        changelog = (
+            issue.get("changelog") if isinstance(issue.get("changelog"), dict) else None
+        )
         histories = changelog.get("histories") if changelog else None
     else:
         changelog = getattr(issue, "changelog", None)
@@ -398,29 +422,62 @@ def jira_issue_to_work_item(
     if histories:
         # Jira returns newest-first sometimes; sort by created timestamp.
         def _hist_dt(h: Any) -> datetime:
-            created = h.get("created") if isinstance(h, dict) else getattr(h, "created", None)
-            return _parse_datetime(created) or datetime.min.replace(
-                tzinfo=timezone.utc
+            created = (
+                h.get("created") if isinstance(h, dict) else getattr(h, "created", None)
             )
+            return _parse_datetime(created) or datetime.min.replace(tzinfo=timezone.utc)
 
         for hist in sorted(list(histories), key=_hist_dt):
-            occurred_at = _parse_datetime(hist.get("created") if isinstance(hist, dict) else getattr(hist, "created", None)) or created_at
-            author_obj = hist.get("author") if isinstance(hist, dict) else getattr(hist, "author", None)
+            occurred_at = (
+                _parse_datetime(
+                    hist.get("created")
+                    if isinstance(hist, dict)
+                    else getattr(hist, "created", None)
+                )
+                or created_at
+            )
+            author_obj = (
+                hist.get("author")
+                if isinstance(hist, dict)
+                else getattr(hist, "author", None)
+            )
             actor = None
             if author_obj is not None:
                 actor = identity.resolve(
                     provider="jira",
-                    email=author_obj.get("emailAddress") if isinstance(author_obj, dict) else getattr(author_obj, "emailAddress", None),
-                    account_id=author_obj.get("accountId") if isinstance(author_obj, dict) else getattr(author_obj, "accountId", None),
-                    display_name=author_obj.get("displayName") if isinstance(author_obj, dict) else getattr(author_obj, "displayName", None),
+                    email=author_obj.get("emailAddress")
+                    if isinstance(author_obj, dict)
+                    else getattr(author_obj, "emailAddress", None),
+                    account_id=author_obj.get("accountId")
+                    if isinstance(author_obj, dict)
+                    else getattr(author_obj, "accountId", None),
+                    display_name=author_obj.get("displayName")
+                    if isinstance(author_obj, dict)
+                    else getattr(author_obj, "displayName", None),
                 )
-            items = hist.get("items") if isinstance(hist, dict) else getattr(hist, "items", None)
+            items = (
+                hist.get("items")
+                if isinstance(hist, dict)
+                else getattr(hist, "items", None)
+            )
             for item in items or []:
-                field_name = item.get("field") if isinstance(item, dict) else getattr(item, "field", "")
+                field_name = (
+                    item.get("field")
+                    if isinstance(item, dict)
+                    else getattr(item, "field", "")
+                )
                 if str(field_name or "").lower() != "status":
                     continue
-                from_raw = item.get("fromString") if isinstance(item, dict) else getattr(item, "fromString", None)
-                to_raw = item.get("toString") if isinstance(item, dict) else getattr(item, "toString", None)
+                from_raw = (
+                    item.get("fromString")
+                    if isinstance(item, dict)
+                    else getattr(item, "fromString", None)
+                )
+                to_raw = (
+                    item.get("toString")
+                    if isinstance(item, dict)
+                    else getattr(item, "toString", None)
+                )
                 from_norm = status_mapping.normalize_status(
                     provider="jira", status_raw=from_raw, labels=labels
                 )
@@ -471,7 +528,7 @@ def jira_issue_to_work_item(
         started_at=started_at,
         completed_at=completed_at,
         closed_at=closed_at,
-        labels=[str(l) for l in labels if l],
+        labels=[str(lbl) for lbl in labels if lbl],
         story_points=story_points,
         sprint_id=sprint_id,
         sprint_name=sprint_name,

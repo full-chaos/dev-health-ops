@@ -44,7 +44,7 @@ def _update_transitions_work_item_id(
 ) -> List[WorkItemStatusTransition]:
     """
     Update work_item_id in a list of transitions.
-    
+
     Creates new WorkItemStatusTransition instances with the updated work_item_id
     while preserving all other fields.
     """
@@ -85,8 +85,8 @@ def github_issue_to_work_item(
     updated_at = _to_utc(getattr(issue, "updated_at", None)) or created_at
     closed_at = _to_utc(getattr(issue, "closed_at", None))
 
-    labels = [getattr(l, "name", None) for l in getattr(issue, "labels", []) or []]
-    labels = [str(l) for l in labels if l]
+    labels = [getattr(lbl, "name", None) for lbl in getattr(issue, "labels", []) or []]
+    labels = [str(lbl) for lbl in labels if lbl]
 
     # If the issue is in a Project with a status field, prefer that as status_raw.
     status_raw = project_status_raw

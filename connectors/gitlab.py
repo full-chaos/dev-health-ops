@@ -6,7 +6,6 @@ contributors, statistics, merge requests, and blame information from GitLab.
 """
 
 import asyncio
-import fnmatch
 import logging
 import time
 import threading
@@ -37,7 +36,7 @@ from connectors.models import (
     Repository,
     RepoStats,
 )
-from connectors.utils import GitLabRESTClient, retry_with_backoff
+from connectors.utils import GitLabRESTClient, retry_with_backoff, match_project_pattern
 from connectors.utils.rate_limit_queue import RateLimitConfig, RateLimitGate
 
 logger = logging.getLogger(__name__)
@@ -63,22 +62,6 @@ class GitLabBatchResult:
     stats: Optional[RepoStats] = None
     error: Optional[str] = None
     success: bool = True
-
-
-def match_project_pattern(full_name: str, pattern: str) -> bool:
-    """
-    Match a project full name against a pattern using fnmatch-style matching.
-
-    :param full_name: Project full name (e.g., 'group/project').
-    :param pattern: Pattern to match (e.g., 'group/p*', '*/sync*', 'group/*').
-    :return: True if the pattern matches, False otherwise.
-
-    Examples:
-        - 'group/p*' matches 'group/project'
-        - '*/sync*' matches 'anygroup/sync-tool'
-        - 'group/project' matches exactly 'group/project'
-    """
-    return fnmatch.fnmatch(full_name.lower(), pattern.lower())
 
 
 class GitLabConnector(GitConnector):

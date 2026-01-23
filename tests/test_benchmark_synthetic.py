@@ -35,7 +35,6 @@ async def test_synthetic_data_performance(tmp_path):
 
     db_path = tmp_path / "benchmark.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
-    _sync_db_url = f"sqlite:///{db_path}"
 
     logging.info(
         f"Starting benchmark with DAYS={DAYS}, COMMITS_PER_DAY={COMMITS_PER_DAY}, DB={db_path}"

@@ -4,7 +4,7 @@ import argparse
 import logging
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from analytics.investment import InvestmentClassifier
 from analytics.issue_types import IssueTypeNormalizer

@@ -1,15 +1,12 @@
 """Tests for performance optimizations."""
 
-import asyncio
 import os
 import uuid
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from processors.local import (
-    process_files_and_blame,
     process_git_commit_stats,
     process_git_commits,
 )

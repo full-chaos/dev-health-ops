@@ -1,9 +1,8 @@
 import argparse
 import os
-import re
 from datetime import datetime, date, timezone
 from pathlib import Path
-from typing import Optional, Iterable, List, Union, Tuple, Set
+from typing import Optional, Iterable, List, Union, Tuple
 
 # Constants
 REPO_ROOT = Path(__file__).resolve().parent
@@ -64,7 +63,9 @@ SKIP_EXTENSIONS = {
 }
 CONNECTORS_AVAILABLE = True
 try:
-    import connectors
+    import importlib.util
+
+    CONNECTORS_AVAILABLE = importlib.util.find_spec("connectors") is not None
 except ImportError:
     CONNECTORS_AVAILABLE = False
 

@@ -2,7 +2,6 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
-import cli
 
 
 def _make_ns(**overrides):

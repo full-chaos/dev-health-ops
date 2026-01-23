@@ -25,5 +25,5 @@ def test_migrations_no_hardcoded_stats_db():
                 if "stats." in line:
                     errors.append(f"{path.name}:{i+1}: {line.strip()}")
     
-    assert not errors, f"Found hardcoded 'stats.' DB references in migrations:\n" + "\n".join(errors)
+    assert not errors, "Found hardcoded 'stats.' DB references in migrations:\n" + "\n".join(errors)
 

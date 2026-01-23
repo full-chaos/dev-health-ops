@@ -152,6 +152,18 @@ class MongoMetricsSink(BaseMetricsSink):
         ])
         self.db["investment_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["issue_type_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
+        # Work unit investment indexes
+        self.db["work_unit_investments"].create_index([
+            ("work_unit_id", 1),
+            ("categorization_run_id", 1),
+        ])
+        self.db["work_unit_investments"].create_index([
+            ("repo_id", 1),
+            ("computed_at", -1),
+        ])
+        self.db["work_unit_investment_quotes"].create_index([
+            ("work_unit_id", 1),
+        ])
 
     async def get_all_teams(self) -> List[Dict[str, Any]]:
         """Fetch all teams from MongoDB for identity resolution."""
@@ -587,13 +599,34 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_work_unit_investments(
         self, rows: Sequence[WorkUnitInvestmentRecord]
     ) -> None:
-        raise NotImplementedError(
-            "Work unit investment materialization is not supported for MongoDB"
-        )
+        if not rows:
+            return
+        ops: List[ReplaceOne] = []
+        for row in rows:
+            doc = asdict(row)
+            # Composite key: work_unit_id + categorization_run_id for versioning
+            doc["_id"] = f"{row.work_unit_id}:{row.categorization_run_id}"
+            if row.repo_id:
+                doc["repo_id"] = str(row.repo_id)
+            doc["from_ts"] = _dt_to_mongo_datetime(row.from_ts)
+            doc["to_ts"] = _dt_to_mongo_datetime(row.to_ts)
+            doc["computed_at"] = _dt_to_mongo_datetime(row.computed_at)
+            ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
+        self.db["work_unit_investments"].bulk_write(ops, ordered=False)
 
     def write_work_unit_investment_quotes(
         self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
     ) -> None:
-        raise NotImplementedError(
-            "Work unit investment evidence quotes are not supported for MongoDB"
-        )
+        if not rows:
+            return
+        ops: List[ReplaceOne] = []
+        for row in rows:
+            doc = asdict(row)
+            # Composite key: work_unit_id + source_type + source_id + quote hash
+            quote_hash = hash(row.quote) & 0xFFFFFFFF  # Truncate to 32-bit
+            doc["_id"] = (
+                f"{row.work_unit_id}:{row.source_type}:{row.source_id}:{quote_hash}"
+            )
+            doc["computed_at"] = _dt_to_mongo_datetime(row.computed_at)
+            ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
+        self.db["work_unit_investment_quotes"].bulk_write(ops, ordered=False)

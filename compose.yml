@@ -54,6 +54,12 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
   postgres:
     image: postgres:latest
     container_name: postgres
@@ -67,6 +73,12 @@ services:
       - "5555:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: clickhouse
@@ -85,6 +97,12 @@ services:
         hard: 262144
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
   stats:
     image: python:alpine
     environment:
@@ -110,11 +128,50 @@ services:
       # GraphQL analytics endpoint available at /graphql
       GRAPHQL_QUERY_TIMEOUT: "30"
     depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_healthy
     ports:
       - "8000:8000"
     volumes:
       - ./:/app
     working_dir: /app
-  renderer:
-    image: grafana/grafana-image-renderer:latest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+  celery-worker:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    container_name: celery-worker
+    command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    working_dir: /app

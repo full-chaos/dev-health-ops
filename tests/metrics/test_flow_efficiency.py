@@ -1,24 +1,22 @@
 from datetime import date, datetime, timedelta, timezone
-from typing import List
 
 from metrics.compute_work_items import (
     _calculate_flow_breakdown,
     compute_work_item_metrics_daily,
-    WAIT_STATUSES,
 )
 from models.work_items import WorkItem, WorkItemStatusTransition
-from metrics.schemas import WorkItemCycleTimeRecord
+
 
 def _utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc)
 
+
 def test_calculate_flow_breakdown_all_active():
-    repo_id = "repo-1"
     item_id = "item-1"
-    
+
     start_time = datetime(2023, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
     complete_time = datetime(2023, 1, 1, 14, 0, 0, tzinfo=timezone.utc)
-    
+
     item = WorkItem(
         work_item_id=item_id,
         project_id="repo-1",
@@ -33,10 +31,10 @@ def test_calculate_flow_breakdown_all_active():
         status_raw="Done",
         assignees=[],
     )
-    
+
     # 4 hours duration, no transitions (assumed active)
     active_h, wait_h = _calculate_flow_breakdown(item, [])
-    
+
     # Logic in _calculate_flow_breakdown:
     # transitions=[]
     # start_utc != end_utc
@@ -45,7 +43,7 @@ def test_calculate_flow_breakdown_all_active():
     # duration = end - start (4 hours)
     # in_progress not in WAIT_STATUSES -> active_seconds += duration
     # Returns (4.0, 0.0)
-    
+
     assert active_h == 4.0
     assert wait_h == 0.0
 
@@ -53,13 +51,13 @@ def test_calculate_flow_breakdown_all_active():
 def test_calculate_flow_breakdown_with_wait():
     repo_id = "repo-1"
     item_id = "item-1"
-    
+
     start_time = datetime(2023, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
     # 10:00 - 11:00 Active (1h)
     # 11:00 - 12:00 Blocked (1h)
     # 12:00 - 14:00 Active (2h)
     complete_time = datetime(2023, 1, 1, 14, 0, 0, tzinfo=timezone.utc)
-    
+
     item = WorkItem(
         work_item_id=item_id,
         project_id=repo_id,
@@ -74,7 +72,7 @@ def test_calculate_flow_breakdown_with_wait():
         status_raw="Done",
         assignees=[],
     )
-    
+
     transitions = [
         WorkItemStatusTransition(
             work_item_id=item_id,
@@ -92,7 +90,7 @@ def test_calculate_flow_breakdown_with_wait():
             to_status="blocked",
             from_status_raw="In Progress",
             to_status_raw="Blocked",
-            occurred_at=datetime(2023, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
+            occurred_at=datetime(2023, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
         ),
         WorkItemStatusTransition(
             work_item_id=item_id,
@@ -101,7 +99,7 @@ def test_calculate_flow_breakdown_with_wait():
             to_status="in_progress",
             from_status_raw="Blocked",
             to_status_raw="In Progress",
-            occurred_at=datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+            occurred_at=datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         ),
         WorkItemStatusTransition(
             work_item_id=item_id,
@@ -110,14 +108,14 @@ def test_calculate_flow_breakdown_with_wait():
             to_status="done",
             from_status_raw="In Progress",
             to_status_raw="Done",
-            occurred_at=complete_time
-        )
+            occurred_at=complete_time,
+        ),
     ]
-    
+
     active_h, wait_h = _calculate_flow_breakdown(item, transitions)
-    
-    assert active_h == 3.0 # 1h start->blocked, 2h in_progress->done
-    assert wait_h == 1.0   # 1h blocked->in_progress
+
+    assert active_h == 3.0  # 1h start->blocked, 2h in_progress->done
+    assert wait_h == 1.0  # 1h blocked->in_progress
 
 
 def test_calculate_flow_breakdown_started_late():
@@ -125,12 +123,13 @@ def test_calculate_flow_breakdown_started_late():
     # If started_at is t0, but first transition is at t1.
     pass
 
+
 def test_compute_metrics_daily_populates_efficiency():
     day = date(2023, 1, 1)
-    
+
     start_time = datetime(2023, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
     complete_time = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    
+
     item = WorkItem(
         work_item_id="item-2",
         project_id="repo-1",
@@ -145,7 +144,7 @@ def test_compute_metrics_daily_populates_efficiency():
         status_raw="Done",
         assignees=[],
     )
-    
+
     # 10-11: Blocked (Wait)
     # 11-12: In Progress (Active)
     # Total 2h. Active 1h. Efficiency 0.5
@@ -154,7 +153,7 @@ def test_compute_metrics_daily_populates_efficiency():
             work_item_id="item-2",
             provider="github",
             from_status="todo",
-            to_status="blocked", # Immediate wait
+            to_status="blocked",  # Immediate wait
             from_status_raw="Todo",
             to_status_raw="Blocked",
             occurred_at=start_time,
@@ -167,34 +166,34 @@ def test_compute_metrics_daily_populates_efficiency():
             from_status_raw="Blocked",
             to_status_raw="In Progress",
             occurred_at=datetime(2023, 1, 1, 11, 0, 0, tzinfo=timezone.utc),
-        )
+        ),
     ]
-    
+
     metrics_daily, user_daily, cycle_times = compute_work_item_metrics_daily(
         day=day,
         work_items=[item],
         transitions=transitions,
         computed_at=datetime.now(timezone.utc),
     )
-    
+
     assert len(cycle_times) == 1
     record = cycle_times[0]
-    
+
     assert record.cycle_time_hours == 2.0
     assert record.active_time_hours == 1.0
     assert record.wait_time_hours == 1.0
     assert record.flow_efficiency == 0.5
-    
+
     metrics_daily, user_daily, cycle_times = compute_work_item_metrics_daily(
         day=day,
         work_items=[item],
         transitions=transitions,
         computed_at=datetime.now(timezone.utc),
     )
-    
+
     assert len(cycle_times) == 1
     record = cycle_times[0]
-    
+
     assert record.cycle_time_hours == 2.0
     assert record.active_time_hours == 1.0
     assert record.wait_time_hours == 1.0

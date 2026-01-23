@@ -95,7 +95,7 @@ def gitlab_issue_to_work_item(
     closed_at = _to_utc(_parse_iso(_get(issue, "closed_at")))
 
     labels = list(_get(issue, "labels") or [])
-    labels = [str(l) for l in labels if l]
+    labels = [str(lbl) for lbl in labels if lbl]
 
     normalized_status = status_mapping.normalize_status(
         provider="gitlab",

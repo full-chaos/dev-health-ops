@@ -30,7 +30,6 @@ from metrics.schemas import (
     UserMetricsDailyRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
-    WorkGraphPRCommitRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
     WorkItemCycleTimeRecord,

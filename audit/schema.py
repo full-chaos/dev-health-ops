@@ -529,7 +529,6 @@ def format_schema_report(report: Dict[str, Any]) -> str:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-    import argparse
 
     audit_schema = audit_subparsers.add_parser(
         "schema", help="Verify DB schema is current."

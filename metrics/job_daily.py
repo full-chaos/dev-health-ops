@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 
-import json
 import logging
 import os
 import uuid
@@ -43,7 +42,6 @@ from metrics.schemas import (
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
 )
-from analytics.complexity import FileComplexity
 from analytics.investment import InvestmentClassifier
 from analytics.issue_types import IssueTypeNormalizer
 from models.work_items import (
@@ -66,6 +64,16 @@ from providers.identity import load_identity_resolver
 from providers.status_mapping import load_status_mapping
 from providers.teams import load_team_resolver
 from storage import create_store, detect_db_type
+
+# Import shared utilities from loaders package
+from metrics.loaders import (
+    naive_utc as _naive_utc_new,
+    to_utc as _to_utc_new,
+    parse_uuid as _parse_uuid_new,
+    safe_json_loads as _safe_json_loads_new,
+    chunked as _chunked_new,
+    clickhouse_query_dicts as _clickhouse_query_dicts_new,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1009,14 +1017,8 @@ def _secondary_uri_from_env() -> str:
 
 
 def _safe_json_loads(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(str(value))
-    except Exception:
-        return None
+    # TODO: Remove this function and use metrics.loaders.safe_json_loads directly
+    return _safe_json_loads_new(value)
 
 
 def _discover_repos(
@@ -1157,39 +1159,25 @@ def _normalize_sqlite_url(db_url: str) -> str:
 
 
 def _naive_utc(dt: datetime) -> datetime:
-    """Convert a datetime to naive UTC (BSON/ClickHouse friendly)."""
-    if dt.tzinfo is None:
-        return dt
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    # TODO: Remove this function and use metrics.loaders.naive_utc directly
+    return _naive_utc_new(dt)
 
 
 def _to_utc(dt: datetime) -> datetime:
-    """Ensure datetime has UTC tzinfo."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    # TODO: Remove this function and use metrics.loaders.to_utc directly
+    return _to_utc_new(dt)
 
 
 def _parse_uuid(value: Any) -> Optional[uuid.UUID]:
-    if value is None:
-        return None
-    if isinstance(value, uuid.UUID):
-        return value
-    try:
-        return uuid.UUID(str(value))
-    except Exception:
-        return None
+    # TODO: Remove this function and use metrics.loaders.parse_uuid directly
+    return _parse_uuid_new(value)
 
 
 def _clickhouse_query_dicts(
     client: Any, query: str, parameters: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-    result = client.query(query, parameters=parameters)
-    col_names = list(getattr(result, "column_names", []) or [])
-    rows = list(getattr(result, "result_rows", []) or [])
-    if not col_names or not rows:
-        return []
-    return [dict(zip(col_names, row)) for row in rows]
+    # TODO: Remove this function and use metrics.loaders.clickhouse_query_dicts directly
+    return _clickhouse_query_dicts_new(client, query, parameters)
 
 
 async def _load_complexity_snapshots(
@@ -1633,8 +1621,8 @@ def _load_clickhouse_blame_concentration(
 
 
 def _chunked(values: Sequence[str], chunk_size: int) -> Iterable[List[str]]:
-    for i in range(0, len(values), chunk_size):
-        yield list(values[i : i + chunk_size])
+    # TODO: Remove this function and use metrics.loaders.chunked directly
+    return iter(_chunked_new(values, chunk_size))
 
 
 def _load_mongo_rows(

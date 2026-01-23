@@ -7,7 +7,6 @@ from typing import Dict, List, Optional
 
 import yaml
 from radon.complexity import cc_visit
-from radon.visitors import ComplexityVisitor
 
 logger = logging.getLogger(__name__)
 

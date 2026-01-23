@@ -726,12 +726,8 @@ class SyntheticDataGenerator:
             commits = random.randint(0, 6)
             loc_added = random.randint(0, 400)
             loc_deleted = random.randint(0, loc_added)
-            prs_authored = random.randint(0, 3)
-            prs_merged = random.randint(0, prs_authored)
-            pr_cycle_p90 = float(random.randint(24, 120))
-            median_pr_cycle = float(random.randint(8, 72))
             files_changed = random.randint(0, 10)
-            prs = random.randint(0, 3)  # Replaces prs_authored and prs_merged
+            prs = random.randint(0, 3)
             records.append(
                 UserMetricsDailyRecord(
                     repo_id=self.repo_id,

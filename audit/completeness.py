@@ -559,7 +559,6 @@ def completeness_failed(report: Dict[str, Any]) -> bool:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-    import argparse
 
     audit_completeness = audit_subparsers.add_parser(
         "completeness", help="Audit data completeness and freshness."

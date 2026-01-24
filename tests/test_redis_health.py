@@ -1,5 +1,3 @@
-import asyncio
-import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -8,8 +6,8 @@ import sys
 
 sys.modules["redis"] = MagicMock()
 
-from api.services.cache import MemoryBackend, RedisBackend, TTLCache
-from api.main import health
+from api.services.cache import MemoryBackend, RedisBackend, TTLCache  # noqa: E402
+from api.main import health  # noqa: E402
 
 
 class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
@@ -53,7 +51,6 @@ class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
         mock_cache.status.return_value = "ok"
 
         # Call health endpoint
-        from api.main import health
 
         response = await health()
 

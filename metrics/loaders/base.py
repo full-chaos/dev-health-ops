@@ -32,7 +32,7 @@ class DataLoader(Protocol):
         repo_name: Optional[str] = None,
     ) -> Tuple[List[CommitStatRow], List[PullRequestRow], List[PullRequestReviewRow]]:
         """Load commit stats, pull requests, and reviews."""
-        ...
+        raise NotImplementedError()
 
     async def load_work_items(
         self,
@@ -42,7 +42,7 @@ class DataLoader(Protocol):
         repo_name: Optional[str] = None,
     ) -> Tuple[List[Any], List[Any]]:
         """Load work items and transitions."""
-        ...
+        raise NotImplementedError()
 
     async def load_cicd_data(
         self,
@@ -52,7 +52,7 @@ class DataLoader(Protocol):
         repo_name: Optional[str] = None,
     ) -> Tuple[List[PipelineRunRow], List[DeploymentRow]]:
         """Load CI pipeline runs and deployments."""
-        ...
+        raise NotImplementedError()
 
     async def load_incidents(
         self,
@@ -62,7 +62,7 @@ class DataLoader(Protocol):
         repo_name: Optional[str] = None,
     ) -> List[IncidentRow]:
         """Load incident records."""
-        ...
+        raise NotImplementedError()
 
     async def load_blame_concentration(
         self,
@@ -70,7 +70,7 @@ class DataLoader(Protocol):
         as_of: datetime,
     ) -> Dict[uuid.UUID, float]:
         """Load blame concentration stats for code ownership metrics."""
-        ...
+        raise NotImplementedError()
 
 
 def naive_utc(dt: datetime) -> datetime:

@@ -8,6 +8,7 @@ with a unified interface for loading git facts, work items, and derived metrics.
 from __future__ import annotations
 
 from metrics.loaders.base import (
+    DataLoader,
     naive_utc,
     to_utc,
     parse_uuid,
@@ -17,6 +18,7 @@ from metrics.loaders.base import (
 )
 
 __all__ = [
+    "DataLoader",
     # Base utilities
     "naive_utc",
     "to_utc",

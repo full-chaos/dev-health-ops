@@ -18,34 +18,6 @@ volumes:
 #      device: ./data/clickhouse
 #      o: bind
 services:
-  grafana:
-    image: grafana/grafana-enterprise:latest
-    container_name: grafana
-    restart: unless-stopped
-    environment:
-      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_PORT: "8123"
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ch}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
-      GF_AUTH_ANONYMOUS_ENABLED: true
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
-      GF_AUTH_DISABLE_LOGIN_FORM: true
-      GF_LOG_LEVEL: debug
-      GF_DATAPROXY_LOGGING: 1
-      GF_RENDERING_SERVER_URL: http://renderer:8081/render
-      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
-    ports:
-      - "3000:3000"
-    depends_on:
-      - clickhouse
-    volumes:
-      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
   mongo:
     image: mongo:latest
     container_name: mongo
@@ -103,15 +75,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-  stats:
-    image: python:alpine
-    environment:
-      PG_URL: postgres://postgres:postgres@postgres:5432/postgres
-      DATABASE_URI: postgres://postgres:postgres@postgres:5432/postgres
-    volumes:
-      - ./:/app
-    working_dir: /app
-    command: /bin/sh -c 'python3 cli.py sync git --provider local --db "$DATABASE_URI" --repo-path .'
   api:
     build:
       context: .
@@ -127,8 +90,11 @@ services:
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
       # GraphQL analytics endpoint available at /graphql
       GRAPHQL_QUERY_TIMEOUT: "30"
+      REDIS_URL: "redis://redis:6379/1"
     depends_on:
       clickhouse:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -153,14 +119,14 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-  celery-worker:
+  worker:
     build:
       context: .
       dockerfile: ./docker/Dockerfile
       target: api
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
-    container_name: celery-worker
+    container_name: worker
     command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0

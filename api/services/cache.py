@@ -23,6 +23,11 @@ class CacheBackend(ABC):
         """Set a value in the cache with TTL."""
         pass
 
+    @abstractmethod
+    def status(self) -> str:
+        """Check the status of the cache backend."""
+        pass
+
 
 class MemoryBackend(CacheBackend):
     """In-memory cache backend (default)."""
@@ -42,6 +47,9 @@ class MemoryBackend(CacheBackend):
 
     def set(self, key: str, value: Any, ttl_seconds: int) -> None:
         self._store[key] = (time.time() + ttl_seconds, value)
+
+    def status(self) -> str:
+        return "ok"
 
 
 class RedisBackend(CacheBackend):
@@ -81,6 +89,15 @@ class RedisBackend(CacheBackend):
         except Exception as e:
             logger.warning("Redis set failed: %s", e)
 
+    def status(self) -> str:
+        if not self._available:
+            return "down"
+        try:
+            self._client.ping()
+            return "ok"
+        except Exception:
+            return "down"
+
 
 class TTLCache:
     """Cache with configurable backend (memory or Redis)."""
@@ -98,6 +115,10 @@ class TTLCache:
 
     def set(self, key: str, value: Any) -> None:
         self._backend.set(key, value, self.ttl_seconds)
+
+    def status(self) -> str:
+        """Returns the status of the underlying backend."""
+        return self._backend.status()
 
 
 def create_cache(

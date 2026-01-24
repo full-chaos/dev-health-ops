@@ -5,10 +5,17 @@ This module provides an abstract base class that defines the common interface
 for all Git connectors (GitHub, GitLab, local, etc.).
 """
 
+import asyncio
+import hashlib
+import json
 import logging
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from queue import Empty as QueueEmpty
+from queue import Queue
+from typing import Callable, List, Optional, Any
+import redis
 
 from connectors.models import (
     Author,
@@ -19,8 +26,17 @@ from connectors.models import (
     Repository,
     RepoStats,
 )
+from connectors.utils.rate_limit_queue import RateLimitConfig, RateLimitGate
 
 logger = logging.getLogger(__name__)
+
+
+class RateLimitException(Exception):
+    """Exception raised when API rate limit is reached."""
+
+    def __init__(self, message: str, retry_after_seconds: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass
@@ -45,15 +61,24 @@ class GitConnector(ABC):
         self,
         per_page: int = 100,
         max_workers: int = 4,
+        cache: Optional[redis.Redis] = None,
+        cache_prefix: str = "git:",
+        cache_ttl: int = 3600,
     ):
         """
         Initialize the base connector.
 
         :param per_page: Number of items per page for pagination.
         :param max_workers: Maximum concurrent workers for operations.
+        :param cache: Optional Redis client for caching.
+        :param cache_prefix: Prefix for Redis keys.
+        :param cache_ttl: TTL for cached items in seconds.
         """
         self.per_page = per_page
         self.max_workers = max_workers
+        self.cache = cache
+        self.cache_prefix = cache_prefix
+        self.cache_ttl = cache_ttl
 
     @abstractmethod
     def list_organizations(
@@ -179,6 +204,119 @@ class GitConnector(ABC):
         pass
 
     @abstractmethod
+    def close(self) -> None:
+        """Close the connector and cleanup resources."""
+        pass
+
+    # --- Caching Support ---
+
+    def _get_cache_key(self, method: str, **kwargs) -> str:
+        """Generate a stable cache key for a method and its arguments."""
+        # Sort kwargs to ensure stability
+        sorted_args = sorted(kwargs.items())
+        args_str = json.dumps(sorted_args, default=str)
+        args_hash = hashlib.md5(args_str.encode()).hexdigest()
+        return f"{self.cache_prefix}{method}:{args_hash}"
+
+    def _get_cached_item(self, key: str, model_class: Any) -> Optional[Any]:
+        """Retrieve and deserialize an item from cache."""
+        if not self.cache:
+            return None
+
+        try:
+            data = self.cache.get(key)
+            if data:
+                logger.debug(f"Cache hit: {key}")
+                raw_data = json.loads(data)
+                if isinstance(raw_data, list):
+                    return [model_class(**item) for item in raw_data]
+                return model_class(**raw_data)
+        except Exception as e:
+            logger.warning(f"Cache retrieval error for {key}: {e}")
+        return None
+
+    def _set_cached_item(self, key: str, item: Any) -> None:
+        """Serialize and store an item in cache."""
+        if not self.cache:
+            return
+
+        try:
+            if isinstance(item, list):
+                data = json.dumps(
+                    [i.__dict__ if hasattr(i, "__dict__") else i for i in item],
+                    default=str,
+                )
+            elif hasattr(item, "__dict__"):
+                data = json.dumps(item.__dict__, default=str)
+            else:
+                data = json.dumps(item, default=str)
+
+            self.cache.setex(key, self.cache_ttl, data)
+            logger.debug(f"Cache store: {key}")
+        except Exception as e:
+            logger.warning(f"Cache storage error for {key}: {e}")
+
+    def _get_repositories_for_processing(
+        self,
+        org_name: Optional[str] = None,
+        user_name: Optional[str] = None,
+        pattern: Optional[str] = None,
+        max_repos: Optional[int] = None,
+    ) -> List[Repository]:
+        """Standard implementation of repository discovery for batch processing."""
+        effective_org = org_name
+        effective_user = user_name
+
+        if not org_name and not user_name and pattern:
+            if "/" in pattern:
+                parts = pattern.split("/", 1)
+                owner_part = parts[0]
+                if owner_part and "*" not in owner_part and "?" not in owner_part:
+                    effective_user = owner_part
+                    logger.info(
+                        f"Extracted owner '{owner_part}' from pattern '{pattern}'"
+                    )
+
+        return self.list_repositories(
+            org_name=effective_org,
+            user_name=effective_user,
+            pattern=pattern,
+            max_repos=max_repos,
+        )
+
+    def _process_single_repo_stats(
+        self,
+        repo: Repository,
+        max_commits: Optional[int] = None,
+    ) -> BatchResult:
+        """Standard implementation of single repository processing."""
+        try:
+            parts = repo.full_name.split("/")
+            if len(parts) != 2:
+                return BatchResult(
+                    repository=repo,
+                    error=f"Invalid repository name: {repo.full_name}",
+                    success=False,
+                )
+
+            owner, repo_name = parts
+            stats = self.get_repo_stats(owner, repo_name, max_commits=max_commits)
+
+            return BatchResult(
+                repository=repo,
+                stats=stats,
+                success=True,
+            )
+        except RateLimitException:
+            raise
+        except Exception as e:
+            logger.warning(f"Failed to get stats for {repo.full_name}: {e}")
+            return BatchResult(
+                repository=repo,
+                error=str(e),
+                success=False,
+            )
+
     def get_repos_with_stats(
         self,
         org_name: Optional[str] = None,
@@ -191,25 +329,76 @@ class GitConnector(ABC):
         max_repos: Optional[int] = None,
         on_repo_complete: Optional[Callable[[BatchResult], None]] = None,
     ) -> List[BatchResult]:
-        """
-        Get repositories and their stats with batch processing.
+        """Standard implementation of batch repository processing."""
+        repos = self._get_repositories_for_processing(
+            org_name=org_name,
+            user_name=user_name,
+            pattern=pattern,
+            max_repos=max_repos,
+        )
 
-        Each connector must implement its own filtering and processing logic.
+        logger.info(
+            f"Processing {len(repos)} repositories with batch_size={batch_size}"
+        )
+        results: List[BatchResult] = []
 
-        :param org_name: Optional organization name.
-        :param user_name: Optional user name.
-        :param pattern: Optional fnmatch-style pattern to filter repos.
-        :param batch_size: Number of repos to process in each batch.
-        :param max_concurrent: Maximum concurrent workers for processing.
-        :param rate_limit_delay: Delay in seconds between batches.
-        :param max_commits_per_repo: Maximum commits to analyze per repository.
-        :param max_repos: Maximum number of repositories to process.
-        :param on_repo_complete: Callback function called after each repo.
-        :return: List of BatchResult objects.
-        """
-        pass
+        for batch_start in range(0, len(repos), batch_size):
+            batch_end = min(batch_start + batch_size, len(repos))
+            batch = repos[batch_start:batch_end]
 
-    @abstractmethod
+            work_q: Queue[Repository] = Queue()
+            for repo in batch:
+                work_q.put(repo)
+
+            gate = RateLimitGate(
+                RateLimitConfig(initial_backoff_seconds=max(1.0, rate_limit_delay))
+            )
+            results_lock = threading.Lock()
+
+            def worker():
+                while True:
+                    try:
+                        repo = work_q.get_nowait()
+                    except QueueEmpty:
+                        return
+
+                    attempts = 0
+                    while attempts < 10:
+                        gate.wait_sync()
+                        try:
+                            result = self._process_single_repo_stats(
+                                repo, max_commits=max_commits_per_repo
+                            )
+                            gate.reset()
+                            with results_lock:
+                                results.append(result)
+                            if on_repo_complete:
+                                on_repo_complete(result)
+                            break
+                        except RateLimitException as e:
+                            attempts += 1
+                            applied = gate.penalize(e.retry_after_seconds)
+                            logger.info(f"Rate limited; backoff {applied:.1f}s ({e})")
+                        except Exception as e:
+                            with results_lock:
+                                results.append(
+                                    BatchResult(
+                                        repository=repo, error=str(e), success=False
+                                    )
+                                )
+                            break
+
+            threads = [
+                threading.Thread(target=worker)
+                for _ in range(min(max_concurrent, len(batch)))
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        return results
+
     async def get_repos_with_stats_async(
         self,
         org_name: Optional[str] = None,
@@ -222,28 +411,21 @@ class GitConnector(ABC):
         max_repos: Optional[int] = None,
         on_repo_complete: Optional[Callable[[BatchResult], None]] = None,
     ) -> List[BatchResult]:
-        """
-        Async version of get_repos_with_stats.
-
-        Each connector must implement its own async filtering and processing logic.
-
-        :param org_name: Optional organization name.
-        :param user_name: Optional user name.
-        :param pattern: Optional fnmatch-style pattern to filter repos.
-        :param batch_size: Number of repos to process in each batch.
-        :param max_concurrent: Maximum concurrent workers for processing.
-        :param rate_limit_delay: Delay in seconds between batches.
-        :param max_commits_per_repo: Maximum commits to analyze per repository.
-        :param max_repos: Maximum number of repositories to process.
-        :param on_repo_complete: Callback function called after each repo.
-        :return: List of BatchResult objects.
-        """
-        pass
-
-    @abstractmethod
-    def close(self) -> None:
-        """Close the connector and cleanup resources."""
-        pass
+        """Async implementation of batch repository processing."""
+        # For base implementation, we'll wrap the sync one but in a real provider
+        # this might use aiohttp or similar.
+        return await asyncio.to_thread(
+            self.get_repos_with_stats,
+            org_name=org_name,
+            user_name=user_name,
+            pattern=pattern,
+            batch_size=batch_size,
+            max_concurrent=max_concurrent,
+            rate_limit_delay=rate_limit_delay,
+            max_commits_per_repo=max_commits_per_repo,
+            max_repos=max_repos,
+            on_repo_complete=on_repo_complete,
+        )
 
     def __enter__(self):
         """Context manager entry."""

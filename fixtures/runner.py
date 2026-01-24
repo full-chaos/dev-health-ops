@@ -256,16 +256,19 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         from work_graph.builder import BuildConfig, WorkGraphBuilder
 
         config = BuildConfig(
-            dsn=ns.db, from_date=now - timedelta(days=ns.days), to_date=now
+            dsn=ns.db,
+            from_date=(now - timedelta(days=ns.days)),
+            to_date=now,
         )
         builder = WorkGraphBuilder(config)
         try:
             builder.build()
-            await materialize_fixture_investments(
-                db_url=ns.db,
-                from_ts=config.from_date,
-                to_ts=config.to_date,
-            )
+            if config.from_date and config.to_date:
+                await materialize_fixture_investments(
+                    db_url=ns.db,
+                    from_ts=config.from_date,
+                    to_ts=config.to_date,
+                )
         finally:
             builder.close()
     return 0
@@ -338,7 +341,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
     # 1b. Check team mappings in derived work item metrics
     try:
         if not _table_exists("teams"):
-            logging.error("FAIL: teams table missing (sync teams or fixtures generate).")
+            logging.error(
+                "FAIL: teams table missing (sync teams or fixtures generate)."
+            )
             return 1
         if not _table_exists("work_item_cycle_times"):
             logging.error(
@@ -346,9 +351,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             )
             return 1
 
-        team_count = int(
-            client.query("SELECT count() FROM teams").result_rows[0][0]
-        )
+        team_count = int(client.query("SELECT count() FROM teams").result_rows[0][0])
         cycle_count = int(
             client.query("SELECT count() FROM work_item_cycle_times").result_rows[0][0]
         )

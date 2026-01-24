@@ -54,7 +54,7 @@ from .models.schemas import (
 from .queries.client import clickhouse_client, query_dicts, close_global_client
 from .queries.drilldown import fetch_issues, fetch_pull_requests
 from .queries.filters import fetch_filter_options
-from .services.cache import TTLCache
+from .services.cache import create_cache
 from .services.explain import build_explain_response
 from .services.filtering import scope_filter_for_metric, time_window
 from .services.home import build_home_response
@@ -81,8 +81,8 @@ from .services.work_units import build_work_unit_investments
 from .services.work_unit_explain import explain_work_unit
 from .graphql.app import create_graphql_app
 
-HOME_CACHE = TTLCache(ttl_seconds=60)
-EXPLAIN_CACHE = TTLCache(ttl_seconds=120)
+HOME_CACHE = create_cache(ttl_seconds=60)
+EXPLAIN_CACHE = create_cache(ttl_seconds=120)
 
 
 def _sanitize_for_log(value: str) -> str:
@@ -193,7 +193,7 @@ graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
 
 
-@app.get("/api/v1/health", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:
     services = {}
     try:
@@ -202,6 +202,11 @@ async def health() -> HealthResponse | JSONResponse:
         services["clickhouse"] = "ok" if rows else "down"
     except Exception:
         services["clickhouse"] = "down"
+
+    try:
+        services["redis"] = HOME_CACHE.status()
+    except Exception:
+        services["redis"] = "down"
 
     status = "ok" if all(state == "ok" for state in services.values()) else "down"
     response = HealthResponse(status=status, services=services)

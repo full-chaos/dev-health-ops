@@ -3,15 +3,25 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable, List, Optional
 
-from models.git import GitCommit, GitCommitStat, Repo, GitPullRequest, GitBlame, GitFile, CiPipelineRun, Deployment, Incident
+from models.git import (
+    GitCommit,
+    GitCommitStat,
+    Repo,
+    GitPullRequest,
+    GitBlame,
+    GitFile,
+    CiPipelineRun,
+    Deployment,
+    Incident,
+)
 from utils import AGGREGATE_STATS_MARKER, is_skippable, CONNECTORS_AVAILABLE, BATCH_SIZE
 
 if CONNECTORS_AVAILABLE:
-    from connectors import GitLabBatchResult, GitLabConnector, ConnectorException
+    from connectors import BatchResult, GitLabConnector, ConnectorException
     from connectors.models import Repository
     from connectors.utils import RateLimitConfig, RateLimitGate
 else:
-    GitLabBatchResult = None  # type: ignore
+    BatchResult = None  # type: ignore
     GitLabConnector = None  # type: ignore
     ConnectorException = Exception
     Repository = None  # type: ignore
@@ -336,6 +346,7 @@ def _sync_gitlab_mrs_to_store(
 def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
     """Sync helper to fetch GitLab CI/CD pipelines."""
     pipelines = []
+
     def _coerce_datetime(value):
         if isinstance(value, datetime):
             return value
@@ -345,6 +356,7 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
             except Exception:
                 return None
         return None
+
     try:
         list_params = {"per_page": 100, "order_by": "updated_at", "sort": "desc"}
         if max_pipelines > 100:
@@ -369,7 +381,9 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
             break
 
         started_at = created_at
-        started_at = _coerce_datetime(getattr(pipeline, "started_at", None)) or created_at
+        started_at = (
+            _coerce_datetime(getattr(pipeline, "started_at", None)) or created_at
+        )
 
         finished_at = _coerce_datetime(getattr(pipeline, "finished_at", None))
 
@@ -388,7 +402,9 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
     return pipelines
 
 
-def _fetch_gitlab_deployments_sync(connector, project_id, repo_id, max_deployments, since):
+def _fetch_gitlab_deployments_sync(
+    connector, project_id, repo_id, max_deployments, since
+):
     """Sync helper to fetch GitLab deployments."""
     deployments = []
     try:
@@ -421,7 +437,9 @@ def _fetch_gitlab_deployments_sync(connector, project_id, repo_id, max_deploymen
         finished_at_str = dep.get("finished_at")
         if finished_at_str:
             try:
-                finished_at = datetime.fromisoformat(finished_at_str.replace("Z", "+00:00"))
+                finished_at = datetime.fromisoformat(
+                    finished_at_str.replace("Z", "+00:00")
+                )
             except Exception:
                 pass
 
@@ -430,7 +448,9 @@ def _fetch_gitlab_deployments_sync(connector, project_id, repo_id, max_deploymen
                 repo_id=repo_id,
                 deployment_id=str(dep.get("id", "")),
                 status=dep.get("status", None),
-                environment=dep.get("environment", {}).get("name") if isinstance(dep.get("environment"), dict) else None,
+                environment=dep.get("environment", {}).get("name")
+                if isinstance(dep.get("environment"), dict)
+                else None,
                 started_at=created_at,
                 finished_at=finished_at,
                 deployed_at=created_at,
@@ -474,7 +494,9 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
         closed_at_str = issue.get("closed_at")
         if closed_at_str:
             try:
-                resolved_at = datetime.fromisoformat(closed_at_str.replace("Z", "+00:00"))
+                resolved_at = datetime.fromisoformat(
+                    closed_at_str.replace("Z", "+00:00")
+                )
             except Exception:
                 pass
 
@@ -611,7 +633,9 @@ async def _backfill_gitlab_missing_data(
         return
 
     needs_files = not await store.has_any_git_files(db_repo.id)
-    needs_commit_stats = False if blame_only else not await store.has_any_git_commit_stats(db_repo.id)
+    needs_commit_stats = (
+        False if blame_only else not await store.has_any_git_commit_stats(db_repo.id)
+    )
     needs_blame = not await store.has_any_git_blame(db_repo.id)
 
     if not (needs_files or needs_commit_stats or needs_blame):
@@ -853,9 +877,7 @@ async def process_gitlab_project(
 
             if stats_objects:
                 await store.insert_git_commit_stats(stats_objects)
-                logging.info(
-                    f"Stored {len(stats_objects)} commit stats from GitLab"
-                )
+                logging.info(f"Stored {len(stats_objects)} commit stats from GitLab")
 
         if sync_prs:
             # 4. Fetch Merge Requests
@@ -989,19 +1011,19 @@ async def process_gitlab_projects_batch(
         )
         mr_semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
-    all_results: List[GitLabBatchResult] = []
+    all_results: List[BatchResult] = []
     stored_count = 0
 
     results_queue: Optional[asyncio.Queue] = None
     _queue_sentinel = object()
 
-    async def store_result(result: GitLabBatchResult) -> None:
+    async def store_result(result: BatchResult) -> None:
         """Store a single result in the database (upsert)."""
         nonlocal stored_count
         if not result.success:
             return
 
-        project_info = result.project
+        project_info = result.repository
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=project_info.full_name,
@@ -1194,15 +1216,19 @@ async def process_gitlab_projects_batch(
                     e,
                 )
 
-    def on_project_complete(result: GitLabBatchResult) -> None:
+    def on_project_complete(result: BatchResult) -> None:
         all_results.append(result)
         if result.success:
             stats_info = ""
             if result.stats:
                 stats_info = f" ({result.stats.total_commits} commits)"
-            logging.info(f"  ✓ Processed: {result.project.full_name}{stats_info}")
+                logging.info(
+                    f"  ✓ Processed: {result.repository.full_name}{stats_info}"
+                )
         else:
-            logging.warning(f"  ✗ Failed: {result.project.full_name}: {result.error}")
+            logging.warning(
+                f"  ✗ Failed: {result.repository.full_name}: {result.error}"
+            )
 
         if results_queue is not None:
             try:
@@ -1246,8 +1272,8 @@ async def process_gitlab_projects_batch(
                     batch_size=batch_size,
                     max_concurrent=max_concurrent,
                     rate_limit_delay=rate_limit_delay,
-                    max_commits_per_project=max_commits_per_project,
-                    max_projects=max_projects,
+                    max_commits_per_repo=max_commits_per_project,
+                    max_repos=max_projects,
                     on_project_complete=on_project_complete,
                 )
             else:
@@ -1259,8 +1285,8 @@ async def process_gitlab_projects_batch(
                         batch_size=batch_size,
                         max_concurrent=max_concurrent,
                         rate_limit_delay=rate_limit_delay,
-                        max_commits_per_project=max_commits_per_project,
-                        max_projects=max_projects,
+                        max_commits_per_repo=max_commits_per_project,
+                        max_repos=max_projects,
                         on_project_complete=on_project_complete,
                     ),
                 )
@@ -1280,7 +1306,7 @@ async def process_gitlab_projects_batch(
                 lambda: connector._get_projects_for_processing(
                     group_name=group_name,
                     pattern=pattern,
-                    max_projects=max_projects,
+                    max_repos=max_projects,
                 ),
             )
             logging.info("Discovered %d GitLab projects for PR sync", len(projects))
@@ -1288,16 +1314,16 @@ async def process_gitlab_projects_batch(
 
             async def _process_project(project_info) -> None:
                 async with semaphore:
-                    result = GitLabBatchResult(
-                        project=project_info,
+                    result = BatchResult(
+                        repository=project_info,
                         stats=None,
                         success=True,
                     )
                     try:
                         await store_result(result)
                     except Exception as e:
-                        result = GitLabBatchResult(
-                            project=project_info,
+                        result = BatchResult(
+                            repository=project_info,
                             stats=None,
                             error=str(e),
                             success=False,

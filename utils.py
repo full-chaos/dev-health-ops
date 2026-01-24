@@ -1,4 +1,5 @@
 import argparse
+import fnmatch
 import os
 from datetime import datetime, date, timezone
 from pathlib import Path
@@ -223,3 +224,12 @@ def _split_full_name(full_name: str) -> Tuple[str, str]:
     if len(parts) != 2:
         raise ValueError(f"Invalid repo/project full name: {full_name}")
     return parts[0], parts[1]
+
+
+def match_pattern(value: str, pattern: str) -> bool:
+    """
+    Match a string value against an fnmatch-style pattern (case-insensitive).
+    """
+    if not pattern or pattern == "*":
+        return True
+    return fnmatch.fnmatch((value or "").lower(), pattern.lower())

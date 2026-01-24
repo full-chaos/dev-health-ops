@@ -5,24 +5,22 @@ This connector provides methods to retrieve organizations, repositories,
 contributors, statistics, pull requests, and blame information from GitHub.
 """
 
-import asyncio
 import logging
-import time
 import inspect
-from queue import Queue
-from queue import Empty as QueueEmpty
-import threading
+import time
 from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from typing import List, Optional, Dict, Any
 
 from github import Auth, Github, GithubException, RateLimitExceededException
 
-from connectors.base import BatchResult, GitConnector
+from connectors.base import (
+    GitConnector,
+    RateLimitException,
+)
 from connectors.exceptions import (
     APIException,
     AuthenticationException,
     NotFoundException,
-    RateLimitException,
 )
 from connectors.models import (
     Author,
@@ -37,7 +35,6 @@ from connectors.models import (
     RepoStats,
 )
 from connectors.utils import GitHubGraphQLClient, retry_with_backoff, match_repo_pattern
-from connectors.utils.rate_limit_queue import RateLimitConfig, RateLimitGate
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +139,7 @@ class GitHubConnector(GitConnector):
 
         except Exception as e:
             self._handle_github_exception(e)
+            return []
 
     @retry_with_backoff(
         max_retries=3,
@@ -227,6 +225,7 @@ class GitHubConnector(GitConnector):
 
         except Exception as e:
             self._handle_github_exception(e)
+            return []
 
     @retry_with_backoff(
         max_retries=3,
@@ -272,6 +271,7 @@ class GitHubConnector(GitConnector):
 
         except Exception as e:
             self._handle_github_exception(e)
+            return []
 
     @retry_with_backoff(
         max_retries=3,
@@ -306,6 +306,7 @@ class GitHubConnector(GitConnector):
 
         except Exception as e:
             self._handle_github_exception(e)
+            raise
 
     @retry_with_backoff(
         max_retries=3,
@@ -391,6 +392,7 @@ class GitHubConnector(GitConnector):
 
         except Exception as e:
             self._handle_github_exception(e)
+            raise
 
     @retry_with_backoff(
         max_retries=3,
@@ -602,443 +604,53 @@ class GitHubConnector(GitConnector):
 
         except Exception as e:
             self._handle_github_exception(e)
+            raise
 
-    def get_rate_limit(self) -> dict:
+    def get_rate_limit(self) -> Dict[str, Any]:
         """
         Get current rate limit status.
 
         :return: Dictionary with rate limit information.
         """
         try:
-            rate_limit = self.github.get_rate_limit()
-            core = rate_limit.core
+            # PyGithub's get_rate_limit().core is the core rate limit
+            # but sometimes it's nested differently depending on version
+            rl = self.github.get_rate_limit()
+            core = getattr(rl, "core", rl)
+            search = getattr(rl, "search", None)
 
-            return {
-                "limit": core.limit,
-                "remaining": core.remaining,
-                "reset": core.reset,
+            res = {
+                "limit": getattr(core, "limit", 0),
+                "remaining": getattr(core, "remaining", 0),
+                "reset": getattr(core, "reset", datetime.now(timezone.utc)).isoformat(),
             }
+
+            if search:
+                res["search"] = {
+                    "limit": getattr(search, "limit", 0),
+                    "remaining": getattr(search, "remaining", 0),
+                    "reset": getattr(
+                        search, "reset", datetime.now(timezone.utc)
+                    ).isoformat(),
+                }
+
+            return res
         except Exception as e:
             self._handle_github_exception(e)
+            return {}
 
-    def _get_repositories_for_processing(
-        self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
-        max_repos: Optional[int] = None,
-    ) -> List[Repository]:
-        """
-        Get repositories for batch processing, optionally filtered by pattern.
-
-        If neither org_name nor user_name is provided but pattern contains an owner
-        (e.g., 'chrisgeo/*'), the owner is extracted from the pattern and used as
-        the user_name for fetching repositories.
-
-        :param org_name: Optional organization name.
-        :param user_name: Optional user name.
-        :param pattern: Optional fnmatch-style pattern.
-        :param max_repos: Maximum number of repos to retrieve.
-        :return: List of Repository objects.
-        """
-        # Extract owner from pattern if not explicitly provided
-        effective_org = org_name
-        effective_user = user_name
-
-        if not org_name and not user_name and pattern:
-            # Check if pattern has a specific owner prefix (e.g., 'chrisgeo/*')
-            if "/" in pattern:
-                parts = pattern.split("/", 1)
-                owner_part = parts[0]
-                # Only use as owner if it's not a wildcard
-                if owner_part and "*" not in owner_part and "?" not in owner_part:
-                    # Try as user first (works for both users and orgs via search)
-                    effective_user = owner_part
-                    logger.info(
-                        f"Extracted owner '{owner_part}' from pattern '{pattern}'"
-                    )
-
-        return self.list_repositories(
-            org_name=effective_org,
-            user_name=effective_user,
-            pattern=pattern,
-            max_repos=max_repos,
-        )
-
-    def _process_single_repo_stats(
-        self,
-        repo: Repository,
-        max_commits: Optional[int] = None,
-    ) -> BatchResult:
-        """
-        Process a single repository and get its stats.
-
-        :param repo: Repository object to process.
-        :param max_commits: Maximum number of commits to analyze.
-        :return: BatchResult containing repository and stats.
-        """
+    def _rate_limit_reset_delay_seconds(self) -> float:
+        """Get delay in seconds until rate limit resets."""
         try:
-            parts = repo.full_name.split("/")
-            if len(parts) != 2:
-                return BatchResult(
-                    repository=repo,
-                    error=f"Invalid repository name: {repo.full_name}",
-                    success=False,
-                )
-
-            owner, repo_name = parts
-            stats = self.get_repo_stats(owner, repo_name, max_commits=max_commits)
-
-            return BatchResult(
-                repository=repo,
-                stats=stats,
-                success=True,
-            )
-
-        except RateLimitException:
-            # Let the batch scheduler coordinate a shared backoff.
-            raise
-
-        except Exception as e:
-            logger.warning(f"Failed to get stats for {repo.full_name}: {e}")
-            return BatchResult(
-                repository=repo,
-                error=str(e),
-                success=False,
-            )
-
-    def _rate_limit_reset_delay_seconds(self) -> Optional[float]:
-        """Best-effort delay until GitHub core rate limit reset."""
-        try:
-            info = self.get_rate_limit() or {}
-            remaining = info.get("remaining")
-            reset = info.get("reset")
-            if remaining == 0 and reset:
-                seconds = (reset - datetime.now(timezone.utc)).total_seconds()
-                return max(1.0, float(seconds))
+            rl = self.github.get_rate_limit()
+            core = getattr(rl, "core", rl)
+            reset_time = getattr(core, "reset", datetime.now(timezone.utc)).timestamp()
+            now = time.time()
+            return max(1.0, float(reset_time - now) + 1.0)
         except Exception:
-            return None
-        return None
-
-    def get_repos_with_stats(
-        self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
-        batch_size: int = 10,
-        max_concurrent: int = 4,
-        rate_limit_delay: float = 1.0,
-        max_commits_per_repo: Optional[int] = None,
-        max_repos: Optional[int] = None,
-        on_repo_complete: Optional[Callable[[BatchResult], None]] = None,
-    ) -> List[BatchResult]:
-        """
-        Get repositories and their stats with batch processing and rate limiting.
-
-        This method retrieves repositories from an organization or user,
-        optionally filtering by pattern, and collects statistics for each
-        repository with configurable batch processing and rate limiting.
-
-        :param org_name: Optional organization name to fetch repos from.
-        :param user_name: Optional user name to fetch repos from.
-        :param pattern: Optional fnmatch-style pattern to filter repos (e.g., 'chrisgeo/m*').
-        :param batch_size: Number of repos to process in each batch.
-        :param max_concurrent: Maximum number of concurrent workers for processing.
-        :param rate_limit_delay: Delay in seconds between batches for rate limiting.
-        :param max_commits_per_repo: Maximum commits to analyze per repository.
-        :param max_repos: Maximum number of repositories to process.
-        :param on_repo_complete: Optional callback function called after each repo is processed.
-        :return: List of BatchResult objects with repository and stats.
-
-        Example:
-            >>> results = connector.get_repos_with_stats(
-            ...     org_name='myorg',
-            ...     pattern='myorg/api-*',
-            ...     batch_size=5,
-            ...     max_concurrent=2,
-            ...     rate_limit_delay=2.0,
-            ... )
-            >>> for result in results:
-            ...     if result.success:
-            ...         print(f"{result.repository.full_name}: {result.stats}")
-        """
-        # Step 1: Get repositories
-        repos = self._get_repositories_for_processing(
-            org_name=org_name,
-            user_name=user_name,
-            pattern=pattern,
-            max_repos=max_repos,
-        )
-
-        logger.info(
-            "Processing %s repositories with batch_size=%s",
-            len(repos),
-            batch_size,
-        )
-
-        results: List[BatchResult] = []
-
-        # Step 2: Process in batches (queue-based workers + shared backoff)
-        for batch_start in range(0, len(repos), batch_size):
-            batch_end = min(batch_start + batch_size, len(repos))
-            batch = repos[batch_start:batch_end]
-
-            logger.info(
-                "Processing batch %s: repos %s-%s of %s",
-                batch_start // batch_size + 1,
-                batch_start + 1,
-                batch_end,
-                len(repos),
-            )
-
-            work_q: Queue[Repository] = Queue()
-            for repo in batch:
-                work_q.put(repo)
-
-            gate = RateLimitGate(
-                RateLimitConfig(
-                    initial_backoff_seconds=max(1.0, rate_limit_delay),
-                )
-            )
-            results_lock = threading.Lock()
-
-            def worker(
-                work_q: Queue,
-                gate: RateLimitGate,
-                results_lock: threading.Lock,
-            ) -> None:
-                while True:
-                    try:
-                        repo = work_q.get_nowait()
-                    except QueueEmpty:
-                        return
-
-                    try:
-                        attempts = 0
-                        while True:
-                            gate.wait_sync()
-                            try:
-                                result = self._process_single_repo_stats(
-                                    repo,
-                                    max_commits=max_commits_per_repo,
-                                )
-                                gate.reset()
-                                with results_lock:
-                                    results.append(result)
-                                if on_repo_complete:
-                                    on_repo_complete(result)
-                                break
-                            except RateLimitException as e:
-                                attempts += 1
-                                reset_delay = (
-                                    getattr(e, "retry_after_seconds", None)
-                                    or self._rate_limit_reset_delay_seconds()
-                                )
-                                applied = gate.penalize(reset_delay)
-                                logger.info(
-                                    "GitHub rate limited; backoff %.1fs (%s)",
-                                    applied,
-                                    e,
-                                )
-                                if attempts >= 10:
-                                    result = BatchResult(
-                                        repository=repo,
-                                        error=str(e),
-                                        success=False,
-                                    )
-                                    with results_lock:
-                                        results.append(result)
-                                    if on_repo_complete:
-                                        on_repo_complete(result)
-                                    break
-                    finally:
-                        work_q.task_done()
-
-            threads = [
-                threading.Thread(
-                    target=worker,
-                    args=(work_q, gate, results_lock),
-                    daemon=True,
-                )
-                for _ in range(max(1, min(max_concurrent, len(batch))))
-            ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            # Rate limiting delay between batches
-            if batch_end < len(repos) and rate_limit_delay > 0:
-                logger.debug("Rate limiting: waiting %ss", rate_limit_delay)
-                time.sleep(rate_limit_delay)
-
-        logger.info(
-            "Completed processing %s repositories, %s successful",
-            len(results),
-            sum(1 for r in results if r.success),
-        )
-        return results
-
-    async def get_repos_with_stats_async(
-        self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
-        batch_size: int = 10,
-        max_concurrent: int = 4,
-        rate_limit_delay: float = 1.0,
-        max_commits_per_repo: Optional[int] = None,
-        max_repos: Optional[int] = None,
-        on_repo_complete: Optional[Callable[[BatchResult], None]] = None,
-    ) -> List[BatchResult]:
-        """
-        Async version of get_repos_with_stats for better concurrent processing.
-
-        This method retrieves repositories from an organization or user,
-        optionally filtering by pattern, and collects statistics for each
-        repository with configurable async batch processing and rate limiting.
-
-        :param org_name: Optional organization name to fetch repos from.
-        :param user_name: Optional user name to fetch repos from.
-        :param pattern: Optional fnmatch-style pattern to filter repos (e.g., 'chrisgeo/m*').
-        :param batch_size: Number of repos to process in each batch.
-        :param max_concurrent: Maximum number of concurrent workers for processing.
-        :param rate_limit_delay: Delay in seconds between batches for rate limiting.
-        :param max_commits_per_repo: Maximum commits to analyze per repository.
-        :param max_repos: Maximum number of repositories to process.
-        :param on_repo_complete: Optional callback function called after each repo is processed.
-        :return: List of BatchResult objects with repository and stats.
-
-        Example:
-            >>> import asyncio
-            >>> async def main():
-            ...     results = await connector.get_repos_with_stats_async(
-            ...         org_name='myorg',
-            ...         pattern='myorg/api-*',
-            ...         batch_size=5,
-            ...         max_concurrent=2,
-            ...     )
-            ...     for result in results:
-            ...         if result.success:
-            ...             print(f"{result.repository.full_name}: {result.stats}")
-            >>> asyncio.run(main())
-        """
-        # Step 1: Get repositories (using sync method via run_in_executor)
-        loop = asyncio.get_running_loop()
-
-        repos = await loop.run_in_executor(
-            None,
-            lambda: self._get_repositories_for_processing(
-                org_name=org_name,
-                user_name=user_name,
-                pattern=pattern,
-                max_repos=max_repos,
-            ),
-        )
-
-        logger.info("Processing %s repositories asynchronously", len(repos))
-
-        results: List[BatchResult] = []
-
-        # Step 2: Process in batches with rate limiting
-        for batch_start in range(0, len(repos), batch_size):
-            batch_end = min(batch_start + batch_size, len(repos))
-            batch = repos[batch_start:batch_end]
-
-            logger.info(
-                "Processing async batch %s: repos %s-%s of %s",
-                batch_start // batch_size + 1,
-                batch_start + 1,
-                batch_end,
-                len(repos),
-            )
-
-            work_q: asyncio.Queue[Repository] = asyncio.Queue()
-            for repo in batch:
-                await work_q.put(repo)
-
-            gate = RateLimitGate(
-                RateLimitConfig(
-                    initial_backoff_seconds=max(1.0, rate_limit_delay),
-                )
-            )
-
-            async def worker_async(
-                work_q: asyncio.Queue = work_q,
-                gate: RateLimitGate = gate,
-            ) -> None:
-                while True:
-                    try:
-                        repo = work_q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        return
-
-                    try:
-                        attempts = 0
-                        while True:
-                            await gate.wait_async()
-                            try:
-                                result = await loop.run_in_executor(
-                                    None,
-                                    lambda: self._process_single_repo_stats(
-                                        repo,
-                                        max_commits=max_commits_per_repo,
-                                    ),
-                                )
-                                gate.reset()
-                                results.append(result)
-                                if on_repo_complete:
-                                    on_repo_complete(result)
-                                break
-                            except RateLimitException as e:
-                                attempts += 1
-                                retry_after = getattr(e, "retry_after_seconds", None)
-                                if retry_after is None:
-                                    retry_after = await loop.run_in_executor(
-                                        None,
-                                        self._rate_limit_reset_delay_seconds,
-                                    )
-                                applied = gate.penalize(retry_after)
-                                logger.info(
-                                    "GitHub rate limited; backoff %.1fs (%s)",
-                                    applied,
-                                    e,
-                                )
-                                if attempts >= 10:
-                                    result = BatchResult(
-                                        repository=repo,
-                                        error=str(e),
-                                        success=False,
-                                    )
-                                    results.append(result)
-                                    if on_repo_complete:
-                                        on_repo_complete(result)
-                                    break
-                    finally:
-                        work_q.task_done()
-
-            workers = [
-                asyncio.create_task(worker_async())
-                for _ in range(max(1, min(max_concurrent, len(batch))))
-            ]
-            await asyncio.gather(*workers)
-
-            # Rate limiting delay between batches
-            if batch_end < len(repos) and rate_limit_delay > 0:
-                logger.debug(
-                    "Rate limiting: waiting %ss before next batch",
-                    rate_limit_delay,
-                )
-                await asyncio.sleep(rate_limit_delay)
-
-        logger.info(
-            "Completed async processing %s repositories, %s successful",
-            len(results),
-            sum(1 for r in results if r.success),
-        )
-        return results
+            return 60.0
 
     def close(self) -> None:
-        """Close the connector and cleanup resources."""
+        """Cleanup GitHub client resources."""
         if hasattr(self.github, "close"):
             self.github.close()

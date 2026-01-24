@@ -6,13 +6,26 @@ with automatic pagination, rate limiting, and error handling.
 """
 
 from .base import BatchResult, GitConnector
-from .exceptions import (APIException, AuthenticationException,
-                         ConnectorException, NotFoundException,
-                         PaginationException, RateLimitException)
+from .exceptions import (
+    APIException,
+    AuthenticationException,
+    ConnectorException,
+    NotFoundException,
+    PaginationException,
+    RateLimitException,
+)
 from .github import GitHubConnector, match_repo_pattern
-from .gitlab import GitLabBatchResult, GitLabConnector, match_project_pattern
-from .models import (Author, BlameRange, CommitStats, FileBlame, Organization,
-                     PullRequest, Repository, RepoStats)
+from .gitlab import GitLabConnector, match_project_pattern
+from .models import (
+    Author,
+    BlameRange,
+    CommitStats,
+    FileBlame,
+    Organization,
+    PullRequest,
+    Repository,
+    RepoStats,
+)
 
 __all__ = [
     # Base class
@@ -20,11 +33,9 @@ __all__ = [
     # Connectors
     "GitHubConnector",
     "GitLabConnector",
-    # GitHub Batch processing
+    # Batch processing
     "BatchResult",
     "match_repo_pattern",
-    # GitLab Batch processing
-    "GitLabBatchResult",
     "match_project_pattern",
     # Models
     "Organization",

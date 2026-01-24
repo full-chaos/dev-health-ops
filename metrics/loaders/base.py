@@ -5,7 +5,72 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Protocol
+
+from metrics.schemas import (
+    CommitStatRow,
+    PullRequestRow,
+    PullRequestReviewRow,
+    PipelineRunRow,
+    DeploymentRow,
+    IncidentRow,
+)
+
+
+# Type aliases for internal data structures - using imports from metrics.schemas
+# (Removed redundant definitions)
+
+
+class DataLoader(Protocol):
+    """Protocol defining the interface for data loaders."""
+
+    def load_git_rows(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: Optional[uuid.UUID],
+        repo_name: Optional[str] = None,
+    ) -> Tuple[List[CommitStatRow], List[PullRequestRow], List[PullRequestReviewRow]]:
+        """Load commit stats, pull requests, and reviews."""
+        ...
+
+    def load_work_items(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: Optional[uuid.UUID],
+        repo_name: Optional[str] = None,
+    ) -> Tuple[List[Any], List[Any]]:
+        """Load work items and transitions."""
+        ...
+
+    def load_cicd_data(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: Optional[uuid.UUID],
+        repo_name: Optional[str] = None,
+    ) -> Tuple[List[PipelineRunRow], List[DeploymentRow]]:
+        """Load CI pipeline runs and deployments."""
+        ...
+
+    def load_incidents(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: Optional[uuid.UUID],
+        repo_name: Optional[str] = None,
+    ) -> List[IncidentRow]:
+        """Load incident records."""
+        ...
+
+    def load_blame_concentration(
+        self,
+        repo_id: uuid.UUID,
+        as_of: datetime,
+    ) -> Dict[uuid.UUID, float]:
+        """Load blame concentration stats for code ownership metrics."""
+        ...
 
 
 def naive_utc(dt: datetime) -> datetime:

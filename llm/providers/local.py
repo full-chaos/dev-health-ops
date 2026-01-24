@@ -10,6 +10,15 @@ import logging
 import os
 from typing import Optional
 
+from .openai import (
+    OpenAIProviderConfig,
+    OpenAIGPT5Provider,
+    categorization_json_schema,
+    is_json_schema_prompt,
+    system_message,
+    validate_json_or_empty,
+)
+
 logger = logging.getLogger(__name__)
 
 # Default endpoints for common local providers
@@ -19,15 +28,6 @@ DEFAULT_ENDPOINTS = {
     "vllm": "http://localhost:8000/v1",
     "local": "http://localhost:11434/v1",  # Default to Ollama
 }
-
-from .openai import (
-    OpenAIProviderConfig,
-    OpenAIGPT5Provider,
-    is_json_schema_prompt,
-    system_message,
-    categorization_json_schema,
-    validate_json_or_empty,
-)
 
 
 class LocalProvider:
@@ -69,12 +69,6 @@ class LocalProvider:
         )
         self.model = model or os.getenv("LOCAL_LLM_MODEL", "llama3.2")
         self.api_key = api_key or os.getenv("LOCAL_LLM_API_KEY", "not-needed")
-        # ``max_completion_tokens`` is the name used by OpenAI for the
-        # maximum length of a chat completion.  Historically this repo used
-        # ``max_tokens`` which is ignored by the OpenAI API and caused
-        # responses to be truncated or omitted.  Using the correct keyword
-        # guarantees we never hit the undocumented length limit and keeps
-        # the intent of the config clear.
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
         self._client: Optional[object] = None
@@ -110,7 +104,7 @@ class LocalProvider:
         # Retry once on 400 errors (which often indicate unsupported response_format)
         retry_count = 0
         max_retries = 1
-        
+
         is_schema_prompt = is_json_schema_prompt(prompt)
         sys_msg = system_message(prompt)
 
@@ -159,9 +153,10 @@ class LocalProvider:
                     response_format = {"type": "text"}
                     retry_count += 1
                     continue
-                
+
                 logger.error("Local LLM API error (%s): %s", self.base_url, e)
                 raise
+        return ""  # Should not be reachable
 
     async def aclose(self) -> None:
         if self._client:

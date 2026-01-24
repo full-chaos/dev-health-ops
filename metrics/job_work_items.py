@@ -159,21 +159,18 @@ def run_work_items_sync_job(
             repo_id=repo_id,
             repo_name=repo_name,
         )
-        if search_pattern:
-            import fnmatch
+        from utils import match_pattern
 
-            before = len(discovered_repos)
-            discovered_repos = [
-                r
-                for r in discovered_repos
-                if fnmatch.fnmatch(r.full_name, search_pattern)
-            ]
-            logger.info(
-                "Filtered repos by '%s': %d/%d",
-                search_pattern,
-                len(discovered_repos),
-                before,
-            )
+        before = len(discovered_repos)
+        discovered_repos = [
+            r for r in discovered_repos if match_pattern(r.full_name, search_pattern)
+        ]
+        logger.info(
+            "Filtered repos by '%s': %d/%d",
+            search_pattern,
+            len(discovered_repos),
+            before,
+        )
 
         if "synthetic" in provider_set and not any(
             r.source == "synthetic" for r in discovered_repos

@@ -10,6 +10,7 @@ from metrics.loaders.base import (
     DataLoader,
     naive_utc,
     parse_uuid,
+    to_dataclass,
 )
 from metrics.schemas import (
     CommitStatRow,
@@ -21,21 +22,12 @@ from metrics.schemas import (
 )
 
 
-def _clickhouse_query_dicts(
+async def _clickhouse_query_dicts(
     client: Any, query: str, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
     from api.queries.client import query_dicts
-    import asyncio
 
-    # Simplified sync wrapper for the async query_dicts
-    try:
-        return asyncio.run(query_dicts(client, query, params))
-    except RuntimeError:
-        # Fallback if loop already running
-        import nest_asyncio
-
-        nest_asyncio.apply()
-        return asyncio.run(query_dicts(client, query, params))
+    return await query_dicts(client, query, params)
 
 
 class ClickHouseDataLoader(DataLoader):
@@ -44,7 +36,7 @@ class ClickHouseDataLoader(DataLoader):
     def __init__(self, client: Any) -> None:
         self.client = client
 
-    def load_git_rows(
+    async def load_git_rows(
         self,
         start: datetime,
         end: datetime,
@@ -112,20 +104,21 @@ class ClickHouseDataLoader(DataLoader):
         {repo_filter.replace("c.repo_id", "repo_id") if repo_id or repo_name else ""}
         """
 
-        commit_dicts = _clickhouse_query_dicts(self.client, commit_query, params)
-        pr_dicts = _clickhouse_query_dicts(self.client, pr_query, params)
-        review_dicts = _clickhouse_query_dicts(self.client, review_query, params)
+        commit_dicts = await _clickhouse_query_dicts(self.client, commit_query, params)
+        pr_dicts = await _clickhouse_query_dicts(self.client, pr_query, params)
+        review_dicts = await _clickhouse_query_dicts(self.client, review_query, params)
 
         commit_rows: List[CommitStatRow] = []
         for r in commit_dicts:
             u = parse_uuid(r.get("repo_id"))
-            if u:
+            cw = r.get("committer_when")
+            if u and cw:
                 commit_rows.append({
                     "repo_id": u,
-                    "commit_hash": str(r.get("commit_hash")),
-                    "author_email": r.get("author_email"),
-                    "author_name": r.get("author_name"),
-                    "committer_when": r.get("committer_when"),
+                    "commit_hash": str(r.get("commit_hash") or ""),
+                    "author_email": r.get("author_email") or "",
+                    "author_name": r.get("author_name") or "",
+                    "committer_when": cw,
                     "file_path": r.get("file_path"),
                     "additions": int(r.get("additions") or 0),
                     "deletions": int(r.get("deletions") or 0),
@@ -134,13 +127,14 @@ class ClickHouseDataLoader(DataLoader):
         pr_rows: List[PullRequestRow] = []
         for r in pr_dicts:
             u = parse_uuid(r.get("repo_id"))
-            if u:
+            ca = r.get("created_at")
+            if u and ca:
                 pr_rows.append({
                     "repo_id": u,
                     "number": int(r.get("number") or 0),
-                    "author_email": r.get("author_email"),
-                    "author_name": r.get("author_name"),
-                    "created_at": r.get("created_at"),
+                    "author_email": r.get("author_email") or "",
+                    "author_name": r.get("author_name") or "",
+                    "created_at": ca,
                     "merged_at": r.get("merged_at"),
                     "first_review_at": r.get("first_review_at"),
                     "first_comment_at": r.get("first_comment_at"),
@@ -155,18 +149,19 @@ class ClickHouseDataLoader(DataLoader):
         review_rows: List[PullRequestReviewRow] = []
         for r in review_dicts:
             u = parse_uuid(r.get("repo_id"))
-            if u:
+            sa = r.get("submitted_at")
+            if u and sa:
                 review_rows.append({
                     "repo_id": u,
                     "number": int(r.get("number") or 0),
-                    "reviewer": r.get("reviewer"),
-                    "submitted_at": r.get("submitted_at"),
-                    "state": r.get("state"),
+                    "reviewer": r.get("reviewer") or "unknown",
+                    "submitted_at": sa,
+                    "state": r.get("state") or "unknown",
                 })
 
         return commit_rows, pr_rows, review_rows
 
-    def load_work_items(
+    async def load_work_items(
         self,
         start: datetime,
         end: datetime,
@@ -184,25 +179,25 @@ class ClickHouseDataLoader(DataLoader):
         item_query = f"""
         SELECT * FROM work_items
         WHERE (created_at < {{end:DateTime}})
-        AND (status != 'done' OR resolved_at >= {{start:DateTime}})
+        AND (status != 'done' OR completed_at >= {{start:DateTime}})
         {repo_filter}
         """
 
         trans_query = f"""
-        SELECT * FROM work_item_status_transitions
+        SELECT * FROM work_item_transitions
         WHERE (occurred_at < {{end:DateTime}})
         {repo_filter}
         """
 
-        item_dicts = _clickhouse_query_dicts(self.client, item_query, params)
-        trans_dicts = _clickhouse_query_dicts(self.client, trans_query, params)
+        item_dicts = await _clickhouse_query_dicts(self.client, item_query, params)
+        trans_dicts = await _clickhouse_query_dicts(self.client, trans_query, params)
 
-        items = [WorkItem(**d) for d in item_dicts]
-        transitions = [WorkItemStatusTransition(**d) for d in trans_dicts]
+        items = [to_dataclass(WorkItem, d) for d in item_dicts]
+        transitions = [to_dataclass(WorkItemStatusTransition, t) for t in trans_dicts]
 
         return items, transitions
 
-    def load_cicd_data(
+    async def load_cicd_data(
         self,
         start: datetime,
         end: datetime,
@@ -226,8 +221,8 @@ class ClickHouseDataLoader(DataLoader):
         {repo_filter}
         """
 
-        pipes_dicts = _clickhouse_query_dicts(self.client, pipe_query, params)
-        deploys_dicts = _clickhouse_query_dicts(self.client, deploy_query, params)
+        pipes_dicts = await _clickhouse_query_dicts(self.client, pipe_query, params)
+        deploys_dicts = await _clickhouse_query_dicts(self.client, deploy_query, params)
 
         # ClickHouse dicts can be directly cast if they match keys
         pipes: List[PipelineRunRow] = [dict(p) for p in pipes_dicts]  # type: ignore
@@ -235,7 +230,7 @@ class ClickHouseDataLoader(DataLoader):
 
         return pipes, deploys
 
-    def load_incidents(
+    async def load_incidents(
         self,
         start: datetime,
         end: datetime,
@@ -253,10 +248,10 @@ class ClickHouseDataLoader(DataLoader):
         WHERE started_at >= {{start:DateTime}} AND started_at < {{end:DateTime}}
         {repo_filter}
         """
-        dicts = _clickhouse_query_dicts(self.client, query, params)
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
         return [dict(d) for d in dicts]  # type: ignore
 
-    def load_blame_concentration(
+    async def load_blame_concentration(
         self,
         repo_id: uuid.UUID,
         as_of: datetime,
@@ -270,7 +265,7 @@ class ClickHouseDataLoader(DataLoader):
         WHERE repo_id = {repo_id:UUID}
         GROUP BY repo_id
         """
-        rows = _clickhouse_query_dicts(self.client, query, params)
+        rows = await _clickhouse_query_dicts(self.client, query, params)
         res = {}
         for r in rows:
             u = parse_uuid(r.get("repo_id"))

@@ -193,7 +193,7 @@ graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
 
 
-@app.get("/api/v1/health", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:
     services = {}
     try:
@@ -202,6 +202,11 @@ async def health() -> HealthResponse | JSONResponse:
         services["clickhouse"] = "ok" if rows else "down"
     except Exception:
         services["clickhouse"] = "down"
+
+    try:
+        services["redis"] = HOME_CACHE.status()
+    except Exception:
+        services["redis"] = "down"
 
     status = "ok" if all(state == "ok" for state in services.values()) else "down"
     response = HealthResponse(status=status, services=services)

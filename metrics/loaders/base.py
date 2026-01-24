@@ -24,7 +24,7 @@ from metrics.schemas import (
 class DataLoader(Protocol):
     """Protocol defining the interface for data loaders."""
 
-    def load_git_rows(
+    async def load_git_rows(
         self,
         start: datetime,
         end: datetime,
@@ -34,7 +34,7 @@ class DataLoader(Protocol):
         """Load commit stats, pull requests, and reviews."""
         ...
 
-    def load_work_items(
+    async def load_work_items(
         self,
         start: datetime,
         end: datetime,
@@ -44,7 +44,7 @@ class DataLoader(Protocol):
         """Load work items and transitions."""
         ...
 
-    def load_cicd_data(
+    async def load_cicd_data(
         self,
         start: datetime,
         end: datetime,
@@ -54,7 +54,7 @@ class DataLoader(Protocol):
         """Load CI pipeline runs and deployments."""
         ...
 
-    def load_incidents(
+    async def load_incidents(
         self,
         start: datetime,
         end: datetime,
@@ -64,7 +64,7 @@ class DataLoader(Protocol):
         """Load incident records."""
         ...
 
-    def load_blame_concentration(
+    async def load_blame_concentration(
         self,
         repo_id: uuid.UUID,
         as_of: datetime,
@@ -114,6 +114,38 @@ def safe_json_loads(value: Any) -> Any:
 def chunked(values: Sequence[str], chunk_size: int) -> List[List[str]]:
     """Split a sequence into chunks of the given size."""
     return [list(values[i : i + chunk_size]) for i in range(0, len(values), chunk_size)]
+
+
+def to_dataclass(cls: Any, row_map: Dict[str, Any]) -> Any:
+    """Instantiate a dataclass from a dict, filtering unknown fields and parsing datetimes."""
+    import dataclasses
+
+    if not dataclasses.is_dataclass(cls):
+        return cls(**row_map)
+
+    field_names = {f.name for f in dataclasses.fields(cls)}
+    filtered = {}
+    for k, v in row_map.items():
+        if k in field_names:
+            if isinstance(v, str) and (
+                k.endswith("_at") or k.endswith("_when") or k == "day"
+            ):
+                try:
+                    v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                    if v.tzinfo is None:
+                        v = v.replace(tzinfo=timezone.utc)
+                    else:
+                        v = v.astimezone(timezone.utc)
+                except Exception:
+                    pass
+            elif isinstance(v, datetime):
+                # Ensure it has a timezone (assume UTC for naive DB times)
+                if v.tzinfo is None:
+                    v = v.replace(tzinfo=timezone.utc)
+                else:
+                    v = v.astimezone(timezone.utc)
+            filtered[k] = v
+    return cls(**filtered)
 
 
 def clickhouse_query_dicts(

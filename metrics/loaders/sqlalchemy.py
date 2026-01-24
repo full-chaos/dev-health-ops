@@ -42,7 +42,7 @@ class SqlAlchemyDataLoader(DataLoader):
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
 
-    def load_git_rows(
+    async def load_git_rows(
         self,
         start: datetime,
         end: datetime,
@@ -146,14 +146,14 @@ class SqlAlchemyDataLoader(DataLoader):
                     review_rows.append({
                         "repo_id": u,
                         "number": int(r.get("number") or 0),
-                        "reviewer": r.get("reviewer"),
+                        "reviewer": r.get("reviewer") or "unknown",
                         "submitted_at": sa,
-                        "state": r.get("state"),
+                        "state": r.get("state") or "unknown",
                     })
 
         return commit_rows, pr_rows, review_rows
 
-    def load_work_items(
+    async def load_work_items(
         self,
         start: datetime,
         end: datetime,
@@ -202,7 +202,7 @@ class SqlAlchemyDataLoader(DataLoader):
         transitions = [to_dataclass(WorkItemStatusTransition, t) for t in trans_raw]
         return items, transitions
 
-    def load_cicd_data(
+    async def load_cicd_data(
         self,
         start: datetime,
         end: datetime,
@@ -241,7 +241,7 @@ class SqlAlchemyDataLoader(DataLoader):
 
         return pipes, deploys
 
-    def load_incidents(
+    async def load_incidents(
         self,
         start: datetime,
         end: datetime,
@@ -265,7 +265,7 @@ class SqlAlchemyDataLoader(DataLoader):
                 incidents.append(rd)  # type: ignore
         return incidents
 
-    def load_blame_concentration(
+    async def load_blame_concentration(
         self,
         repo_id: uuid.UUID,
         as_of: datetime,

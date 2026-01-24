@@ -48,7 +48,9 @@ from metrics.sinks.base import BaseMetricsSink
 logger = logging.getLogger(__name__)
 
 
-def _dt_to_clickhouse_datetime(value: datetime) -> datetime:
+def _dt_to_clickhouse_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
     if value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
@@ -66,14 +68,17 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def backend_type(self) -> str:
         return "clickhouse"
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, client: Optional[Any] = None) -> None:
         if not dsn:
             raise ValueError("ClickHouse DSN is required")
         self.dsn = dsn
-        settings = {
-            "max_query_size": 1 * 1024 * 1024,  # 1MB
-        }
-        self.client = clickhouse_connect.get_client(dsn=dsn, settings=settings)
+        if client:
+            self.client = client
+        else:
+            settings = {
+                "max_query_size": 1 * 1024 * 1024,  # 1MB
+            }
+            self.client = clickhouse_connect.get_client(dsn=dsn, settings=settings)
 
     def close(self) -> None:
         try:
@@ -90,7 +95,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
         query = "SELECT id, name, members FROM teams FINAL"
         result = await asyncio.to_thread(self.client.query, query)
         teams: List[Dict[str, Any]] = []
-        for row in (result.result_rows or []):
+        for row in result.result_rows or []:
             teams.append({
                 "id": row[0],
                 "name": row[1],
@@ -925,20 +930,12 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "assignees": get("assignees") or [],
                 "reporter": str(get("reporter") or ""),
                 "created_at": _dt_to_clickhouse_datetime(get("created_at"))
-                if get("created_at")
-                else datetime.now(timezone.utc),
+                or datetime.now(timezone.utc),
                 "updated_at": _dt_to_clickhouse_datetime(get("updated_at"))
-                if get("updated_at")
-                else datetime.now(timezone.utc),
-                "started_at": _dt_to_clickhouse_datetime(get("started_at"))
-                if get("started_at")
-                else None,
-                "completed_at": _dt_to_clickhouse_datetime(get("completed_at"))
-                if get("completed_at")
-                else None,
-                "closed_at": _dt_to_clickhouse_datetime(get("closed_at"))
-                if get("closed_at")
-                else None,
+                or datetime.now(timezone.utc),
+                "started_at": _dt_to_clickhouse_datetime(get("started_at")),
+                "completed_at": _dt_to_clickhouse_datetime(get("completed_at")),
+                "closed_at": _dt_to_clickhouse_datetime(get("closed_at")),
                 "labels": get("labels") or [],
                 "story_points": get("story_points")
                 if get("story_points") is not None

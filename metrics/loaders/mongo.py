@@ -10,6 +10,7 @@ from metrics.loaders.base import (
     DataLoader,
     naive_utc,
     parse_uuid,
+    to_dataclass,
 )
 from metrics.schemas import (
     CommitStatRow,
@@ -27,7 +28,7 @@ class MongoDataLoader(DataLoader):
     def __init__(self, db: Any) -> None:
         self.db = db
 
-    def load_git_rows(
+    async def load_git_rows(
         self,
         start: datetime,
         end: datetime,
@@ -136,7 +137,7 @@ class MongoDataLoader(DataLoader):
 
         return commit_rows, pr_rows, review_rows
 
-    def load_work_items(
+    async def load_work_items(
         self,
         start: datetime,
         end: datetime,
@@ -168,30 +169,12 @@ class MongoDataLoader(DataLoader):
         }
         trans_raw = list(self.db["work_item_transitions"].find(trans_query))
 
-        import dataclasses
-
-        def to_dataclass(cls, row_map):
-            field_names = {f.name for f in dataclasses.fields(cls)}
-            filtered = {}
-            for k, v in row_map.items():
-                if k in field_names:
-                    # Mongo usually provides datetimes, but we'll be safe
-                    if isinstance(v, str) and (
-                        k.endswith("_at") or k.endswith("_when") or k == "day"
-                    ):
-                        try:
-                            v = datetime.fromisoformat(v.replace("Z", "+00:00"))
-                        except Exception:
-                            pass
-                    filtered[k] = v
-            return cls(**filtered)
-
         items = [to_dataclass(WorkItem, i) for i in items_raw]
         transitions = [to_dataclass(WorkItemStatusTransition, t) for t in trans_raw]
 
         return items, transitions
 
-    def load_cicd_data(
+    async def load_cicd_data(
         self,
         start: datetime,
         end: datetime,
@@ -215,7 +198,7 @@ class MongoDataLoader(DataLoader):
 
         return pipes, deploys
 
-    def load_incidents(
+    async def load_incidents(
         self,
         start: datetime,
         end: datetime,
@@ -232,7 +215,7 @@ class MongoDataLoader(DataLoader):
         items_raw = list(self.db["incidents"].find(query))
         return [dict(i) for i in items_raw]  # type: ignore
 
-    def load_blame_concentration(
+    async def load_blame_concentration(
         self,
         repo_id: uuid.UUID,
         as_of: datetime,

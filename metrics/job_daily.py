@@ -128,12 +128,13 @@ def discover_repos(
 _discover_repos = discover_repos
 
 
-def _get_loader(db_url: str, backend: str) -> DataLoader:
+async def _get_loader(db_url: str, backend: str) -> DataLoader:
     """Factory to create the appropriate DataLoader for the backend."""
     if backend == "clickhouse":
-        from api.queries.client import clickhouse_client
+        from api.queries.client import get_global_client
 
-        return ClickHouseDataLoader(clickhouse_client(db_url))
+        client = await get_global_client(db_url)
+        return ClickHouseDataLoader(client)
     elif backend == "mongo":
         import pymongo
 
@@ -228,7 +229,7 @@ async def run_daily_metrics_job(
     await init_team_resolver(primary_sink)
     team_resolver = get_team_resolver()
 
-    loader = _get_loader(db_url, backend)
+    loader = await _get_loader(db_url, backend)
 
     work_items: List[Any] = []
     work_item_transitions: List[Any] = []
@@ -238,7 +239,9 @@ async def run_daily_metrics_job(
         since_dt = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
         until_dt = datetime.combine(max(days), time.max, tzinfo=timezone.utc)
         if load_from_db:
-            wi, trans = loader.load_work_items(since_dt, until_dt, repo_id, repo_name)
+            wi, trans = await loader.load_work_items(
+                since_dt, until_dt, repo_id, repo_name
+            )
             work_items.extend(wi)
             work_item_transitions.extend(trans)
 
@@ -250,20 +253,20 @@ async def run_daily_metrics_job(
         logger.info("Computing metrics for day=%s", d.isoformat())
         start, end = _utc_day_window(d)
 
-        commit_rows, pr_rows, review_rows = loader.load_git_rows(
+        commit_rows, pr_rows, review_rows = await loader.load_git_rows(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
-        pipeline_rows, deployment_rows = loader.load_cicd_data(
+        pipeline_rows, deployment_rows = await loader.load_cicd_data(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
-        incident_rows = loader.load_incidents(
+        incident_rows = await loader.load_incidents(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
 
         h_start = datetime.combine(
             d - timedelta(days=29), time.min, tzinfo=timezone.utc
         )
-        h_commit_rows, _, _ = loader.load_git_rows(
+        h_commit_rows, _, _ = await loader.load_git_rows(
             h_start, end, repo_id=repo_id, repo_name=repo_name
         )
 
@@ -290,13 +293,17 @@ async def run_daily_metrics_job(
 
         for r_id in active_repos:
             rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
-                str(r_id), h_commit_rows
+                repo_id=str(r_id), window_stats=h_commit_rows
             )
             single_owner_ratio_by_repo[r_id] = compute_single_owner_file_ratio(
-                str(r_id), h_commit_rows
+                repo_id=str(r_id), window_stats=h_commit_rows
             )
-            bus_factor_by_repo[r_id] = compute_bus_factor(str(r_id), h_commit_rows)
-            gini_by_repo[r_id] = compute_code_ownership_gini(str(r_id), h_commit_rows)
+            bus_factor_by_repo[r_id] = compute_bus_factor(
+                repo_id=str(r_id), window_stats=h_commit_rows
+            )
+            gini_by_repo[r_id] = compute_code_ownership_gini(
+                repo_id=str(r_id), window_stats=h_commit_rows
+            )
 
         result = compute_daily_metrics(
             day=d,

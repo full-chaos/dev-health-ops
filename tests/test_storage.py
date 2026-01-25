@@ -807,17 +807,17 @@ async def test_clickhouse_store_context_manager_initializes_and_creates_tables()
         patch.dict(sys.modules, {"clickhouse_connect": fake_clickhouse_connect}),
         patch("dev_health_ops.storage.Path") as MockPath,
     ):
-        # Setup the chain: Path(__file__).resolve().parents[2] / "migrations" / "clickhouse"
+        # Setup the chain: Path(__file__).resolve().parent / "migrations" / "clickhouse"
         mock_file_path = MagicMock()
         mock_resolved_path = MagicMock()
-        mock_repo_root_path = MagicMock()
+        mock_package_root_path = MagicMock()
         mock_migrations_path = MagicMock()
         mock_clickhouse_path = MagicMock()
 
         MockPath.return_value = mock_file_path
         mock_file_path.resolve.return_value = mock_resolved_path
-        mock_resolved_path.parents.__getitem__.return_value = mock_repo_root_path
-        mock_repo_root_path.__truediv__.return_value = mock_migrations_path
+        mock_resolved_path.parent = mock_package_root_path
+        mock_package_root_path.__truediv__.return_value = mock_migrations_path
         mock_migrations_path.__truediv__.return_value = mock_clickhouse_path
 
         mock_clickhouse_path.exists.return_value = True

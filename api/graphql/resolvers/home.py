@@ -27,7 +27,7 @@ async def resolve_home(
     Returns:
         Dict with freshness, deltas, summary, tiles, constraint, and events.
     """
-    org_id = require_org_id(context)
+    require_org_id(context)
     client = context.client
 
     if client is None:

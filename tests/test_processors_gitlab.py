@@ -2,18 +2,19 @@ import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timezone
 
-from processors.gitlab import (
+from dev_health_ops.processors.gitlab import (
     process_gitlab_project,
     _fetch_gitlab_pipelines_sync,
     _fetch_gitlab_deployments_sync,
     _fetch_gitlab_incidents_sync,
 )
-from models.git import CiPipelineRun, Deployment, Incident
+from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
 
 
 @pytest.mark.asyncio
-async def test_process_gitlab_project_sync_flags():
+async def test_process_gitlab_project_sync_flags(monkeypatch):
     """Test that process_gitlab_project calls sync functions based on flags."""
+    monkeypatch.setattr("dev_health_ops.processors.gitlab.CONNECTORS_AVAILABLE", True)
 
     # Mock storage
     mock_store = AsyncMock()
@@ -47,27 +48,27 @@ async def test_process_gitlab_project_sync_flags():
 
     # Patch the helper functions and connector
     with (
-        patch("processors.gitlab.GitLabConnector") as _MockConnector,
+        patch("dev_health_ops.processors.gitlab.GitLabConnector") as _MockConnector,  # noqa: F841
         patch(
-            "processors.gitlab._fetch_gitlab_project_info_sync",
+            "dev_health_ops.processors.gitlab._fetch_gitlab_project_info_sync",
             return_value=mock_gl_project,
         ),
-        patch("processors.gitlab._fetch_gitlab_commits_sync", return_value=([], [])),
-        patch("processors.gitlab._fetch_gitlab_commit_stats_sync", return_value=[]),
-        patch("processors.gitlab._sync_gitlab_mrs_to_store", return_value=0),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync", return_value=([], [])),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync", return_value=[]),
+        patch("dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0),
         patch(
-            "processors.gitlab._fetch_gitlab_pipelines_sync",
+            "dev_health_ops.processors.gitlab._fetch_gitlab_pipelines_sync",
             return_value=mock_pipelines,
         ) as mock_fetch_pipelines,
         patch(
-            "processors.gitlab._fetch_gitlab_deployments_sync",
+            "dev_health_ops.processors.gitlab._fetch_gitlab_deployments_sync",
             return_value=mock_deployments,
         ) as mock_fetch_deployments,
         patch(
-            "processors.gitlab._fetch_gitlab_incidents_sync",
+            "dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync",
             return_value=mock_incidents,
         ) as mock_fetch_incidents,
-        patch("processors.gitlab._fetch_gitlab_blame_sync", return_value=[]),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_blame_sync", return_value=[]),
     ):
         # Call the function with all sync flags enabled
         await process_gitlab_project(
@@ -92,8 +93,9 @@ async def test_process_gitlab_project_sync_flags():
 
 
 @pytest.mark.asyncio
-async def test_process_gitlab_project_no_sync_flags():
+async def test_process_gitlab_project_no_sync_flags(monkeypatch):
     """Test that process_gitlab_project DOES NOT call sync functions when flags are False."""
+    monkeypatch.setattr("dev_health_ops.processors.gitlab.CONNECTORS_AVAILABLE", True)
 
     mock_store = AsyncMock()
     mock_gl_project = Mock()
@@ -101,19 +103,19 @@ async def test_process_gitlab_project_no_sync_flags():
     mock_gl_project.name = "test-project"
 
     with (
-        patch("processors.gitlab.GitLabConnector") as _MockConnector,
+        patch("dev_health_ops.processors.gitlab.GitLabConnector") as _MockConnector,  # noqa: F841
         patch(
-            "processors.gitlab._fetch_gitlab_project_info_sync",
+            "dev_health_ops.processors.gitlab._fetch_gitlab_project_info_sync",
             return_value=mock_gl_project,
         ),
-        patch("processors.gitlab._fetch_gitlab_commits_sync", return_value=([], [])),
-        patch("processors.gitlab._fetch_gitlab_commit_stats_sync", return_value=[]),
-        patch("processors.gitlab._sync_gitlab_mrs_to_store", return_value=0),
-        patch("processors.gitlab._fetch_gitlab_pipelines_sync") as mock_fetch_pipelines,
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync", return_value=([], [])),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync", return_value=[]),
+        patch("dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0),
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_pipelines_sync") as mock_fetch_pipelines,
         patch(
-            "processors.gitlab._fetch_gitlab_deployments_sync"
+            "dev_health_ops.processors.gitlab._fetch_gitlab_deployments_sync"
         ) as mock_fetch_deployments,
-        patch("processors.gitlab._fetch_gitlab_incidents_sync") as mock_fetch_incidents,
+        patch("dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync") as mock_fetch_incidents,
     ):
         # Call with flags False
         await process_gitlab_project(

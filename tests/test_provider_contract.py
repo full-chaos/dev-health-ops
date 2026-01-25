@@ -13,14 +13,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from providers.base import (
+from dev_health_ops.providers.base import (
     IngestionContext,
     IngestionWindow,
     Provider,
     ProviderBatch,
     ProviderCapabilities,
 )
-from providers.registry import (
+from dev_health_ops.providers.registry import (
     get_provider,
     is_registered,
     list_providers,
@@ -149,10 +149,8 @@ class TestJiraProvider:
         assert caps.reopen_events is True
         assert caps.priority is True
 
-    @patch("providers.jira.client.JiraClient.from_env")
-    def test_jira_provider_ingest_returns_batch(
-        self, mock_from_env: MagicMock
-    ) -> None:
+    @patch("dev_health_ops.providers.jira.client.JiraClient.from_env")
+    def test_jira_provider_ingest_returns_batch(self, mock_from_env: MagicMock) -> None:
         """Verify JiraProvider.ingest returns a ProviderBatch."""
         # Mock JiraClient.from_env
         mock_client = MagicMock()
@@ -181,7 +179,7 @@ class TestJiraProvider:
         mock_client.close.return_value = None
 
         # Import and create provider
-        from providers.jira.provider import JiraProvider
+        from dev_health_ops.providers.jira.provider import JiraProvider
 
         provider = JiraProvider()
 
@@ -212,10 +210,8 @@ class TestJiraProvider:
         # Verify client was closed
         mock_client.close.assert_called_once()
 
-    @patch("providers.jira.client.JiraClient.from_env")
-    def test_jira_provider_respects_limit(
-        self, mock_from_env: MagicMock
-    ) -> None:
+    @patch("dev_health_ops.providers.jira.client.JiraClient.from_env")
+    def test_jira_provider_respects_limit(self, mock_from_env: MagicMock) -> None:
         """Verify JiraProvider respects the limit in IngestionContext."""
         mock_client = MagicMock()
         mock_from_env.return_value = mock_client
@@ -245,7 +241,7 @@ class TestJiraProvider:
         mock_client.iter_issue_comments.return_value = iter([])
         mock_client.close.return_value = None
 
-        from providers.jira.provider import JiraProvider
+        from dev_health_ops.providers.jira.provider import JiraProvider
 
         provider = JiraProvider()
         ctx = IngestionContext(

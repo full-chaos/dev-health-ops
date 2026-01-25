@@ -19,8 +19,8 @@ from urllib.parse import urlparse
 
 import pytest
 
-from connectors import GitHubConnector, GitLabConnector
-from connectors.exceptions import APIException, AuthenticationException
+from dev_health_ops.connectors import GitHubConnector, GitLabConnector
+from dev_health_ops.connectors.exceptions import APIException, AuthenticationException
 
 # Skip integration tests if environment variable is set
 skip_integration = os.getenv("SKIP_INTEGRATION_TESTS", "0") == "1"
@@ -88,9 +88,9 @@ class TestGitHubPrivateRepoAccess:
                     private_repo_found = repo
                     break
 
-            assert (
-                private_repo_found is not None
-            ), f"Private repository {private_repo} not found in user's repositories"
+            assert private_repo_found is not None, (
+                f"Private repository {private_repo} not found in user's repositories"
+            )
             print(
                 f"  ✓ Successfully found private repository: {private_repo_found.full_name}"
             )
@@ -109,21 +109,21 @@ class TestGitHubPrivateRepoAccess:
                 owner, repo_name, max_contributors=5
             )
 
-            assert (
-                contributors is not None
-            ), "Should return contributors for private repository"
-            assert (
-                len(contributors) > 0
-            ), "Private repository should have at least one contributor"
+            assert contributors is not None, (
+                "Should return contributors for private repository"
+            )
+            assert len(contributors) > 0, (
+                "Private repository should have at least one contributor"
+            )
             print(f"  ✓ Successfully fetched {len(contributors)} contributors")
 
             # Test 4: Get pull requests
             print("\nTest 4: Fetching pull requests for private repository...")
             prs = connector.get_pull_requests(owner, repo_name, state="all", max_prs=5)
 
-            assert (
-                prs is not None
-            ), "Should return PRs list (even if empty) for private repository"
+            assert prs is not None, (
+                "Should return PRs list (even if empty) for private repository"
+            )
             print(f"  ✓ Successfully fetched {len(prs)} pull requests")
 
             # Test 5: Check rate limit
@@ -189,9 +189,7 @@ class TestGitHubPrivateRepoAccess:
             connector.close()
 
 
-@pytest.mark.skipif(
-    skip_integration or skip_gitlab_network, reason=gitlab_skip_reason
-)
+@pytest.mark.skipif(skip_integration or skip_gitlab_network, reason=gitlab_skip_reason)
 class TestGitLabPrivateProjectAccess:
     """Integration tests for GitLab connector with private projects."""
 
@@ -267,9 +265,9 @@ class TestGitLabPrivateProjectAccess:
                 else:
                     raise
 
-            assert (
-                contributors is not None
-            ), "Should return contributors for private project"
+            assert contributors is not None, (
+                "Should return contributors for private project"
+            )
             print(f"  ✓ Successfully fetched {len(contributors)} contributors")
 
             # Test 5: Get merge requests
@@ -286,9 +284,9 @@ class TestGitLabPrivateProjectAccess:
                 else:
                     raise
 
-            assert (
-                mrs is not None
-            ), "Should return MRs list (even if empty) for private project"
+            assert mrs is not None, (
+                "Should return MRs list (even if empty) for private project"
+            )
             print(f"  ✓ Successfully fetched {len(mrs)} merge requests")
 
             print(f"\n✅ All tests passed for private project {private_project}")

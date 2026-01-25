@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
-from api.services.investment_mix_explain import (
+from dev_health_ops.api.services.investment_mix_explain import (
     _compute_cache_key,
     explain_investment_mix,
 )
@@ -106,14 +106,14 @@ async def test_explain_investment_mix_mock_provider_skips_cache():
     # This test verifies that llm_provider='mock' bypasses cache lookup
     with (
         patch(
-            "api.services.investment_mix_explain.build_investment_response"
+            "dev_health_ops.api.services.investment_mix_explain.build_investment_response"
         ) as mock_build,
         patch(
-            "api.services.investment_mix_explain.build_work_unit_investments"
+            "dev_health_ops.api.services.investment_mix_explain.build_work_unit_investments"
         ) as mock_units,
-        patch("api.services.investment_mix_explain.get_provider") as mock_get_provider,
+        patch("dev_health_ops.api.services.investment_mix_explain.get_provider") as mock_get_provider,
         patch(
-            "api.services.investment_mix_explain.ClickHouseMetricsSink"
+            "dev_health_ops.api.services.investment_mix_explain.ClickHouseMetricsSink"
         ) as mock_sink_class,
     ):
         # Setup mocks

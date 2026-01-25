@@ -7,9 +7,9 @@ import pytest_asyncio
 from pymongo import UpdateOne
 from sqlalchemy import select, text
 
-from models import GitBlame, GitCommit, GitCommitStat, GitFile, Repo
-from models.git import Base
-from storage import (
+from dev_health_ops.models import GitBlame, GitCommit, GitCommitStat, GitFile, Repo
+from dev_health_ops.models.git import Base
+from dev_health_ops.storage import (
     ClickHouseStore,
     MongoStore,
     SQLAlchemyStore,
@@ -218,7 +218,9 @@ async def test_sqlalchemy_store_insert_repo_duplicate(sqlalchemy_store):
 
 
 @pytest.mark.asyncio
-async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_repo(sqlalchemy_store):
+async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_repo(
+    sqlalchemy_store,
+):
     repo_id = uuid.uuid4()
     other_repo_id = uuid.uuid4()
     computed_at = datetime(2025, 1, 10, tzinfo=timezone.utc).isoformat()
@@ -291,7 +293,9 @@ async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_repo(sqlalch
 
 
 @pytest.mark.asyncio
-async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_all_repos(sqlalchemy_store):
+async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_all_repos(
+    sqlalchemy_store,
+):
     repo_id = uuid.uuid4()
     other_repo_id = uuid.uuid4()
     computed_at = datetime(2025, 1, 10, tzinfo=timezone.utc).isoformat()
@@ -337,7 +341,11 @@ async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_all_repos(sq
                 (:repo2, '2025-01-04', 'main', 'x.py', 'python', 2, 1, 2, 2.0, 0, 0, :computed_at)
                 """
             ),
-            {"repo1": str(repo_id), "repo2": str(other_repo_id), "computed_at": computed_at},
+            {
+                "repo1": str(repo_id),
+                "repo2": str(other_repo_id),
+                "computed_at": computed_at,
+            },
         )
         await store.session.commit()
 
@@ -795,36 +803,36 @@ async def test_clickhouse_store_context_manager_initializes_and_creates_tables()
     get_client = MagicMock(return_value=mock_client)
     fake_clickhouse_connect = SimpleNamespace(get_client=get_client)
 
-    with patch.dict(sys.modules, {"clickhouse_connect": fake_clickhouse_connect}), patch(
-        "storage.Path"
-    ) as MockPath:
-
-        # Setup the chain: Path(__file__).resolve().parent / "migrations" / "clickhouse"
+    with (
+        patch.dict(sys.modules, {"clickhouse_connect": fake_clickhouse_connect}),
+        patch("dev_health_ops.storage.Path") as MockPath,
+    ):
+        # Setup the chain: Path(__file__).resolve().parents[2] / "migrations" / "clickhouse"
         mock_file_path = MagicMock()
         mock_resolved_path = MagicMock()
-        mock_parent_path = MagicMock()
+        mock_repo_root_path = MagicMock()
         mock_migrations_path = MagicMock()
         mock_clickhouse_path = MagicMock()
 
         MockPath.return_value = mock_file_path
         mock_file_path.resolve.return_value = mock_resolved_path
-        mock_resolved_path.parent = mock_parent_path
-        mock_parent_path.__truediv__.return_value = mock_migrations_path
+        mock_resolved_path.parents.__getitem__.return_value = mock_repo_root_path
+        mock_repo_root_path.__truediv__.return_value = mock_migrations_path
         mock_migrations_path.__truediv__.return_value = mock_clickhouse_path
-        
+
         mock_clickhouse_path.exists.return_value = True
-        
+
         # Configure mock_sql_file with necessary attributes
         mock_sql_file.name = "000_test.sql"
         mock_sql_file.suffix = ".sql"
         mock_sql_file.stem = "000_test"
-        
+
         # Configure glob to return the mock file only for .sql pattern
         def glob_side_effect(pattern):
             if pattern == "*.sql":
                 return [mock_sql_file]
             return []
-            
+
         mock_clickhouse_path.glob.side_effect = glob_side_effect
 
         store = ClickHouseStore("clickhouse://localhost:8123/default")
@@ -902,7 +910,7 @@ def _create_mock_collection():
 async def mongo_store():
     """Create a MongoStore instance with mocked MongoDB client for testing."""
     # Mock the AsyncIOMotorClient to avoid actual connection
-    with patch("storage.AsyncIOMotorClient") as mock_client_class:
+    with patch("dev_health_ops.storage.AsyncIOMotorClient") as mock_client_class:
         # Setup the mock client and database
         mock_client = MagicMock()
         mock_db = MagicMock()
@@ -938,7 +946,7 @@ async def test_mongo_store_init_with_empty_connection_string():
 @pytest.mark.asyncio
 async def test_mongo_store_init_with_connection_string():
     """Test that MongoStore initializes properly with a connection string."""
-    with patch("storage.AsyncIOMotorClient"):
+    with patch("dev_health_ops.storage.AsyncIOMotorClient"):
         store = MongoStore("mongodb://localhost:27017/test_db")
         assert store.db_name is None
         assert store.db is None
@@ -947,7 +955,7 @@ async def test_mongo_store_init_with_connection_string():
 @pytest.mark.asyncio
 async def test_mongo_store_init_with_db_name():
     """Test that MongoStore initializes properly with explicit db_name."""
-    with patch("storage.AsyncIOMotorClient"):
+    with patch("dev_health_ops.storage.AsyncIOMotorClient"):
         store = MongoStore("mongodb://localhost:27017", db_name="my_database")
         assert store.db_name == "my_database"
         assert store.db is None
@@ -956,7 +964,7 @@ async def test_mongo_store_init_with_db_name():
 @pytest.mark.asyncio
 async def test_mongo_store_context_manager_with_db_name():
     """Test that MongoStore can be used as an async context manager with explicit db_name."""
-    with patch("storage.AsyncIOMotorClient") as mock_client_class:
+    with patch("dev_health_ops.storage.AsyncIOMotorClient") as mock_client_class:
         mock_client = MagicMock()
         mock_db = MagicMock()
         mock_db.name = "my_database"
@@ -974,7 +982,7 @@ async def test_mongo_store_context_manager_with_db_name():
 @pytest.mark.asyncio
 async def test_mongo_store_context_manager_with_connection_string_db():
     """Test MongoStore context manager with database in connection string."""
-    with patch("storage.AsyncIOMotorClient") as mock_client_class:
+    with patch("dev_health_ops.storage.AsyncIOMotorClient") as mock_client_class:
         mock_client = MagicMock()
         mock_db = MagicMock()
         mock_db.name = "mydb"
@@ -993,7 +1001,7 @@ async def test_mongo_store_context_manager_without_db_raises_error():
     """Test that MongoStore raises error when no database is specified."""
     from pymongo.errors import ConfigurationError
 
-    with patch("storage.AsyncIOMotorClient") as mock_client_class:
+    with patch("dev_health_ops.storage.AsyncIOMotorClient") as mock_client_class:
         mock_client = MagicMock()
         mock_client.get_default_database = MagicMock(
             side_effect=ConfigurationError("No default database")
@@ -1316,7 +1324,7 @@ async def test_mongo_store_bulk_operations_unordered(mongo_store):
 @pytest.mark.asyncio
 async def test_mongo_store_connection_cleanup():
     """Test that MongoStore properly closes connection on exit."""
-    with patch("storage.AsyncIOMotorClient") as mock_client_class:
+    with patch("dev_health_ops.storage.AsyncIOMotorClient") as mock_client_class:
         mock_client = MagicMock()
         mock_db = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
@@ -1429,7 +1437,7 @@ class TestMongoStoreMultipleRepos:
 
             return collection
 
-        with patch("storage.AsyncIOMotorClient") as mock_client_class:
+        with patch("dev_health_ops.storage.AsyncIOMotorClient") as mock_client_class:
             mock_client = MagicMock()
             mock_db = MagicMock()
             mock_db.name = "test_db"

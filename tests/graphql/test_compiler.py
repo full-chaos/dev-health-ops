@@ -6,8 +6,8 @@ from datetime import date
 
 import pytest
 
-from api.graphql.errors import ValidationError
-from api.graphql.sql.compiler import (
+from dev_health_ops.api.graphql.errors import ValidationError
+from dev_health_ops.api.graphql.sql.compiler import (
     BreakdownRequest,
     CatalogValuesRequest,
     SankeyRequest,
@@ -17,7 +17,7 @@ from api.graphql.sql.compiler import (
     compile_sankey,
     compile_timeseries,
 )
-from api.graphql.sql.validate import (
+from dev_health_ops.api.graphql.sql.validate import (
     Dimension,
     Measure,
     validate_dimension,

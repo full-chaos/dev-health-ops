@@ -24,7 +24,7 @@ The project follows a pipeline-style architecture that separates data collection
 
 ## CLI entry points
 
-The CLI is implemented with argparse in `cli.py` and orchestrates sync, metrics, and Grafana workflows.
+The CLI is implemented with argparse in `cli.py` and orchestrates sync and metrics workflows.
 
 ## Work unit investment payload
 

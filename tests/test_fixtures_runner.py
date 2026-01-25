@@ -1,6 +1,10 @@
 import argparse
 import pytest
-from fixtures.runner import run_fixtures_generation
+from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+from dev_health_ops.fixtures.runner import (
+    _build_repo_team_assignments,
+    run_fixtures_generation,
+)
 
 
 @pytest.mark.asyncio
@@ -62,3 +66,22 @@ async def test_fixtures_generation_minimal_no_metrics(tmp_path):
     result = await run_fixtures_generation(ns)
     assert result == 0
     assert db_file.exists()
+
+
+def test_repo_team_assignments_distribution():
+    teams = SyntheticDataGenerator(seed=123).get_team_assignment(count=6)["teams"]
+    assignments = _build_repo_team_assignments(teams, repo_count=20, seed=123)
+
+    assert len(assignments) == 20
+
+    unowned_count = sum(1 for repo_teams in assignments if not repo_teams)
+    assert unowned_count <= int(20 * 0.1)
+
+    owned_by_team = {team.id: 0 for team in teams}
+    for repo_teams in assignments:
+        for team in repo_teams:
+            owned_by_team[team.id] += 1
+    assert all(count >= 1 for count in owned_by_team.values())
+
+    multi_owned = sum(1 for count in owned_by_team.values() if count >= 2)
+    assert multi_owned >= min(3, len(owned_by_team))

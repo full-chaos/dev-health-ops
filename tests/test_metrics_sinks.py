@@ -5,13 +5,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import text
 
-from metrics.schemas import RepoMetricsDailyRecord, WorkItemMetricsDailyRecord
-from metrics.sinks.clickhouse import ClickHouseMetricsSink
-from metrics.sinks.sqlite import SQLiteMetricsSink
+from dev_health_ops.metrics.schemas import (
+    RepoMetricsDailyRecord,
+    WorkItemMetricsDailyRecord,
+)
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 
 
 def test_sqlite_sink_writes_repo_knowledge_metrics(tmp_path):
-    db_path = tmp_path / "metrics.db"
+    db_path = tmp_path / "dev_health_ops.metrics.db"
     sink = SQLiteMetricsSink(f"sqlite:///{db_path}")
     try:
         sink.ensure_tables()
@@ -51,7 +54,7 @@ def test_sqlite_sink_writes_repo_knowledge_metrics(tmp_path):
 
 
 def test_sqlite_sink_writes_predictability_score(tmp_path):
-    db_path = tmp_path / "metrics.db"
+    db_path = tmp_path / "dev_health_ops.metrics.db"
     sink = SQLiteMetricsSink(f"sqlite:///{db_path}")
     try:
         sink.ensure_tables()
@@ -110,7 +113,7 @@ def test_clickhouse_sink_includes_repo_knowledge_columns():
     mock_client = MagicMock()
     mock_client.insert = MagicMock()
     with patch(
-        "metrics.sinks.clickhouse.clickhouse_connect.get_client",
+        "dev_health_ops.metrics.sinks.clickhouse.clickhouse_connect.get_client",
         return_value=mock_client,
     ):
         sink = ClickHouseMetricsSink("clickhouse://localhost:8123/default")
@@ -142,7 +145,7 @@ def test_clickhouse_sink_includes_predictability_score():
     mock_client = MagicMock()
     mock_client.insert = MagicMock()
     with patch(
-        "metrics.sinks.clickhouse.clickhouse_connect.get_client",
+        "dev_health_ops.metrics.sinks.clickhouse.clickhouse_connect.get_client",
         return_value=mock_client,
     ):
         sink = ClickHouseMetricsSink("clickhouse://localhost:8123/default")

@@ -1,6 +1,6 @@
 from datetime import date
 
-from api.models.schemas import (
+from dev_health_ops.api.models.schemas import (
     QuadrantAnnotation,
     QuadrantAxes,
     QuadrantAxis,
@@ -8,7 +8,7 @@ from api.models.schemas import (
     QuadrantPointTrajectory,
     QuadrantResponse,
 )
-from api.services.quadrant import QUADRANT_DEFINITIONS
+from dev_health_ops.api.services.quadrant import QUADRANT_DEFINITIONS
 
 
 def _model_fields(model) -> set[str]:

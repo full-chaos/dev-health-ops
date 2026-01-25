@@ -144,7 +144,7 @@ Jira is **not** a replacement for pull request data — it’s used to track ass
 1. Start ClickHouse + Grafana:
 
 ```bash
-dev-hops grafana up
+docker compose -f compose.yml up -d
 ```
 
 1. Sync Git data into ClickHouse (choose one):
@@ -254,7 +254,7 @@ Work items are fetched from provider APIs via a dedicated sync command. This is 
 - Sync work items: `dev-hops sync work-items --provider jira|github|gitlab|all ...` (use `-s` to filter repos; `--auth` for GitHub/GitLab token override)
 - `metrics daily` does not need `--provider` unless you want backward-compatible "sync-then-compute" behavior in one step.
 
-`cli.py` automatically loads a local `.env` file from the repo root (without overriding already-set environment variables). Disable with `DISABLE_DOTENV=1`.
+`src/dev_health_ops/cli.py` automatically loads a local `.env` file from the repo root (without overriding already-set environment variables). Disable with `DISABLE_DOTENV=1`.
 
 ### Sync Teams
 

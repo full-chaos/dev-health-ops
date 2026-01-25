@@ -1,32 +1,39 @@
-
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from api.services.investment_mix_explain import explain_investment_mix
+from dev_health_ops.api.services.investment_mix_explain import explain_investment_mix
+
 
 @pytest.mark.asyncio
 async def test_explain_investment_mix_mismatch_warning():
     """Test that theme/subcategory mismatch logs a warning and continues."""
     with (
-        patch("api.services.investment_mix_explain.build_investment_response") as mock_build,
-        patch("api.services.investment_mix_explain.build_work_unit_investments") as mock_units,
-        patch("api.services.investment_mix_explain.get_provider") as mock_get_provider,
-        patch("api.services.investment_mix_explain.logger") as mock_logger,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.build_investment_response"
+        ) as mock_build,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.build_work_unit_investments"
+        ) as mock_units,
+        patch("dev_health_ops.api.services.investment_mix_explain.get_provider") as mock_get_provider,
+        patch("dev_health_ops.api.services.investment_mix_explain.logger") as mock_logger,
     ):
         # Setup mocks
         mock_investment = MagicMock()
         mock_investment.theme_distribution = {}
         mock_investment.subcategory_distribution = {}
         mock_build.return_value = mock_investment
-        
+
         mock_units.return_value = []
-        
+
         mock_provider = MagicMock()
-        mock_provider.complete = AsyncMock(return_value='{"summary": "test", "top_findings": [], "confidence": {"level": "low"}, "what_to_check_next": [], "anti_claims": []}')
+        mock_provider.complete = AsyncMock(
+            return_value='{"summary": "test", "top_findings": [], "confidence": {"level": "low"}, "what_to_check_next": [], "anti_claims": []}'
+        )
         mock_get_provider.return_value = mock_provider
 
         class MockFilters:
             def model_dump(self, mode=None):
                 return {"scope": {"level": "org"}}
+
             @property
             def why(self):
                 return MagicMock(work_category=[])
@@ -41,7 +48,7 @@ async def test_explain_investment_mix_mismatch_warning():
             filters=filters,
             theme="maintenance",
             subcategory="feature_delivery.customer",
-            llm_provider="mock"
+            llm_provider="mock",
         )
 
         # Check that warning was logged

@@ -16,7 +16,7 @@ Developer health tooling drifted into expensive, opaque scoring systems that are
 - Sync data from GitHub, GitLab, Jira, and local Git repositories.
 - Normalize and store work items, commits, and blame data.
 - Compute metrics like throughput, cycle time, rework, and predictability.
-- Explore Grafana dashboards for hotspots, investment flow, and team health.
+- Explore optional Grafana dashboards for hotspots, investment flow, and team health (panel plugin moved to `dev-health-panels`).
 
 ## Quick links
 

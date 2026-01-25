@@ -3,7 +3,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-
 def _make_ns(**overrides):
     data = {
         "repo_path": ".",
@@ -27,7 +26,7 @@ def test_complexity_cli_does_not_touch_git_paths(monkeypatch, tmp_path):
     repo_path = tmp_path / ".git"
 
     calls = []
-    import metrics.job_complexity_db as job
+    import dev_health_ops.metrics.job_complexity_db as job
 
     def _fake_run_complexity_db_job(**kwargs):
         calls.append(kwargs)

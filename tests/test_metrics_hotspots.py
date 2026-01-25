@@ -2,8 +2,11 @@ import math
 import uuid
 from datetime import date, datetime, timezone
 
-from metrics.hotspots import compute_file_hotspots, compute_file_risk_hotspots
-from metrics.schemas import CommitStatRow, FileComplexitySnapshot
+from dev_health_ops.metrics.hotspots import (
+    compute_file_hotspots,
+    compute_file_risk_hotspots,
+)
+from dev_health_ops.metrics.schemas import CommitStatRow, FileComplexitySnapshot
 
 
 def test_file_hotspots_formula():

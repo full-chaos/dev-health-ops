@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
-from cli import build_parser
-from utils import SKIP_EXTENSIONS, is_skippable
+from dev_health_ops.cli import build_parser
+from dev_health_ops.utils import SKIP_EXTENSIONS, is_skippable
 
 
 class TestIsSkippable:
@@ -327,6 +327,12 @@ class TestBatchProcessingCLIArguments:
         assert args.use_async is False
         assert args.date is None
         assert args.backfill == 1
+
+    def test_grafana_subcommand_removed(self):
+        """Test that the deprecated grafana subcommand is not accepted."""
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["grafana", "up"])
 
     def test_gitlab_batch_processing_arguments_with_custom_values(self):
         """Test that GitLab batch processing arguments accept custom values."""

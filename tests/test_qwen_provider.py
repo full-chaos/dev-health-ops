@@ -1,8 +1,8 @@
 import os
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from llm.providers import get_provider
-from llm.providers.qwen import (
+from dev_health_ops.llm.providers import get_provider
+from dev_health_ops.llm.providers.qwen import (
     QwenProvider,
     QwenLocalProvider,
     QwenLMStudioProvider,

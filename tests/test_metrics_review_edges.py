@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from metrics.reviews import compute_review_edges_daily
+from dev_health_ops.metrics.reviews import compute_review_edges_daily
 
 
 def test_review_edges_daily():

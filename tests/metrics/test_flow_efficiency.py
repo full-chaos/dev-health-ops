@@ -1,10 +1,10 @@
 from datetime import date, datetime, timedelta, timezone
 
-from metrics.compute_work_items import (
+from dev_health_ops.metrics.compute_work_items import (
     _calculate_flow_breakdown,
     compute_work_item_metrics_daily,
 )
-from models.work_items import WorkItem, WorkItemStatusTransition
+from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
 
 
 def _utc(dt: datetime) -> datetime:

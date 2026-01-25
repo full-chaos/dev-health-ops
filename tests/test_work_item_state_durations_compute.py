@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from metrics.compute_work_item_state_durations import compute_work_item_state_durations_daily
-from models.work_items import WorkItem, WorkItemStatusTransition
+from dev_health_ops.metrics.compute_work_item_state_durations import (
+    compute_work_item_state_durations_daily,
+)
+from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
 
 
 def test_time_in_state_is_bucketed_to_day() -> None:
@@ -64,4 +66,3 @@ def test_time_in_state_is_bucketed_to_day() -> None:
     assert by_status["todo"].duration_hours == 2.0
     assert by_status["in_progress"].duration_hours == 8.0
     assert by_status["done"].duration_hours == 14.0
-

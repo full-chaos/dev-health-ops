@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from providers.identity import IdentityResolver
-from providers.jira.normalize import jira_issue_to_work_item
-from providers.status_mapping import load_status_mapping
+from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.jira.normalize import jira_issue_to_work_item
+from dev_health_ops.providers.status_mapping import load_status_mapping
 
 
 def test_jira_issue_dict_parses_status_category_and_changelog() -> None:
@@ -29,18 +29,32 @@ def test_jira_issue_dict_parses_status_category_and_changelog() -> None:
                 {
                     "created": "2025-12-01T12:00:00.000+0000",
                     "author": {"displayName": "Alice", "accountId": "a1"},
-                    "items": [{"field": "status", "fromString": "To Do", "toString": "In Progress"}],
+                    "items": [
+                        {
+                            "field": "status",
+                            "fromString": "To Do",
+                            "toString": "In Progress",
+                        }
+                    ],
                 },
                 {
                     "created": "2025-12-02T10:00:00.000+0000",
                     "author": {"displayName": "Alice", "accountId": "a1"},
-                    "items": [{"field": "status", "fromString": "In Progress", "toString": "Custom Done"}],
+                    "items": [
+                        {
+                            "field": "status",
+                            "fromString": "In Progress",
+                            "toString": "Custom Done",
+                        }
+                    ],
                 },
             ]
         },
     }
 
-    wi, transitions = jira_issue_to_work_item(issue=issue, status_mapping=status_mapping, identity=identity, repo_id=None)
+    wi, transitions = jira_issue_to_work_item(
+        issue=issue, status_mapping=status_mapping, identity=identity, repo_id=None
+    )
 
     assert wi.work_item_id == "jira:ABC-1"
     assert wi.project_key == "ABC"

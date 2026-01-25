@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from connectors import GitHubConnector
+from dev_health_ops.connectors import GitHubConnector
 
 
 class TestGitHubConnectorRepositories:
@@ -15,13 +15,13 @@ class TestGitHubConnectorRepositories:
     @pytest.fixture
     def mock_github_client(self):
         """Create a mock GitHub client."""
-        with patch("connectors.github.Github") as mock_github:
+        with patch("dev_health_ops.connectors.github.Github") as mock_github:
             yield mock_github
 
     @pytest.fixture
     def mock_graphql_client(self):
         """Create a mock GraphQL client."""
-        with patch("connectors.github.GitHubGraphQLClient") as mock_graphql:
+        with patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as mock_graphql:
             yield mock_graphql
 
     def test_list_repositories_for_user(self, mock_github_client, mock_graphql_client):

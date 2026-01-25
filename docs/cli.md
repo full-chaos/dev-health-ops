@@ -37,12 +37,6 @@ python cli.py metrics complexity --repo-path . -s "*" --db "<DB_CONN>"
 python cli.py fixtures generate --db "<DB_CONN>" --days 30
 ```
 
-### Grafana
-
-```bash
-python cli.py grafana up
-```
-
 ## Flags and overrides
 
 CLI flags override environment variables. Use `--db` or `DATABASE_URI` to target a specific database.

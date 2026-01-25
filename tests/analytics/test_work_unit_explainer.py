@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from llm.explainers.work_unit_explainer import (
+from dev_health_ops.llm.explainers.work_unit_explainer import (
     CANONICAL_EXPLANATION_PROMPT,
     FORBIDDEN_WORDS,
     ExplanationInputs,

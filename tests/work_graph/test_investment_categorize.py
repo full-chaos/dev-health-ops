@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from work_graph.investment.categorize import categorize_text_bundle
-from work_graph.investment.types import TextBundle
+from dev_health_ops.work_graph.investment.categorize import categorize_text_bundle
+from dev_health_ops.work_graph.investment.types import TextBundle
 
 
 class StubProvider:
@@ -36,7 +36,7 @@ def _bundle() -> TextBundle:
 def test_retry_limit_and_fallback(monkeypatch):
     provider = StubProvider(["not json", "still not json"])
     monkeypatch.setattr(
-        "work_graph.investment.categorize.get_provider",
+        "dev_health_ops.work_graph.investment.categorize.get_provider",
         lambda name, model=None: provider,
     )
     outcome = asyncio.run(categorize_text_bundle(_bundle(), llm_provider="mock"))
@@ -46,9 +46,10 @@ def test_retry_limit_and_fallback(monkeypatch):
 
 
 def test_repaired_status(monkeypatch):
-    provider = StubProvider([
-        "not json",
-        """{
+    provider = StubProvider(
+        [
+            "not json",
+            """{
               "subcategories": {
                 "feature_delivery.roadmap": 1.0
               },
@@ -57,9 +58,10 @@ def test_repaired_status(monkeypatch):
               ],
               "uncertainty": "Some uncertainty remains."
             }""",
-    ])
+        ]
+    )
     monkeypatch.setattr(
-        "work_graph.investment.categorize.get_provider",
+        "dev_health_ops.work_graph.investment.categorize.get_provider",
         lambda name, model=None: provider,
     )
     outcome = asyncio.run(categorize_text_bundle(_bundle(), llm_provider="mock"))

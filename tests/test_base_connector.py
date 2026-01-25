@@ -4,9 +4,9 @@ Tests for the base connector class.
 
 import pytest
 
-from connectors import GitConnector
-from connectors.base import BatchResult
-from connectors.models import Repository, RepoStats
+from dev_health_ops.connectors import GitConnector
+from dev_health_ops.connectors.base import BatchResult
+from dev_health_ops.connectors.models import Repository, RepoStats
 
 
 class TestBatchResult:
@@ -67,6 +67,7 @@ class TestGitConnectorInterface:
 
         class IncompleteConnector(GitConnector):
             """A connector that doesn't implement all abstract methods."""
+
             pass
 
         with pytest.raises(TypeError, match="Can't instantiate abstract class"):
@@ -81,7 +82,14 @@ class TestGitConnectorInterface:
             def list_organizations(self, max_orgs=None):
                 return []
 
-            def list_repositories(self, org_name=None, user_name=None, search=None, pattern=None, max_repos=None):
+            def list_repositories(
+                self,
+                org_name=None,
+                user_name=None,
+                search=None,
+                pattern=None,
+                max_repos=None,
+            ):
                 return []
 
             def get_contributors(self, owner, repo, max_contributors=None):
@@ -99,14 +107,32 @@ class TestGitConnectorInterface:
             def get_file_blame(self, owner, repo, path, ref="HEAD"):
                 return None
 
-            def get_repos_with_stats(self, org_name=None, user_name=None, pattern=None,
-                                     batch_size=10, max_concurrent=4, rate_limit_delay=1.0,
-                                     max_commits_per_repo=None, max_repos=None, on_repo_complete=None):
+            def get_repos_with_stats(
+                self,
+                org_name=None,
+                user_name=None,
+                pattern=None,
+                batch_size=10,
+                max_concurrent=4,
+                rate_limit_delay=1.0,
+                max_commits_per_repo=None,
+                max_repos=None,
+                on_repo_complete=None,
+            ):
                 return []
 
-            async def get_repos_with_stats_async(self, org_name=None, user_name=None, pattern=None,
-                                                  batch_size=10, max_concurrent=4, rate_limit_delay=1.0,
-                                                  max_commits_per_repo=None, max_repos=None, on_repo_complete=None):
+            async def get_repos_with_stats_async(
+                self,
+                org_name=None,
+                user_name=None,
+                pattern=None,
+                batch_size=10,
+                max_concurrent=4,
+                rate_limit_delay=1.0,
+                max_commits_per_repo=None,
+                max_repos=None,
+                on_repo_complete=None,
+            ):
                 return []
 
             def close(self):
@@ -125,7 +151,14 @@ class TestGitConnectorInterface:
             def list_organizations(self, max_orgs=None):
                 return []
 
-            def list_repositories(self, org_name=None, user_name=None, search=None, pattern=None, max_repos=None):
+            def list_repositories(
+                self,
+                org_name=None,
+                user_name=None,
+                search=None,
+                pattern=None,
+                max_repos=None,
+            ):
                 return []
 
             def get_contributors(self, owner, repo, max_contributors=None):
@@ -143,14 +176,32 @@ class TestGitConnectorInterface:
             def get_file_blame(self, owner, repo, path, ref="HEAD"):
                 return None
 
-            def get_repos_with_stats(self, org_name=None, user_name=None, pattern=None,
-                                     batch_size=10, max_concurrent=4, rate_limit_delay=1.0,
-                                     max_commits_per_repo=None, max_repos=None, on_repo_complete=None):
+            def get_repos_with_stats(
+                self,
+                org_name=None,
+                user_name=None,
+                pattern=None,
+                batch_size=10,
+                max_concurrent=4,
+                rate_limit_delay=1.0,
+                max_commits_per_repo=None,
+                max_repos=None,
+                on_repo_complete=None,
+            ):
                 return []
 
-            async def get_repos_with_stats_async(self, org_name=None, user_name=None, pattern=None,
-                                                  batch_size=10, max_concurrent=4, rate_limit_delay=1.0,
-                                                  max_commits_per_repo=None, max_repos=None, on_repo_complete=None):
+            async def get_repos_with_stats_async(
+                self,
+                org_name=None,
+                user_name=None,
+                pattern=None,
+                batch_size=10,
+                max_concurrent=4,
+                rate_limit_delay=1.0,
+                max_commits_per_repo=None,
+                max_repos=None,
+                on_repo_complete=None,
+            ):
                 return []
 
             def close(self):
@@ -177,7 +228,14 @@ class TestGitConnectorContextManager:
             def list_organizations(self, max_orgs=None):
                 return []
 
-            def list_repositories(self, org_name=None, user_name=None, search=None, pattern=None, max_repos=None):
+            def list_repositories(
+                self,
+                org_name=None,
+                user_name=None,
+                search=None,
+                pattern=None,
+                max_repos=None,
+            ):
                 return []
 
             def get_contributors(self, owner, repo, max_contributors=None):
@@ -195,14 +253,32 @@ class TestGitConnectorContextManager:
             def get_file_blame(self, owner, repo, path, ref="HEAD"):
                 return None
 
-            def get_repos_with_stats(self, org_name=None, user_name=None, pattern=None,
-                                     batch_size=10, max_concurrent=4, rate_limit_delay=1.0,
-                                     max_commits_per_repo=None, max_repos=None, on_repo_complete=None):
+            def get_repos_with_stats(
+                self,
+                org_name=None,
+                user_name=None,
+                pattern=None,
+                batch_size=10,
+                max_concurrent=4,
+                rate_limit_delay=1.0,
+                max_commits_per_repo=None,
+                max_repos=None,
+                on_repo_complete=None,
+            ):
                 return []
 
-            async def get_repos_with_stats_async(self, org_name=None, user_name=None, pattern=None,
-                                                  batch_size=10, max_concurrent=4, rate_limit_delay=1.0,
-                                                  max_commits_per_repo=None, max_repos=None, on_repo_complete=None):
+            async def get_repos_with_stats_async(
+                self,
+                org_name=None,
+                user_name=None,
+                pattern=None,
+                batch_size=10,
+                max_concurrent=4,
+                rate_limit_delay=1.0,
+                max_commits_per_repo=None,
+                max_repos=None,
+                on_repo_complete=None,
+            ):
                 return []
 
             def close(self):

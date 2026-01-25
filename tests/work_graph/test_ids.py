@@ -1,14 +1,14 @@
 """Tests for work graph ID generation."""
 
 import uuid
-from work_graph.ids import (
+from dev_health_ops.work_graph.ids import (
     generate_edge_id,
     generate_issue_id,
     generate_pr_id,
     generate_commit_id,
     generate_file_id,
 )
-from work_graph.models import NodeType, EdgeType
+from dev_health_ops.work_graph.models import NodeType, EdgeType
 
 
 class TestGenerateEdgeId:

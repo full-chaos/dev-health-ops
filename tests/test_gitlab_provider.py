@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from providers.gitlab.normalize import (
+from dev_health_ops.providers.gitlab.normalize import (
     _priority_from_labels,
     detect_gitlab_reopen_events,
     enrich_work_item_with_priority,
@@ -16,8 +16,8 @@ from providers.gitlab.normalize import (
     gitlab_mr_to_work_item,
     gitlab_note_to_interaction_event,
 )
-from providers.identity import IdentityResolver
-from providers.status_mapping import StatusMapping
+from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.status_mapping import StatusMapping
 
 
 @pytest.fixture
@@ -464,13 +464,13 @@ class TestGitLabProviderRegistration:
     """Tests for GitLab provider registration."""
 
     def test_gitlab_registered(self) -> None:
-        from providers.registry import is_registered, list_providers
+        from dev_health_ops.providers.registry import is_registered, list_providers
 
         assert is_registered("gitlab")
         assert "gitlab" in list_providers()
 
     def test_gitlab_provider_instantiation(self) -> None:
-        from providers.registry import get_provider
+        from dev_health_ops.providers.registry import get_provider
 
         # Should not raise - provider is instantiated lazily without client
         provider = get_provider("gitlab")

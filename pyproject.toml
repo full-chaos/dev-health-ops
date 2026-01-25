@@ -64,48 +64,76 @@ dev = [
 Repository = "https://github.com/chrisgeo/dev-health-ops"
 Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
 
-[project.scripts]
-dev-health-ops = "cli:main"
-dev-hops = "cli:main"
-
 [tool.setuptools_scm]
 version_scheme = "post-release"
 local_scheme = "dirty-tag"
 
 [tool.setuptools]
-packages = [
-  "analytics",
-  "api",
-  "api.models",
-  "api.queries",
-  "api.services",
-  "audit",
-  "connectors",
-  "connectors.utils",
-  "fixtures",
-  "llm",
-  "llm.providers",
-  "llm.explainers",
-  "metrics",
-  "metrics.loaders",
-  "metrics.sinks",
-  "models",
-  "processors",
-  "providers",
-  "providers.github",
-  "providers.gitlab",
-  "providers.jira",
-  "work_graph",
-  "work_graph.extractors",
-  "work_graph.investment",
-  "work_graph.writers",
-  "api.graphql",
-  "api.graphql.sql",
-  "api.graphql.models",
-  "api.graphql.resolvers",
-  "api.graphql.loaders",
-]
+package-dir = { "" = "src" }
+packages = { find = { where = ["src"], exclude = ["tests*", "docs*", "examples*", "data*", "grafana*", "docker*", "dist*", "build*"] } }
 py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
+include-package-data = true
 
 [tool.setuptools.package-data]
-api = ["sql/**/*.sql"]
+"*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json"]
+
+[tool.poetry]
+name = "dev-health-ops"
+version = "0.1.0"
+description = "Open Source Development Team Operation Analytics"
+authors = ["Chris Geo <chris@example.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [
+    { include = "dev_health_ops", from = "src" },
+]
+include = [
+    "src/dev_health_ops/config/**/*",
+    "src/dev_health_ops/alembic.ini",
+    "src/dev_health_ops/alembic/**/*"
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+tqdm = "*"
+sqlalchemy = "*"
+clickhouse-connect = "*"
+fastapi = "*"
+httpx = "*"
+psycopg2-binary = "*"
+asyncpg = "*"
+aiosqlite = "*"
+python-gitlab = "*"
+GitPython = "*"
+PyGithub = ">=2.1.0,<3.0.0"
+requests = "*"
+pydantic = "*"
+PyYAML = "*"
+typing_extensions = "*"
+jira = "*"
+alembic = "*"
+motor = "*"
+uvicorn = "*"
+radon = "*"
+openai = "*"
+anthropic = "*"
+strawberry-graphql = {extras = ["fastapi"], version = "*"}
+celery = {extras = ["redis"], version = ">=5.3.0"}
+redis = ">=5.0.0"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "*"
+black = "*"
+flake8 = "*"
+isort = "*"
+pytest = "*"
+pytest-asyncio = "*"
+pytest-cov = "*"
+
+[tool.poetry.scripts]
+dev-health-ops = "dev_health_ops.cli:main"
+dev-hops = "dev_health_ops.cli:main"
+
+[project.scripts]
+dev-health-ops = "dev_health_ops.cli:main"
+dev-hops = "dev_health_ops.cli:main"

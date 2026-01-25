@@ -6,11 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from metrics.schemas import (
+from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
 )
-from metrics.sinks.mongo import MongoMetricsSink
+from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def test_mongo_sink_writes_work_unit_investments():
     mock_db = MagicMock()
     mock_db.__getitem__ = MagicMock(return_value=mock_collection)
 
-    with patch("metrics.sinks.mongo.MongoClient") as mock_client_cls:
+    with patch("dev_health_ops.metrics.sinks.mongo.MongoClient") as mock_client_cls:
         mock_client = MagicMock()
         # MongoMetricsSink uses client[db_name] to get db, then db[collection] to get collection
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
@@ -82,7 +82,7 @@ def test_mongo_sink_writes_work_unit_investment_quotes():
     mock_db = MagicMock()
     mock_db.__getitem__ = MagicMock(return_value=mock_collection)
 
-    with patch("metrics.sinks.mongo.MongoClient") as mock_client_cls:
+    with patch("dev_health_ops.metrics.sinks.mongo.MongoClient") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
         mock_client.get_default_database.return_value = mock_db
@@ -114,7 +114,7 @@ def test_mongo_sink_skips_empty_work_unit_investments():
     """Test that write_work_unit_investments handles empty list gracefully."""
     mock_db = MagicMock()
 
-    with patch("metrics.sinks.mongo.MongoClient") as mock_client_cls:
+    with patch("dev_health_ops.metrics.sinks.mongo.MongoClient") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
         mock_client.get_database.return_value = mock_db
@@ -133,7 +133,7 @@ def test_mongo_sink_skips_empty_work_unit_investment_quotes():
     """Test that write_work_unit_investment_quotes handles empty list gracefully."""
     mock_db = MagicMock()
 
-    with patch("metrics.sinks.mongo.MongoClient") as mock_client_cls:
+    with patch("dev_health_ops.metrics.sinks.mongo.MongoClient") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
         mock_client.get_database.return_value = mock_db
@@ -154,7 +154,7 @@ def test_mongo_sink_handles_multiple_work_unit_investments():
     mock_db = MagicMock()
     mock_db.__getitem__ = MagicMock(return_value=mock_collection)
 
-    with patch("metrics.sinks.mongo.MongoClient") as mock_client_cls:
+    with patch("dev_health_ops.metrics.sinks.mongo.MongoClient") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
         mock_client.get_default_database.return_value = mock_db

@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from processors.local import (
+from dev_health_ops.processors.local import (
     process_git_commit_stats,
     process_git_commits,
 )
-from utils import BATCH_SIZE, MAX_WORKERS
+from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS
 
 
 class TestBatchSizeConfiguration:
@@ -18,7 +18,7 @@ class TestBatchSizeConfiguration:
 
     def test_batch_size_defaults_to_1000(self):
         """Test that BATCH_SIZE defaults to 1000."""
-        # BATCH_SIZE is imported directly from utils
+        # BATCH_SIZE is imported directly from dev_health_ops.utils
         assert BATCH_SIZE == 1000
 
     def test_batch_size_can_be_configured_via_env(self):
@@ -34,7 +34,7 @@ class TestMaxWorkersConfiguration:
 
     def test_max_workers_defaults_to_4(self):
         """Test that MAX_WORKERS defaults to 4."""
-        # MAX_WORKERS is imported directly from utils
+        # MAX_WORKERS is imported directly from dev_health_ops.utils
         assert MAX_WORKERS == 4
 
     def test_max_workers_can_be_configured_via_env(self):
@@ -43,6 +43,7 @@ class TestMaxWorkersConfiguration:
             # Re-evaluate the expression
             max_workers = int(os.getenv("MAX_WORKERS", "4"))
             assert max_workers == 8
+
 
 class TestCommitProcessing:
     """Test git commit processing."""
@@ -71,7 +72,7 @@ class TestCommitProcessing:
 
         mock_repo.iter_commits.return_value = iter(mock_commits)
 
-        with patch("processors.local.logging") as mock_logging:
+        with patch("dev_health_ops.processors.local.logging") as mock_logging:
             await process_git_commits(mock_repo, mock_store)
             # Verify the function was called and processing occurred
             assert mock_logging.info.call_count >= 1
@@ -103,17 +104,18 @@ class TestCommitStatsProcessing:
         mock_commit.parents[0].diff.return_value = [mock_diff]
         mock_repo.iter_commits.return_value = iter([mock_commit])
 
-        with patch("processors.local.logging") as mock_logging:
+        with patch("dev_health_ops.processors.local.logging") as mock_logging:
             await process_git_commit_stats(mock_repo, mock_store)
             # Verify the function was called and processing occurred
             assert mock_logging.info.call_count >= 1
+
 
 class TestConnectionPooling:
     """Test connection pooling configuration."""
 
     def test_postgresql_connection_pool_configured(self):
         """Test that PostgreSQL connections use pooling."""
-        from storage import SQLAlchemyStore
+        from dev_health_ops.storage import SQLAlchemyStore
 
         conn_string = "postgresql+asyncpg://user:pass@localhost/db"
         store = SQLAlchemyStore(conn_string)
@@ -124,7 +126,7 @@ class TestConnectionPooling:
 
     def test_sqlite_connection_no_pooling(self):
         """Test that SQLite connections don't use pooling parameters."""
-        from storage import SQLAlchemyStore
+        from dev_health_ops.storage import SQLAlchemyStore
 
         conn_string = "sqlite+aiosqlite:///test.db"
         # Should not raise an error about invalid pool parameters
@@ -138,7 +140,7 @@ class TestRepoUUIDDerivation:
 
     def test_get_repo_uuid_is_deterministic(self, tmp_path):
         """Test that get_repo_uuid returns the same UUID for the same repo."""
-        from models.git import get_repo_uuid
+        from dev_health_ops.models.git import get_repo_uuid
 
         # Clear REPO_UUID env var for this test
         with patch.dict(os.environ, {}, clear=True):
@@ -155,7 +157,7 @@ class TestRepoUUIDDerivation:
 
     def test_get_repo_uuid_respects_env_var(self):
         """Test that get_repo_uuid respects REPO_UUID environment variable."""
-        from models.git import get_repo_uuid
+        from dev_health_ops.models.git import get_repo_uuid
 
         test_uuid = "12345678-1234-1234-1234-123456789abc"
         with patch.dict(os.environ, {"REPO_UUID": test_uuid}):
@@ -164,7 +166,7 @@ class TestRepoUUIDDerivation:
 
     def test_get_repo_uuid_handles_missing_repo(self, tmp_path):
         """Test that get_repo_uuid handles non-git directories gracefully."""
-        from models.git import get_repo_uuid
+        from dev_health_ops.models.git import get_repo_uuid
 
         # Clear REPO_UUID env var
         with patch.dict(os.environ, {}, clear=True):

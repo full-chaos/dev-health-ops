@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from connectors import GitHubConnector, GitLabConnector
-from models.git import GitCommit, GitCommitStat, Repo
-from storage import SQLAlchemyStore
+from dev_health_ops.connectors import GitHubConnector, GitLabConnector  # noqa: E402
+from dev_health_ops.models.git import GitCommit, GitCommitStat, Repo  # noqa: E402
+from dev_health_ops.storage import SQLAlchemyStore  # noqa: E402
 
 
 async def github_to_storage_example():

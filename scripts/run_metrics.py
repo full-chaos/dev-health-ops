@@ -19,13 +19,13 @@ from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
-from analytics.metrics import (  # noqa: E402
+from dev_health_ops.analytics.metrics import (  # noqa: E402
     compute_commit_metrics,
     compute_pr_metrics,
     compute_repo_metrics,
     compute_user_metrics,
 )
-from models.git import GitCommit, GitCommitStat, GitPullRequest  # noqa: E402
+from dev_health_ops.models.git import GitCommit, GitCommitStat, GitPullRequest  # noqa: E402
 
 
 def _is_async_db_url(db_url: str) -> bool:
@@ -37,12 +37,14 @@ def _detect_backend(db_url: str) -> str:
     url = db_url.lower()
     if url.startswith(("mongodb://", "mongodb+srv://")):
         return "mongo"
-    if url.startswith((
-        "clickhouse://",
-        "clickhouse+http://",
-        "clickhouse+https://",
-        "clickhouse+native://",
-    )):
+    if url.startswith(
+        (
+            "clickhouse://",
+            "clickhouse+http://",
+            "clickhouse+https://",
+            "clickhouse+native://",
+        )
+    ):
         return "clickhouse"
     return "sqlalchemy"
 

@@ -44,7 +44,7 @@ python cli.py metrics daily --db "<DB_CONN>"
 ### Bring up Grafana dashboards
 
 ```bash
-python cli.py grafana up
+docker compose -f compose.yml up -d
 ```
 
 ## Environment notes

@@ -7,8 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from processors.local import process_git_commits
-from utils import collect_changed_files, iter_commits_since
+from dev_health_ops.processors.local import process_git_commits
+from dev_health_ops.utils import collect_changed_files, iter_commits_since
 
 
 class DummyPerson:

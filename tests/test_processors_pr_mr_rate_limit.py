@@ -3,8 +3,8 @@ import uuid
 
 import pytest
 
-from processors.github import _sync_github_prs_to_store
-from processors.gitlab import _sync_gitlab_mrs_to_store
+from dev_health_ops.processors.github import _sync_github_prs_to_store
+from dev_health_ops.processors.gitlab import _sync_gitlab_mrs_to_store
 
 
 class _NoSleepGate:
@@ -103,11 +103,13 @@ async def test_github_pr_sync_retries_on_retry_after_and_persists():
     store = _FakeStore()
 
     # First call hits a Retry-After style limit, then we yield two PRs.
-    fake_repo = _FakeRepo([
-        _RetryAfterException({"Retry-After": "0"}),
-        _FakePR(1),
-        _FakePR(2),
-    ])
+    fake_repo = _FakeRepo(
+        [
+            _RetryAfterException({"Retry-After": "0"}),
+            _FakePR(1),
+            _FakePR(2),
+        ]
+    )
 
     class _Connector:
         def __init__(self):

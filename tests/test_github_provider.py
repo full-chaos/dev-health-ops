@@ -21,14 +21,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from models.work_items import WorkItem
-from providers.base import (
+from dev_health_ops.models.work_items import WorkItem
+from dev_health_ops.providers.base import (
     IngestionContext,
     IngestionWindow,
     ProviderBatch,
     ProviderCapabilities,
 )
-from providers.github.normalize import (
+from dev_health_ops.providers.github.normalize import (
     _priority_from_labels,
     detect_github_reopen_events,
     enrich_work_item_with_priority,
@@ -39,10 +39,10 @@ from providers.github.normalize import (
     github_pr_to_work_item,
     github_project_v2_item_to_work_item,
 )
-from providers.github.provider import GitHubProvider
-from providers.identity import IdentityResolver
-from providers.registry import get_provider, is_registered
-from providers.status_mapping import StatusMapping
+from dev_health_ops.providers.github.provider import GitHubProvider
+from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.registry import get_provider, is_registered
+from dev_health_ops.providers.status_mapping import StatusMapping
 
 
 # ============================================================================
@@ -903,7 +903,7 @@ def test_github_project_v2_item_no_transitions(mock_status_mapping, mock_identit
 
 
 @patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}, clear=False)
-@patch("providers.github.client.GitHubWorkClient")
+@patch("dev_health_ops.providers.github.client.GitHubWorkClient")
 def test_github_provider_ingest(mock_client_class, mock_status_mapping, mock_identity):
     """Test full provider ingest flow."""
     # Setup mock client

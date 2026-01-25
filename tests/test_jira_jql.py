@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from providers.jira.client import build_jira_jql
+from dev_health_ops.providers.jira.client import build_jira_jql
 
 
 def test_build_jira_jql_formats_order_by() -> None:
-    assert build_jira_jql(updated_since="2025-11-19") == "updated >= '2025-11-19' ORDER BY updated DESC"
+    assert (
+        build_jira_jql(updated_since="2025-11-19")
+        == "updated >= '2025-11-19' ORDER BY updated DESC"
+    )
     assert build_jira_jql(project_key="ABC") == "project = 'ABC' ORDER BY updated DESC"
     assert (
         build_jira_jql(project_key="ABC", updated_since="2025-11-19")

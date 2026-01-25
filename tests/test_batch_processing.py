@@ -6,25 +6,45 @@ import asyncio
 import threading
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
-from connectors import GitHubConnector, GitLabConnector, BatchResult, match_repo_pattern
-from models.git import GitCommit, GitCommitStat, get_repo_uuid_from_repo
-import utils
-import processors.github
-import processors.gitlab
+from dev_health_ops import utils
+from dev_health_ops.connectors import (
+    GitHubConnector,
+    GitLabConnector,
+    BatchResult,
+    match_repo_pattern,
+)
+from dev_health_ops.models.git import GitCommit, GitCommitStat, get_repo_uuid_from_repo
+from dev_health_ops.processors import github as _github_processor
+from dev_health_ops.processors import gitlab as _gitlab_processor
+
+# Create namespace to match existing code references
+processors = SimpleNamespace(github=_github_processor, gitlab=_gitlab_processor)
+
+
+def _enable_connector_stubs(monkeypatch) -> None:
+    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+
+    monkeypatch.setattr(processors.github, "CONNECTORS_AVAILABLE", True)
+    monkeypatch.setattr(processors.gitlab, "CONNECTORS_AVAILABLE", True)
+    monkeypatch.setattr(processors.github, "RateLimitConfig", RateLimitConfig)
+    monkeypatch.setattr(processors.github, "RateLimitGate", RateLimitGate)
+    monkeypatch.setattr(processors.gitlab, "RateLimitConfig", RateLimitConfig)
+    monkeypatch.setattr(processors.gitlab, "RateLimitGate", RateLimitGate)
 
 
 @pytest.mark.asyncio
 async def test_github_async_batch_callback_fires_as_completed(monkeypatch):
     """Fast repos should invoke callback before slow repos in same batch."""
-    from connectors.models import Repository
+    from dev_health_ops.connectors.models import Repository
 
     with (
-        patch("connectors.github.Github"),
-        patch("connectors.github.GitHubGraphQLClient"),
+        patch("dev_health_ops.connectors.github.Github"),
+        patch("dev_health_ops.connectors.github.GitHubGraphQLClient"),
     ):
         connector = GitHubConnector(token="test_token")
 
@@ -76,9 +96,9 @@ async def test_github_async_batch_callback_fires_as_completed(monkeypatch):
 @pytest.mark.asyncio
 async def test_gitlab_async_batch_callback_fires_as_completed(monkeypatch):
     """Fast projects should invoke callback before slow projects in same batch."""
-    from connectors.models import Repository
+    from dev_health_ops.connectors.models import Repository
 
-    with patch("connectors.gitlab.gitlab.Gitlab"):
+    with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab"):
         connector = GitLabConnector(url="https://gitlab.com", private_token="test")
 
     slow = Repository(
@@ -130,8 +150,7 @@ async def test_process_gitlab_projects_batch_upserts_during_sync_processing(
     monkeypatch,
 ):
     """Default (sync) batch mode should still upsert before processing ends."""
-    # Force connectors availability for this test.
-    monkeypatch.setattr(utils, "CONNECTORS_AVAILABLE", True)
+    _enable_connector_stubs(monkeypatch)
 
     monkeypatch.setattr(
         processors.gitlab,
@@ -209,8 +228,7 @@ async def test_process_gitlab_projects_batch_upserts_during_sync_processing(
 @pytest.mark.asyncio
 async def test_process_github_repos_batch_upserts_during_async_processing(monkeypatch):
     """Ensure async batch mode upserts as repos complete."""
-    # Force connectors availability for this test.
-    monkeypatch.setattr(utils, "CONNECTORS_AVAILABLE", True)
+    _enable_connector_stubs(monkeypatch)
 
     monkeypatch.setattr(
         processors.github,
@@ -305,7 +323,7 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
 async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
     """Batch GitHub processing should persist commits and stats for metrics."""
     # Force connectors availability and stub API helpers.
-    monkeypatch.setattr(utils, "CONNECTORS_AVAILABLE", True)
+    _enable_connector_stubs(monkeypatch)
 
     recorded_commits = []
     recorded_stats = []
@@ -419,7 +437,7 @@ async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
 @pytest.mark.asyncio
 async def test_process_gitlab_projects_batch_stores_commits_and_stats(monkeypatch):
     """Batch GitLab processing should persist commits and stats for metrics."""
-    monkeypatch.setattr(utils, "CONNECTORS_AVAILABLE", True)
+    _enable_connector_stubs(monkeypatch)
 
     recorded_commits = []
     recorded_stats = []
@@ -620,13 +638,13 @@ class TestGitHubConnectorBatchProcessing:
     @pytest.fixture
     def mock_github_client(self):
         """Create a mock GitHub client."""
-        with patch("connectors.github.Github") as mock_github:
+        with patch("dev_health_ops.connectors.github.Github") as mock_github:
             yield mock_github
 
     @pytest.fixture
     def mock_graphql_client(self):
         """Create a mock GraphQL client."""
-        with patch("connectors.github.GitHubGraphQLClient") as mock_graphql:
+        with patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as mock_graphql:
             yield mock_graphql
 
     def _create_mock_repo(self, name: str, full_name: str):
@@ -809,13 +827,13 @@ class TestGitHubConnectorAsyncBatchProcessing:
     @pytest.fixture
     def mock_github_client(self):
         """Create a mock GitHub client."""
-        with patch("connectors.github.Github") as mock_github:
+        with patch("dev_health_ops.connectors.github.Github") as mock_github:
             yield mock_github
 
     @pytest.fixture
     def mock_graphql_client(self):
         """Create a mock GraphQL client."""
-        with patch("connectors.github.GitHubGraphQLClient") as mock_graphql:
+        with patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as mock_graphql:
             yield mock_graphql
 
     def _create_mock_repo(self, name: str, full_name: str):
@@ -948,13 +966,13 @@ class TestBatchProcessingErrorHandling:
     @pytest.fixture
     def mock_github_client(self):
         """Create a mock GitHub client."""
-        with patch("connectors.github.Github") as mock_github:
+        with patch("dev_health_ops.connectors.github.Github") as mock_github:
             yield mock_github
 
     @pytest.fixture
     def mock_graphql_client(self):
         """Create a mock GraphQL client."""
-        with patch("connectors.github.GitHubGraphQLClient") as mock_graphql:
+        with patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as mock_graphql:
             yield mock_graphql
 
     def _create_mock_repo(self, name: str, full_name: str):
@@ -1139,13 +1157,13 @@ class TestGitLabPatternMatching:
 
     def test_exact_match(self):
         """Test exact project name matching."""
-        from connectors.utils import match_project_pattern
+        from dev_health_ops.connectors.utils import match_project_pattern
 
         assert match_project_pattern("group/project", "group/project")
 
     def test_wildcard_suffix(self):
         """Test pattern with wildcard suffix."""
-        from connectors.utils import match_project_pattern
+        from dev_health_ops.connectors.utils import match_project_pattern
 
         assert match_project_pattern("group/api-service", "group/api-*")
         assert match_project_pattern("group/api-v2", "group/api-*")
@@ -1153,28 +1171,28 @@ class TestGitLabPatternMatching:
 
     def test_wildcard_prefix(self):
         """Test pattern with wildcard prefix."""
-        from connectors.utils import match_project_pattern
+        from dev_health_ops.connectors.utils import match_project_pattern
 
         assert match_project_pattern("mygroup/api-service", "*-service")
         assert match_project_pattern("other/web-service", "*-service")
 
     def test_wildcard_group(self):
         """Test pattern with wildcard group."""
-        from connectors.utils import match_project_pattern
+        from dev_health_ops.connectors.utils import match_project_pattern
 
         assert match_project_pattern("group1/sync-tool", "*/sync-tool")
         assert match_project_pattern("group2/sync-tool", "*/sync-tool")
 
     def test_wildcard_project(self):
         """Test pattern with wildcard project."""
-        from connectors.utils import match_project_pattern
+        from dev_health_ops.connectors.utils import match_project_pattern
 
         assert match_project_pattern("mygroup/anything", "mygroup/*")
         assert match_project_pattern("mygroup/another", "mygroup/*")
 
     def test_case_insensitive(self):
         """Test case insensitive matching."""
-        from connectors.utils import match_project_pattern
+        from dev_health_ops.connectors.utils import match_project_pattern
 
         assert match_project_pattern("MyGroup/MyProject", "mygroup/myproject*")
         assert match_project_pattern("MYGROUP/PROJECT", "mygroup/*")
@@ -1219,7 +1237,7 @@ class TestGitLabConnectorBatchProcessing:
     @pytest.fixture
     def mock_gitlab_client(self):
         """Create a mock GitLab client."""
-        with patch("connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
+        with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
             mock_instance = mock_gitlab.return_value
             mock_instance.auth.return_value = None
             yield mock_gitlab
@@ -1227,7 +1245,7 @@ class TestGitLabConnectorBatchProcessing:
     @pytest.fixture
     def mock_rest_client(self):
         """Create a mock REST client."""
-        with patch("connectors.gitlab.GitLabRESTClient") as mock_rest:
+        with patch("dev_health_ops.connectors.gitlab.GitLabRESTClient") as mock_rest:
             yield mock_rest
 
     def _create_mock_project(self, name: str, full_name: str):
@@ -1351,7 +1369,7 @@ class TestGitLabConnectorAsyncBatchProcessing:
     @pytest.fixture
     def mock_gitlab_client(self):
         """Create a mock GitLab client."""
-        with patch("connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
+        with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
             mock_instance = mock_gitlab.return_value
             mock_instance.auth.return_value = None
             yield mock_gitlab
@@ -1359,7 +1377,7 @@ class TestGitLabConnectorAsyncBatchProcessing:
     @pytest.fixture
     def mock_rest_client(self):
         """Create a mock REST client."""
-        with patch("connectors.gitlab.GitLabRESTClient") as mock_rest:
+        with patch("dev_health_ops.connectors.gitlab.GitLabRESTClient") as mock_rest:
             yield mock_rest
 
     def _create_mock_project(self, name: str, full_name: str):
@@ -1458,7 +1476,7 @@ class TestGitLabBatchProcessingErrorHandling:
     @pytest.fixture
     def mock_gitlab_client(self):
         """Create a mock GitLab client."""
-        with patch("connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
+        with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
             mock_instance = mock_gitlab.return_value
             mock_instance.auth.return_value = None
             yield mock_gitlab
@@ -1466,7 +1484,7 @@ class TestGitLabBatchProcessingErrorHandling:
     @pytest.fixture
     def mock_rest_client(self):
         """Create a mock REST client."""
-        with patch("connectors.gitlab.GitLabRESTClient") as mock_rest:
+        with patch("dev_health_ops.connectors.gitlab.GitLabRESTClient") as mock_rest:
             yield mock_rest
 
     def _create_mock_project(self, name: str, full_name: str):

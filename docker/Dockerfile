@@ -16,6 +16,8 @@ RUN rm -rf /build
 
 WORKDIR /app
 RUN mkdir -p /app
+# Ensure config files are available if needed
+# COPY --from=base /usr/local/lib/python3.14/site-packages/dev_health_ops/config /app/config
 
 FROM base AS api
 EXPOSE 8000

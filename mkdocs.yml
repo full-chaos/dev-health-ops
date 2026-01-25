@@ -16,21 +16,59 @@ theme:
 
 nav:
   - Home: index.md
+  - Product:
+      - PRD: product/prd.md
+      - Product Brief: product/product-brief.md
+      - Concepts: product/concepts.md
+      - Investment Taxonomy: product/investment-taxonomy.md
   - Getting Started: getting-started.md
-  - Architecture: architecture.md
-  - CLI: cli.md
+  - Architecture:
+      - Overview: architecture.md
+      - Data Pipeline: architecture/data-pipeline.md
+      - Repo Layout: architecture/repo-layout.md
+      - Frontend Architecture: architecture/frontend-architecture.md
+  - CLI:
+      - Overview: cli.md
+      - Reference: ops/cli-reference.md
   - Connectors:
       - Usage: CONNECTOR_USAGE.md
       - Private Repos: PRIVATE_REPO_TESTING.md
   - Metrics:
       - Overview: metrics.md
       - Inventory: metrics-inventory.md
+      - Canonical Metrics (API Mapping): canonical-metrics.md
+      - Canonical Metrics (PRD): computations/canonical-metrics-prd.md
+      - Metric Calculations: computations/metric-calculations.md
+      - Computations Index: computations/index.md
+      - Views Index: user-guide/views-index.md
+      - Views:
+          - Investment View: user-guide/investment-view.md
+          - Investment Mix: user-guide/views/investment-mix.md
+          - Investment Flows: user-guide/views/investment-flows.md
+          - Investment Expense: user-guide/views/investment-expense.md
+          - Code Hotspots: user-guide/views/code-hotspots.md
+          - PR Flow: user-guide/views/pr-flow.md
+          - Quadrants: user-guide/views/quadrants.md
+          - Flame Diagrams: user-guide/views/flame-diagrams.md
+      - Work Graph: user-guide/work-graph.md
+  - API:
+      - GraphQL (Legacy): graphql.md
+      - GraphQL Overview: api/graphql-overview.md
+      - Persisted Queries: api/persisted-queries.md
+      - View Mapping: api/view-mapping.md
+      - Web GraphQL Client: api/web-graphql-client.md
+      - Web Investment Queries: api/web-graphql-investment.md
+  - Visualizations: visualizations/patterns.md
+  - LLM: llm/categorization-contract.md
   - Grafana: grafana.md
   - Task Trackers: task_trackers.md
   - Roadmap: roadmap.md
   - Project Plan: project.md
+  - Appendix:
+      - Agent Instructions (index): appendix/agent-instructions/README.md
 
-plugins:
+
+      - Legacy: appendix/legacy/index.mdplugins:
   - search
 
 markdown_extensions:

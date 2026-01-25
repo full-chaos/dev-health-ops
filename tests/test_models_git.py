@@ -21,7 +21,7 @@ class TestRepoUUID:
 
     def test_two_repos_with_different_remotes_get_different_uuids(self):
         """Test that two repos with different remote URLs get different UUIDs."""
-        with patch("models.git.GitRepo") as MockGitRepo:
+        with patch("dev_health_ops.models.git.GitRepo") as MockGitRepo:
             # Mock first repo with remote URL 1
             mock_repo1 = MagicMock()
             mock_remote1 = MagicMock()
@@ -49,7 +49,7 @@ class TestRepoUUID:
 
     def test_same_remote_url_produces_same_uuid(self):
         """Test that the same remote URL always produces the same UUID."""
-        with patch("models.git.GitRepo") as MockGitRepo:
+        with patch("dev_health_ops.models.git.GitRepo") as MockGitRepo:
 
             def create_mock_repo():
                 mock_repo = MagicMock()
@@ -69,7 +69,7 @@ class TestRepoUUID:
 
     def test_repo_without_remote_uses_path(self):
         """Test that repos without remotes use absolute path for UUID."""
-        with patch("models.git.GitRepo") as MockGitRepo:
+        with patch("dev_health_ops.models.git.GitRepo") as MockGitRepo:
             mock_repo = MagicMock()
             mock_repo.remotes = []  # No remotes
 
@@ -84,8 +84,8 @@ class TestRepoUUID:
     def test_repo_id_is_set_on_init(self):
         """Test that Repo.id is automatically set when initialized with a path."""
         with (
-            patch("models.git.get_repo_uuid") as mock_get_uuid,
-            patch("models.git.GitRepo.__init__", return_value=None),
+            patch("dev_health_ops.models.git.get_repo_uuid") as mock_get_uuid,
+            patch("dev_health_ops.models.git.GitRepo.__init__", return_value=None),
         ):
             expected_uuid = uuid.uuid4()
             mock_get_uuid.return_value = expected_uuid
@@ -98,8 +98,8 @@ class TestRepoUUID:
     def test_repo_id_not_overwritten_if_provided(self):
         """Test that explicitly provided id is not overwritten."""
         with (
-            patch("models.git.get_repo_uuid") as mock_get_uuid,
-            patch("models.git.GitRepo.__init__", return_value=None),
+            patch("dev_health_ops.models.git.get_repo_uuid") as mock_get_uuid,
+            patch("dev_health_ops.models.git.GitRepo.__init__", return_value=None),
         ):
             explicit_uuid = uuid.uuid4()
 
@@ -134,8 +134,8 @@ class TestRepoUUID:
     def test_git_commit_uses_repo_id(self):
         """Test that GitCommit can be created with repo.id."""
         with (
-            patch("models.git.get_repo_uuid") as mock_get_uuid,
-            patch("models.git.GitRepo.__init__", return_value=None),
+            patch("dev_health_ops.models.git.get_repo_uuid") as mock_get_uuid,
+            patch("dev_health_ops.models.git.GitRepo.__init__", return_value=None),
         ):
             repo_uuid = uuid.uuid4()
             mock_get_uuid.return_value = repo_uuid
@@ -227,7 +227,7 @@ class TestDatetimeDefaultsReturnCurrentTime:
 
     def test_multiple_repo_creations_have_different_timestamps(self):
         """Test that creating multiple Repo instances generates different timestamps."""
-        with patch("models.git.datetime") as mock_datetime:
+        with patch("dev_health_ops.models.git.datetime") as mock_datetime:
             # Mock two different times
             time1 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
             time2 = datetime(2024, 1, 1, 12, 0, 1, tzinfo=timezone.utc)
@@ -244,7 +244,7 @@ class TestDatetimeDefaultsReturnCurrentTime:
 
     def test_datetime_now_called_with_timezone_utc(self):
         """Test that datetime.now is called with timezone.utc argument."""
-        with patch("models.git.datetime") as mock_datetime:
+        with patch("dev_health_ops.models.git.datetime") as mock_datetime:
             mock_datetime.now.return_value = datetime(
                 2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc
             )

@@ -52,7 +52,7 @@ def test_people_search_schema(client, monkeypatch):
     async def _fake_search(**_):
         return sample
 
-    monkeypatch.setattr("api.main.search_people_response", _fake_search)
+    monkeypatch.setattr("dev_health_ops.api.main.search_people_response", _fake_search)
 
     response = client.get("/api/v1/people", params={"q": "ch"})
     assert response.status_code == 200
@@ -113,7 +113,7 @@ def test_people_summary_schema(client, monkeypatch):
     async def _fake_summary(**_):
         return sample
 
-    monkeypatch.setattr("api.main.build_person_summary_response", _fake_summary)
+    monkeypatch.setattr("dev_health_ops.api.main.build_person_summary_response", _fake_summary)
 
     response = client.get("/api/v1/people/abc123/summary")
     assert response.status_code == 200
@@ -145,7 +145,7 @@ def test_people_metric_schema(client, monkeypatch):
     async def _fake_metric(**_):
         return sample
 
-    monkeypatch.setattr("api.main.build_person_metric_response", _fake_metric)
+    monkeypatch.setattr("dev_health_ops.api.main.build_person_metric_response", _fake_metric)
 
     response = client.get(
         "/api/v1/people/abc123/metric", params={"metric": "cycle_time"}
@@ -171,7 +171,7 @@ def test_people_drilldown_limit_is_capped(client, monkeypatch):
         captured["limit"] = kwargs["limit"]
         return {"items": [], "next_cursor": None}
 
-    monkeypatch.setattr("api.main.build_person_drilldown_prs_response", _fake_drilldown)
+    monkeypatch.setattr("dev_health_ops.api.main.build_person_drilldown_prs_response", _fake_drilldown)
 
     response = client.get(
         "/api/v1/people/abc123/drilldown/prs",
@@ -221,12 +221,12 @@ def test_people_responses_do_not_include_forbidden_fields(client, monkeypatch):
     async def _fake_summary(**_):
         return sample
 
-    monkeypatch.setattr("api.main.build_person_summary_response", _fake_summary)
+    monkeypatch.setattr("dev_health_ops.api.main.build_person_summary_response", _fake_summary)
 
     async def _fake_metric(**_):
         return metric_sample
 
-    monkeypatch.setattr("api.main.build_person_metric_response", _fake_metric)
+    monkeypatch.setattr("dev_health_ops.api.main.build_person_metric_response", _fake_metric)
 
     response = client.get("/api/v1/people/abc123/summary")
     assert response.status_code == 200

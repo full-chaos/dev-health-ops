@@ -36,7 +36,7 @@ def _bundle() -> TextBundle:
 def test_retry_limit_and_fallback(monkeypatch):
     provider = StubProvider(["not json", "still not json"])
     monkeypatch.setattr(
-        "work_graph.investment.categorize.get_provider",
+        "dev_health_ops.work_graph.investment.categorize.get_provider",
         lambda name, model=None: provider,
     )
     outcome = asyncio.run(categorize_text_bundle(_bundle(), llm_provider="mock"))
@@ -61,7 +61,7 @@ def test_repaired_status(monkeypatch):
         ]
     )
     monkeypatch.setattr(
-        "work_graph.investment.categorize.get_provider",
+        "dev_health_ops.work_graph.investment.categorize.get_provider",
         lambda name, model=None: provider,
     )
     outcome = asyncio.run(categorize_text_bundle(_bundle(), llm_provider="mock"))

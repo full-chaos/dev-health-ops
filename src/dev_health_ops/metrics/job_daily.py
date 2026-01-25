@@ -283,12 +283,13 @@ async def run_daily_metrics_job(
         bug_times: Dict[uuid.UUID, List[float]] = {}
         for item in work_items:
             if item.type == "bug" and item.completed_at and item.started_at:
-                comp_dt = item.completed_at
+                comp_dt = _to_utc(item.completed_at)
                 if start <= comp_dt < end:
                     rid = getattr(item, "repo_id", None)
                     if rid:
                         bug_times.setdefault(rid, []).append(
-                            (comp_dt - item.started_at).total_seconds() / 3600.0
+                            (comp_dt - _to_utc(item.started_at)).total_seconds()
+                            / 3600.0
                         )
         for rid, times in bug_times.items():
             mttr_by_repo[rid] = sum(times) / len(times)

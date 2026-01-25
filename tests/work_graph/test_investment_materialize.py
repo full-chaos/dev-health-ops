@@ -76,35 +76,35 @@ def _sample_data():
 
 def _patch_queries(monkeypatch, edges, work_items, commits):
     monkeypatch.setattr(
-        "work_graph.investment.materialize.fetch_work_graph_edges",
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_graph_edges",
         lambda client, repo_ids=None: edges,
     )
     monkeypatch.setattr(
-        "work_graph.investment.materialize.fetch_work_items",
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_items",
         lambda client, work_item_ids: work_items,
     )
     monkeypatch.setattr(
-        "work_graph.investment.materialize.fetch_work_item_active_hours",
+        "dev_health_ops.work_graph.investment.materialize.fetch_work_item_active_hours",
         lambda client, work_item_ids: {},
     )
     monkeypatch.setattr(
-        "work_graph.investment.materialize.fetch_pull_requests",
+        "dev_health_ops.work_graph.investment.materialize.fetch_pull_requests",
         lambda client, repo_numbers: [],
     )
     monkeypatch.setattr(
-        "work_graph.investment.materialize.fetch_commits",
+        "dev_health_ops.work_graph.investment.materialize.fetch_commits",
         lambda client, repo_commits: commits,
     )
     monkeypatch.setattr(
-        "work_graph.investment.materialize.fetch_commit_churn",
+        "dev_health_ops.work_graph.investment.materialize.fetch_commit_churn",
         lambda client, repo_commits: {f"{commits[0]['repo_id']}@abc123": 10.0},
     )
     monkeypatch.setattr(
-        "work_graph.investment.materialize.fetch_parent_titles",
+        "dev_health_ops.work_graph.investment.materialize.fetch_parent_titles",
         lambda client, work_item_ids: {},
     )
     monkeypatch.setattr(
-        "work_graph.investment.materialize.resolve_repo_ids_for_teams",
+        "dev_health_ops.work_graph.investment.materialize.resolve_repo_ids_for_teams",
         lambda client, team_ids: [],
     )
 
@@ -124,11 +124,11 @@ async def test_materialize_invokes_sink(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "work_graph.investment.materialize.create_sink", lambda dsn: sink
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
     )
     _patch_queries(monkeypatch, edges, work_items, commits)
     monkeypatch.setattr(
-        "work_graph.investment.materialize.categorize_text_bundle",
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
         _fake_categorize,
     )
 
@@ -166,11 +166,11 @@ async def test_materialize_does_not_write_files(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "work_graph.investment.materialize.create_sink", lambda dsn: sink
+        "dev_health_ops.work_graph.investment.materialize.create_sink", lambda dsn: sink
     )
     _patch_queries(monkeypatch, edges, work_items, commits)
     monkeypatch.setattr(
-        "work_graph.investment.materialize.categorize_text_bundle",
+        "dev_health_ops.work_graph.investment.materialize.categorize_text_bundle",
         _fake_categorize,
     )
 

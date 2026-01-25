@@ -400,6 +400,16 @@ def _sync_github_prs_to_store(
                     retry_after = connector._rate_limit_reset_delay_seconds()
                 except Exception:
                     retry_after = None
+            if retry_after is None:
+                headers = getattr(e, "headers", None)
+                if isinstance(headers, dict):
+                    headers_ci = {str(k).lower(): v for k, v in headers.items()}
+                    ra = headers_ci.get("retry-after")
+                    if ra is not None:
+                        try:
+                            retry_after = float(ra)
+                        except ValueError:
+                            retry_after = None
             applied = gate.penalize(retry_after)
             logging.info(
                 "GitHub rate limited fetching PRs; backoff %.1fs (%s)",

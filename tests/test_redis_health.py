@@ -41,9 +41,9 @@ class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
         cache = TTLCache(ttl_seconds=60, backend=mock_backend)
         self.assertEqual(cache.status(), "ok")
 
-    @patch("api.main.clickhouse_client")
-    @patch("api.main.HOME_CACHE")
-    @patch("api.main.query_dicts")
+    @patch("dev_health_ops.api.main.clickhouse_client")
+    @patch("dev_health_ops.api.main.HOME_CACHE")
+    @patch("dev_health_ops.api.main.query_dicts")
     async def test_health_endpoint_integration(self, mock_query, mock_cache, mock_ch):
         # Setup mocks
         mock_ch.return_value.__aenter__.return_value = MagicMock()

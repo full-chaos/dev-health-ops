@@ -76,7 +76,7 @@ class TestWorkGraphBuilder:
         fake_sink.backend_type = "clickhouse"
         fake_sink.client = MagicMock()
 
-        with patch("work_graph.builder.create_sink", return_value=fake_sink):
+        with patch("dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink):
             builder = WorkGraphBuilder(config)
             assert builder.config == config
             assert builder.sink == fake_sink

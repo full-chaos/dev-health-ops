@@ -72,7 +72,7 @@ class TestCommitProcessing:
 
         mock_repo.iter_commits.return_value = iter(mock_commits)
 
-        with patch("processors.local.logging") as mock_logging:
+        with patch("dev_health_ops.processors.local.logging") as mock_logging:
             await process_git_commits(mock_repo, mock_store)
             # Verify the function was called and processing occurred
             assert mock_logging.info.call_count >= 1
@@ -104,7 +104,7 @@ class TestCommitStatsProcessing:
         mock_commit.parents[0].diff.return_value = [mock_diff]
         mock_repo.iter_commits.return_value = iter([mock_commit])
 
-        with patch("processors.local.logging") as mock_logging:
+        with patch("dev_health_ops.processors.local.logging") as mock_logging:
             await process_git_commit_stats(mock_repo, mock_store)
             # Verify the function was called and processing occurred
             assert mock_logging.info.call_count >= 1

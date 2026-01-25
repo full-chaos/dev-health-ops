@@ -359,7 +359,7 @@ class SQLAlchemyStore:
 
     async def ensure_tables(self) -> None:
         from dev_health_ops.models.git import Base
-        import models.teams  # noqa: F401
+        import dev_health_ops.models.teams  # noqa: F401
 
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -1803,7 +1803,7 @@ class ClickHouseStore:
         assert self.client is not None
 
         # Locate migrations directory
-        migrations_dir = Path(__file__).resolve().parent / "migrations" / "clickhouse"
+        migrations_dir = Path(__file__).resolve().parents[2] / "migrations" / "clickhouse"
         if not migrations_dir.exists():
             return
 

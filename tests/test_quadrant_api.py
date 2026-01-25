@@ -47,7 +47,7 @@ def test_quadrant_endpoint_schema(client, monkeypatch):
     async def _fake_quadrant(**_):
         return sample
 
-    monkeypatch.setattr("api.main.build_quadrant_response", _fake_quadrant)
+    monkeypatch.setattr("dev_health_ops.api.main.build_quadrant_response", _fake_quadrant)
 
     response = client.get("/api/v1/quadrant", params={"type": "churn_throughput"})
     assert response.status_code == 200

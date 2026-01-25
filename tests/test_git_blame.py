@@ -42,7 +42,7 @@ class TestGitBlameMixin:
     def test_fetch_blame_repo_reuse_performance(self, repo_path, repo_uuid, git_repo):
         """Test that passing a repo instance avoids creating a new one."""
         # Mock the Repo class to track instantiation
-        with patch("models.Repo") as mock_repo:
+        with patch("dev_health_ops.models.git.Repo") as mock_repo:
             # Call with existing repo - should not create a new one
             GitBlameMixin.fetch_blame(
                 repo_path,
@@ -56,7 +56,7 @@ class TestGitBlameMixin:
 
     def test_fetch_blame_creates_repo_when_none_provided(self, repo_path, repo_uuid):
         """Test that fetch_blame creates a GitRepo when none is provided."""
-        with patch("models.git.GitRepo") as mock_repo:
+        with patch("dev_health_ops.models.git.GitRepo") as mock_repo:
             mock_repo_instance = MagicMock()
             mock_repo_instance.blame.return_value = []
             mock_repo.return_value = mock_repo_instance
@@ -175,7 +175,7 @@ class TestRepoInstanceReuse:
         # Get a few files from the repo
         test_files = [
             os.path.join(repo_path, "README.md"),
-            os.path.join(repo_path, "storage.py"),
+            os.path.join(repo_path, "dev_health_ops.storage.py"),
         ]
 
         # Process each file with the same repo instance

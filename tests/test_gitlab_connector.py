@@ -15,13 +15,13 @@ class TestGitLabConnectorProjects:
     @pytest.fixture
     def mock_gitlab_client(self):
         """Create a mock GitLab client."""
-        with patch("connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
+        with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
             yield mock_gitlab
 
     @pytest.fixture
     def mock_rest_client(self):
         """Create a mock REST client."""
-        with patch("connectors.gitlab.GitLabRESTClient") as mock_rest:
+        with patch("dev_health_ops.connectors.gitlab.GitLabRESTClient") as mock_rest:
             yield mock_rest
 
     def test_list_projects_by_group_name(self, mock_gitlab_client, mock_rest_client):
@@ -303,13 +303,13 @@ class TestGitLabConnectorAdapterMethods:
     @pytest.fixture
     def mock_gitlab_client(self):
         """Create a mock GitLab client."""
-        with patch("connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
+        with patch("dev_health_ops.connectors.gitlab.gitlab.Gitlab") as mock_gitlab:
             yield mock_gitlab
 
     @pytest.fixture
     def mock_rest_client(self):
         """Create a mock REST client."""
-        with patch("connectors.gitlab.GitLabRESTClient") as mock_rest:
+        with patch("dev_health_ops.connectors.gitlab.GitLabRESTClient") as mock_rest:
             yield mock_rest
 
     def test_get_contributors_adapter(self, mock_gitlab_client, mock_rest_client):

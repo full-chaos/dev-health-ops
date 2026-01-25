@@ -8,13 +8,13 @@ async def test_explain_investment_mix_mismatch_warning():
     """Test that theme/subcategory mismatch logs a warning and continues."""
     with (
         patch(
-            "api.services.investment_mix_explain.build_investment_response"
+            "dev_health_ops.api.services.investment_mix_explain.build_investment_response"
         ) as mock_build,
         patch(
-            "api.services.investment_mix_explain.build_work_unit_investments"
+            "dev_health_ops.api.services.investment_mix_explain.build_work_unit_investments"
         ) as mock_units,
-        patch("api.services.investment_mix_explain.get_provider") as mock_get_provider,
-        patch("api.services.investment_mix_explain.logger") as mock_logger,
+        patch("dev_health_ops.api.services.investment_mix_explain.get_provider") as mock_get_provider,
+        patch("dev_health_ops.api.services.investment_mix_explain.logger") as mock_logger,
     ):
         # Setup mocks
         mock_investment = MagicMock()

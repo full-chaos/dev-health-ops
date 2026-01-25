@@ -261,15 +261,15 @@ def test_aggregated_flame_milestone_approximation():
 
     with (
         patch(
-            "api.services.aggregated_flame.fetch_cycle_breakdown",
+            "dev_health_ops.api.services.aggregated_flame.fetch_cycle_breakdown",
             side_effect=mock_fetch_status_durations,
         ),
         patch(
-            "api.services.aggregated_flame.fetch_cycle_milestones",
+            "dev_health_ops.api.services.aggregated_flame.fetch_cycle_milestones",
             side_effect=mock_fetch_cycle_milestones,
         ),
         patch(
-            "api.services.aggregated_flame.clickhouse_client",
+            "dev_health_ops.api.services.aggregated_flame.clickhouse_client",
             side_effect=mock_clickhouse_client,
         ),
     ):

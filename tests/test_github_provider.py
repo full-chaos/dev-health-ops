@@ -903,7 +903,7 @@ def test_github_project_v2_item_no_transitions(mock_status_mapping, mock_identit
 
 
 @patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}, clear=False)
-@patch("providers.github.client.GitHubWorkClient")
+@patch("dev_health_ops.providers.github.client.GitHubWorkClient")
 def test_github_provider_ingest(mock_client_class, mock_status_mapping, mock_identity):
     """Test full provider ingest flow."""
     # Setup mock client

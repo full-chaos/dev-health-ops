@@ -208,7 +208,7 @@ def _build_sqlalchemy_expected_schema(
     dialect_name: str,
 ) -> Dict[str, Dict[str, str]]:
     from dev_health_ops.models.git import Base
-    import models.teams  # noqa: F401
+    import dev_health_ops.models.teams  # noqa: F401
 
     expected: Dict[str, Dict[str, str]] = {}
     for table in Base.metadata.sorted_tables:

@@ -1803,7 +1803,7 @@ class ClickHouseStore:
         assert self.client is not None
 
         # Locate migrations directory
-        migrations_dir = Path(__file__).resolve().parents[2] / "migrations" / "clickhouse"
+        migrations_dir = Path(__file__).resolve().parent / "migrations" / "clickhouse"
         if not migrations_dir.exists():
             return
 

@@ -68,7 +68,9 @@ nav:
       - Agent Instructions (index): appendix/agent-instructions/README.md
 
 
-      - Legacy: appendix/legacy/index.mdplugins:
+      - Legacy: appendix/legacy/index.md
+
+plugins:
   - search
 
 markdown_extensions:

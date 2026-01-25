@@ -18,7 +18,7 @@ def run_api_server(ns: argparse.Namespace) -> int:
     log_level = str(getattr(ns, "log_level", "") or "INFO").upper()
 
     config = uvicorn.Config(
-        "api.main:app",
+        "dev_health_ops.api.main:app",
         host=ns.host,
         port=ns.port,
         log_level=log_level.lower(),

@@ -13,3 +13,4 @@ demo-data**
 # **/.terraform*
 **/.trunk/**
 **/.beads/**
+**/site**

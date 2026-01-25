@@ -97,3 +97,54 @@ def test_complexity_db_job_scans_contents_without_gitpython(monkeypatch):
         "src/alpha.py",
         "src/beta.py",
     }
+
+
+class FakeClickHouseClientBlameOnly:
+    def __init__(self, blame_files, last_synced=None):
+        self.blame_files = blame_files
+        self.last_synced = last_synced
+        self.queries = []
+
+    def query(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        if "FROM git_files" in query and "count()" in query:
+            return FakeQueryResult([[0, 0]])
+        if "FROM git_files" in query and "contents" in query:
+            return FakeQueryResult([])
+        if "max(last_synced)" in query and "git_files" in query:
+            return FakeQueryResult([[None]])
+        if "max(last_synced)" in query and "git_blame" in query:
+            return FakeQueryResult([[self.last_synced]])
+        if "FROM git_blame" in query:
+            return FakeQueryResult(self.blame_files)
+        raise AssertionError(f"Unexpected query: {query}")
+
+
+def test_complexity_db_job_falls_back_to_blame(monkeypatch):
+    repo_id = uuid.uuid4()
+    blame_files = [
+        ("src/alpha.py", "def alpha():\n    return 1\n"),
+        ("src/beta.py", "def beta(x):\n    if x:\n        return x\n    return 0\n"),
+    ]
+    last_synced = datetime(2025, 1, 2, 3, 4, 5)
+    client = FakeClickHouseClientBlameOnly(blame_files, last_synced=last_synced)
+    sink = FakeClickHouseSink(client)
+
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
+
+    rc = job.run_complexity_db_job(
+        repo_id=repo_id,
+        db_url="clickhouse://localhost:8123/default",
+        date=date(2025, 1, 5),
+        backfill_days=1,
+        language_globs=None,
+        max_files=None,
+    )
+
+    assert rc == 0
+    assert sink.snapshots
+    assert sink.dailies
+    assert {snap.file_path for snap in sink.snapshots} == {
+        "src/alpha.py",
+        "src/beta.py",
+    }

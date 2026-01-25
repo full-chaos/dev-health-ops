@@ -14,7 +14,7 @@ from dev_health_ops.storage import detect_db_type
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+DEFAULT_COMPLEXITY_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
 
 
 def _normalize_sqlite_url(db_url: str) -> str:
@@ -46,8 +46,7 @@ def run_complexity_scan_job(
         raise FileNotFoundError(f"Repo path {repo_path} does not exist.")
 
     repo = git.Repo(repo_path)
-    config_path = REPO_ROOT / "src/dev_health_ops/config/complexity.yaml"
-    scanner = ComplexityScanner(config_path=config_path)
+    scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
 
     # Calculate date range
     start_date = date - timedelta(days=max(1, backfill_days) - 1)

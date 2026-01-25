@@ -598,6 +598,61 @@ class SyntheticDataGenerator:
             GitFile(repo_id=self.repo_id, path=f, executable=False) for f in self.files
         ]
 
+    def _generate_synthetic_python_lines(self, file_path: str) -> List[str]:
+        target_lines = random.randint(30, 140)
+        safe_name = (
+            file_path.replace("/", "_")
+            .replace("\\", "_")
+            .replace(".", "_")
+            .replace("-", "_")
+        )
+        safe_name = "".join(
+            ch if (ch.isalnum() or ch == "_") else "_" for ch in safe_name
+        )
+        safe_name = safe_name.strip("_") or "synthetic_module"
+
+        lines: List[str] = [
+            f'"""Synthetic fixture module: {safe_name}."""',
+            "",
+            "from __future__ import annotations",
+            "",
+            "from typing import Iterable",
+            "",
+        ]
+
+        max_functions = 6
+        for func_idx in range(max_functions):
+            func_name = f"{safe_name}_fn_{func_idx}"
+            threshold = random.randint(3, 12)
+            multiplier = random.randint(2, 7)
+
+            block = [
+                f"def {func_name}(values: Iterable[int]) -> int:",
+                "    total = 0",
+                "    for idx, value in enumerate(values):",
+                f"        if value % {threshold} == 0:",
+                f"            total += value * {multiplier}",
+                "        elif value % 2 == 0:",
+                "            total += value",
+                "        elif value < 0:",
+                "            total -= value",
+                "        else:",
+                "            total -= value // 2",
+                "        if idx % 5 == 0 and total > 0:",
+                "            total //= 2",
+                "    return total",
+                "",
+            ]
+
+            # Ensure we never truncate mid-block (keeps generated code parseable).
+            if func_idx >= 2 and (len(lines) + len(block)) > target_lines:
+                break
+            lines.extend(block)
+
+        while len(lines) < target_lines:
+            lines.append(f"# filler {len(lines) + 1} for {file_path}")
+        return lines
+
     def generate_blame(
         self, commits: List[GitCommit]
     ) -> List[
@@ -611,10 +666,15 @@ class SyntheticDataGenerator:
             return blame_records
 
         for file_path in self.files:
-            # Generate random file length
-            num_lines = random.randint(10, 200)
+            if file_path.endswith(".py"):
+                lines = self._generate_synthetic_python_lines(file_path)
+            else:
+                num_lines = random.randint(10, 200)
+                lines = [
+                    f"Line {i} content for {file_path}" for i in range(1, num_lines + 1)
+                ]
 
-            for i in range(1, num_lines + 1):
+            for i, line in enumerate(lines, start=1):
                 # Pick a random commit that "modified" this line
                 commit = random.choice(commits)
 
@@ -627,7 +687,7 @@ class SyntheticDataGenerator:
                         author_name=commit.author_name,
                         author_when=commit.author_when,
                         commit_hash=commit.hash,
-                        line=f"Line {i} content for {file_path}",
+                        line=line,
                     )
                 )
         return blame_records

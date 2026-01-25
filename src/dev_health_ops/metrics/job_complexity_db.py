@@ -16,7 +16,7 @@ from dev_health_ops.storage import detect_db_type
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+DEFAULT_COMPLEXITY_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
 
 
 def _date_range(end_day: date, backfill_days: int) -> List[date]:
@@ -210,8 +210,7 @@ def run_complexity_db_job(
     try:
         sink.ensure_tables()
 
-        config_path = REPO_ROOT / "src/dev_health_ops/config/complexity.yaml"
-        scanner = ComplexityScanner(config_path=config_path)
+        scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
         if language_globs:
             scanner.include_globs = list(language_globs)
         if exclude_globs:

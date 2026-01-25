@@ -17,9 +17,10 @@ from ..queries.scopes import parse_uuid
 
 
 def _now_like(reference: Optional[datetime]) -> datetime:
+    now = datetime.now(timezone.utc)
     if reference and reference.tzinfo is not None:
-        return datetime.now(timezone.utc)
-    return datetime.utcnow()
+        return now
+    return now.replace(tzinfo=None)
 
 
 def _frame(

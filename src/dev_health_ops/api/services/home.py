@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import math
 from typing import Any, Dict, List
 
@@ -370,7 +370,7 @@ async def build_home_response(
             if abs(delta.delta_pct) >= 25:
                 events.append(
                     EventItem(
-                        ts=datetime.utcnow(),
+                        ts=datetime.now(timezone.utc),
                         type="regression" if delta.delta_pct > 0 else "spike",
                         text=(
                             f"{delta.label} shifted {delta.delta_pct:.0f}% "

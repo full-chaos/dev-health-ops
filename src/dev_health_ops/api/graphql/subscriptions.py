@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import AsyncGenerator, Optional
 
 import strawberry
@@ -12,6 +12,10 @@ from strawberry.types import Info
 from .pubsub import get_pubsub, metrics_channel, task_channel, sync_channel
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @strawberry.type
@@ -33,7 +37,7 @@ class TaskStatus:
     progress: float
     message: Optional[str] = None
     result: Optional[str] = None
-    updated_at: datetime = strawberry.field(default_factory=datetime.utcnow)
+    updated_at: datetime = strawberry.field(default_factory=_utc_now)
 
 
 @strawberry.type
@@ -46,7 +50,7 @@ class SyncProgress:
     items_processed: int
     items_total: int
     message: Optional[str] = None
-    updated_at: datetime = strawberry.field(default_factory=datetime.utcnow)
+    updated_at: datetime = strawberry.field(default_factory=_utc_now)
 
 
 @strawberry.type
@@ -83,7 +87,7 @@ class Subscription:
                     org_id=org_id,
                     day=message.data.get("day", ""),
                     updated_at=datetime.fromisoformat(
-                        message.data.get("updated_at", datetime.utcnow().isoformat())
+                        message.data.get("updated_at", _utc_now().isoformat())
                     ),
                     message=message.data.get("message", "Metrics updated"),
                 )
@@ -121,7 +125,7 @@ class Subscription:
                     message=message.data.get("message"),
                     result=message.data.get("result"),
                     updated_at=datetime.fromisoformat(
-                        message.data.get("updated_at", datetime.utcnow().isoformat())
+                        message.data.get("updated_at", _utc_now().isoformat())
                     ),
                 )
             except Exception as e:
@@ -159,7 +163,7 @@ class Subscription:
                     items_total=int(message.data.get("items_total", 0)),
                     message=message.data.get("message"),
                     updated_at=datetime.fromisoformat(
-                        message.data.get("updated_at", datetime.utcnow().isoformat())
+                        message.data.get("updated_at", _utc_now().isoformat())
                     ),
                 )
             except Exception as e:
@@ -190,7 +194,7 @@ async def publish_metrics_update(
         {
             "day": day,
             "message": message,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": _utc_now().isoformat(),
         },
     )
 
@@ -222,7 +226,7 @@ async def publish_task_status(
             "progress": progress,
             "message": message,
             "result": result,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": _utc_now().isoformat(),
         },
     )
 
@@ -257,6 +261,6 @@ async def publish_sync_progress(
             "items_processed": items_processed,
             "items_total": items_total,
             "message": message,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": _utc_now().isoformat(),
         },
     )

@@ -219,11 +219,13 @@ class GraphQLCacheManager:
                 count += 1
             except Exception as e:
                 logger.warning("Failed to invalidate %s: %s", key, e)
-        # Clear tag set
+        # Clear tag set (best-effort; log but do not raise on failure)
         try:
             self._cache._backend.set(tag_key, None, 1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "Failed to clear tag key %s from cache backend: %s", tag_key, e
+            )
         return count
 
     def invalidate_org(self, org_id: str) -> int:

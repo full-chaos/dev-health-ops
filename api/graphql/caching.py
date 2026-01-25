@@ -220,8 +220,8 @@ class CacheInvalidator:
                 self._cache.delete(tag_set_key)
             else:
                 self._cache._backend.set(tag_set_key, None, 1)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to clear tag set %s: %s", tag_set_key, e)
         return count
 
 

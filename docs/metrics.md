@@ -354,3 +354,12 @@ Categorizes engineering effort into investment areas (e.g., "New Value", "Securi
   - `delivery_units`: Story points or count of work items completed.
   - `churn_loc`: Sum of additions + deletions associated with the area.
 - **Configuration**: `config/investment_areas.yaml` defines the matching rules and priorities.
+
+## Views and interpretations
+
+Metrics are intended to be consumed through views that constrain interpretation and provide drill-down.
+
+- Views index: `user-guide/views-index.md`
+- Investment View: `user-guide/investment-view.md`
+- Work Graph: `user-guide/work-graph.md`
+- Computations index: `computations/index.md`

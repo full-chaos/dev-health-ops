@@ -400,18 +400,20 @@ def run_schema_audit(*, db_url: str) -> Dict[str, Any]:
                 _normalize_clickhouse_type,
                 _normalize_clickhouse_type,
             )
-            base_report.update({
-                "checked": True,
-                "missing_tables": missing_tables,
-                "missing_columns": missing_columns,
-                "type_mismatches": type_mismatches,
-                "migration_hints": _build_clickhouse_migration_hints(
-                    migrations,
-                    missing_tables,
-                    missing_columns,
-                    type_mismatches,
-                ),
-            })
+            base_report.update(
+                {
+                    "checked": True,
+                    "missing_tables": missing_tables,
+                    "missing_columns": missing_columns,
+                    "type_mismatches": type_mismatches,
+                    "migration_hints": _build_clickhouse_migration_hints(
+                        migrations,
+                        missing_tables,
+                        missing_columns,
+                        type_mismatches,
+                    ),
+                }
+            )
             base_report["status"] = (
                 "missing"
                 if missing_tables or missing_columns or type_mismatches
@@ -463,18 +465,20 @@ def run_schema_audit(*, db_url: str) -> Dict[str, Any]:
             lambda t: t,
             lambda t: _normalize_inspected_type(t, backend),
         )
-        base_report.update({
-            "checked": True,
-            "missing_tables": missing_tables,
-            "missing_columns": missing_columns,
-            "type_mismatches": type_mismatches,
-            "migration_hints": _build_sql_migration_hints(
-                repo_root,
-                missing_tables,
-                missing_columns,
-                type_mismatches,
-            ),
-        })
+        base_report.update(
+            {
+                "checked": True,
+                "missing_tables": missing_tables,
+                "missing_columns": missing_columns,
+                "type_mismatches": type_mismatches,
+                "migration_hints": _build_sql_migration_hints(
+                    repo_root,
+                    missing_tables,
+                    missing_columns,
+                    type_mismatches,
+                ),
+            }
+        )
         base_report["status"] = (
             "missing" if missing_tables or missing_columns or type_mismatches else "ok"
         )
@@ -529,7 +533,6 @@ def format_schema_report(report: Dict[str, Any]) -> str:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-
     audit_schema = audit_subparsers.add_parser(
         "schema", help="Verify DB schema is current."
     )
@@ -538,7 +541,6 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
 
 
 def _cmd_audit_schema(ns: argparse.Namespace) -> int:
-
     logger = logging.getLogger(__name__)
     try:
         report = run_schema_audit(db_url=ns.db)

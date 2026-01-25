@@ -28,9 +28,7 @@ def test_query_builders_include_tables(builder, expected_table):
 
 
 def test_infer_repo_source_prefers_settings():
-    assert (
-        infer_repo_source('{"source": "gitlab"}', '["github"]') == "gitlab"
-    )
+    assert infer_repo_source('{"source": "gitlab"}', '["github"]') == "gitlab"
 
 
 def test_infer_repo_source_falls_back_to_tags():
@@ -110,9 +108,7 @@ def test_compile_report_flags_stale_provider():
         window_end=window_end,
         window_days=31,
         work_item_rows=[{"provider": "jira", "count": 2, "last_synced": stale_time}],
-        transition_rows=[
-            {"provider": "jira", "count": 1, "last_synced": stale_time}
-        ],
+        transition_rows=[{"provider": "jira", "count": 1, "last_synced": stale_time}],
         repo_rows=[],
         git_rows_by_table={},
         present_tables={

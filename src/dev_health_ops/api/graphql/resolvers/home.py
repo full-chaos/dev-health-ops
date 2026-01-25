@@ -62,14 +62,16 @@ async def resolve_home(
 
     deltas = []
     for row in delta_rows:
-        deltas.append({
-            "metric": row.get("metric", ""),
-            "label": row.get("label", ""),
-            "value": float(row.get("value", 0)),
-            "unit": row.get("unit", ""),
-            "delta_pct": 0.0,  # Would need previous period comparison
-            "spark": [],
-        })
+        deltas.append(
+            {
+                "metric": row.get("metric", ""),
+                "label": row.get("label", ""),
+                "value": float(row.get("value", 0)),
+                "unit": row.get("unit", ""),
+                "delta_pct": 0.0,  # Would need previous period comparison
+                "spark": [],
+            }
+        )
 
     return {
         "freshness": {

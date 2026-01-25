@@ -3,9 +3,6 @@
 import argparse
 import subprocess
 import sys
-from typing import List
-
-from dev_health_ops.workers.celery_app import celery_app
 
 
 def _cmd_start_worker(ns: argparse.Namespace) -> int:

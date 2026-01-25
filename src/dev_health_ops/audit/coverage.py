@@ -418,15 +418,17 @@ def format_coverage_table(report: Dict[str, Any]) -> str:
     rows: List[List[str]] = []
     for provider in providers:
         entry = providers.get(provider, {})
-        rows.append([
-            provider,
-            entry.get("collector", {}).get("status", "missing"),
-            entry.get("config", {}).get("status", "missing"),
-            entry.get("schema", {}).get("status", "missing"),
-            entry.get("sink", {}).get("status", "missing"),
-            entry.get("commands", {}).get("status", "missing"),
-            entry.get("overall", "missing"),
-        ])
+        rows.append(
+            [
+                provider,
+                entry.get("collector", {}).get("status", "missing"),
+                entry.get("config", {}).get("status", "missing"),
+                entry.get("schema", {}).get("status", "missing"),
+                entry.get("sink", {}).get("status", "missing"),
+                entry.get("commands", {}).get("status", "missing"),
+                entry.get("overall", "missing"),
+            ]
+        )
 
     return _render_table(
         [
@@ -459,7 +461,6 @@ def coverage_failed(report: Dict[str, Any]) -> bool:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-
     audit_coverage = audit_subparsers.add_parser(
         "coverage", help="Audit provider implementation coverage."
     )

@@ -37,12 +37,14 @@ def _detect_backend(db_url: str) -> str:
     url = db_url.lower()
     if url.startswith(("mongodb://", "mongodb+srv://")):
         return "mongo"
-    if url.startswith((
-        "clickhouse://",
-        "clickhouse+http://",
-        "clickhouse+https://",
-        "clickhouse+native://",
-    )):
+    if url.startswith(
+        (
+            "clickhouse://",
+            "clickhouse+http://",
+            "clickhouse+https://",
+            "clickhouse+native://",
+        )
+    ):
         return "clickhouse"
     return "sqlalchemy"
 

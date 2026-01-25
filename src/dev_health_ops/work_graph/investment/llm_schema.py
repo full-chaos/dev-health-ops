@@ -94,7 +94,10 @@ def validate_llm_payload(
         evidence_quotes_raw = []
 
     if isinstance(evidence_quotes_raw, list):
-        if len(evidence_quotes_raw) < MIN_QUOTES or len(evidence_quotes_raw) > MAX_QUOTES:
+        if (
+            len(evidence_quotes_raw) < MIN_QUOTES
+            or len(evidence_quotes_raw) > MAX_QUOTES
+        ):
             errors.append("evidence_quotes_count_out_of_range")
         for idx, entry in enumerate(evidence_quotes_raw):
             if not isinstance(entry, dict):
@@ -105,7 +108,9 @@ def validate_llm_payload(
                 missing = ALLOWED_QUOTE_KEYS - entry_keys
                 extra = entry_keys - ALLOWED_QUOTE_KEYS
                 if missing:
-                    errors.append(f"evidence_quote_missing_keys:{idx}:{sorted(missing)}")
+                    errors.append(
+                        f"evidence_quote_missing_keys:{idx}:{sorted(missing)}"
+                    )
                 if extra:
                     errors.append(f"evidence_quote_extra_keys:{idx}:{sorted(extra)}")
                 continue

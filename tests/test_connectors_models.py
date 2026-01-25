@@ -4,9 +4,16 @@ Tests for connector data models.
 
 from datetime import datetime, timezone
 
-from dev_health_ops.connectors.models import (Author, BlameRange, CommitStats, FileBlame,
-                               Organization, PullRequest, Repository,
-                               RepoStats)
+from dev_health_ops.connectors.models import (
+    Author,
+    BlameRange,
+    CommitStats,
+    FileBlame,
+    Organization,
+    PullRequest,
+    Repository,
+    RepoStats,
+)
 
 
 class TestOrganization:

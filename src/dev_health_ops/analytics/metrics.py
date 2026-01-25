@@ -27,7 +27,9 @@ class PRMetric:
     author_name: str
     created_at: datetime
     merged_at: Optional[datetime]
-    cycle_time_hours: Optional[float]  # merged_at - created_at in hours, None if not merged
+    cycle_time_hours: Optional[
+        float
+    ]  # merged_at - created_at in hours, None if not merged
 
 
 @dataclass
@@ -155,7 +157,9 @@ def compute_commit_metrics(
             CommitMetric(
                 commit_hash=commit.hash,
                 repo_id=commit.repo_id,
-                author_name=_normalize_author_name(getattr(commit, "author_name", None)),
+                author_name=_normalize_author_name(
+                    getattr(commit, "author_name", None)
+                ),
                 committed_at=committed_at,
                 total_loc=total_loc,
                 files_changed=len(files),
@@ -363,4 +367,3 @@ def compute_repo_metrics(
         )
 
     return repo_result
-

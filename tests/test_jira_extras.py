@@ -97,7 +97,10 @@ def test_extract_jira_issue_dependencies() -> None:
     deps = extract_jira_issue_dependencies(issue=issue, work_item_id="jira:ABC-1")
     assert len(deps) == 4
 
-    dep_map = {(d.source_work_item_id, d.target_work_item_id): d.relationship_type for d in deps}
+    dep_map = {
+        (d.source_work_item_id, d.target_work_item_id): d.relationship_type
+        for d in deps
+    }
     assert dep_map[("jira:ABC-1", "jira:ABC-2")] == "blocks"
     assert dep_map[("jira:ABC-3", "jira:ABC-1")] == "relates"
     assert dep_map[("jira:ABC-1", "jira:ABC-4")] == "duplicates"
@@ -192,43 +195,69 @@ def test_jira_comments_limit_no_limit() -> None:
     import os
     from unittest.mock import MagicMock, patch
     from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
-    
+
     with patch.dict(os.environ, {"JIRA_COMMENTS_LIMIT": "0"}, clear=False):
         with patch("providers.jira.client.JiraClient") as MockClient:
             mock_client = MagicMock()
             MockClient.from_env.return_value = mock_client
-            
+
             # Mock issue with key
             mock_issue = {"key": "TEST-1", "fields": {}}
             mock_client.iter_issues.return_value = [mock_issue]
-            
+
             # Mock 5 comments
             mock_comments = [
-                {"created": "2025-01-01T10:00:00.000+0000", "author": {"displayName": "User1"}, "body": "Comment 1"},
-                {"created": "2025-01-01T11:00:00.000+0000", "author": {"displayName": "User2"}, "body": "Comment 2"},
-                {"created": "2025-01-01T12:00:00.000+0000", "author": {"displayName": "User3"}, "body": "Comment 3"},
-                {"created": "2025-01-01T13:00:00.000+0000", "author": {"displayName": "User4"}, "body": "Comment 4"},
-                {"created": "2025-01-01T14:00:00.000+0000", "author": {"displayName": "User5"}, "body": "Comment 5"},
+                {
+                    "created": "2025-01-01T10:00:00.000+0000",
+                    "author": {"displayName": "User1"},
+                    "body": "Comment 1",
+                },
+                {
+                    "created": "2025-01-01T11:00:00.000+0000",
+                    "author": {"displayName": "User2"},
+                    "body": "Comment 2",
+                },
+                {
+                    "created": "2025-01-01T12:00:00.000+0000",
+                    "author": {"displayName": "User3"},
+                    "body": "Comment 3",
+                },
+                {
+                    "created": "2025-01-01T13:00:00.000+0000",
+                    "author": {"displayName": "User4"},
+                    "body": "Comment 4",
+                },
+                {
+                    "created": "2025-01-01T14:00:00.000+0000",
+                    "author": {"displayName": "User5"},
+                    "body": "Comment 5",
+                },
             ]
             mock_client.iter_issue_comments.return_value = mock_comments
-            
+
             identity = IdentityResolver(alias_to_canonical={})
             from dev_health_ops.providers.status_mapping import StatusMapping
+
             status_mapping = StatusMapping(
                 status_by_provider={},
                 label_status_by_provider={},
                 type_by_provider={},
-                label_type_by_provider={}
+                label_type_by_provider={},
             )
-            
-            work_items, transitions, dependencies, reopen_events, interactions, sprints = (
-                fetch_jira_work_items_with_extras(
-                    identity=identity,
-                    status_mapping=status_mapping,
-                    since=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                )
+
+            (
+                work_items,
+                transitions,
+                dependencies,
+                reopen_events,
+                interactions,
+                sprints,
+            ) = fetch_jira_work_items_with_extras(
+                identity=identity,
+                status_mapping=status_mapping,
+                since=datetime(2025, 1, 1, tzinfo=timezone.utc),
             )
-            
+
             # All 5 comments should be fetched
             assert len(interactions) == 5
 
@@ -238,43 +267,69 @@ def test_jira_comments_limit_with_limit() -> None:
     import os
     from unittest.mock import MagicMock, patch
     from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
-    
+
     with patch.dict(os.environ, {"JIRA_COMMENTS_LIMIT": "3"}, clear=False):
         with patch("providers.jira.client.JiraClient") as MockClient:
             mock_client = MagicMock()
             MockClient.from_env.return_value = mock_client
-            
+
             # Mock issue with key
             mock_issue = {"key": "TEST-1", "fields": {}}
             mock_client.iter_issues.return_value = [mock_issue]
-            
+
             # Mock 5 comments
             mock_comments = [
-                {"created": "2025-01-01T10:00:00.000+0000", "author": {"displayName": "User1"}, "body": "Comment 1"},
-                {"created": "2025-01-01T11:00:00.000+0000", "author": {"displayName": "User2"}, "body": "Comment 2"},
-                {"created": "2025-01-01T12:00:00.000+0000", "author": {"displayName": "User3"}, "body": "Comment 3"},
-                {"created": "2025-01-01T13:00:00.000+0000", "author": {"displayName": "User4"}, "body": "Comment 4"},
-                {"created": "2025-01-01T14:00:00.000+0000", "author": {"displayName": "User5"}, "body": "Comment 5"},
+                {
+                    "created": "2025-01-01T10:00:00.000+0000",
+                    "author": {"displayName": "User1"},
+                    "body": "Comment 1",
+                },
+                {
+                    "created": "2025-01-01T11:00:00.000+0000",
+                    "author": {"displayName": "User2"},
+                    "body": "Comment 2",
+                },
+                {
+                    "created": "2025-01-01T12:00:00.000+0000",
+                    "author": {"displayName": "User3"},
+                    "body": "Comment 3",
+                },
+                {
+                    "created": "2025-01-01T13:00:00.000+0000",
+                    "author": {"displayName": "User4"},
+                    "body": "Comment 4",
+                },
+                {
+                    "created": "2025-01-01T14:00:00.000+0000",
+                    "author": {"displayName": "User5"},
+                    "body": "Comment 5",
+                },
             ]
             mock_client.iter_issue_comments.return_value = mock_comments
-            
+
             identity = IdentityResolver(alias_to_canonical={})
             from dev_health_ops.providers.status_mapping import StatusMapping
+
             status_mapping = StatusMapping(
                 status_by_provider={},
                 label_status_by_provider={},
                 type_by_provider={},
-                label_type_by_provider={}
+                label_type_by_provider={},
             )
-            
-            work_items, transitions, dependencies, reopen_events, interactions, sprints = (
-                fetch_jira_work_items_with_extras(
-                    identity=identity,
-                    status_mapping=status_mapping,
-                    since=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                )
+
+            (
+                work_items,
+                transitions,
+                dependencies,
+                reopen_events,
+                interactions,
+                sprints,
+            ) = fetch_jira_work_items_with_extras(
+                identity=identity,
+                status_mapping=status_mapping,
+                since=datetime(2025, 1, 1, tzinfo=timezone.utc),
             )
-            
+
             # Only 3 comments should be fetched due to limit
             assert len(interactions) == 3
 
@@ -283,27 +338,28 @@ def test_jira_comments_error_handling() -> None:
     """Test that comment fetch errors are handled gracefully and don't halt sync."""
     from unittest.mock import MagicMock, patch
     from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
-    
+
     with patch("providers.jira.client.JiraClient") as MockClient:
         mock_client = MagicMock()
         MockClient.from_env.return_value = mock_client
-        
+
         # Mock issue with key
         mock_issue = {"key": "TEST-1", "fields": {}}
         mock_client.iter_issues.return_value = [mock_issue]
-        
+
         # Mock error when fetching comments
         mock_client.iter_issue_comments.side_effect = Exception("API Error")
-        
+
         identity = IdentityResolver(alias_to_canonical={})
         from dev_health_ops.providers.status_mapping import StatusMapping
+
         status_mapping = StatusMapping(
-                status_by_provider={},
-                label_status_by_provider={},
-                type_by_provider={},
-                label_type_by_provider={}
-            )
-        
+            status_by_provider={},
+            label_status_by_provider={},
+            type_by_provider={},
+            label_type_by_provider={},
+        )
+
         # Should not raise an exception
         work_items, transitions, dependencies, reopen_events, interactions, sprints = (
             fetch_jira_work_items_with_extras(
@@ -312,7 +368,7 @@ def test_jira_comments_error_handling() -> None:
                 since=datetime(2025, 1, 1, tzinfo=timezone.utc),
             )
         )
-        
+
         # Work item should still be fetched
         assert len(work_items) == 1
         # But no interactions due to error

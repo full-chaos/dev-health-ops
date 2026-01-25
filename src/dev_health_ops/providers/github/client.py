@@ -6,7 +6,10 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, Optional
 
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
-from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitConfig, RateLimitGate
+from dev_health_ops.connectors.utils.rate_limit_queue import (
+    RateLimitConfig,
+    RateLimitGate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +185,7 @@ class GitHubWorkClient:
         Iterate GitHub Projects v2 items via GraphQL.
 
         Returns raw dict nodes (parsed GraphQL response).
-        
+
         Note: This method automatically paginates through all field changes
         for each item, ensuring complete status transition history is captured.
         """
@@ -317,13 +320,13 @@ class GitHubWorkClient:
                 changes_dict = item.get("changes") or {}
                 changes = changes_dict.get("nodes") or []
                 changes_page_info = changes_dict.get("pageInfo") or {}
-                
+
                 # If there are more changes, fetch them
                 if changes_page_info.get("hasNextPage"):
                     all_changes = []
                     all_changes.extend(changes)
                     changes_cursor = changes_page_info.get("endCursor")
-                    
+
                     # Fetch remaining changes for this specific item
                     while changes_cursor:
                         self.gate.wait_sync()
@@ -332,20 +335,20 @@ class GitHubWorkClient:
                             after=changes_cursor,
                         )
                         self.gate.reset()
-                        
+
                         if not more_changes or not more_changes.get("nodes"):
                             break
-                        
+
                         all_changes.extend(more_changes.get("nodes") or [])
                         changes_page_info = more_changes.get("pageInfo") or {}
                         changes_cursor = changes_page_info.get("endCursor")
-                        
+
                         if not changes_page_info.get("hasNextPage"):
                             break
-                    
+
                     # Update the item with all changes
                     changes_dict["nodes"] = all_changes
-                
+
                 yield item
                 fetched += 1
                 if max_items is not None and fetched >= int(max_items):
@@ -363,7 +366,7 @@ class GitHubWorkClient:
     ) -> Optional[Dict[str, Any]]:
         """
         Fetch additional changes for a specific ProjectV2Item.
-        
+
         Returns the changes dict with nodes and pageInfo, or None if the query
         fails or the item is not found.
         """
@@ -399,7 +402,7 @@ class GitHubWorkClient:
           }
         }
         """
-        
+
         data = self.graphql.query(
             query,
             variables={
@@ -407,6 +410,6 @@ class GitHubWorkClient:
                 "after": after,
             },
         )
-        
+
         node = (data or {}).get("node") or {}
         return node.get("changes")

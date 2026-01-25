@@ -163,7 +163,10 @@ class RedisPubSub:
                     break
         finally:
             # Cleanup empty channels
-            if channel in self._memory_channels and self._memory_channels[channel].empty():
+            if (
+                channel in self._memory_channels
+                and self._memory_channels[channel].empty()
+            ):
                 del self._memory_channels[channel]
 
 

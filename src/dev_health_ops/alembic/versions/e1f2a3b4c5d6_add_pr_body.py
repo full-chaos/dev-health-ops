@@ -5,6 +5,7 @@ Revises: d4b8e3f5a1c2
 Create Date: 2025-01-01 00:00:00.000000
 
 """
+
 from alembic import op
 from sqlalchemy import Column, Text
 

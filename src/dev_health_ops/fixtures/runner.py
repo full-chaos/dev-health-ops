@@ -32,6 +32,55 @@ async def _insert_batches(
     await asyncio.gather(*(_run(batch) for batch in batches))
 
 
+def _build_repo_team_assignments(all_teams, repo_count: int, seed: int | None):
+    if repo_count <= 0:
+        return []
+    if not all_teams:
+        return [[] for _ in range(repo_count)]
+
+    rng = random.Random(seed if seed is not None else 0)
+    repo_indices = list(range(repo_count))
+    rng.shuffle(repo_indices)
+
+    max_unowned = int(repo_count * 0.1)
+    max_unowned = min(max_unowned, repo_count - 1)
+    unowned_count = max_unowned
+    owned_repos = repo_indices[unowned_count:]
+    if not owned_repos:
+        owned_repos = [repo_indices[0]]
+
+    repo_to_teams = {idx: [] for idx in range(repo_count)}
+    team_to_repos = {team.id: [] for team in all_teams}
+
+    teams_shuffled = list(all_teams)
+    rng.shuffle(teams_shuffled)
+    for i, repo_idx in enumerate(owned_repos):
+        team = teams_shuffled[i % len(teams_shuffled)]
+        repo_to_teams[repo_idx].append(team)
+        team_to_repos[team.id].append(repo_idx)
+
+    missing_teams = [team for team in teams_shuffled if not team_to_repos[team.id]]
+    for i, team in enumerate(missing_teams):
+        repo_idx = owned_repos[i % len(owned_repos)]
+        repo_to_teams[repo_idx].append(team)
+        team_to_repos[team.id].append(repo_idx)
+
+    multi_team_count = min(len(teams_shuffled), max(3, len(teams_shuffled) // 3))
+    for team in teams_shuffled[:multi_team_count]:
+        target = min(rng.randint(2, 3), len(owned_repos))
+        assigned = set(team_to_repos[team.id])
+        if len(assigned) >= target:
+            continue
+        available = [idx for idx in owned_repos if idx not in assigned]
+        rng.shuffle(available)
+        need = min(target - len(assigned), len(available))
+        for idx in available[:need]:
+            repo_to_teams[idx].append(team)
+            team_to_repos[team.id].append(idx)
+
+    return [repo_to_teams[idx] for idx in range(repo_count)]
+
+
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.db, ns.db_type)
@@ -45,6 +94,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         ).get_team_assignment(count=team_count)
 
         all_teams = team_assignment.get("teams", [])
+        repo_team_assignments = _build_repo_team_assignments(
+            all_teams, repo_count, ns.seed
+        )
         if hasattr(store, "insert_teams") and all_teams:
             await store.insert_teams(all_teams)
             logging.info("Inserted %d synthetic teams.", len(all_teams))
@@ -82,15 +134,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             )
             seed_value = (int(ns.seed) + i) if ns.seed is not None else None
 
-            # Pick 1-3 teams for this repo from the pool
-            # Use deterministic choice based on seed
-            pool_random = (
-                random.Random(seed_value)
-                if seed_value is not None
-                else random.Random(i)
-            )
-            num_teams_for_repo = pool_random.randint(1, min(3, len(all_teams)))
-            assigned_teams = pool_random.sample(all_teams, num_teams_for_repo)
+            assigned_teams = repo_team_assignments[i]
 
             generator = SyntheticDataGenerator(
                 repo_name=r_name,
@@ -597,7 +641,6 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
-
     fix = subparsers.add_parser("fixtures", help="Data simulation and fixtures.")
     fix_sub = fix.add_subparsers(dest="fixtures_command", required=True)
 

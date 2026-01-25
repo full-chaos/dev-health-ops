@@ -198,12 +198,14 @@ def publish_invalidation_event(
     """
     import json
 
-    message = json.dumps({
-        "event_type": event.event_type,
-        "org_id": event.org_id,
-        "tags": event.tags,
-        "metadata": event.metadata,
-    })
+    message = json.dumps(
+        {
+            "event_type": event.event_type,
+            "org_id": event.org_id,
+            "tags": event.tags,
+            "metadata": event.metadata,
+        }
+    )
 
     try:
         redis_client.publish(INVALIDATION_CHANNEL, message)

@@ -94,7 +94,9 @@ def run_daily_metrics(
 def _invalidate_metrics_cache(day: str, org_id: str = "default") -> None:
     """Invalidate GraphQL caches after metrics update."""
     try:
-        from dev_health_ops.api.graphql.cache_invalidation import invalidate_on_metrics_update
+        from dev_health_ops.api.graphql.cache_invalidation import (
+            invalidate_on_metrics_update,
+        )
         from dev_health_ops.api.services.cache import create_cache
 
         cache = create_cache(ttl_seconds=300)
@@ -107,7 +109,9 @@ def _invalidate_metrics_cache(day: str, org_id: str = "default") -> None:
 def _invalidate_sync_cache(sync_type: str, org_id: str = "default") -> None:
     """Invalidate GraphQL caches after data sync."""
     try:
-        from dev_health_ops.api.graphql.cache_invalidation import invalidate_on_sync_complete
+        from dev_health_ops.api.graphql.cache_invalidation import (
+            invalidate_on_sync_complete,
+        )
         from dev_health_ops.api.services.cache import create_cache
 
         cache = create_cache(ttl_seconds=300)

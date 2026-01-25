@@ -218,7 +218,9 @@ async def test_sqlalchemy_store_insert_repo_duplicate(sqlalchemy_store):
 
 
 @pytest.mark.asyncio
-async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_repo(sqlalchemy_store):
+async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_repo(
+    sqlalchemy_store,
+):
     repo_id = uuid.uuid4()
     other_repo_id = uuid.uuid4()
     computed_at = datetime(2025, 1, 10, tzinfo=timezone.utc).isoformat()
@@ -291,7 +293,9 @@ async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_repo(sqlalch
 
 
 @pytest.mark.asyncio
-async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_all_repos(sqlalchemy_store):
+async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_all_repos(
+    sqlalchemy_store,
+):
     repo_id = uuid.uuid4()
     other_repo_id = uuid.uuid4()
     computed_at = datetime(2025, 1, 10, tzinfo=timezone.utc).isoformat()
@@ -337,7 +341,11 @@ async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_all_repos(sq
                 (:repo2, '2025-01-04', 'main', 'x.py', 'python', 2, 1, 2, 2.0, 0, 0, :computed_at)
                 """
             ),
-            {"repo1": str(repo_id), "repo2": str(other_repo_id), "computed_at": computed_at},
+            {
+                "repo1": str(repo_id),
+                "repo2": str(other_repo_id),
+                "computed_at": computed_at,
+            },
         )
         await store.session.commit()
 
@@ -795,10 +803,10 @@ async def test_clickhouse_store_context_manager_initializes_and_creates_tables()
     get_client = MagicMock(return_value=mock_client)
     fake_clickhouse_connect = SimpleNamespace(get_client=get_client)
 
-    with patch.dict(sys.modules, {"clickhouse_connect": fake_clickhouse_connect}), patch(
-        "storage.Path"
-    ) as MockPath:
-
+    with (
+        patch.dict(sys.modules, {"clickhouse_connect": fake_clickhouse_connect}),
+        patch("storage.Path") as MockPath,
+    ):
         # Setup the chain: Path(__file__).resolve().parent / "migrations" / "clickhouse"
         mock_file_path = MagicMock()
         mock_resolved_path = MagicMock()
@@ -811,20 +819,20 @@ async def test_clickhouse_store_context_manager_initializes_and_creates_tables()
         mock_resolved_path.parent = mock_parent_path
         mock_parent_path.__truediv__.return_value = mock_migrations_path
         mock_migrations_path.__truediv__.return_value = mock_clickhouse_path
-        
+
         mock_clickhouse_path.exists.return_value = True
-        
+
         # Configure mock_sql_file with necessary attributes
         mock_sql_file.name = "000_test.sql"
         mock_sql_file.suffix = ".sql"
         mock_sql_file.stem = "000_test"
-        
+
         # Configure glob to return the mock file only for .sql pattern
         def glob_side_effect(pattern):
             if pattern == "*.sql":
                 return [mock_sql_file]
             return []
-            
+
         mock_clickhouse_path.glob.side_effect = glob_side_effect
 
         store = ClickHouseStore("clickhouse://localhost:8123/default")

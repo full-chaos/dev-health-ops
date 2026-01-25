@@ -26,8 +26,8 @@ class MockProvider:
         """
         if (
             "Output schema" in prompt
-            and "\"subcategories\"" in prompt
-            and "\"evidence_quotes\"" in prompt
+            and '"subcategories"' in prompt
+            and '"evidence_quotes"' in prompt
         ) or "matching the schema" in prompt:
             return self._mock_categorization(prompt)
 
@@ -71,13 +71,13 @@ class MockProvider:
             "dominant_themes": [top_category.split(".")[0]],
             "key_drivers": [
                 "Structural evidence appears to contribute most significantly to the categorization.",
-                "Textual phrases appear to align with the investment interpretation."
+                "Textual phrases appear to align with the investment interpretation.",
             ],
             "operational_signals": [
                 f"Evidence quality bands indicate {evidence_quality_band} uncertainty.",
-                "Lower-weight categories may still represent meaningful aspects of the work."
+                "Lower-weight categories may still represent meaningful aspects of the work.",
             ],
-            "confidence_note": confidence_note
+            "confidence_note": confidence_note,
         }
         return json.dumps(response_data)
 
@@ -117,33 +117,39 @@ class MockProvider:
 
         top_category = "feature_delivery.customer"
         lowered = phrase.lower()
-        if any(token in lowered for token in ["incident", "outage", "on-call", "hotfix"]):
+        if any(
+            token in lowered for token in ["incident", "outage", "on-call", "hotfix"]
+        ):
             top_category = "operational.incident_response"
-        elif any(token in lowered for token in ["refactor", "cleanup", "chore", "upgrade"]):
+        elif any(
+            token in lowered for token in ["refactor", "cleanup", "chore", "upgrade"]
+        ):
             top_category = "maintenance.refactor"
         elif any(token in lowered for token in ["bug", "fix", "test", "reliability"]):
             top_category = "quality.bugfix"
-        elif any(token in lowered for token in ["security", "vulnerability", "compliance"]):
+        elif any(
+            token in lowered for token in ["security", "vulnerability", "compliance"]
+        ):
             top_category = "risk.security"
 
         base = {
             cat: 1.0 / 15.0
             for cat in [
-            "feature_delivery.customer",
-            "feature_delivery.roadmap",
-            "feature_delivery.enablement",
-            "operational.incident_response",
-            "operational.on_call",
-            "operational.support",
-            "maintenance.refactor",
-            "maintenance.upgrade",
-            "maintenance.debt",
-            "quality.testing",
-            "quality.bugfix",
-            "quality.reliability",
-            "risk.security",
-            "risk.compliance",
-            "risk.vulnerability",
+                "feature_delivery.customer",
+                "feature_delivery.roadmap",
+                "feature_delivery.enablement",
+                "operational.incident_response",
+                "operational.on_call",
+                "operational.support",
+                "maintenance.refactor",
+                "maintenance.upgrade",
+                "maintenance.debt",
+                "quality.testing",
+                "quality.bugfix",
+                "quality.reliability",
+                "risk.security",
+                "risk.compliance",
+                "risk.vulnerability",
             ]
         }
         base[top_category] = 0.5

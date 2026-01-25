@@ -55,13 +55,19 @@ async def test_home_response_sanitizes_non_finite_values(monkeypatch):
         return []
 
     monkeypatch.setattr(home_service, "clickhouse_client", _fake_clickhouse_client)
-    monkeypatch.setattr(home_service, "scope_filter_for_metric", _fake_scope_filter_for_metric)
+    monkeypatch.setattr(
+        home_service, "scope_filter_for_metric", _fake_scope_filter_for_metric
+    )
     monkeypatch.setattr(home_service, "fetch_metric_value", _fake_fetch_metric_value)
     monkeypatch.setattr(home_service, "fetch_metric_series", _fake_fetch_metric_series)
     monkeypatch.setattr(home_service, "fetch_blocked_hours", _fake_fetch_blocked_hours)
-    monkeypatch.setattr(home_service, "fetch_last_ingested_at", _fake_fetch_last_ingested_at)
+    monkeypatch.setattr(
+        home_service, "fetch_last_ingested_at", _fake_fetch_last_ingested_at
+    )
     monkeypatch.setattr(home_service, "fetch_coverage", _fake_fetch_coverage)
-    monkeypatch.setattr(home_service, "fetch_metric_driver_delta", _fake_fetch_metric_driver_delta)
+    monkeypatch.setattr(
+        home_service, "fetch_metric_driver_delta", _fake_fetch_metric_driver_delta
+    )
 
     response = await home_service.build_home_response(
         db_url="clickhouse://",
@@ -90,10 +96,16 @@ async def test_explain_response_sanitizes_non_finite_values(monkeypatch):
         return [{"id": "team-b", "value": float("nan")}]
 
     monkeypatch.setattr(explain_service, "clickhouse_client", _fake_clickhouse_client)
-    monkeypatch.setattr(explain_service, "scope_filter_for_metric", _fake_scope_filter_for_metric)
+    monkeypatch.setattr(
+        explain_service, "scope_filter_for_metric", _fake_scope_filter_for_metric
+    )
     monkeypatch.setattr(explain_service, "fetch_metric_value", _fake_fetch_metric_value)
-    monkeypatch.setattr(explain_service, "fetch_metric_driver_delta", _fake_fetch_metric_driver_delta)
-    monkeypatch.setattr(explain_service, "fetch_metric_contributors", _fake_fetch_metric_contributors)
+    monkeypatch.setattr(
+        explain_service, "fetch_metric_driver_delta", _fake_fetch_metric_driver_delta
+    )
+    monkeypatch.setattr(
+        explain_service, "fetch_metric_contributors", _fake_fetch_metric_contributors
+    )
 
     response = await explain_service.build_explain_response(
         db_url="clickhouse://",
@@ -142,16 +154,32 @@ async def test_person_summary_sanitizes_non_finite_values(monkeypatch):
         return [{"section": "review_load", "label": "handoff", "value": float("nan")}]
 
     monkeypatch.setattr(people_service, "clickhouse_client", _fake_clickhouse_client)
-    monkeypatch.setattr(people_service, "_resolve_identity_context", _fake_resolve_identity_context)
+    monkeypatch.setattr(
+        people_service, "_resolve_identity_context", _fake_resolve_identity_context
+    )
     monkeypatch.setattr(people_service, "load_identity_aliases", lambda: {})
-    monkeypatch.setattr(people_service, "fetch_last_ingested_at", _fake_fetch_last_ingested_at)
+    monkeypatch.setattr(
+        people_service, "fetch_last_ingested_at", _fake_fetch_last_ingested_at
+    )
     monkeypatch.setattr(people_service, "fetch_coverage", _fake_fetch_coverage)
-    monkeypatch.setattr(people_service, "fetch_identity_coverage", _fake_fetch_identity_coverage)
-    monkeypatch.setattr(people_service, "fetch_person_metric_value", _fake_fetch_person_metric_value)
-    monkeypatch.setattr(people_service, "fetch_person_metric_series", _fake_fetch_person_metric_series)
-    monkeypatch.setattr(people_service, "fetch_person_work_mix", _fake_fetch_person_work_mix)
-    monkeypatch.setattr(people_service, "fetch_person_flow_breakdown", _fake_fetch_person_flow_breakdown)
-    monkeypatch.setattr(people_service, "fetch_person_collaboration", _fake_fetch_person_collaboration)
+    monkeypatch.setattr(
+        people_service, "fetch_identity_coverage", _fake_fetch_identity_coverage
+    )
+    monkeypatch.setattr(
+        people_service, "fetch_person_metric_value", _fake_fetch_person_metric_value
+    )
+    monkeypatch.setattr(
+        people_service, "fetch_person_metric_series", _fake_fetch_person_metric_series
+    )
+    monkeypatch.setattr(
+        people_service, "fetch_person_work_mix", _fake_fetch_person_work_mix
+    )
+    monkeypatch.setattr(
+        people_service, "fetch_person_flow_breakdown", _fake_fetch_person_flow_breakdown
+    )
+    monkeypatch.setattr(
+        people_service, "fetch_person_collaboration", _fake_fetch_person_collaboration
+    )
 
     response = await people_service.build_person_summary_response(
         db_url="clickhouse://",
@@ -175,10 +203,16 @@ async def test_person_metric_sanitizes_non_finite_values(monkeypatch):
         return [{"label": "Review", "value": float("nan")}]
 
     monkeypatch.setattr(people_service, "clickhouse_client", _fake_clickhouse_client)
-    monkeypatch.setattr(people_service, "_resolve_identity_context", _fake_resolve_identity_context)
+    monkeypatch.setattr(
+        people_service, "_resolve_identity_context", _fake_resolve_identity_context
+    )
     monkeypatch.setattr(people_service, "load_identity_aliases", lambda: {})
-    monkeypatch.setattr(people_service, "fetch_person_metric_series", _fake_fetch_person_metric_series)
-    monkeypatch.setattr(people_service, "fetch_person_breakdown", _fake_fetch_person_breakdown)
+    monkeypatch.setattr(
+        people_service, "fetch_person_metric_series", _fake_fetch_person_metric_series
+    )
+    monkeypatch.setattr(
+        people_service, "fetch_person_breakdown", _fake_fetch_person_breakdown
+    )
 
     response = await people_service.build_person_metric_response(
         db_url="clickhouse://",

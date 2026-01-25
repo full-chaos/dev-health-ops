@@ -6,15 +6,24 @@ import asyncio
 import threading
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
-from dev_health_ops.connectors import GitHubConnector, GitLabConnector, BatchResult, match_repo_pattern
+from dev_health_ops import utils
+from dev_health_ops.connectors import (
+    GitHubConnector,
+    GitLabConnector,
+    BatchResult,
+    match_repo_pattern,
+)
 from dev_health_ops.models.git import GitCommit, GitCommitStat, get_repo_uuid_from_repo
-import dev_health_ops.utils
-import dev_health_ops.processors.github
-import dev_health_ops.processors.gitlab
+from dev_health_ops.processors import github as _github_processor
+from dev_health_ops.processors import gitlab as _gitlab_processor
+
+# Create namespace to match existing code references
+processors = SimpleNamespace(github=_github_processor, gitlab=_gitlab_processor)
 
 
 @pytest.mark.asyncio

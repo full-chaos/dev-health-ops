@@ -96,5 +96,7 @@ async def fetch_deployment(
           AND deployment_id = %(deployment_id)s
         LIMIT 1
     """
-    rows = await query_dicts(client, query, {"repo_id": repo_id, "deployment_id": deployment_id})
+    rows = await query_dicts(
+        client, query, {"repo_id": repo_id, "deployment_id": deployment_id}
+    )
     return rows[0] if rows else None

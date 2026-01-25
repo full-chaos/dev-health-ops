@@ -206,9 +206,7 @@ class TestTimezoneAwareDatetimes:
     def test_git_commit_stat_synced_at_is_timezone_aware(self):
         """Test that GitCommitStat.last_synced default is timezone-aware."""
         git_commit_stat = GitCommitStat()
-        default_func = git_commit_stat.__table__.columns[
-            "last_synced"
-        ].default.arg
+        default_func = git_commit_stat.__table__.columns["last_synced"].default.arg
         synced_at = default_func(MagicMock())
 
         assert synced_at.tzinfo is not None

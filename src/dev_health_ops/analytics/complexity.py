@@ -10,6 +10,7 @@ from radon.complexity import cc_visit
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class FileComplexity:
     file_path: str
@@ -20,6 +21,7 @@ class FileComplexity:
     cyclomatic_avg: float
     high_complexity_functions: int
     very_high_complexity_functions: int
+
 
 class ComplexityScanner:
     def __init__(self, config_path: Path):
@@ -54,7 +56,7 @@ class ComplexityScanner:
         for root, dirs, files in os.walk(repo_root):
             # Modify dirs in-place to skip hidden directories (e.g. .git)
             dirs[:] = [d for d in dirs if not d.startswith(".")]
-            
+
             for file in files:
                 full_path = Path(root) / file
                 rel_path = str(full_path.relative_to(repo_root))
@@ -74,43 +76,45 @@ class ComplexityScanner:
     def scan_git_ref(self, repo_root: Path, ref: str) -> List[FileComplexity]:
         """Scan files at a specific git reference/commit using GitPython."""
         import git
-        
+
         results = []
         try:
             repo = git.Repo(repo_root)
             commit = repo.commit(ref)
-            
+
             # Walk the tree of the commit
             # stack of (tree, parent_path)
             stack = [(commit.tree, "")]
-            
+
             while stack:
                 tree, parent = stack.pop()
                 for item in tree:
-                    if item.type == 'tree':
+                    if item.type == "tree":
                         # Directory
                         stack.append((item, os.path.join(parent, item.name)))
-                    elif item.type == 'blob':
+                    elif item.type == "blob":
                         # File
                         rel_path = os.path.join(parent, item.name)
                         if self.should_process(rel_path):
                             try:
                                 # Get content from blob
-                                content = item.data_stream.read().decode("utf-8", errors="replace")
+                                content = item.data_stream.read().decode(
+                                    "utf-8", errors="replace"
+                                )
                                 metrics = self._analyze_content(content, rel_path)
                                 if metrics:
                                     results.append(metrics)
                             except Exception as e:
-                                logger.warning(f"Failed to analyze blob {rel_path} at {ref}: {e}")
-                                
+                                logger.warning(
+                                    f"Failed to analyze blob {rel_path} at {ref}: {e}"
+                                )
+
         except Exception as e:
             logger.error(f"Failed to scan git ref {ref}: {e}")
-            
+
         return results
 
-    def scan_file_contents(
-        self, files: List[tuple[str, str]]
-    ) -> List[FileComplexity]:
+    def scan_file_contents(self, files: List[tuple[str, str]]) -> List[FileComplexity]:
         results = []
         for file_path, contents in files:
             if not self.should_process(file_path):
@@ -139,19 +143,23 @@ class ComplexityScanner:
 
     def _analyze_content(self, code: str, file_path: str) -> Optional[FileComplexity]:
         if not file_path.endswith(".py"):
-             return None
+            return None
 
         try:
             # Radon analysis
             blocks = cc_visit(code)
-            
+
             functions_count = len(blocks)
             cyclomatic_total = sum(b.complexity for b in blocks)
-            cyclomatic_avg = cyclomatic_total / functions_count if functions_count > 0 else 0.0
-            
+            cyclomatic_avg = (
+                cyclomatic_total / functions_count if functions_count > 0 else 0.0
+            )
+
             high_count = sum(1 for b in blocks if b.complexity > self.high_threshold)
-            very_high_count = sum(1 for b in blocks if b.complexity > self.very_high_threshold)
-            
+            very_high_count = sum(
+                1 for b in blocks if b.complexity > self.very_high_threshold
+            )
+
             # Count LOC
             loc = len(code.splitlines())
 
@@ -163,7 +171,7 @@ class ComplexityScanner:
                 cyclomatic_total=cyclomatic_total,
                 cyclomatic_avg=cyclomatic_avg,
                 high_complexity_functions=high_count,
-                very_high_complexity_functions=very_high_count
+                very_high_complexity_functions=very_high_count,
             )
         except Exception:
             return None

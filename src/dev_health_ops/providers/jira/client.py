@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from dev_health_ops.connectors.utils import retry_with_backoff
-from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitConfig, RateLimitGate
+from dev_health_ops.connectors.utils.rate_limit_queue import (
+    RateLimitConfig,
+    RateLimitGate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +19,9 @@ def _require_jira() -> Any:
         from jira import JIRA  # type: ignore
 
         return JIRA
-    except Exception as exc:  # pragma: no cover - exercised in docs/runtime, not unit tests
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - exercised in docs/runtime, not unit tests
         raise RuntimeError(
             "Jira support requires the 'jira' package. Install dependencies from requirements.txt."
         ) from exc
@@ -129,7 +134,9 @@ class JiraClient:
                 body = exc.response.text if exc.response is not None else ""
             except Exception:
                 body = ""
-            logger.debug("Jira request failed: %s %s params=%s body=%s", "GET", url, params, body)
+            logger.debug(
+                "Jira request failed: %s %s params=%s body=%s", "GET", url, params, body
+            )
             raise
 
     @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
@@ -179,7 +186,9 @@ class JiraClient:
         next_page_token: Optional[str] = None
 
         while True:
-            logger.debug("Jira search page startAt=%d maxResults=%d", start_at, self.per_page)
+            logger.debug(
+                "Jira search page startAt=%d maxResults=%d", start_at, self.per_page
+            )
             page = self.search_issues_page(
                 jql=jql,
                 start_at=start_at,
@@ -269,41 +278,44 @@ class JiraClient:
         """
         projects = []
         start_at = 0
-        max_results = 50 
+        max_results = 50
 
         while True:
             params = {
                 "startAt": start_at,
                 "maxResults": max_results,
-                "expand": "description,lead"
+                "expand": "description,lead",
             }
             # Note: project/search is the modern endpoint, but fallback to project if needed.
             # We'll try project/search first.
             try:
-                data = self._request_json(path="/rest/api/3/project/search", params=params)
+                data = self._request_json(
+                    path="/rest/api/3/project/search", params=params
+                )
                 page = data.get("values", [])
             except Exception:
                 # Fallback to non-paginated (or differently paginated) /project endpoint
-                # which usually returns all projects if the list is small, or 
-                # strictly follows deprecated behavior. 
+                # which usually returns all projects if the list is small, or
+                # strictly follows deprecated behavior.
                 # Ideally, we stick to /search. If it fails, we might just re-raise.
-                logger.warning("Jira project/search failed, trying /project (may be unpaginated)")
-                return self._request_json(path="/rest/api/3/project", params={}) # type: ignore
+                logger.warning(
+                    "Jira project/search failed, trying /project (may be unpaginated)"
+                )
+                return self._request_json(path="/rest/api/3/project", params={})  # type: ignore
 
             if not page:
                 break
-            
+
             projects.extend(page)
             if data.get("isLast"):
                 break
-            
+
             start_at += len(page)
             # Safety break for massive instances if isLast isn't reliable
             if len(page) < max_results:
                 break
-                
-        return projects
 
+        return projects
 
 
 def build_jira_jql(
@@ -323,7 +335,9 @@ def build_jira_jql(
         # Also include still-open items that may not have been updated recently, but existed within the window.
         # Prefer statusCategory over resolution: resolution can remain set on reopened issues, while statusCategory
         # is Jira's normalized open/done bucketing.
-        clauses.append(f"(updated >= '{updated_since}' OR (statusCategory != Done AND created <= '{active_until}'))")
+        clauses.append(
+            f"(updated >= '{updated_since}' OR (statusCategory != Done AND created <= '{active_until}'))"
+        )
     elif updated_since:
         clauses.append(f"updated >= '{updated_since}'")
     elif active_until:

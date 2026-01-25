@@ -58,24 +58,24 @@ def main():
     print("✓ write_work_unit_investment_quotes")
 
     print("Verifying data...")
-    inv_doc = sink.db["work_unit_investments"].find_one({
-        "work_unit_id": "verify-test-001"
-    })
+    inv_doc = sink.db["work_unit_investments"].find_one(
+        {"work_unit_id": "verify-test-001"}
+    )
     assert inv_doc is not None, "Investment document not found!"
     assert inv_doc["theme_distribution_json"] == {"feature": 0.6, "maintenance": 0.4}
     print(f"✓ Document _id: {inv_doc['_id']}")
 
-    quote_doc = sink.db["work_unit_investment_quotes"].find_one({
-        "work_unit_id": "verify-test-001"
-    })
+    quote_doc = sink.db["work_unit_investment_quotes"].find_one(
+        {"work_unit_id": "verify-test-001"}
+    )
     assert quote_doc is not None, "Quote document not found!"
     print("✓ Quote found")
 
     print("Cleaning up...")
     sink.db["work_unit_investments"].delete_many({"work_unit_id": "verify-test-001"})
-    sink.db["work_unit_investment_quotes"].delete_many({
-        "work_unit_id": "verify-test-001"
-    })
+    sink.db["work_unit_investment_quotes"].delete_many(
+        {"work_unit_id": "verify-test-001"}
+    )
     print("✓ Test data cleaned")
 
     sink.close()

@@ -20,8 +20,10 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dev_health_ops.connectors import GitHubConnector, GitLabConnector  # noqa: E402
-from dev_health_ops.connectors.exceptions import (APIException,  # noqa: E402
-                                   AuthenticationException)
+from dev_health_ops.connectors.exceptions import (  # noqa: E402
+    APIException,
+    AuthenticationException,
+)
 
 
 def test_github_private_repo():

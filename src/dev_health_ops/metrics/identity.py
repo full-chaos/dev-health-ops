@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from dev_health_ops.providers.identity import load_identity_resolver as _load_identity_resolver
+from dev_health_ops.providers.identity import (
+    load_identity_resolver as _load_identity_resolver,
+)
 from dev_health_ops.providers.teams import (
     load_team_resolver as _load_team_resolver,
     load_team_resolver_from_store,

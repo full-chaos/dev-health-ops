@@ -9,10 +9,15 @@ from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.metrics.job_daily import _normalize_sqlite_url
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.metrics.compute import compute_daily_metrics
-from dev_health_ops.metrics.compute_wellbeing import compute_team_wellbeing_metrics_daily
+from dev_health_ops.metrics.compute_wellbeing import (
+    compute_team_wellbeing_metrics_daily,
+)
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
 from dev_health_ops.metrics.compute_ic import compute_ic_metrics_daily
-from dev_health_ops.metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
+from dev_health_ops.metrics.quality import (
+    compute_rework_churn_ratio,
+    compute_single_owner_file_ratio,
+)
 from dev_health_ops.providers.teams import TeamResolver
 from dev_health_ops.storage import SQLAlchemyStore
 
@@ -93,16 +98,18 @@ async def test_synthetic_data_performance(tmp_path):
         commit = commit_by_hash.get(stat.commit_hash)
         if not commit:
             continue
-        commit_stat_rows.append({
-            "repo_id": stat.repo_id,
-            "commit_hash": stat.commit_hash,
-            "author_email": commit.author_email,
-            "author_name": commit.author_name,
-            "committer_when": commit.committer_when,
-            "file_path": stat.file_path,
-            "additions": stat.additions,
-            "deletions": stat.deletions,
-        })
+        commit_stat_rows.append(
+            {
+                "repo_id": stat.repo_id,
+                "commit_hash": stat.commit_hash,
+                "author_email": commit.author_email,
+                "author_name": commit.author_name,
+                "committer_when": commit.committer_when,
+                "file_path": stat.file_path,
+                "additions": stat.additions,
+                "deletions": stat.deletions,
+            }
+        )
 
     pull_request_rows = [
         {
@@ -135,7 +142,7 @@ async def test_synthetic_data_performance(tmp_path):
         for r in reviews
     ]
 
-    _pipeline_rows = [
+    _pipeline_rows = [  # noqa: F841
         {
             "repo_id": r.repo_id,
             "run_id": r.run_id,
@@ -147,7 +154,7 @@ async def test_synthetic_data_performance(tmp_path):
         for r in pipeline_runs
     ]
 
-    _deployment_rows = [
+    _deployment_rows = [  # noqa: F841
         {
             "repo_id": d.repo_id,
             "deployment_id": d.deployment_id,
@@ -162,7 +169,7 @@ async def test_synthetic_data_performance(tmp_path):
         for d in deployments
     ]
 
-    _incident_rows = [
+    _incident_rows = [  # noqa: F841
         {
             "repo_id": i.repo_id,
             "incident_id": i.incident_id,

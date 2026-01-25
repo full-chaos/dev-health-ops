@@ -41,7 +41,7 @@ class SyntheticDataGenerator:
         assigned_teams: Optional[List[Team]] = None,
     ):
         self.repo_name = repo_name
-        self.assigned_teams = assigned_teams or []
+        self.assigned_teams = assigned_teams
         if repo_id:
             self.repo_id = repo_id
         else:
@@ -71,6 +71,12 @@ class SyntheticDataGenerator:
         ]
         # Randomize authors order to vary team composition
         random.shuffle(self.authors)
+        self.unassigned_authors = [
+            ("Unaffiliated One", "unassigned1@example.com"),
+            ("Unaffiliated Two", "unassigned2@example.com"),
+            ("Unaffiliated Three", "unassigned3@example.com"),
+        ]
+        self.repo_authors = self._resolve_repo_authors()
         self.files = [
             "src/main.py",
             "src/utils.py",
@@ -114,6 +120,26 @@ class SyntheticDataGenerator:
             ".github/workflows/ci.yml",
             ".github/workflows/release.yml",
         ]
+
+    def _resolve_repo_authors(self) -> List[Tuple[str, str]]:
+        if self.assigned_teams is None:
+            return list(self.authors)
+        if self.assigned_teams:
+            member_identities = {
+                str(member).strip().lower()
+                for team in self.assigned_teams
+                for member in (team.members or [])
+            }
+            filtered = [
+                (name, email)
+                for name, email in self.authors
+                if str(email).strip().lower() in member_identities
+                or str(name).strip().lower() in member_identities
+            ]
+            if filtered:
+                return filtered
+            return list(self.authors)
+        return list(self.unassigned_authors)
 
     def get_team_assignment(self, count: int = 2) -> Dict[str, Any]:
         """
@@ -187,7 +213,7 @@ class SyntheticDataGenerator:
         while current_date <= end_date:
             daily_count = random.randint(1, commits_per_day * 2)
             for _ in range(daily_count):
-                author_name, author_email = random.choice(self.authors)
+                author_name, author_email = random.choice(self.repo_authors)
                 commit_time = current_date + timedelta(seconds=random.randint(0, 86400))
                 if commit_time > end_date:
                     continue
@@ -274,7 +300,7 @@ class SyntheticDataGenerator:
         ]
 
         for i in range(1, count + 1):
-            author_name, author_email = random.choice(self.authors)
+            author_name, author_email = random.choice(self.repo_authors)
             # PRs created over the last 60 days
             created_at = end_date - timedelta(
                 days=random.randint(0, 60), hours=random.randint(0, 23)
@@ -322,33 +348,37 @@ class SyntheticDataGenerator:
             if issue_ref is not None:
                 body += f"\nFixes #{issue_ref}\n"
 
-            prs.append({
-                "pr": GitPullRequest(
-                    repo_id=self.repo_id,
-                    number=i,
-                    title=title,
-                    body=body,
-                    state=state,
-                    author_name=author_name,
-                    author_email=author_email,
-                    created_at=created_at,
-                    merged_at=merged_at,
-                    closed_at=closed_at,
-                    head_branch=f"feature/{i}",
-                    base_branch="main",
-                    additions=random.randint(10, 500),
-                    deletions=random.randint(5, 200),
-                    changed_files=random.randint(1, 10),
-                    first_review_at=first_review_at,
-                    first_comment_at=first_comment_at,
-                    reviews_count=reviews_count,
-                    comments_count=comments_count,
-                    changes_requested_count=random.randint(0, 2),
-                ),
-                "reviews": self._generate_pr_reviews(i, first_review_at, reviews_count)
-                if first_review_at
-                else [],
-            })
+            prs.append(
+                {
+                    "pr": GitPullRequest(
+                        repo_id=self.repo_id,
+                        number=i,
+                        title=title,
+                        body=body,
+                        state=state,
+                        author_name=author_name,
+                        author_email=author_email,
+                        created_at=created_at,
+                        merged_at=merged_at,
+                        closed_at=closed_at,
+                        head_branch=f"feature/{i}",
+                        base_branch="main",
+                        additions=random.randint(10, 500),
+                        deletions=random.randint(5, 200),
+                        changed_files=random.randint(1, 10),
+                        first_review_at=first_review_at,
+                        first_comment_at=first_comment_at,
+                        reviews_count=reviews_count,
+                        comments_count=comments_count,
+                        changes_requested_count=random.randint(0, 2),
+                    ),
+                    "reviews": self._generate_pr_reviews(
+                        i, first_review_at, reviews_count
+                    )
+                    if first_review_at
+                    else [],
+                }
+            )
         return prs
 
     def generate_ci_pipeline_runs(
@@ -472,7 +502,7 @@ class SyntheticDataGenerator:
     ) -> List[GitPullRequestReview]:
         reviews = []
         for i in range(count):
-            reviewer_name, reviewer_email = random.choice(self.authors)
+            reviewer_name, reviewer_email = random.choice(self.repo_authors)
             review_time = first_review_at + timedelta(hours=random.randint(0, 24) * i)
             state = (
                 "APPROVED"
@@ -492,7 +522,10 @@ class SyntheticDataGenerator:
         return reviews
 
     def generate_complexity_metrics(self, days: int = 30) -> Dict[str, List[Any]]:
-        from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
+        from dev_health_ops.metrics.schemas import (
+            FileComplexitySnapshot,
+            RepoComplexityDaily,
+        )
 
         snapshots = []
         dailies = []
@@ -606,10 +639,12 @@ class SyntheticDataGenerator:
         end_date = datetime.now(timezone.utc).date()
 
         teams_to_use = []
-        if self.assigned_teams:
+        if self.assigned_teams is None:
+            teams_to_use = [("alpha", "Alpha Team")]
+        elif self.assigned_teams:
             teams_to_use = [(t.id, t.name) for t in self.assigned_teams]
         else:
-            teams_to_use = [("alpha", "Alpha Team")]
+            teams_to_use = [("unassigned", "Unassigned")]
 
         for i in range(days):
             day = end_date - timedelta(days=i)
@@ -653,10 +688,12 @@ class SyntheticDataGenerator:
         end_date = datetime.now(timezone.utc)
 
         teams_to_use = []
-        if self.assigned_teams:
+        if self.assigned_teams is None:
+            teams_to_use = [("alpha", "Alpha Team")]
+        elif self.assigned_teams:
             teams_to_use = [(t.id, t.name) for t in self.assigned_teams]
         else:
-            teams_to_use = [("alpha", "Alpha Team")]
+            teams_to_use = [("unassigned", "Unassigned")]
 
         for i in range(count):
             created_at = end_date - timedelta(days=random.randint(0, 60))
@@ -679,7 +716,7 @@ class SyntheticDataGenerator:
                     work_scope_id=self.repo_name,
                     team_id=team_id,
                     team_name=team_name,
-                    assignee=random.choice(self.authors)[0],
+                    assignee=random.choice(self.repo_authors)[0],
                     type=random.choice(["story", "bug", "task"]),
                     status="done",
                     created_at=created_at,
@@ -719,7 +756,7 @@ class SyntheticDataGenerator:
     ) -> List[UserMetricsDailyRecord]:
         records = []
         computed_at = datetime.now(timezone.utc)
-        for author_name, author_email in self.authors:
+        for author_name, author_email in self.repo_authors:
             team_id, team_name = self._resolve_team(
                 member_map, author_name, author_email
             )
@@ -781,7 +818,7 @@ class SyntheticDataGenerator:
     ) -> List[WorkItemUserMetricsDailyRecord]:
         records = []
         computed_at = datetime.now(timezone.utc)
-        for author_name, author_email in self.authors:
+        for author_name, author_email in self.repo_authors:
             team_id, team_name = self._resolve_team(
                 member_map, author_name, author_email
             )
@@ -941,8 +978,8 @@ class SyntheticDataGenerator:
                     started_at=epic_created_at + timedelta(days=1),
                     completed_at=None,
                     closed_at=None,
-                    reporter=random.choice(self.authors)[1],
-                    assignees=[random.choice(self.authors)[1]],
+                    reporter=random.choice(self.repo_authors)[1],
+                    assignees=[random.choice(self.repo_authors)[1]],
                     labels=[category, sub_category, "strategic"],
                     story_points=None,
                 )
@@ -955,7 +992,7 @@ class SyntheticDataGenerator:
 
         for i in range(total_items):
             project = random.choice(projects)
-            author_name, author_email = random.choice(self.authors)
+            author_name, author_email = random.choice(self.repo_authors)
 
             # Random date within range
             created_at = end_date - timedelta(
@@ -1304,15 +1341,17 @@ class SyntheticDataGenerator:
                     pr_commits.extend(random.sample(supplement, k=need))
 
             for c in pr_commits:
-                links.append({
-                    "repo_id": str(pr.repo_id),
-                    "pr_number": pr.number,
-                    "commit_hash": c.hash,
-                    "confidence": 1.0,
-                    "provenance": "synthetic",
-                    "evidence": "generated_fixture",
-                    "last_synced": synced_at,
-                })
+                links.append(
+                    {
+                        "repo_id": str(pr.repo_id),
+                        "pr_number": pr.number,
+                        "commit_hash": c.hash,
+                        "confidence": 1.0,
+                        "provenance": "synthetic",
+                        "evidence": "generated_fixture",
+                        "last_synced": synced_at,
+                    }
+                )
 
         return links
 
@@ -1368,15 +1407,17 @@ class SyntheticDataGenerator:
                 assigned.add(random.choice(list(popular_prs)))
 
             for pr_number in sorted(assigned):
-                links.append({
-                    "repo_id": str(self.repo_id),
-                    "work_item_id": str(wi.work_item_id),
-                    "pr_number": int(pr_number),
-                    "confidence": 1.0,
-                    "provenance": "synthetic",
-                    "evidence": "generated_fixture",
-                    "last_synced": synced_at,
-                })
+                links.append(
+                    {
+                        "repo_id": str(self.repo_id),
+                        "work_item_id": str(wi.work_item_id),
+                        "pr_number": int(pr_number),
+                        "confidence": 1.0,
+                        "provenance": "synthetic",
+                        "evidence": "generated_fixture",
+                        "last_synced": synced_at,
+                    }
+                )
 
         return links
 

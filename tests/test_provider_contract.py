@@ -150,9 +150,7 @@ class TestJiraProvider:
         assert caps.priority is True
 
     @patch("providers.jira.client.JiraClient.from_env")
-    def test_jira_provider_ingest_returns_batch(
-        self, mock_from_env: MagicMock
-    ) -> None:
+    def test_jira_provider_ingest_returns_batch(self, mock_from_env: MagicMock) -> None:
         """Verify JiraProvider.ingest returns a ProviderBatch."""
         # Mock JiraClient.from_env
         mock_client = MagicMock()
@@ -213,9 +211,7 @@ class TestJiraProvider:
         mock_client.close.assert_called_once()
 
     @patch("providers.jira.client.JiraClient.from_env")
-    def test_jira_provider_respects_limit(
-        self, mock_from_env: MagicMock
-    ) -> None:
+    def test_jira_provider_respects_limit(self, mock_from_env: MagicMock) -> None:
         """Verify JiraProvider respects the limit in IngestionContext."""
         mock_client = MagicMock()
         mock_from_env.return_value = mock_client

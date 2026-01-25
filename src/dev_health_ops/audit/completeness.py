@@ -468,15 +468,17 @@ def format_completeness_table(report: Dict[str, Any]) -> str:
         work_items = entry.get("work_items") or {}
         transitions = entry.get("transitions") or {}
         issues = entry.get("issues") or []
-        provider_rows.append([
-            provider,
-            str(work_items.get("count", 0)),
-            _format_dt(work_items.get("last_synced")),
-            str(transitions.get("count", 0)),
-            _format_dt(transitions.get("last_synced")),
-            "ok" if entry.get("ok") else "missing",
-            ", ".join(issues) if issues else "-",
-        ])
+        provider_rows.append(
+            [
+                provider,
+                str(work_items.get("count", 0)),
+                _format_dt(work_items.get("last_synced")),
+                str(transitions.get("count", 0)),
+                _format_dt(transitions.get("last_synced")),
+                "ok" if entry.get("ok") else "missing",
+                ", ".join(issues) if issues else "-",
+            ]
+        )
 
     table_sections = [
         f"Completeness window: last {days} days ({start} to {end})",
@@ -508,31 +510,35 @@ def format_completeness_table(report: Dict[str, Any]) -> str:
         commit_ok = _stat_ok(source_entry.get("git_commits"))
         pr_ok = _stat_ok(source_entry.get("git_pull_requests"))
         git_status = "ok" if (commit_ok or pr_ok) else "missing"
-        git_rows.append([
-            source,
-            _cell("git_commits"),
-            _cell("git_pull_requests"),
-            _cell("deployments"),
-            _cell("incidents"),
-            _cell("ci_pipeline_runs"),
-            git_status,
-        ])
-
-    table_sections.extend([
-        "",
-        _render_table(
+        git_rows.append(
             [
-                "source",
-                "commits",
-                "pull_requests",
-                "deployments",
-                "incidents",
-                "ci_pipeline_runs",
-                "status",
-            ],
-            git_rows,
-        ),
-    ])
+                source,
+                _cell("git_commits"),
+                _cell("git_pull_requests"),
+                _cell("deployments"),
+                _cell("incidents"),
+                _cell("ci_pipeline_runs"),
+                git_status,
+            ]
+        )
+
+    table_sections.extend(
+        [
+            "",
+            _render_table(
+                [
+                    "source",
+                    "commits",
+                    "pull_requests",
+                    "deployments",
+                    "incidents",
+                    "ci_pipeline_runs",
+                    "status",
+                ],
+                git_rows,
+            ),
+        ]
+    )
 
     overall = "ok" if report.get("overall_ok") else "missing"
     table_sections.append("")
@@ -559,7 +565,6 @@ def completeness_failed(report: Dict[str, Any]) -> bool:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-
     audit_completeness = audit_subparsers.add_parser(
         "completeness", help="Audit data completeness and freshness."
     )

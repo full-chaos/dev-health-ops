@@ -329,7 +329,9 @@ def _person_model(identity: str, aliases: Iterable[str]) -> PersonSummaryPerson:
     )
 
 
-def _metric_link(person_id: str, metric: str, range_days: int, compare_days: int) -> str:
+def _metric_link(
+    person_id: str, metric: str, range_days: int, compare_days: int
+) -> str:
     return (
         f"/api/v1/people/{person_id}/metric"
         f"?metric={metric}&range_days={range_days}&compare_days={compare_days}"
@@ -358,17 +360,11 @@ def _narrative_for_deltas(
             direction = "held steady"
 
         if delta.metric == "review_latency":
-            text = (
-                f"Review latency {direction} over the last {range_days} days."
-            )
+            text = f"Review latency {direction} over the last {range_days} days."
         elif delta.metric == "cycle_time":
-            text = (
-                f"Cycle time {direction} over the last {range_days} days."
-            )
+            text = f"Cycle time {direction} over the last {range_days} days."
         elif delta.metric == "throughput":
-            text = (
-                f"Throughput {direction} compared to the prior period."
-            )
+            text = f"Throughput {direction} compared to the prior period."
         elif delta.metric == "churn":
             text = f"Code churn {direction} in this period."
         elif delta.metric == "wip_overlap":
@@ -451,7 +447,9 @@ async def search_people_response(
         last_seen = row.get("last_seen")
         active = True
         if last_seen:
-            seen_day = last_seen.date() if isinstance(last_seen, datetime) else last_seen
+            seen_day = (
+                last_seen.date() if isinstance(last_seen, datetime) else last_seen
+            )
             if isinstance(seen_day, date):
                 active = (today - seen_day).days <= 90
         results.append(
@@ -592,7 +590,10 @@ async def build_person_summary_response(
                 review_load.append(item)
 
     narrative = _narrative_for_deltas(
-        deltas, person_id=person.person_id, range_days=range_days, compare_days=compare_days
+        deltas,
+        person_id=person.person_id,
+        range_days=range_days,
+        compare_days=compare_days,
     )
 
     return PersonSummaryResponse(
@@ -681,7 +682,9 @@ async def build_person_metric_response(
             breakdowns[key] = [
                 MetricBreakdownItem(
                     label=str(row.get("label") or ""),
-                    value=_safe_transform(detail["transform"], _safe_float(row.get("value"))),
+                    value=_safe_transform(
+                        detail["transform"], _safe_float(row.get("value"))
+                    ),
                 )
                 for row in rows
             ]
@@ -746,7 +749,9 @@ async def build_person_drilldown_prs_response(
                 created_at=row.get("created_at"),
                 merged_at=row.get("merged_at"),
                 first_review_at=row.get("first_review_at"),
-                review_latency_hours=_safe_optional_float(row.get("review_latency_hours")),
+                review_latency_hours=_safe_optional_float(
+                    row.get("review_latency_hours")
+                ),
                 link=None,
             )
         )

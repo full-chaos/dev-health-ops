@@ -102,4 +102,3 @@ def load_identity_resolver(path: Optional[Path] = None) -> IdentityResolver:
             alias_to_canonical[alias_norm] = canonical_norm
 
     return IdentityResolver(alias_to_canonical=alias_to_canonical)
-

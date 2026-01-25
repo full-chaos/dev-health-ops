@@ -112,9 +112,9 @@ def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
             Dict[str, Any],
             {
                 "count": len(structural),
-                "types": list({
-                    str(item.get("type", "unknown")) for item in structural
-                }),
+                "types": list(
+                    {str(item.get("type", "unknown")) for item in structural}
+                ),
             },
         )
         # Include graph density if present

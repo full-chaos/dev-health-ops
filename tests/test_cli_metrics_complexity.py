@@ -3,7 +3,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-
 def _make_ns(**overrides):
     data = {
         "repo_path": ".",

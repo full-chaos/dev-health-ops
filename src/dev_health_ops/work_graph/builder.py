@@ -705,7 +705,7 @@ class WorkGraphBuilder:
 
             pr_number = best[0]
             pr_created_at = best[1]
-            
+
             # Use max(updated_at, pr_created_at) as event time
             event_ts = pr_created_at
             if updated_at and updated_at > event_ts:
@@ -713,7 +713,7 @@ class WorkGraphBuilder:
             # Ensure timezone
             if event_ts and event_ts.tzinfo is None:
                 event_ts = event_ts.replace(tzinfo=timezone.utc)
-            
+
             pr_id = generate_pr_id(uuid.UUID(repo_key), pr_number)
             edge_id = generate_edge_id(
                 NodeType.PR,
@@ -759,7 +759,9 @@ class WorkGraphBuilder:
         return count
 
     def _build_issue_pr_edges_from_fast_path(self) -> Tuple[Set[Tuple[str, int]], int]:
-        logger.info("Building issue->PR edges from dev_health_ops.work_graph_issue_pr...")
+        logger.info(
+            "Building issue->PR edges from dev_health_ops.work_graph_issue_pr..."
+        )
 
         query = """
         SELECT
@@ -797,7 +799,16 @@ class WorkGraphBuilder:
         edges: List[WorkGraphEdge] = []
         links: Set[Tuple[str, int]] = set()
         for row in rows:
-            repo_id, work_item_id, pr_number, confidence, provenance, evidence, _synced, created_at = row
+            (
+                repo_id,
+                work_item_id,
+                pr_number,
+                confidence,
+                provenance,
+                evidence,
+                _synced,
+                created_at,
+            ) = row
             repo_uuid = uuid.UUID(str(repo_id))
             pr_id = generate_pr_id(repo_uuid, int(pr_number))
             edge_id = generate_edge_id(
@@ -807,7 +818,7 @@ class WorkGraphBuilder:
                 NodeType.ISSUE,
                 str(work_item_id),
             )
-            
+
             # Ensure timezone
             event_ts = created_at
             if event_ts and event_ts.tzinfo is None:
@@ -839,7 +850,9 @@ class WorkGraphBuilder:
         return links, count
 
     def _build_pr_commit_edges_from_fast_path(self) -> int:
-        logger.info("Building PR->commit edges from dev_health_ops.work_graph_pr_commit...")
+        logger.info(
+            "Building PR->commit edges from dev_health_ops.work_graph_pr_commit..."
+        )
 
         query = """
         SELECT
@@ -869,7 +882,7 @@ class WorkGraphBuilder:
             query += " WHERE " + " AND ".join(where_parts)
 
         # Optimize for distributed join if needed, but local join is fine here
-        
+
         result = self.client.query(query)
         rows = result.result_rows or []
         logger.info("Found %d rows in work_graph_pr_commit", len(rows))
@@ -878,7 +891,16 @@ class WorkGraphBuilder:
 
         edges: List[WorkGraphEdge] = []
         for row in rows:
-            repo_id, pr_number, commit_hash, confidence, provenance, evidence, _synced, author_when = row
+            (
+                repo_id,
+                pr_number,
+                commit_hash,
+                confidence,
+                provenance,
+                evidence,
+                _synced,
+                author_when,
+            ) = row
             repo_uuid = uuid.UUID(str(repo_id))
             pr_id = generate_pr_id(repo_uuid, int(pr_number))
             commit_id = generate_commit_id(repo_uuid, str(commit_hash))
@@ -889,7 +911,7 @@ class WorkGraphBuilder:
                 NodeType.COMMIT,
                 commit_id,
             )
-            
+
             # Ensure timezone
             event_ts = author_when
             if event_ts and event_ts.tzinfo is None:

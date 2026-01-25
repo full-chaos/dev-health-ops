@@ -49,7 +49,9 @@ def _frame(
 
 def _parse_repo_entity(entity_id: str) -> Tuple[str, str]:
     if ":" not in entity_id:
-        raise HTTPException(status_code=400, detail="Entity id must include repo_id prefix")
+        raise HTTPException(
+            status_code=400, detail="Entity id must include repo_id prefix"
+        )
     repo_id, item_id = entity_id.split(":", 1)
     if not parse_uuid(repo_id):
         raise HTTPException(status_code=400, detail="Invalid repo id")
@@ -131,13 +133,17 @@ async def build_flame_response(
             try:
                 number = int(suffix)
             except Exception as exc:
-                raise HTTPException(status_code=400, detail="PR id must be numeric") from exc
+                raise HTTPException(
+                    status_code=400, detail="PR id must be numeric"
+                ) from exc
 
             pr = await fetch_pull_request(client, repo_id=repo_id, number=number)
             if not pr:
                 raise HTTPException(status_code=404, detail="PR not found")
 
-            reviews = await fetch_pull_request_reviews(client, repo_id=repo_id, number=number)
+            reviews = await fetch_pull_request_reviews(
+                client, repo_id=repo_id, number=number
+            )
 
             start = pr.get("created_at")
             end = pr.get("merged_at") or pr.get("closed_at") or _now_like(start)
@@ -219,7 +225,9 @@ async def build_flame_response(
 
             start = issue.get("created_at")
             if start is None:
-                raise HTTPException(status_code=404, detail="Issue timeline unavailable")
+                raise HTTPException(
+                    status_code=404, detail="Issue timeline unavailable"
+                )
             end = issue.get("completed_at") or _now_like(start)
 
             root_id = f"issue:{entity_id}"
@@ -283,10 +291,20 @@ async def build_flame_response(
             if not deployment:
                 raise HTTPException(status_code=404, detail="Deployment not found")
 
-            start = deployment.get("started_at") or deployment.get("merged_at") or deployment.get("deployed_at")
+            start = (
+                deployment.get("started_at")
+                or deployment.get("merged_at")
+                or deployment.get("deployed_at")
+            )
             if start is None:
-                raise HTTPException(status_code=404, detail="Deployment timeline unavailable")
-            end = deployment.get("finished_at") or deployment.get("deployed_at") or _now_like(start)
+                raise HTTPException(
+                    status_code=404, detail="Deployment timeline unavailable"
+                )
+            end = (
+                deployment.get("finished_at")
+                or deployment.get("deployed_at")
+                or _now_like(start)
+            )
 
             root_id = f"deploy:{repo_id}:{deployment_id}"
             frames: List[FlameFrame] = []
@@ -329,7 +347,12 @@ async def build_flame_response(
                 frames.append(pipeline)
 
             deployed_at = deployment.get("deployed_at")
-            if pipeline and deployed_at and deployed_at > pipeline.start and end > deployed_at:
+            if (
+                pipeline
+                and deployed_at
+                and deployed_at > pipeline.start
+                and end > deployed_at
+            ):
                 deploy = _frame(
                     frame_id=f"{root_id}:deploy",
                     parent_id=pipeline.id,

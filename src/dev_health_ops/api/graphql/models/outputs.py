@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date  # noqa: F401 - used in type annotations
 from enum import Enum
 from typing import List, Optional
 

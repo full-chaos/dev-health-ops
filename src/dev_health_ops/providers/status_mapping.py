@@ -7,7 +7,11 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 import yaml
 
-from dev_health_ops.models.work_items import WorkItemProvider, WorkItemStatusCategory, WorkItemType
+from dev_health_ops.models.work_items import (
+    WorkItemProvider,
+    WorkItemStatusCategory,
+    WorkItemType,
+)
 
 DEFAULT_STATUS_MAPPING_PATH = Path("src/dev_health_ops/config/status_mapping.yaml")
 
@@ -110,7 +114,16 @@ class StatusMapping:
                 matched_types.add(mapped)
         if matched_types:
             # Bug/incident are most important for quality rollups.
-            for candidate in ["incident", "bug", "epic", "story", "task", "chore", "issue", "unknown"]:
+            for candidate in [
+                "incident",
+                "bug",
+                "epic",
+                "story",
+                "task",
+                "chore",
+                "issue",
+                "unknown",
+            ]:
                 if candidate in matched_types:
                     return candidate  # type: ignore[return-value]
 
@@ -162,7 +175,9 @@ def load_status_mapping(path: Optional[Path] = None) -> StatusMapping:
         # Ensure type is correct at runtime.
         return {k: v for k, v in indexed.items()}
 
-    def _build_label_status_index(provider_name: str) -> Dict[str, WorkItemStatusCategory]:
+    def _build_label_status_index(
+        provider_name: str,
+    ) -> Dict[str, WorkItemStatusCategory]:
         indexed: Dict[str, WorkItemStatusCategory] = {}
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("status_labels") or {}).items():

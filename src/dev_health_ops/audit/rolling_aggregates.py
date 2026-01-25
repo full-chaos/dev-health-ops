@@ -93,9 +93,7 @@ def _fetch_table_presence_clickhouse(
     return {table: table in present for table in table_list}
 
 
-def _fetch_table_presence_sqlite(
-    engine: Any, tables: Iterable[str]
-) -> Dict[str, bool]:
+def _fetch_table_presence_sqlite(engine: Any, tables: Iterable[str]) -> Dict[str, bool]:
     table_list = list(tables)
     if not table_list:
         return {}
@@ -472,9 +470,7 @@ def _populate_table_report(
         drift_count = stats.get("drift_count", 0)
         group_count = stats.get("group_count", 0)
         if drift_count:
-            entry["issues"].append(
-                f"sum:{metric} drift={drift_count}/{group_count}"
-            )
+            entry["issues"].append(f"sum:{metric} drift={drift_count}/{group_count}")
 
     for metric in avg_metrics:
         if backend == "clickhouse":

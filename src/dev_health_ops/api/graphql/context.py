@@ -10,7 +10,13 @@ import uuid
 from strawberry.fastapi import BaseContext
 
 if TYPE_CHECKING:
-    from .loaders import DataLoaders, TeamLoader, TeamByNameLoader, RepoLoader, RepoByNameLoader
+    from .loaders import (
+        DataLoaders,
+        TeamLoader,
+        TeamByNameLoader,
+        RepoLoader,
+        RepoByNameLoader,
+    )
 
 
 @dataclass

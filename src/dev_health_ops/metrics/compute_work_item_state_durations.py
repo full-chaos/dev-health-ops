@@ -5,7 +5,11 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from dev_health_ops.metrics.schemas import WorkItemStateDurationDailyRecord
-from dev_health_ops.models.work_items import WorkItem, WorkItemStatusCategory, WorkItemStatusTransition
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemStatusCategory,
+    WorkItemStatusTransition,
+)
 from dev_health_ops.providers.teams import TeamResolver
 
 

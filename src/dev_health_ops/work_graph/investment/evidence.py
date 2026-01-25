@@ -133,11 +133,7 @@ def compute_evidence_quality(
     confidence = _edge_confidence(edges_list)
     structural_density = clamp((density + confidence) / 2.0)
 
-    value = (
-        0.4 * text_score
-        + 0.3 * agreement_score
-        + 0.3 * structural_density
-    )
+    value = 0.4 * text_score + 0.3 * agreement_score + 0.3 * structural_density
     return clamp(value)
 
 
@@ -220,7 +216,9 @@ def build_text_bundle(
     text_source_count = sum(
         1 for texts in source_texts.values() for text in texts.values() if text
     )
-    text_char_count = sum(len(text) for texts in source_texts.values() for text in texts.values())
+    text_char_count = sum(
+        len(text) for texts in source_texts.values() for text in texts.values()
+    )
 
     input_payload = {
         "work_unit_id": work_unit_id,

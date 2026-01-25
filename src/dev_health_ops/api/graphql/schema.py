@@ -109,7 +109,9 @@ class Query:
 
         return HR(
             freshness=Freshness(
-                last_ingested_at=str(data["freshness"]["last_ingested_at"]) if data["freshness"]["last_ingested_at"] else None,
+                last_ingested_at=str(data["freshness"]["last_ingested_at"])
+                if data["freshness"]["last_ingested_at"]
+                else None,
             ),
             deltas=[
                 MetricDelta(

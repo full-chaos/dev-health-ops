@@ -74,65 +74,85 @@ class MongoMetricsSink(BaseMetricsSink):
         self.db["teams"].create_index([("id", 1)], unique=True)
         self.db["repo_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["user_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
-        self.db["user_metrics_daily"].create_index([
-            ("repo_id", 1),
-            ("author_email", 1),
-            ("day", 1),
-        ])
+        self.db["user_metrics_daily"].create_index(
+            [
+                ("repo_id", 1),
+                ("author_email", 1),
+                ("day", 1),
+            ]
+        )
         self.db["commit_metrics"].create_index([("repo_id", 1), ("day", 1)])
-        self.db["commit_metrics"].create_index([
-            ("repo_id", 1),
-            ("author_email", 1),
-            ("day", 1),
-        ])
+        self.db["commit_metrics"].create_index(
+            [
+                ("repo_id", 1),
+                ("author_email", 1),
+                ("day", 1),
+            ]
+        )
         self.db["team_metrics_daily"].create_index([("team_id", 1), ("day", 1)])
         self.db["work_item_metrics_daily"].create_index([("provider", 1), ("day", 1)])
-        self.db["work_item_metrics_daily"].create_index([
-            ("provider", 1),
-            ("work_scope_id", 1),
-            ("day", 1),
-        ])
-        self.db["work_item_metrics_daily"].create_index([
-            ("provider", 1),
-            ("work_scope_id", 1),
-            ("team_id", 1),
-            ("day", 1),
-        ])
-        self.db["work_item_user_metrics_daily"].create_index([
-            ("provider", 1),
-            ("work_scope_id", 1),
-            ("user_identity", 1),
-            ("day", 1),
-        ])
+        self.db["work_item_metrics_daily"].create_index(
+            [
+                ("provider", 1),
+                ("work_scope_id", 1),
+                ("day", 1),
+            ]
+        )
+        self.db["work_item_metrics_daily"].create_index(
+            [
+                ("provider", 1),
+                ("work_scope_id", 1),
+                ("team_id", 1),
+                ("day", 1),
+            ]
+        )
+        self.db["work_item_user_metrics_daily"].create_index(
+            [
+                ("provider", 1),
+                ("work_scope_id", 1),
+                ("user_identity", 1),
+                ("day", 1),
+            ]
+        )
         self.db["work_item_cycle_times"].create_index([("provider", 1), ("day", 1)])
-        self.db["work_item_state_durations_daily"].create_index([
-            ("provider", 1),
-            ("day", 1),
-        ])
-        self.db["work_item_state_durations_daily"].create_index([
-            ("provider", 1),
-            ("work_scope_id", 1),
-            ("day", 1),
-        ])
-        self.db["work_item_state_durations_daily"].create_index([
-            ("provider", 1),
-            ("work_scope_id", 1),
-            ("team_id", 1),
-            ("day", 1),
-        ])
-        self.db["work_item_state_durations_daily"].create_index([
-            ("provider", 1),
-            ("work_scope_id", 1),
-            ("team_id", 1),
-            ("status", 1),
-            ("day", 1),
-        ])
-        self.db["review_edges_daily"].create_index([
-            ("repo_id", 1),
-            ("day", 1),
-            ("reviewer", 1),
-            ("author", 1),
-        ])
+        self.db["work_item_state_durations_daily"].create_index(
+            [
+                ("provider", 1),
+                ("day", 1),
+            ]
+        )
+        self.db["work_item_state_durations_daily"].create_index(
+            [
+                ("provider", 1),
+                ("work_scope_id", 1),
+                ("day", 1),
+            ]
+        )
+        self.db["work_item_state_durations_daily"].create_index(
+            [
+                ("provider", 1),
+                ("work_scope_id", 1),
+                ("team_id", 1),
+                ("day", 1),
+            ]
+        )
+        self.db["work_item_state_durations_daily"].create_index(
+            [
+                ("provider", 1),
+                ("work_scope_id", 1),
+                ("team_id", 1),
+                ("status", 1),
+                ("day", 1),
+            ]
+        )
+        self.db["review_edges_daily"].create_index(
+            [
+                ("repo_id", 1),
+                ("day", 1),
+                ("reviewer", 1),
+                ("author", 1),
+            ]
+        )
         self.db["cicd_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["deploy_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["incident_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
@@ -140,41 +160,53 @@ class MongoMetricsSink(BaseMetricsSink):
             [("repo_id", 1), ("map_name", 1), ("as_of_day", 1), ("identity_id", 1)],
             unique=True,
         )
-        self.db["file_complexity_snapshots"].create_index([
-            ("repo_id", 1),
-            ("as_of_day", 1),
-        ])
+        self.db["file_complexity_snapshots"].create_index(
+            [
+                ("repo_id", 1),
+                ("as_of_day", 1),
+            ]
+        )
         self.db["repo_complexity_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["file_hotspot_daily"].create_index([("repo_id", 1), ("day", 1)])
-        self.db["investment_classifications_daily"].create_index([
-            ("repo_id", 1),
-            ("day", 1),
-        ])
+        self.db["investment_classifications_daily"].create_index(
+            [
+                ("repo_id", 1),
+                ("day", 1),
+            ]
+        )
         self.db["investment_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["issue_type_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         # Work unit investment indexes
-        self.db["work_unit_investments"].create_index([
-            ("work_unit_id", 1),
-            ("categorization_run_id", 1),
-        ])
-        self.db["work_unit_investments"].create_index([
-            ("repo_id", 1),
-            ("computed_at", -1),
-        ])
-        self.db["work_unit_investment_quotes"].create_index([
-            ("work_unit_id", 1),
-        ])
+        self.db["work_unit_investments"].create_index(
+            [
+                ("work_unit_id", 1),
+                ("categorization_run_id", 1),
+            ]
+        )
+        self.db["work_unit_investments"].create_index(
+            [
+                ("repo_id", 1),
+                ("computed_at", -1),
+            ]
+        )
+        self.db["work_unit_investment_quotes"].create_index(
+            [
+                ("work_unit_id", 1),
+            ]
+        )
 
     async def get_all_teams(self) -> List[Dict[str, Any]]:
         """Fetch all teams from MongoDB for identity resolution."""
         rows = list(self.db["teams"].find({}, {"_id": 0}))
         teams: List[Dict[str, Any]] = []
         for row in rows:
-            teams.append({
-                "id": row.get("id") or row.get("team_id"),
-                "name": row.get("name") or row.get("team_name"),
-                "members": row.get("members") or [],
-            })
+            teams.append(
+                {
+                    "id": row.get("id") or row.get("team_id"),
+                    "name": row.get("name") or row.get("team_name"),
+                    "members": row.get("members") or [],
+                }
+            )
         return teams
 
     async def insert_teams(self, teams: List[Any]) -> None:

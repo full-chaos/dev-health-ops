@@ -44,6 +44,7 @@ class TestMaxWorkersConfiguration:
             max_workers = int(os.getenv("MAX_WORKERS", "4"))
             assert max_workers == 8
 
+
 class TestCommitProcessing:
     """Test git commit processing."""
 
@@ -107,6 +108,7 @@ class TestCommitStatsProcessing:
             await process_git_commit_stats(mock_repo, mock_store)
             # Verify the function was called and processing occurred
             assert mock_logging.info.call_count >= 1
+
 
 class TestConnectionPooling:
     """Test connection pooling configuration."""

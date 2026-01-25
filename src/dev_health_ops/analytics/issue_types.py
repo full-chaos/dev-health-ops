@@ -6,20 +6,23 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+
 class IssueTypeNormalizer:
     def __init__(self, config_path: Path):
         self.mapping = self._load_config(config_path)
 
     def _load_config(self, path: Path) -> Dict:
         if not path.exists():
-            logger.warning(f"Issue type mapping config not found at {path}, using defaults")
+            logger.warning(
+                f"Issue type mapping config not found at {path}, using defaults"
+            )
             return {}
         with open(path, "r") as f:
             return yaml.safe_load(f)
 
     def normalize(self, provider: str, raw_type: str, labels: list[str]) -> str:
         provider = provider.lower()
-        
+
         # Jira: direct mapping from raw_type
         if provider == "jira":
             mapping = self.mapping.get("jira", {})

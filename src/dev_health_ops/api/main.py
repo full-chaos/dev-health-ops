@@ -240,14 +240,18 @@ async def keep_alive_wrapper(coro):
             yield " "
     except Exception:
         logger.exception("Streaming error in keep_alive_wrapper")
-        yield json.dumps({
-            "error": "Streaming error",
-            "detail": "An internal error has occurred.",
-        })
-        yield json.dumps({
-            "error": "Streaming error",
-            "detail": "An internal streaming error occurred.",
-        })
+        yield json.dumps(
+            {
+                "error": "Streaming error",
+                "detail": "An internal error has occurred.",
+            }
+        )
+        yield json.dumps(
+            {
+                "error": "Streaming error",
+                "detail": "An internal streaming error occurred.",
+            }
+        )
 
 
 @app.get("/api/v1/meta", response_model=MetaResponse)

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from dev_health_ops.work_graph.investment.llm_schema import parse_llm_json, validate_llm_payload
+from dev_health_ops.work_graph.investment.llm_schema import (
+    parse_llm_json,
+    validate_llm_payload,
+)
 from dev_health_ops.work_graph.investment.taxonomy import SUBCATEGORIES
 
 
@@ -16,7 +19,12 @@ def test_rejects_unknown_keys_and_extra_keys():
     payload = {
         "subcategories": {"unknown.category": 1.0},
         "evidence_quotes": [
-            {"quote": "Fix login outage", "source": "issue", "id": "jira:ABC-1", "extra": "x"}
+            {
+                "quote": "Fix login outage",
+                "source": "issue",
+                "id": "jira:ABC-1",
+                "extra": "x",
+            }
         ],
         "uncertainty": "Limited evidence.",
         "extra": "nope",

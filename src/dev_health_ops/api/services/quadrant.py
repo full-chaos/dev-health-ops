@@ -451,7 +451,9 @@ async def build_quadrant_response(
     group_scope = _group_scope(normalized_scope)
     filter_scope = "developer" if normalized_scope == "person" else normalized_scope
     if group_scope == "person" and not scope_id:
-        raise HTTPException(status_code=400, detail="Individual quadrants require a person id")
+        raise HTTPException(
+            status_code=400, detail="Individual quadrants require a person id"
+        )
 
     if bucket not in {"week", "month"}:
         raise HTTPException(status_code=400, detail="Bucket must be week or month")

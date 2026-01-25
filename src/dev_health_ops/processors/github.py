@@ -23,7 +23,11 @@ from dev_health_ops.utils import (
 )
 
 if CONNECTORS_AVAILABLE:
-    from dev_health_ops.connectors import BatchResult, GitHubConnector, ConnectorException
+    from dev_health_ops.connectors import (
+        BatchResult,
+        GitHubConnector,
+        ConnectorException,
+    )
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
     from github import RateLimitExceededException
@@ -232,6 +236,7 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
     if not hasattr(gh_repo, "get_workflow_runs"):
         if not hasattr(gh_repo, "get_workflows"):
             return runs
+
     def _coerce_datetime(value):
         if isinstance(value, datetime):
             return value
@@ -241,6 +246,7 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
             except Exception:
                 return None
         return None
+
     try:
         if hasattr(gh_repo, "get_workflow_runs"):
             raw_runs = []
@@ -319,7 +325,9 @@ def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
     if not hasattr(gh_repo, "get_issues"):
         return incidents
     try:
-        raw_issues = list(gh_repo.get_issues(state="all", labels=["incident"])[:max_issues])
+        raw_issues = list(
+            gh_repo.get_issues(state="all", labels=["incident"])[:max_issues]
+        )
     except Exception as exc:
         logging.debug("Failed to fetch incident issues: %s", exc)
         return incidents
@@ -624,7 +632,9 @@ async def _backfill_github_missing_data(
         return
 
     needs_files = not await store.has_any_git_files(db_repo.id)
-    needs_commit_stats = False if blame_only else not await store.has_any_git_commit_stats(db_repo.id)
+    needs_commit_stats = (
+        False if blame_only else not await store.has_any_git_commit_stats(db_repo.id)
+    )
     needs_blame = not await store.has_any_git_blame(db_repo.id)
 
     if not (needs_files or needs_commit_stats or needs_blame):

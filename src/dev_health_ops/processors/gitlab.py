@@ -14,10 +14,19 @@ from dev_health_ops.models.git import (
     Deployment,
     Incident,
 )
-from dev_health_ops.utils import AGGREGATE_STATS_MARKER, is_skippable, CONNECTORS_AVAILABLE, BATCH_SIZE
+from dev_health_ops.utils import (
+    AGGREGATE_STATS_MARKER,
+    is_skippable,
+    CONNECTORS_AVAILABLE,
+    BATCH_SIZE,
+)
 
 if CONNECTORS_AVAILABLE:
-    from dev_health_ops.connectors import BatchResult, GitLabConnector, ConnectorException
+    from dev_health_ops.connectors import (
+        BatchResult,
+        GitLabConnector,
+        ConnectorException,
+    )
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
 else:

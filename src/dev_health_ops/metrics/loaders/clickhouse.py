@@ -113,51 +113,59 @@ class ClickHouseDataLoader(DataLoader):
             u = parse_uuid(r.get("repo_id"))
             cw = r.get("committer_when")
             if u and cw:
-                commit_rows.append({
-                    "repo_id": u,
-                    "commit_hash": str(r.get("commit_hash") or ""),
-                    "author_email": r.get("author_email") or "",
-                    "author_name": r.get("author_name") or "",
-                    "committer_when": cw,
-                    "file_path": r.get("file_path"),
-                    "additions": int(r.get("additions") or 0),
-                    "deletions": int(r.get("deletions") or 0),
-                })
+                commit_rows.append(
+                    {
+                        "repo_id": u,
+                        "commit_hash": str(r.get("commit_hash") or ""),
+                        "author_email": r.get("author_email") or "",
+                        "author_name": r.get("author_name") or "",
+                        "committer_when": cw,
+                        "file_path": r.get("file_path"),
+                        "additions": int(r.get("additions") or 0),
+                        "deletions": int(r.get("deletions") or 0),
+                    }
+                )
 
         pr_rows: List[PullRequestRow] = []
         for r in pr_dicts:
             u = parse_uuid(r.get("repo_id"))
             ca = r.get("created_at")
             if u and ca:
-                pr_rows.append({
-                    "repo_id": u,
-                    "number": int(r.get("number") or 0),
-                    "author_email": r.get("author_email") or "",
-                    "author_name": r.get("author_name") or "",
-                    "created_at": ca,
-                    "merged_at": r.get("merged_at"),
-                    "first_review_at": r.get("first_review_at"),
-                    "first_comment_at": r.get("first_comment_at"),
-                    "changes_requested_count": int(r.get("changes_requested_count", 0)),
-                    "reviews_count": int(r.get("reviews_count", 0)),
-                    "comments_count": int(r.get("comments_count", 0)),
-                    "additions": int(r.get("additions", 0)),
-                    "deletions": int(r.get("deletions", 0)),
-                    "changed_files": int(r.get("changed_files", 0)),
-                })
+                pr_rows.append(
+                    {
+                        "repo_id": u,
+                        "number": int(r.get("number") or 0),
+                        "author_email": r.get("author_email") or "",
+                        "author_name": r.get("author_name") or "",
+                        "created_at": ca,
+                        "merged_at": r.get("merged_at"),
+                        "first_review_at": r.get("first_review_at"),
+                        "first_comment_at": r.get("first_comment_at"),
+                        "changes_requested_count": int(
+                            r.get("changes_requested_count", 0)
+                        ),
+                        "reviews_count": int(r.get("reviews_count", 0)),
+                        "comments_count": int(r.get("comments_count", 0)),
+                        "additions": int(r.get("additions", 0)),
+                        "deletions": int(r.get("deletions", 0)),
+                        "changed_files": int(r.get("changed_files", 0)),
+                    }
+                )
 
         review_rows: List[PullRequestReviewRow] = []
         for r in review_dicts:
             u = parse_uuid(r.get("repo_id"))
             sa = r.get("submitted_at")
             if u and sa:
-                review_rows.append({
-                    "repo_id": u,
-                    "number": int(r.get("number") or 0),
-                    "reviewer": r.get("reviewer") or "unknown",
-                    "submitted_at": sa,
-                    "state": r.get("state") or "unknown",
-                })
+                review_rows.append(
+                    {
+                        "repo_id": u,
+                        "number": int(r.get("number") or 0),
+                        "reviewer": r.get("reviewer") or "unknown",
+                        "submitted_at": sa,
+                        "state": r.get("state") or "unknown",
+                    }
+                )
 
         return commit_rows, pr_rows, review_rows
 

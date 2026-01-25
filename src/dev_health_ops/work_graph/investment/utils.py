@@ -5,7 +5,11 @@ from __future__ import annotations
 import hashlib
 from typing import Dict, Iterable, Tuple
 
-from dev_health_ops.work_graph.investment.taxonomy import SUBCATEGORIES, THEMES, theme_of
+from dev_health_ops.work_graph.investment.taxonomy import (
+    SUBCATEGORIES,
+    THEMES,
+    theme_of,
+)
 
 
 def _sha256_hex(value: str) -> str:

@@ -70,9 +70,7 @@ def work_category_filter(
             categories.append(category_str)
     if not categories:
         return "", {}
-    return f" AND {column} IN %(work_categories)s", {
-        "work_categories": categories
-    }
+    return f" AND {column} IN %(work_categories)s", {"work_categories": categories}
 
 
 async def scope_filter_for_metric(

@@ -35,6 +35,7 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
     - Other types are converted to strings and sanitized in the same way
       as regular strings.
     """
+
     def _clean_scalar(text: str) -> str:
         cleaned = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
         if len(cleaned) > max_length:
@@ -60,6 +61,7 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
     # Fallback for scalars and other objects: log a sanitized string
     # representation to ensure no control characters appear in logs.
     return _clean_scalar(str(value))
+
 
 async def get_global_client(dsn: str) -> Any:
     """Get the shared ClickHouse client, initializing if needed."""

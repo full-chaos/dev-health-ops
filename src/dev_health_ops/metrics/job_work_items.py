@@ -405,12 +405,14 @@ def run_work_items_sync_job(
                 ):
                     continue
 
-                cls = investment_classifier.classify({
-                    "labels": getattr(item, "labels", []),
-                    "component": getattr(item, "component", ""),
-                    "title": item.title,
-                    "provider": item.provider,
-                })
+                cls = investment_classifier.classify(
+                    {
+                        "labels": getattr(item, "labels", []),
+                        "component": getattr(item, "component", ""),
+                        "title": item.title,
+                        "provider": item.provider,
+                    }
+                )
 
                 investment_classifications.append(
                     InvestmentClassificationRecord(

@@ -20,9 +20,16 @@ WORK_ITEM_TYPE_WEIGHTS: Dict[str, Dict[str, float]] = {
     "story": {"feature_delivery.roadmap": 1.0},
     "epic": {"feature_delivery.roadmap": 1.0},
     "feature": {"feature_delivery.customer": 1.0},
-    "enhancement": {"feature_delivery.customer": 0.7, "feature_delivery.enablement": 0.3},
+    "enhancement": {
+        "feature_delivery.customer": 0.7,
+        "feature_delivery.enablement": 0.3,
+    },
     "task": {"feature_delivery.enablement": 0.6, "maintenance.debt": 0.4},
-    "issue": {"feature_delivery.customer": 0.3, "maintenance.debt": 0.3, "quality.bugfix": 0.4},
+    "issue": {
+        "feature_delivery.customer": 0.3,
+        "maintenance.debt": 0.3,
+        "quality.bugfix": 0.4,
+    },
     "chore": {"maintenance.debt": 1.0},
     "refactor": {"maintenance.refactor": 0.8, "quality.reliability": 0.2},
     "bug": {"quality.bugfix": 0.8, "maintenance.debt": 0.2},

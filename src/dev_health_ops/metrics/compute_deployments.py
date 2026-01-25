@@ -76,7 +76,9 @@ def compute_deploy_metrics_daily(
         started_at = row.get("started_at")
         finished_at = row.get("finished_at")
         if isinstance(started_at, datetime) and isinstance(finished_at, datetime):
-            duration = (_to_utc(finished_at) - _to_utc(started_at)).total_seconds() / 3600.0
+            duration = (
+                _to_utc(finished_at) - _to_utc(started_at)
+            ).total_seconds() / 3600.0
             if duration >= 0:
                 bucket["durations"].append(float(duration))
 

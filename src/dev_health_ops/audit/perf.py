@@ -156,18 +156,20 @@ def run_perf_audit(
         for row in rows:
             entry = dict(zip(col_names, row))
             query_text = entry.get("query", "")
-            slow_queries.append({
-                "duration_ms": entry.get("query_duration_ms"),
-                "event_time": entry.get(time_column) if time_column else None,
-                "query_kind": entry.get("query_kind"),
-                "read_rows": entry.get("read_rows"),
-                "read_bytes": entry.get("read_bytes"),
-                "result_rows": entry.get("result_rows"),
-                "result_bytes": entry.get("result_bytes"),
-                "memory_usage": entry.get("memory_usage"),
-                "exception": entry.get("exception"),
-                "query": _truncate_query(str(query_text)),
-            })
+            slow_queries.append(
+                {
+                    "duration_ms": entry.get("query_duration_ms"),
+                    "event_time": entry.get(time_column) if time_column else None,
+                    "query_kind": entry.get("query_kind"),
+                    "read_rows": entry.get("read_rows"),
+                    "read_bytes": entry.get("read_bytes"),
+                    "result_rows": entry.get("result_rows"),
+                    "result_bytes": entry.get("result_bytes"),
+                    "memory_usage": entry.get("memory_usage"),
+                    "exception": entry.get("exception"),
+                    "query": _truncate_query(str(query_text)),
+                }
+            )
 
         report["slow_queries"] = slow_queries
         report["status"] = "slow" if slow_queries else "ok"
@@ -229,7 +231,6 @@ def format_perf_report(report: Dict[str, Any]) -> str:
 
 
 def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
-
     audit_perf = audit_subparsers.add_parser(
         "perf", help="Audit database query performance."
     )
@@ -256,7 +257,6 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
 
 
 def _cmd_audit_perf(ns: argparse.Namespace) -> int:
-
     logger = logging.getLogger(__name__)
     try:
         report = run_perf_audit(

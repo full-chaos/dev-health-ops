@@ -13,7 +13,9 @@ def _rows_to_dicts(result: Any) -> List[Dict[str, Any]]:
     return [dict(zip(col_names, row)) for row in rows]
 
 
-def query_dicts(client: Any, query: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+def query_dicts(
+    client: Any, query: str, params: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     result = client.query(query, parameters=params)
     return _rows_to_dicts(result)
 

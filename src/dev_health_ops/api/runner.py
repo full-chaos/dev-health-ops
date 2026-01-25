@@ -37,7 +37,6 @@ def run_api_server(ns: argparse.Namespace) -> int:
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
-
     api = subparsers.add_parser("api", help="Run the Dev Health Ops API server.")
     api.add_argument(
         "--db",

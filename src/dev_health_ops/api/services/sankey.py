@@ -170,9 +170,7 @@ async def _columns_present(
     present = {row.get("name") for row in rows}
     missing = [column for column in columns if column not in present]
     if missing:
-        logger.info(
-            "Sankey columns missing for %s: %s", table, ", ".join(missing)
-        )
+        logger.info("Sankey columns missing for %s: %s", table, ", ".join(missing))
         return False
     return True
 
@@ -194,9 +192,7 @@ def _team_scope_filter(
 ) -> Tuple[str, Dict[str, Any]]:
     if filters.scope.level != "team" or not filters.scope.ids:
         return "", {}
-    return build_scope_filter_multi(
-        "team", filters.scope.ids, team_column=team_column
-    )
+    return build_scope_filter_multi("team", filters.scope.ids, team_column=team_column)
 
 
 def _category_theme_filters(filters: MetricFilter) -> List[str]:
@@ -298,7 +294,9 @@ async def _build_expense_flow(
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if not await _tables_present(client, ["work_item_metrics_daily", "work_item_cycle_times"]):
+    if not await _tables_present(
+        client, ["work_item_metrics_daily", "work_item_cycle_times"]
+    ):
         return [], []
     if not await _columns_present(
         client,

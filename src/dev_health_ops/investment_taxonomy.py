@@ -45,4 +45,3 @@ _SUBCATEGORY_TO_THEME: Dict[str, str] = {
 def theme_of(subcategory_key: str) -> str:
     """Return the canonical theme for a subcategory key."""
     return _SUBCATEGORY_TO_THEME.get(subcategory_key, "")
-

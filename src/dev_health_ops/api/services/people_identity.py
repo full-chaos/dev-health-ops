@@ -25,7 +25,11 @@ def load_identity_aliases() -> Dict[str, List[str]]:
         return _ALIAS_CACHE
 
     raw_path = os.getenv("IDENTITY_MAPPING_PATH")
-    path = Path(raw_path) if raw_path else Path("src/dev_health_ops/config/identity_mapping.yaml")
+    path = (
+        Path(raw_path)
+        if raw_path
+        else Path("src/dev_health_ops/config/identity_mapping.yaml")
+    )
 
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -74,7 +78,9 @@ def parse_identity(identity: str) -> Tuple[str, str]:
     return "identity", identity
 
 
-def identities_for_person(identity: str, aliases: Iterable[str]) -> List[Dict[str, str]]:
+def identities_for_person(
+    identity: str, aliases: Iterable[str]
+) -> List[Dict[str, str]]:
     seen = set()
     results: List[Dict[str, str]] = []
     for item in [identity, *aliases]:

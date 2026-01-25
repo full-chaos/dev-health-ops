@@ -9,8 +9,7 @@ def get_latest_tag():
     try:
         # Get the latest reachable tag
         tag = (
-            subprocess
-            .check_output(["git", "describe", "--tags", "--abbrev=0"])
+            subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"])
             .decode()
             .strip()
         )

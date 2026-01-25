@@ -116,12 +116,16 @@ def _weekday_labels() -> List[str]:
     return WEEKDAY_LABELS[:]
 
 
-def _axis_order(kind: str, values: Iterable[str], totals: Dict[str, float]) -> List[str]:
+def _axis_order(
+    kind: str, values: Iterable[str], totals: Dict[str, float]
+) -> List[str]:
     values_list = list(dict.fromkeys([v for v in values if v is not None]))
     if kind == "hour":
         return _hour_labels()
     if kind == "weekday":
-        return [label for label in _weekday_labels() if label in values_list] or _weekday_labels()
+        return [
+            label for label in _weekday_labels() if label in values_list
+        ] or _weekday_labels()
     if kind in {"day", "week"}:
         return sorted(values_list)
     if kind == "status":
@@ -250,16 +254,25 @@ async def build_heatmap_response(
         raise HTTPException(status_code=404, detail="Unknown heatmap metric")
 
     if definition.type == "individual" and scope_type != "developer":
-        raise HTTPException(status_code=400, detail="Individual heatmaps require developer scope")
+        raise HTTPException(
+            status_code=400, detail="Individual heatmaps require developer scope"
+        )
 
     if scope_type == "developer" and definition.type != "individual":
-        raise HTTPException(status_code=400, detail="Developer scope is only supported for individual heatmaps")
+        raise HTTPException(
+            status_code=400,
+            detail="Developer scope is only supported for individual heatmaps",
+        )
 
     if definition.type == "individual" and not scope_id:
-        raise HTTPException(status_code=400, detail="Individual heatmaps require a person id")
+        raise HTTPException(
+            status_code=400, detail="Individual heatmaps require a person id"
+        )
 
     if definition.x_axis == "person" and definition.y_axis == "person":
-        raise HTTPException(status_code=400, detail="Person comparisons are not supported")
+        raise HTTPException(
+            status_code=400, detail="Person comparisons are not supported"
+        )
 
     range_days = _normalize_range_days(range_days)
     try:

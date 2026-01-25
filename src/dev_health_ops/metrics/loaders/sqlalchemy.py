@@ -103,53 +103,59 @@ class SqlAlchemyDataLoader(DataLoader):
                 u = parse_uuid(r.get("repo_id"))
                 cw = _to_dt(r.get("committer_when"))
                 if u and cw:
-                    commit_rows.append({
-                        "repo_id": u,
-                        "commit_hash": str(r.get("commit_hash")),
-                        "author_email": r.get("author_email"),
-                        "author_name": r.get("author_name"),
-                        "committer_when": cw,
-                        "file_path": r.get("file_path"),
-                        "additions": int(r.get("additions") or 0),
-                        "deletions": int(r.get("deletions") or 0),
-                    })
+                    commit_rows.append(
+                        {
+                            "repo_id": u,
+                            "commit_hash": str(r.get("commit_hash")),
+                            "author_email": r.get("author_email"),
+                            "author_name": r.get("author_name"),
+                            "committer_when": cw,
+                            "file_path": r.get("file_path"),
+                            "additions": int(r.get("additions") or 0),
+                            "deletions": int(r.get("deletions") or 0),
+                        }
+                    )
 
             p_result = conn.execute(text(pr_query), params).mappings().all()
             for r in p_result:
                 u = parse_uuid(r.get("repo_id"))
                 ca = _to_dt(r.get("created_at"))
                 if u and ca:
-                    pr_rows.append({
-                        "repo_id": u,
-                        "number": int(r.get("number") or 0),
-                        "author_email": r.get("author_email"),
-                        "author_name": r.get("author_name"),
-                        "created_at": ca,
-                        "merged_at": _to_dt(r.get("merged_at")),
-                        "first_review_at": _to_dt(r.get("first_review_at")),
-                        "first_comment_at": _to_dt(r.get("first_comment_at")),
-                        "changes_requested_count": int(
-                            r.get("changes_requested_count") or 0
-                        ),
-                        "reviews_count": int(r.get("reviews_count") or 0),
-                        "comments_count": int(r.get("comments_count") or 0),
-                        "additions": int(r.get("additions") or 0),
-                        "deletions": int(r.get("deletions") or 0),
-                        "changed_files": int(r.get("changed_files") or 0),
-                    })
+                    pr_rows.append(
+                        {
+                            "repo_id": u,
+                            "number": int(r.get("number") or 0),
+                            "author_email": r.get("author_email"),
+                            "author_name": r.get("author_name"),
+                            "created_at": ca,
+                            "merged_at": _to_dt(r.get("merged_at")),
+                            "first_review_at": _to_dt(r.get("first_review_at")),
+                            "first_comment_at": _to_dt(r.get("first_comment_at")),
+                            "changes_requested_count": int(
+                                r.get("changes_requested_count") or 0
+                            ),
+                            "reviews_count": int(r.get("reviews_count") or 0),
+                            "comments_count": int(r.get("comments_count") or 0),
+                            "additions": int(r.get("additions") or 0),
+                            "deletions": int(r.get("deletions") or 0),
+                            "changed_files": int(r.get("changed_files") or 0),
+                        }
+                    )
 
             rv_result = conn.execute(text(review_query), params).mappings().all()
             for r in rv_result:
                 u = parse_uuid(r.get("repo_id"))
                 sa = _to_dt(r.get("submitted_at"))
                 if u and sa:
-                    review_rows.append({
-                        "repo_id": u,
-                        "number": int(r.get("number") or 0),
-                        "reviewer": r.get("reviewer") or "unknown",
-                        "submitted_at": sa,
-                        "state": r.get("state") or "unknown",
-                    })
+                    review_rows.append(
+                        {
+                            "repo_id": u,
+                            "number": int(r.get("number") or 0),
+                            "reviewer": r.get("reviewer") or "unknown",
+                            "submitted_at": sa,
+                            "state": r.get("state") or "unknown",
+                        }
+                    )
 
         return commit_rows, pr_rows, review_rows
 

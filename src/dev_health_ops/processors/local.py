@@ -7,7 +7,14 @@ from typing import List, Optional, Tuple, Set, Dict, Any
 from pathlib import Path
 from datetime import datetime, timezone
 
-from dev_health_ops.models.git import GitBlame, GitCommit, GitCommitStat, GitFile, GitPullRequest, Repo
+from dev_health_ops.models.git import (
+    GitBlame,
+    GitCommit,
+    GitCommitStat,
+    GitFile,
+    GitPullRequest,
+    Repo,
+)
 from dev_health_ops.utils import (
     BATCH_SIZE,
     MAX_WORKERS,
@@ -644,7 +651,9 @@ async def process_local_blame(
 
     repo_obj = GitPythonRepo(str(repo_root))
     commits_iter = list(iter_commits_since(repo_obj, since))
-    files_for_blame = set(collect_changed_files(repo_root, commits_iter)) if commits_iter else set()
+    files_for_blame = (
+        set(collect_changed_files(repo_root, commits_iter)) if commits_iter else set()
+    )
 
     all_files_path = []
     for root, _, files in os.walk(str(repo_root)):

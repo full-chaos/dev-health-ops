@@ -358,7 +358,9 @@ def fetch_github_project_v2_items(
         raise ValueError("GitHub token required (set GITHUB_TOKEN)")
 
     from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
-    from dev_health_ops.providers.github.normalize import github_project_v2_item_to_work_item
+    from dev_health_ops.providers.github.normalize import (
+        github_project_v2_item_to_work_item,
+    )
 
     client = GitHubWorkClient(auth=GitHubAuth(token=token))
     items: Dict[str, WorkItem] = {}

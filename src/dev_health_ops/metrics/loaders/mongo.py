@@ -75,16 +75,18 @@ class MongoDataLoader(DataLoader):
 
             h_stats = stats_by_hash.get(h, [{}])
             for s in h_stats:
-                commit_rows.append({
-                    "repo_id": repo_uuid,
-                    "commit_hash": h,
-                    "author_email": c.get("author_email"),
-                    "author_name": c.get("author_name"),
-                    "committer_when": c.get("committer_when"),
-                    "file_path": s.get("file_path"),
-                    "additions": int(s.get("additions") or 0),
-                    "deletions": int(s.get("deletions") or 0),
-                })
+                commit_rows.append(
+                    {
+                        "repo_id": repo_uuid,
+                        "commit_hash": h,
+                        "author_email": c.get("author_email"),
+                        "author_name": c.get("author_name"),
+                        "committer_when": c.get("committer_when"),
+                        "file_path": s.get("file_path"),
+                        "additions": int(s.get("additions") or 0),
+                        "deletions": int(s.get("deletions") or 0),
+                    }
+                )
 
         pr_query = {
             "$or": [
@@ -99,24 +101,26 @@ class MongoDataLoader(DataLoader):
         for p in prs:
             u = parse_uuid(p.get("repo_id"))
             if u:
-                pr_rows.append({
-                    "repo_id": u,
-                    "number": int(p.get("number") or 0),
-                    "author_email": p.get("author_email"),
-                    "author_name": p.get("author_name"),
-                    "created_at": p.get("created_at"),
-                    "merged_at": p.get("merged_at"),
-                    "first_review_at": p.get("first_review_at"),
-                    "first_comment_at": p.get("first_comment_at"),
-                    "changes_requested_count": int(
-                        p.get("changes_requested_count") or 0
-                    ),
-                    "reviews_count": int(p.get("reviews_count") or 0),
-                    "comments_count": int(p.get("comments_count") or 0),
-                    "additions": int(p.get("additions") or 0),
-                    "deletions": int(p.get("deletions") or 0),
-                    "changed_files": int(p.get("changed_files") or 0),
-                })
+                pr_rows.append(
+                    {
+                        "repo_id": u,
+                        "number": int(p.get("number") or 0),
+                        "author_email": p.get("author_email"),
+                        "author_name": p.get("author_name"),
+                        "created_at": p.get("created_at"),
+                        "merged_at": p.get("merged_at"),
+                        "first_review_at": p.get("first_review_at"),
+                        "first_comment_at": p.get("first_comment_at"),
+                        "changes_requested_count": int(
+                            p.get("changes_requested_count") or 0
+                        ),
+                        "reviews_count": int(p.get("reviews_count") or 0),
+                        "comments_count": int(p.get("comments_count") or 0),
+                        "additions": int(p.get("additions") or 0),
+                        "deletions": int(p.get("deletions") or 0),
+                        "changed_files": int(p.get("changed_files") or 0),
+                    }
+                )
 
         review_query = {
             "submitted_at": {"$gte": start_naive, "$lt": end_naive},
@@ -127,13 +131,15 @@ class MongoDataLoader(DataLoader):
         for r in reviews:
             u = parse_uuid(r.get("repo_id"))
             if u:
-                review_rows.append({
-                    "repo_id": u,
-                    "number": int(r.get("number") or 0),
-                    "reviewer": r.get("reviewer"),
-                    "submitted_at": r.get("submitted_at"),
-                    "state": r.get("state"),
-                })
+                review_rows.append(
+                    {
+                        "repo_id": u,
+                        "number": int(r.get("number") or 0),
+                        "reviewer": r.get("reviewer"),
+                        "submitted_at": r.get("submitted_at"),
+                        "state": r.get("state"),
+                    }
+                )
 
         return commit_rows, pr_rows, review_rows
 

@@ -53,7 +53,9 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     @abstractmethod
     def backend_type(self) -> str:
         """Return backend identifier: 'sqlite' or 'postgres'."""
-        raise NotImplementedError("Subclasses of SQLAlchemyMetricsSink must implement 'backend_type'")
+        raise NotImplementedError(
+            "Subclasses of SQLAlchemyMetricsSink must implement 'backend_type'"
+        )
 
     def __init__(self, db_url: str) -> None:
         """Initialize with SQLAlchemy engine.
@@ -1021,22 +1023,24 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         payload = []
         for row in rows:
             data = asdict(row)
-            payload.append({
-                "repo_id": str(data["repo_id"]),
-                "as_of_day": data["as_of_day"].isoformat(),
-                "identity_id": str(data["identity_id"]),
-                "team_id": str(data["team_id"] or ""),
-                "map_name": str(data["map_name"]),
-                "x_raw": float(data["x_raw"]),
-                "y_raw": float(data["y_raw"]),
-                "x_norm": float(data["x_norm"]),
-                "y_norm": float(data["y_norm"]),
-                "churn_loc_30d": int(data["churn_loc_30d"]),
-                "delivery_units_30d": int(data["delivery_units_30d"]),
-                "cycle_p50_30d_hours": float(data["cycle_p50_30d_hours"]),
-                "wip_max_30d": int(data["wip_max_30d"]),
-                "computed_at": _dt_to_iso(data["computed_at"]),
-            })
+            payload.append(
+                {
+                    "repo_id": str(data["repo_id"]),
+                    "as_of_day": data["as_of_day"].isoformat(),
+                    "identity_id": str(data["identity_id"]),
+                    "team_id": str(data["team_id"] or ""),
+                    "map_name": str(data["map_name"]),
+                    "x_raw": float(data["x_raw"]),
+                    "y_raw": float(data["y_raw"]),
+                    "x_norm": float(data["x_norm"]),
+                    "y_norm": float(data["y_norm"]),
+                    "churn_loc_30d": int(data["churn_loc_30d"]),
+                    "delivery_units_30d": int(data["delivery_units_30d"]),
+                    "cycle_p50_30d_hours": float(data["cycle_p50_30d_hours"]),
+                    "wip_max_30d": int(data["wip_max_30d"]),
+                    "computed_at": _dt_to_iso(data["computed_at"]),
+                }
+            )
         with self.engine.begin() as conn:
             conn.execute(stmt, payload)
 
@@ -1287,14 +1291,16 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         payload = []
         for row in rows:
             data = asdict(row)
-            payload.append({
-                **data,
-                "day": data["day"].isoformat(),
-                "work_scope_id": str(data.get("work_scope_id") or ""),
-                "team_id": str(data.get("team_id") or ""),
-                "team_name": str(data.get("team_name") or ""),
-                "computed_at": _dt_to_iso(data["computed_at"]),
-            })
+            payload.append(
+                {
+                    **data,
+                    "day": data["day"].isoformat(),
+                    "work_scope_id": str(data.get("work_scope_id") or ""),
+                    "team_id": str(data.get("team_id") or ""),
+                    "team_name": str(data.get("team_name") or ""),
+                    "computed_at": _dt_to_iso(data["computed_at"]),
+                }
+            )
         with self.engine.begin() as conn:
             conn.execute(stmt, payload)
 
@@ -1331,19 +1337,21 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         payload = []
         for row in rows:
             data = asdict(row)
-            payload.append({
-                **data,
-                "day": data["day"].isoformat(),
-                "work_scope_id": str(data.get("work_scope_id") or ""),
-                "created_at": _dt_to_iso(data["created_at"]),
-                "started_at": _dt_to_iso(data["started_at"])
-                if data.get("started_at")
-                else None,
-                "completed_at": _dt_to_iso(data["completed_at"])
-                if data.get("completed_at")
-                else None,
-                "computed_at": _dt_to_iso(data["computed_at"]),
-            })
+            payload.append(
+                {
+                    **data,
+                    "day": data["day"].isoformat(),
+                    "work_scope_id": str(data.get("work_scope_id") or ""),
+                    "created_at": _dt_to_iso(data["created_at"]),
+                    "started_at": _dt_to_iso(data["started_at"])
+                    if data.get("started_at")
+                    else None,
+                    "completed_at": _dt_to_iso(data["completed_at"])
+                    if data.get("completed_at")
+                    else None,
+                    "computed_at": _dt_to_iso(data["computed_at"]),
+                }
+            )
         with self.engine.begin() as conn:
             conn.execute(stmt, payload)
 
@@ -1383,14 +1391,16 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         payload = []
         for row in rows:
             data = asdict(row)
-            payload.append({
-                **data,
-                "day": data["day"].isoformat(),
-                "work_scope_id": str(data.get("work_scope_id") or ""),
-                "team_id": str(data.get("team_id") or ""),
-                "team_name": str(data.get("team_name") or ""),
-                "computed_at": _dt_to_iso(data["computed_at"]),
-            })
+            payload.append(
+                {
+                    **data,
+                    "day": data["day"].isoformat(),
+                    "work_scope_id": str(data.get("work_scope_id") or ""),
+                    "team_id": str(data.get("team_id") or ""),
+                    "team_name": str(data.get("team_name") or ""),
+                    "computed_at": _dt_to_iso(data["computed_at"]),
+                }
+            )
         with self.engine.begin() as conn:
             conn.execute(stmt, payload)
 

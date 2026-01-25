@@ -204,7 +204,8 @@ def sync_teams(ns: argparse.Namespace) -> int:
 
 def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     teams = sync_subparsers.add_parser(
-        "teams", help="Sync teams from dev_health_ops.config/teams.yaml, Jira, or Synthetic."
+        "teams",
+        help="Sync teams from dev_health_ops.config/teams.yaml, Jira, or Synthetic.",
     )
     teams.add_argument("--db", required=True, help="Database connection string.")
     teams.add_argument(

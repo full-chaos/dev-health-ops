@@ -208,10 +208,7 @@ class TimeseriesLoader(SimpleDataLoader[TimeseriesKey, List[TimeseriesResultData
         )
 
         # Convert exceptions to empty results
-        return [
-            r if isinstance(r, list) else []
-            for r in results
-        ]
+        return [r if isinstance(r, list) else [] for r in results]
 
 
 class BreakdownLoader(SimpleDataLoader[BreakdownKey, BreakdownResultData]):
@@ -233,9 +230,7 @@ class BreakdownLoader(SimpleDataLoader[BreakdownKey, BreakdownResultData]):
         self._client = client
         self._timeout = timeout
 
-    async def batch_load(
-        self, keys: List[BreakdownKey]
-    ) -> List[BreakdownResultData]:
+    async def batch_load(self, keys: List[BreakdownKey]) -> List[BreakdownResultData]:
         """
         Batch load breakdown data for multiple keys.
 
@@ -290,7 +285,9 @@ class BreakdownLoader(SimpleDataLoader[BreakdownKey, BreakdownResultData]):
 
         # Convert exceptions to empty results
         return [
-            r if isinstance(r, BreakdownResultData) else BreakdownResultData(
+            r
+            if isinstance(r, BreakdownResultData)
+            else BreakdownResultData(
                 dimension=keys[i].dimension,
                 measure=keys[i].measure,
                 items=[],

@@ -59,7 +59,12 @@ def detect_backend(dsn: str) -> SinkBackend:
     scheme = parsed.scheme.lower()
 
     # Handle SQLAlchemy-style schemes
-    if scheme in ("clickhouse", "clickhouse+native", "clickhouse+http", "clickhouse+https"):
+    if scheme in (
+        "clickhouse",
+        "clickhouse+native",
+        "clickhouse+http",
+        "clickhouse+https",
+    ):
         return SinkBackend.CLICKHOUSE
     elif scheme in ("mongodb", "mongodb+srv", "mongo"):
         return SinkBackend.MONGO

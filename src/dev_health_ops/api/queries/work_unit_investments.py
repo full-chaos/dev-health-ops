@@ -73,7 +73,11 @@ async def fetch_repo_scopes(
         WHERE id IN %(repo_ids)s
     """
     rows = await query_dicts(client, query, {"repo_ids": ids})
-    return {str(row.get("repo_id")): str(row.get("repo") or "") for row in rows if row.get("repo_id")}
+    return {
+        str(row.get("repo_id")): str(row.get("repo") or "")
+        for row in rows
+        if row.get("repo_id")
+    }
 
 
 async def fetch_work_item_team_assignments(

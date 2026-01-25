@@ -58,7 +58,9 @@ def test_work_item_cycle_time_percentiles() -> None:
         )
     )
 
-    team_resolver = TeamResolver(member_to_team={"alice@example.com": ("team-a", "Team A")})
+    team_resolver = TeamResolver(
+        member_to_team={"alice@example.com": ("team-a", "Team A")}
+    )
     computed_at = start + timedelta(days=1)
 
     group_rows, user_rows, cycle_rows = compute_work_item_metrics_daily(

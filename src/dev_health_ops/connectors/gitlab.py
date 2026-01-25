@@ -29,7 +29,11 @@ from dev_health_ops.connectors.models import (
     Repository,
     RepoStats,
 )
-from dev_health_ops.connectors.utils import GitLabRESTClient, retry_with_backoff, match_project_pattern
+from dev_health_ops.connectors.utils import (
+    GitLabRESTClient,
+    retry_with_backoff,
+    match_project_pattern,
+)
 
 logger = logging.getLogger(__name__)
 

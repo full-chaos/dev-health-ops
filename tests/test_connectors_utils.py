@@ -7,8 +7,10 @@ import time
 
 import pytest
 
-from dev_health_ops.connectors.utils.pagination import (AsyncPaginationHandler,
-                                         PaginationHandler)
+from dev_health_ops.connectors.utils.pagination import (
+    AsyncPaginationHandler,
+    PaginationHandler,
+)
 from dev_health_ops.connectors.utils.retry import RateLimiter, retry_with_backoff
 
 

@@ -390,9 +390,7 @@ async def resolve_analytics(
                         LEFT JOIN repos AS r ON r.id = repo_id
                         """
 
-                assigned_team_expr = (
-                    f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
-                )
+                assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
                 assigned_repo_expr = f"{repo_col} IS NOT NULL"
                 if request.use_investment:
                     assigned_repo_expr = f"lower({repo_col}) != 'unassigned'"

@@ -19,7 +19,11 @@ from ..models.schemas import (
 from ..queries.client import clickhouse_client
 from ..queries.explain import fetch_metric_driver_delta
 from ..queries.freshness import fetch_coverage, fetch_last_ingested_at
-from ..queries.metrics import fetch_blocked_hours, fetch_metric_series, fetch_metric_value
+from ..queries.metrics import (
+    fetch_blocked_hours,
+    fetch_metric_series,
+    fetch_metric_value,
+)
 from .filtering import filter_cache_key, scope_filter_for_metric, time_window
 from .cache import TTLCache
 
@@ -318,9 +322,7 @@ async def build_home_response(
             driver_labels = ", ".join(
                 [str(row.get("id")) for row in driver_rows if row.get("id")] or []
             )
-            driver_text = (
-                f" driven by {driver_labels}." if driver_labels else "."
-            )
+            driver_text = f" driven by {driver_labels}." if driver_labels else "."
             summary_sentences.append(
                 SummarySentence(
                     id="s1",

@@ -2,7 +2,10 @@ import uuid
 from datetime import date, datetime, timezone
 
 from dev_health_ops.metrics.compute import compute_daily_metrics
-from dev_health_ops.metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
+from dev_health_ops.metrics.quality import (
+    compute_rework_churn_ratio,
+    compute_single_owner_file_ratio,
+)
 
 
 def test_rework_churn_ratio_proxy():
@@ -130,4 +133,6 @@ def test_review_load_top_reviewer_ratio():
     repo_metrics = {m.repo_id: m for m in result.repo_metrics}
     assert repo_id in repo_metrics
     # reviewer-1 has 2/3 of reviews
-    assert abs(repo_metrics[repo_id].review_load_top_reviewer_ratio - (2.0 / 3.0)) < 1e-6
+    assert (
+        abs(repo_metrics[repo_id].review_load_top_reviewer_ratio - (2.0 / 3.0)) < 1e-6
+    )

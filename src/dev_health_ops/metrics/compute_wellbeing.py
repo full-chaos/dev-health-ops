@@ -101,7 +101,9 @@ def compute_team_wellbeing_metrics_daily(
         local_dt = committed_at.astimezone(tz)
         if _is_weekend(local_dt):
             bucket["weekend"] = int(bucket["weekend"]) + 1
-        elif _is_after_hours(local_dt, start_hour=business_hours_start, end_hour=business_hours_end):
+        elif _is_after_hours(
+            local_dt, start_hour=business_hours_start, end_hour=business_hours_end
+        ):
             bucket["after_hours"] = int(bucket["after_hours"]) + 1
 
     records: List[TeamMetricsDailyRecord] = []
@@ -109,7 +111,9 @@ def compute_team_wellbeing_metrics_daily(
         commits_count = int(bucket["commits"])
         after_hours_count = int(bucket["after_hours"])
         weekend_count = int(bucket["weekend"])
-        after_hours_ratio = (after_hours_count / commits_count) if commits_count else 0.0
+        after_hours_ratio = (
+            (after_hours_count / commits_count) if commits_count else 0.0
+        )
         weekend_ratio = (weekend_count / commits_count) if commits_count else 0.0
 
         records.append(
@@ -127,4 +131,3 @@ def compute_team_wellbeing_metrics_daily(
         )
 
     return records
-

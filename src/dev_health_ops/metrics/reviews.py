@@ -4,7 +4,11 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from dev_health_ops.metrics.schemas import PullRequestReviewRow, PullRequestRow, ReviewEdgeDailyRecord
+from dev_health_ops.metrics.schemas import (
+    PullRequestReviewRow,
+    PullRequestRow,
+    ReviewEdgeDailyRecord,
+)
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:

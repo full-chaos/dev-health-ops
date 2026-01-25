@@ -48,10 +48,12 @@ def run_complexity_scan_job(
     repo = git.Repo(repo_path)
     config_path = REPO_ROOT / "src/dev_health_ops/config/complexity.yaml"
     scanner = ComplexityScanner(config_path=config_path)
-    
+
     # Calculate date range
     start_date = date - timedelta(days=max(1, backfill_days) - 1)
-    dates_to_process = [start_date + timedelta(days=i) for i in range(max(1, backfill_days))]
+    dates_to_process = [
+        start_date + timedelta(days=i) for i in range(max(1, backfill_days))
+    ]
 
     own_sink = False
     if sink is None:
@@ -71,28 +73,32 @@ def run_complexity_scan_job(
     try:
         if own_sink:
             sink.ensure_tables()
-        
+
         for d in dates_to_process:
             logger.info(f"Processing date: {d}")
-            
+
             # Find commit for this day
             # "last commit before end of day"
             # git rev-list -1 --before="YYYY-MM-DD 23:59:59" ref
-            end_of_day_ts = datetime.combine(d, datetime.max.time()).replace(tzinfo=timezone.utc).isoformat()
-            
+            end_of_day_ts = (
+                datetime.combine(d, datetime.max.time())
+                .replace(tzinfo=timezone.utc)
+                .isoformat()
+            )
+
             try:
                 commit_sha = repo.git.rev_list("-1", f"--before={end_of_day_ts}", ref)
             except git.Exc as e:
                 logger.warning(f"Could not find commit for {d}: {e}")
                 continue
-                
+
             if not commit_sha:
                 logger.warning(f"No commit found before {d} (ref={ref}). Skipping.")
                 continue
 
             commit_sha = commit_sha.strip()
             logger.info(f"Scanning {repo_path} at commit {commit_sha} (as of {d})...")
-            
+
             file_results = scanner.scan_git_ref(repo_path, commit_sha)
             logger.info(f"Scanned {len(file_results)} files.")
 
@@ -102,36 +108,38 @@ def run_complexity_scan_job(
 
             # Aggregations
             computed_at = datetime.now(timezone.utc)
-            
+
             snapshots = []
             total_loc = 0
             total_cc = 0
             total_high = 0
             total_very_high = 0
-            
+
             for f in file_results:
-                snapshots.append(FileComplexitySnapshot(
-                    repo_id=repo_id,
-                    as_of_day=d,
-                    ref=commit_sha,
-                    file_path=f.file_path,
-                    language=f.language,
-                    loc=f.loc,
-                    functions_count=f.functions_count,
-                    cyclomatic_total=f.cyclomatic_total,
-                    cyclomatic_avg=f.cyclomatic_avg,
-                    high_complexity_functions=f.high_complexity_functions,
-                    very_high_complexity_functions=f.very_high_complexity_functions,
-                    computed_at=computed_at
-                ))
-                
+                snapshots.append(
+                    FileComplexitySnapshot(
+                        repo_id=repo_id,
+                        as_of_day=d,
+                        ref=commit_sha,
+                        file_path=f.file_path,
+                        language=f.language,
+                        loc=f.loc,
+                        functions_count=f.functions_count,
+                        cyclomatic_total=f.cyclomatic_total,
+                        cyclomatic_avg=f.cyclomatic_avg,
+                        high_complexity_functions=f.high_complexity_functions,
+                        very_high_complexity_functions=f.very_high_complexity_functions,
+                        computed_at=computed_at,
+                    )
+                )
+
                 total_loc += f.loc
                 total_cc += f.cyclomatic_total
                 total_high += f.high_complexity_functions
                 total_very_high += f.very_high_complexity_functions
 
             cc_per_kloc = (total_cc / (total_loc / 1000.0)) if total_loc > 0 else 0.0
-            
+
             repo_daily = RepoComplexityDaily(
                 repo_id=repo_id,
                 day=d,
@@ -140,7 +148,7 @@ def run_complexity_scan_job(
                 cyclomatic_per_kloc=cc_per_kloc,
                 high_complexity_functions=total_high,
                 very_high_complexity_functions=total_very_high,
-                computed_at=computed_at
+                computed_at=computed_at,
             )
 
             logger.info(f"Writing {len(snapshots)} file snapshots for {d}...")
@@ -151,5 +159,5 @@ def run_complexity_scan_job(
     finally:
         if own_sink:
             sink.close()
-    
+
     logger.info("Complexity job done.")

@@ -47,7 +47,7 @@ async def test_process_gitlab_project_sync_flags():
 
     # Patch the helper functions and connector
     with (
-        patch("processors.gitlab.GitLabConnector") as _MockConnector,
+        patch("processors.gitlab.GitLabConnector") as _MockConnector,  # noqa: F841
         patch(
             "processors.gitlab._fetch_gitlab_project_info_sync",
             return_value=mock_gl_project,
@@ -101,7 +101,7 @@ async def test_process_gitlab_project_no_sync_flags():
     mock_gl_project.name = "test-project"
 
     with (
-        patch("processors.gitlab.GitLabConnector") as _MockConnector,
+        patch("processors.gitlab.GitLabConnector") as _MockConnector,  # noqa: F841
         patch(
             "processors.gitlab._fetch_gitlab_project_info_sync",
             return_value=mock_gl_project,

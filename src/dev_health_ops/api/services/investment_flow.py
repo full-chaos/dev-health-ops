@@ -357,16 +357,20 @@ async def build_investment_flow_response(
         )
         team_coverage = assigned_team_value / total_value if total_value > 0 else 0.0
         repo_coverage = assigned_repo_value / total_value if total_value > 0 else 0.0
-        distinct_team_targets = len({
-            str(row.get("team"))
-            for row in rows
-            if str(row.get("team") or UNASSIGNED_TEAM) != UNASSIGNED_TEAM
-        })
-        distinct_repo_targets = len({
-            str(row.get("repo"))
-            for row in rows
-            if str(row.get("repo") or UNASSIGNED_REPO) != UNASSIGNED_REPO
-        })
+        distinct_team_targets = len(
+            {
+                str(row.get("team"))
+                for row in rows
+                if str(row.get("team") or UNASSIGNED_TEAM) != UNASSIGNED_TEAM
+            }
+        )
+        distinct_repo_targets = len(
+            {
+                str(row.get("repo"))
+                for row in rows
+                if str(row.get("repo") or UNASSIGNED_REPO) != UNASSIGNED_REPO
+            }
+        )
 
         return SankeyResponse(
             mode="investment",
@@ -438,9 +442,9 @@ async def build_investment_flow_response(
         assigned_val = sum(
             row["value"] for row in rows if row["target"] != "unassigned"
         )
-        distinct_targets = len({
-            row["target"] for row in rows if row["target"] != "unassigned"
-        })
+        distinct_targets = len(
+            {row["target"] for row in rows if row["target"] != "unassigned"}
+        )
         return assigned_val / total_val, distinct_targets
 
     team_coverage, distinct_team_targets = get_stats(team_rows)

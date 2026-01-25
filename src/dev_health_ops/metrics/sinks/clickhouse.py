@@ -96,11 +96,13 @@ class ClickHouseMetricsSink(BaseMetricsSink):
         result = await asyncio.to_thread(self.client.query, query)
         teams: List[Dict[str, Any]] = []
         for row in result.result_rows or []:
-            teams.append({
-                "id": row[0],
-                "name": row[1],
-                "members": row[2] or [],
-            })
+            teams.append(
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "members": row[2] or [],
+                }
+            )
         return teams
 
     def _apply_sql_migrations(self) -> None:
@@ -834,23 +836,25 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             return
         data = []
         for r in rows:
-            data.append({
-                "edge_id": r.edge_id,
-                "source_type": r.source_type,
-                "source_id": r.source_id,
-                "target_type": r.target_type,
-                "target_id": r.target_id,
-                "edge_type": r.edge_type,
-                "repo_id": str(r.repo_id) if r.repo_id else None,
-                "provider": r.provider,
-                "provenance": r.provenance,
-                "confidence": r.confidence,
-                "evidence": r.evidence,
-                "discovered_at": _dt_to_clickhouse_datetime(r.discovered_at),
-                "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-                "event_ts": _dt_to_clickhouse_datetime(r.event_ts),
-                "day": r.day,
-            })
+            data.append(
+                {
+                    "edge_id": r.edge_id,
+                    "source_type": r.source_type,
+                    "source_id": r.source_id,
+                    "target_type": r.target_type,
+                    "target_id": r.target_id,
+                    "edge_type": r.edge_type,
+                    "repo_id": str(r.repo_id) if r.repo_id else None,
+                    "provider": r.provider,
+                    "provenance": r.provenance,
+                    "confidence": r.confidence,
+                    "evidence": r.evidence,
+                    "discovered_at": _dt_to_clickhouse_datetime(r.discovered_at),
+                    "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                    "event_ts": _dt_to_clickhouse_datetime(r.event_ts),
+                    "day": r.day,
+                }
+            )
         column_names = list(data[0].keys())
         matrix = [[row[col] for col in column_names] for row in data]
         self.client.insert("work_graph_edges", matrix, column_names=column_names)
@@ -860,15 +864,17 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             return
         data = []
         for r in rows:
-            data.append({
-                "repo_id": str(r.repo_id),
-                "work_item_id": r.work_item_id,
-                "pr_number": r.pr_number,
-                "confidence": r.confidence,
-                "provenance": r.provenance,
-                "evidence": r.evidence,
-                "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-            })
+            data.append(
+                {
+                    "repo_id": str(r.repo_id),
+                    "work_item_id": r.work_item_id,
+                    "pr_number": r.pr_number,
+                    "confidence": r.confidence,
+                    "provenance": r.provenance,
+                    "evidence": r.evidence,
+                    "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                }
+            )
         column_names = list(data[0].keys())
         matrix = [[row[col] for col in column_names] for row in data]
         self.client.insert("work_graph_issue_pr", matrix, column_names=column_names)
@@ -880,15 +886,17 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             return
         data = []
         for r in rows:
-            data.append({
-                "repo_id": str(r.repo_id),
-                "pr_number": r.pr_number,
-                "commit_hash": r.commit_hash,
-                "confidence": r.confidence,
-                "provenance": r.provenance,
-                "evidence": r.evidence,
-                "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-            })
+            data.append(
+                {
+                    "repo_id": str(r.repo_id),
+                    "pr_number": r.pr_number,
+                    "commit_hash": r.commit_hash,
+                    "confidence": r.confidence,
+                    "provenance": r.provenance,
+                    "evidence": r.evidence,
+                    "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                }
+            )
         column_names = list(data[0].keys())
         matrix = [[row[col] for col in column_names] for row in data]
         self.client.insert("work_graph_pr_commit", matrix, column_names=column_names)
@@ -917,36 +925,38 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             else:
                 repo_id_val = uuid.UUID(int=0)
 
-            rows.append({
-                "repo_id": repo_id_val,
-                "work_item_id": str(get("work_item_id")),
-                "provider": str(get("provider")),
-                "title": str(get("title")),
-                "type": str(get("type")),
-                "status": str(get("status")),
-                "status_raw": str(get("status_raw") or ""),
-                "project_key": str(get("project_key") or ""),
-                "project_id": str(get("project_id") or ""),
-                "assignees": get("assignees") or [],
-                "reporter": str(get("reporter") or ""),
-                "created_at": _dt_to_clickhouse_datetime(get("created_at"))
-                or datetime.now(timezone.utc),
-                "updated_at": _dt_to_clickhouse_datetime(get("updated_at"))
-                or datetime.now(timezone.utc),
-                "started_at": _dt_to_clickhouse_datetime(get("started_at")),
-                "completed_at": _dt_to_clickhouse_datetime(get("completed_at")),
-                "closed_at": _dt_to_clickhouse_datetime(get("closed_at")),
-                "labels": get("labels") or [],
-                "story_points": get("story_points")
-                if get("story_points") is not None
-                else None,
-                "sprint_id": str(get("sprint_id") or ""),
-                "sprint_name": str(get("sprint_name") or ""),
-                "parent_id": str(get("parent_id") or ""),
-                "epic_id": str(get("epic_id") or ""),
-                "url": str(get("url") or ""),
-                "last_synced": _dt_to_clickhouse_datetime(synced_at),
-            })
+            rows.append(
+                {
+                    "repo_id": repo_id_val,
+                    "work_item_id": str(get("work_item_id")),
+                    "provider": str(get("provider")),
+                    "title": str(get("title")),
+                    "type": str(get("type")),
+                    "status": str(get("status")),
+                    "status_raw": str(get("status_raw") or ""),
+                    "project_key": str(get("project_key") or ""),
+                    "project_id": str(get("project_id") or ""),
+                    "assignees": get("assignees") or [],
+                    "reporter": str(get("reporter") or ""),
+                    "created_at": _dt_to_clickhouse_datetime(get("created_at"))
+                    or datetime.now(timezone.utc),
+                    "updated_at": _dt_to_clickhouse_datetime(get("updated_at"))
+                    or datetime.now(timezone.utc),
+                    "started_at": _dt_to_clickhouse_datetime(get("started_at")),
+                    "completed_at": _dt_to_clickhouse_datetime(get("completed_at")),
+                    "closed_at": _dt_to_clickhouse_datetime(get("closed_at")),
+                    "labels": get("labels") or [],
+                    "story_points": get("story_points")
+                    if get("story_points") is not None
+                    else None,
+                    "sprint_id": str(get("sprint_id") or ""),
+                    "sprint_name": str(get("sprint_name") or ""),
+                    "parent_id": str(get("parent_id") or ""),
+                    "epic_id": str(get("epic_id") or ""),
+                    "url": str(get("url") or ""),
+                    "last_synced": _dt_to_clickhouse_datetime(synced_at),
+                }
+            )
 
         # Convert dict rows to matrix format for ClickHouse
         column_names = [
@@ -1003,20 +1013,22 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             else:
                 repo_id_val = uuid.UUID(int=0)
 
-            rows.append({
-                "repo_id": repo_id_val,
-                "work_item_id": str(get("work_item_id")),
-                "occurred_at": _dt_to_clickhouse_datetime(get("occurred_at"))
-                if get("occurred_at")
-                else datetime.now(timezone.utc),
-                "provider": str(get("provider")),
-                "from_status": str(get("from_status")),
-                "to_status": str(get("to_status")),
-                "from_status_raw": str(get("from_status_raw") or ""),
-                "to_status_raw": str(get("to_status_raw") or ""),
-                "actor": str(get("actor") or ""),
-                "last_synced": _dt_to_clickhouse_datetime(synced_at),
-            })
+            rows.append(
+                {
+                    "repo_id": repo_id_val,
+                    "work_item_id": str(get("work_item_id")),
+                    "occurred_at": _dt_to_clickhouse_datetime(get("occurred_at"))
+                    if get("occurred_at")
+                    else datetime.now(timezone.utc),
+                    "provider": str(get("provider")),
+                    "from_status": str(get("from_status")),
+                    "to_status": str(get("to_status")),
+                    "from_status_raw": str(get("from_status_raw") or ""),
+                    "to_status_raw": str(get("to_status_raw") or ""),
+                    "actor": str(get("actor") or ""),
+                    "last_synced": _dt_to_clickhouse_datetime(synced_at),
+                }
+            )
 
         # Convert dict rows to matrix format for ClickHouse
         column_names = [

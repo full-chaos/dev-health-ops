@@ -5,7 +5,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import text
 
-from dev_health_ops.metrics.schemas import RepoMetricsDailyRecord, WorkItemMetricsDailyRecord
+from dev_health_ops.metrics.schemas import (
+    RepoMetricsDailyRecord,
+    WorkItemMetricsDailyRecord,
+)
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 

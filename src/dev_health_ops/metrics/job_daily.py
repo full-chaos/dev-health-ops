@@ -15,15 +15,23 @@ from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
 from dev_health_ops.metrics.compute_ic import compute_ic_metrics_daily
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
-from dev_health_ops.metrics.compute_wellbeing import compute_team_wellbeing_metrics_daily
+from dev_health_ops.metrics.compute_wellbeing import (
+    compute_team_wellbeing_metrics_daily,
+)
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
 from dev_health_ops.metrics.identity import get_team_resolver, init_team_resolver
-from dev_health_ops.metrics.knowledge import compute_bus_factor, compute_code_ownership_gini
+from dev_health_ops.metrics.knowledge import (
+    compute_bus_factor,
+    compute_code_ownership_gini,
+)
 from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.loaders.mongo import MongoDataLoader
 from dev_health_ops.metrics.loaders.sqlalchemy import SqlAlchemyDataLoader
-from dev_health_ops.metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
+from dev_health_ops.metrics.quality import (
+    compute_rework_churn_ratio,
+    compute_single_owner_file_ratio,
+)
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink

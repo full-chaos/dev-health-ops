@@ -53,7 +53,9 @@ class SyncProgress:
 class Subscription:
     """Root subscription type for real-time updates."""
 
-    @strawberry.subscription(description="Subscribe to metrics updates for an organization")
+    @strawberry.subscription(
+        description="Subscribe to metrics updates for an organization"
+    )
     async def metrics_updated(
         self,
         info: Info,

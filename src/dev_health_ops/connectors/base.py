@@ -26,7 +26,10 @@ from dev_health_ops.connectors.models import (
     Repository,
     RepoStats,
 )
-from dev_health_ops.connectors.utils.rate_limit_queue import RateLimitConfig, RateLimitGate
+from dev_health_ops.connectors.utils.rate_limit_queue import (
+    RateLimitConfig,
+    RateLimitGate,
+)
 
 logger = logging.getLogger(__name__)
 

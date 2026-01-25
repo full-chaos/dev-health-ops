@@ -14,13 +14,15 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dev_health_ops.connectors import GitHubConnector, BatchResult
+from dev_health_ops.connectors import GitHubConnector, BatchResult  # noqa: E402
 
 
 def on_repo_processed(result: BatchResult) -> None:
     """Callback function called when each repository is processed."""
     if result.success:
-        print(f"  ✓ {result.repository.full_name}: {result.stats.total_commits} commits")
+        print(
+            f"  ✓ {result.repository.full_name}: {result.stats.total_commits} commits"
+        )
     else:
         print(f"  ✗ {result.repository.full_name}: {result.error}")
 

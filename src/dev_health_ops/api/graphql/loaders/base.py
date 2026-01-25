@@ -91,11 +91,15 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
 
         # Batch load missing keys
         if missing_keys:
-            missing_indices, missing_key_values = zip(*missing_keys) if missing_keys else ([], [])
+            missing_indices, missing_key_values = (
+                zip(*missing_keys) if missing_keys else ([], [])
+            )
             loaded_values = await self.batch_load(list(missing_key_values))
 
             # Map loaded values back and cache them
-            for idx, key, value in zip(missing_indices, missing_key_values, loaded_values):
+            for idx, key, value in zip(
+                missing_indices, missing_key_values, loaded_values
+            ):
                 results[idx] = value
                 if self._external_cache and value is not None:
                     cache_key = make_cache_key(self._cache_prefix, key)

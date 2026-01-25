@@ -197,21 +197,23 @@ def compute_ic_landscape_rolling(
         x3 = wip
         y3 = delivery
 
-        enriched_stats.append({
-            "identity_id": identity,
-            "team_id": team_id,
-            "stats": {
-                "churn_loc_30d": churn,
-                "delivery_units_30d": delivery,
-                "cycle_p50_30d_hours": cycle,
-                "wip_max_30d": wip,
-            },
-            "maps": {
-                "churn_throughput": (x1, y1),
-                "cycle_throughput": (x2, y2),
-                "wip_throughput": (x3, y3),
-            },
-        })
+        enriched_stats.append(
+            {
+                "identity_id": identity,
+                "team_id": team_id,
+                "stats": {
+                    "churn_loc_30d": churn,
+                    "delivery_units_30d": delivery,
+                    "cycle_p50_30d_hours": cycle,
+                    "wip_max_30d": wip,
+                },
+                "maps": {
+                    "churn_throughput": (x1, y1),
+                    "cycle_throughput": (x2, y2),
+                    "wip_throughput": (x3, y3),
+                },
+            }
+        )
 
     # 2. Group by team for normalization
     by_team: Dict[str, List[Any]] = {}

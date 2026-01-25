@@ -427,16 +427,18 @@ class GitBlameMixin:
                         )
                         hexsha = getattr(commit, "hexsha", "unknown")
 
-                        blame_data.append((
-                            repo_uuid,
-                            author_email,
-                            author_name,
-                            committed_datetime,
-                            hexsha,
-                            line_no,
-                            line.rstrip("\n") if line else "",
-                            rel_path,
-                        ))
+                        blame_data.append(
+                            (
+                                repo_uuid,
+                                author_email,
+                                author_name,
+                                committed_datetime,
+                                hexsha,
+                                line_no,
+                                line.rstrip("\n") if line else "",
+                                rel_path,
+                            )
+                        )
                         line_no += 1
         except Exception as e:
             logging.warning(f"Error processing {rel_path}: {e}")

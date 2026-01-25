@@ -139,7 +139,9 @@ async def build_segment_investment(
                 row.get("subcategory_distribution_json")
             )
             total_effort += effort_value
-            evidence_weighted += effort_value * float(row.get("evidence_quality") or 0.0)
+            evidence_weighted += effort_value * float(
+                row.get("evidence_quality") or 0.0
+            )
             for key, value in theme_distribution.items():
                 if key in theme_totals:
                     theme_totals[key] += effort_value * float(value or 0.0)
@@ -164,7 +166,9 @@ async def build_segment_investment(
                 )
 
         theme_distribution = _normalize_scores(theme_totals, sorted(THEMES))
-        subcategory_distribution = _normalize_scores(subcategory_totals, sorted(SUBCATEGORIES))
+        subcategory_distribution = _normalize_scores(
+            subcategory_totals, sorted(SUBCATEGORIES)
+        )
 
         evidence_quality_value = (
             evidence_weighted / total_effort if total_effort > 0 else 0.0

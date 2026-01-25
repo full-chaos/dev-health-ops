@@ -249,7 +249,10 @@ class JiraProvider(Provider):
                             for comment in client.iter_issue_comments(
                                 issue_id_or_key=str(issue_key)
                             ):
-                                if comments_limit > 0 and comment_count >= comments_limit:
+                                if (
+                                    comments_limit > 0
+                                    and comment_count >= comments_limit
+                                ):
                                     break
                                 event = jira_comment_to_interaction_event(
                                     work_item_id=wi.work_item_id,
@@ -282,7 +285,9 @@ class JiraProvider(Provider):
                 try:
                     payload = client.get_sprint(sprint_id=str(sprint_id))
                 except Exception as exc:
-                    logger.warning("Jira: failed to fetch sprint %s: %s", sprint_id, exc)
+                    logger.warning(
+                        "Jira: failed to fetch sprint %s: %s", sprint_id, exc
+                    )
                     continue
                 sprint = jira_sprint_payload_to_model(payload)
                 if sprint:

@@ -34,7 +34,11 @@ from dev_health_ops.connectors.models import (
     Repository,
     RepoStats,
 )
-from dev_health_ops.connectors.utils import GitHubGraphQLClient, retry_with_backoff, match_repo_pattern
+from dev_health_ops.connectors.utils import (
+    GitHubGraphQLClient,
+    retry_with_backoff,
+    match_repo_pattern,
+)
 
 logger = logging.getLogger(__name__)
 

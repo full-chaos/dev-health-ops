@@ -42,7 +42,11 @@ from dev_health_ops.models.git import (
     Incident,
     Repo,
 )
-from dev_health_ops.models.work_items import WorkItem, WorkItemDependency, WorkItemStatusTransition
+from dev_health_ops.models.work_items import (
+    WorkItem,
+    WorkItemDependency,
+    WorkItemStatusTransition,
+)
 from dev_health_ops.models.teams import Team
 
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot
@@ -100,11 +104,13 @@ def detect_db_type(conn_string: str) -> str:
     conn_lower = conn_string.lower()
 
     # ClickHouse connection strings
-    if conn_lower.startswith("clickhouse://") or conn_lower.startswith((
-        "clickhouse+http://",
-        "clickhouse+https://",
-        "clickhouse+native://",
-    )):
+    if conn_lower.startswith("clickhouse://") or conn_lower.startswith(
+        (
+            "clickhouse+http://",
+            "clickhouse+https://",
+            "clickhouse+native://",
+        )
+    ):
         return "clickhouse"
 
     # MongoDB connection strings
@@ -238,12 +244,14 @@ class SQLAlchemyStore:
 
         # Only add pooling parameters for databases that support them
         if "sqlite" not in conn_string.lower():
-            engine_kwargs.update({
-                "pool_size": 20,  # Increased from default 5
-                "max_overflow": 30,  # Increased from default 10
-                "pool_pre_ping": True,  # Verify connections before using
-                "pool_recycle": 3600,  # Recycle connections after 1 hour
-            })
+            engine_kwargs.update(
+                {
+                    "pool_size": 20,  # Increased from default 5
+                    "max_overflow": 30,  # Increased from default 10
+                    "pool_pre_ping": True,  # Verify connections before using
+                    "pool_recycle": 3600,  # Recycle connections after 1 hour
+                }
+            )
 
         self.engine = create_async_engine(conn_string, **engine_kwargs)
         self.session_factory = sessionmaker(
@@ -1043,38 +1051,40 @@ class SQLAlchemyStore:
             if repo_id_val:
                 repo_id_val = str(repo_id_val)
 
-            rows.append({
-                "work_item_id": str(get("work_item_id")),
-                "repo_id": repo_id_val,
-                "provider": str(get("provider") or ""),
-                "title": str(get("title") or ""),
-                "description": get("description"),
-                "type": str(get("type") or ""),
-                "status": str(get("status") or ""),
-                "status_raw": str(get("status_raw") or ""),
-                "project_key": str(get("project_key") or ""),
-                "project_id": str(get("project_id") or ""),
-                "assignees": get("assignees") or [],
-                "reporter": str(get("reporter") or ""),
-                "created_at": get("created_at"),
-                "updated_at": get("updated_at"),
-                "started_at": get("started_at"),
-                "completed_at": get("completed_at"),
-                "closed_at": get("closed_at"),
-                "labels": get("labels") or [],
-                "story_points": float(get("story_points"))
-                if get("story_points") is not None
-                else None,
-                "sprint_id": str(get("sprint_id") or ""),
-                "sprint_name": str(get("sprint_name") or ""),
-                "parent_id": str(get("parent_id") or ""),
-                "epic_id": str(get("epic_id") or ""),
-                "url": str(get("url") or ""),
-                "priority_raw": str(get("priority_raw") or ""),
-                "service_class": str(get("service_class") or ""),
-                "due_at": get("due_at"),
-                "last_synced": get("last_synced") or synced_at_default,
-            })
+            rows.append(
+                {
+                    "work_item_id": str(get("work_item_id")),
+                    "repo_id": repo_id_val,
+                    "provider": str(get("provider") or ""),
+                    "title": str(get("title") or ""),
+                    "description": get("description"),
+                    "type": str(get("type") or ""),
+                    "status": str(get("status") or ""),
+                    "status_raw": str(get("status_raw") or ""),
+                    "project_key": str(get("project_key") or ""),
+                    "project_id": str(get("project_id") or ""),
+                    "assignees": get("assignees") or [],
+                    "reporter": str(get("reporter") or ""),
+                    "created_at": get("created_at"),
+                    "updated_at": get("updated_at"),
+                    "started_at": get("started_at"),
+                    "completed_at": get("completed_at"),
+                    "closed_at": get("closed_at"),
+                    "labels": get("labels") or [],
+                    "story_points": float(get("story_points"))
+                    if get("story_points") is not None
+                    else None,
+                    "sprint_id": str(get("sprint_id") or ""),
+                    "sprint_name": str(get("sprint_name") or ""),
+                    "parent_id": str(get("parent_id") or ""),
+                    "epic_id": str(get("epic_id") or ""),
+                    "url": str(get("url") or ""),
+                    "priority_raw": str(get("priority_raw") or ""),
+                    "service_class": str(get("service_class") or ""),
+                    "due_at": get("due_at"),
+                    "last_synced": get("last_synced") or synced_at_default,
+                }
+            )
 
         await self._upsert_many(
             self._work_items_table,
@@ -1130,18 +1140,20 @@ class SQLAlchemyStore:
             if repo_id_val:
                 repo_id_val = str(repo_id_val)
 
-            rows.append({
-                "work_item_id": str(get("work_item_id")),
-                "occurred_at": get("occurred_at"),
-                "repo_id": repo_id_val,
-                "provider": str(get("provider") or ""),
-                "from_status": str(get("from_status") or ""),
-                "to_status": str(get("to_status") or ""),
-                "from_status_raw": str(get("from_status_raw") or ""),
-                "to_status_raw": str(get("to_status_raw") or ""),
-                "actor": str(get("actor") or ""),
-                "last_synced": get("last_synced") or synced_at_default,
-            })
+            rows.append(
+                {
+                    "work_item_id": str(get("work_item_id")),
+                    "occurred_at": get("occurred_at"),
+                    "repo_id": repo_id_val,
+                    "provider": str(get("provider") or ""),
+                    "from_status": str(get("from_status") or ""),
+                    "to_status": str(get("to_status") or ""),
+                    "from_status_raw": str(get("from_status_raw") or ""),
+                    "to_status_raw": str(get("to_status_raw") or ""),
+                    "actor": str(get("actor") or ""),
+                    "last_synced": get("last_synced") or synced_at_default,
+                }
+            )
 
         await self._upsert_many(
             self._work_item_transitions_table,
@@ -1171,14 +1183,16 @@ class SQLAlchemyStore:
             if isinstance(item, dict):
                 rows.append(item)
             else:
-                rows.append({
-                    "id": item.id,
-                    "team_uuid": item.team_uuid,
-                    "name": item.name,
-                    "description": item.description,
-                    "members": item.members,
-                    "updated_at": item.updated_at,
-                })
+                rows.append(
+                    {
+                        "id": item.id,
+                        "team_uuid": item.team_uuid,
+                        "name": item.name,
+                        "description": item.description,
+                        "members": item.members,
+                        "updated_at": item.updated_at,
+                    }
+                )
 
         await self._upsert_many(
             Team,
@@ -1473,33 +1487,41 @@ class MongoStore:
         rows: List[Dict[str, Any]] = []
         for item in runs:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "run_id": item.get("run_id"),
-                    "status": item.get("status"),
-                    "queued_at": self._normalize_datetime(item.get("queued_at")),
-                    "started_at": self._normalize_datetime(item.get("started_at")),
-                    "finished_at": self._normalize_datetime(item.get("finished_at")),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "run_id": item.get("run_id"),
+                        "status": item.get("status"),
+                        "queued_at": self._normalize_datetime(item.get("queued_at")),
+                        "started_at": self._normalize_datetime(item.get("started_at")),
+                        "finished_at": self._normalize_datetime(
+                            item.get("finished_at")
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "run_id": getattr(item, "run_id"),
-                    "status": getattr(item, "status"),
-                    "queued_at": self._normalize_datetime(
-                        getattr(item, "queued_at", None)
-                    ),
-                    "started_at": self._normalize_datetime(getattr(item, "started_at")),
-                    "finished_at": self._normalize_datetime(
-                        getattr(item, "finished_at", None)
-                    ),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "run_id": getattr(item, "run_id"),
+                        "status": getattr(item, "status"),
+                        "queued_at": self._normalize_datetime(
+                            getattr(item, "queued_at", None)
+                        ),
+                        "started_at": self._normalize_datetime(
+                            getattr(item, "started_at")
+                        ),
+                        "finished_at": self._normalize_datetime(
+                            getattr(item, "finished_at", None)
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "ci_pipeline_runs",
@@ -1522,43 +1544,53 @@ class MongoStore:
         rows: List[Dict[str, Any]] = []
         for item in deployments:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "deployment_id": item.get("deployment_id"),
-                    "status": item.get("status"),
-                    "environment": item.get("environment"),
-                    "started_at": self._normalize_datetime(item.get("started_at")),
-                    "finished_at": self._normalize_datetime(item.get("finished_at")),
-                    "deployed_at": self._normalize_datetime(item.get("deployed_at")),
-                    "merged_at": self._normalize_datetime(item.get("merged_at")),
-                    "pull_request_number": item.get("pull_request_number"),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "deployment_id": item.get("deployment_id"),
+                        "status": item.get("status"),
+                        "environment": item.get("environment"),
+                        "started_at": self._normalize_datetime(item.get("started_at")),
+                        "finished_at": self._normalize_datetime(
+                            item.get("finished_at")
+                        ),
+                        "deployed_at": self._normalize_datetime(
+                            item.get("deployed_at")
+                        ),
+                        "merged_at": self._normalize_datetime(item.get("merged_at")),
+                        "pull_request_number": item.get("pull_request_number"),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "deployment_id": getattr(item, "deployment_id"),
-                    "status": getattr(item, "status"),
-                    "environment": getattr(item, "environment", None),
-                    "started_at": self._normalize_datetime(
-                        getattr(item, "started_at", None)
-                    ),
-                    "finished_at": self._normalize_datetime(
-                        getattr(item, "finished_at", None)
-                    ),
-                    "deployed_at": self._normalize_datetime(
-                        getattr(item, "deployed_at", None)
-                    ),
-                    "merged_at": self._normalize_datetime(
-                        getattr(item, "merged_at", None)
-                    ),
-                    "pull_request_number": getattr(item, "pull_request_number", None),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "deployment_id": getattr(item, "deployment_id"),
+                        "status": getattr(item, "status"),
+                        "environment": getattr(item, "environment", None),
+                        "started_at": self._normalize_datetime(
+                            getattr(item, "started_at", None)
+                        ),
+                        "finished_at": self._normalize_datetime(
+                            getattr(item, "finished_at", None)
+                        ),
+                        "deployed_at": self._normalize_datetime(
+                            getattr(item, "deployed_at", None)
+                        ),
+                        "merged_at": self._normalize_datetime(
+                            getattr(item, "merged_at", None)
+                        ),
+                        "pull_request_number": getattr(
+                            item, "pull_request_number", None
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "deployments",
@@ -1585,7 +1617,6 @@ class MongoStore:
         )
 
     async def insert_teams(self, teams: List["Team"]) -> None:
-
         await self._upsert_many(
             "teams",
             teams,
@@ -1606,25 +1637,29 @@ class MongoStore:
         rows: List[Dict[str, Any]] = []
         for item in dependencies:
             if isinstance(item, dict):
-                rows.append({
-                    "source_work_item_id": item.get("source_work_item_id"),
-                    "target_work_item_id": item.get("target_work_item_id"),
-                    "relationship_type": item.get("relationship_type"),
-                    "relationship_type_raw": item.get("relationship_type_raw"),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "source_work_item_id": item.get("source_work_item_id"),
+                        "target_work_item_id": item.get("target_work_item_id"),
+                        "relationship_type": item.get("relationship_type"),
+                        "relationship_type_raw": item.get("relationship_type_raw"),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "source_work_item_id": getattr(item, "source_work_item_id"),
-                    "target_work_item_id": getattr(item, "target_work_item_id"),
-                    "relationship_type": getattr(item, "relationship_type"),
-                    "relationship_type_raw": getattr(item, "relationship_type_raw"),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "source_work_item_id": getattr(item, "source_work_item_id"),
+                        "target_work_item_id": getattr(item, "target_work_item_id"),
+                        "relationship_type": getattr(item, "relationship_type"),
+                        "relationship_type_raw": getattr(item, "relationship_type_raw"),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "work_item_dependencies",
@@ -1660,17 +1695,19 @@ class MongoStore:
 
         for item in records:
             # item is expected to be a dict
-            rows.append({
-                "repo_id": self._normalize_uuid(item.get("repo_id")),
-                "pr_number": int(item.get("pr_number") or 0),
-                "commit_hash": item.get("commit_hash"),
-                "confidence": float(item.get("confidence") or 1.0),
-                "provenance": item.get("provenance"),
-                "evidence": item.get("evidence"),
-                "last_synced": self._normalize_datetime(
-                    item.get("last_synced") or synced_at_default
-                ),
-            })
+            rows.append(
+                {
+                    "repo_id": self._normalize_uuid(item.get("repo_id")),
+                    "pr_number": int(item.get("pr_number") or 0),
+                    "commit_hash": item.get("commit_hash"),
+                    "confidence": float(item.get("confidence") or 1.0),
+                    "provenance": item.get("provenance"),
+                    "evidence": item.get("evidence"),
+                    "last_synced": self._normalize_datetime(
+                        item.get("last_synced") or synced_at_default
+                    ),
+                }
+            )
 
         await self._insert_rows("work_graph_pr_commit", columns, rows)
 
@@ -2071,25 +2108,29 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in file_data:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "path": item.get("path"),
-                    "executable": 1 if item.get("executable") else 0,
-                    "contents": item.get("contents"),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "path": item.get("path"),
+                        "executable": 1 if item.get("executable") else 0,
+                        "contents": item.get("contents"),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "path": getattr(item, "path"),
-                    "executable": 1 if getattr(item, "executable") else 0,
-                    "contents": getattr(item, "contents"),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "path": getattr(item, "path"),
+                        "executable": 1 if getattr(item, "executable") else 0,
+                        "contents": getattr(item, "contents"),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "git_files",
@@ -2104,43 +2145,49 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in commit_data:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "hash": item.get("hash"),
-                    "message": item.get("message"),
-                    "author_name": item.get("author_name"),
-                    "author_email": item.get("author_email"),
-                    "author_when": self._normalize_datetime(item.get("author_when")),
-                    "committer_name": item.get("committer_name"),
-                    "committer_email": item.get("committer_email"),
-                    "committer_when": self._normalize_datetime(
-                        item.get("committer_when")
-                    ),
-                    "parents": int(item.get("parents") or 0),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "hash": item.get("hash"),
+                        "message": item.get("message"),
+                        "author_name": item.get("author_name"),
+                        "author_email": item.get("author_email"),
+                        "author_when": self._normalize_datetime(
+                            item.get("author_when")
+                        ),
+                        "committer_name": item.get("committer_name"),
+                        "committer_email": item.get("committer_email"),
+                        "committer_when": self._normalize_datetime(
+                            item.get("committer_when")
+                        ),
+                        "parents": int(item.get("parents") or 0),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "hash": getattr(item, "hash"),
-                    "message": getattr(item, "message"),
-                    "author_name": getattr(item, "author_name"),
-                    "author_email": getattr(item, "author_email"),
-                    "author_when": self._normalize_datetime(
-                        getattr(item, "author_when")
-                    ),
-                    "committer_name": getattr(item, "committer_name"),
-                    "committer_email": getattr(item, "committer_email"),
-                    "committer_when": self._normalize_datetime(
-                        getattr(item, "committer_when")
-                    ),
-                    "parents": int(getattr(item, "parents") or 0),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "hash": getattr(item, "hash"),
+                        "message": getattr(item, "message"),
+                        "author_name": getattr(item, "author_name"),
+                        "author_email": getattr(item, "author_email"),
+                        "author_when": self._normalize_datetime(
+                            getattr(item, "author_when")
+                        ),
+                        "committer_name": getattr(item, "committer_name"),
+                        "committer_email": getattr(item, "committer_email"),
+                        "committer_when": self._normalize_datetime(
+                            getattr(item, "committer_when")
+                        ),
+                        "parents": int(getattr(item, "parents") or 0),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "git_commits",
@@ -2167,31 +2214,37 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in commit_stats:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "commit_hash": item.get("commit_hash"),
-                    "file_path": item.get("file_path"),
-                    "additions": int(item.get("additions") or 0),
-                    "deletions": int(item.get("deletions") or 0),
-                    "old_file_mode": item.get("old_file_mode") or "unknown",
-                    "new_file_mode": item.get("new_file_mode") or "unknown",
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "commit_hash": item.get("commit_hash"),
+                        "file_path": item.get("file_path"),
+                        "additions": int(item.get("additions") or 0),
+                        "deletions": int(item.get("deletions") or 0),
+                        "old_file_mode": item.get("old_file_mode") or "unknown",
+                        "new_file_mode": item.get("new_file_mode") or "unknown",
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "commit_hash": getattr(item, "commit_hash"),
-                    "file_path": getattr(item, "file_path"),
-                    "additions": int(getattr(item, "additions") or 0),
-                    "deletions": int(getattr(item, "deletions") or 0),
-                    "old_file_mode": getattr(item, "old_file_mode", None) or "unknown",
-                    "new_file_mode": getattr(item, "new_file_mode", None) or "unknown",
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "commit_hash": getattr(item, "commit_hash"),
+                        "file_path": getattr(item, "file_path"),
+                        "additions": int(getattr(item, "additions") or 0),
+                        "deletions": int(getattr(item, "deletions") or 0),
+                        "old_file_mode": getattr(item, "old_file_mode", None)
+                        or "unknown",
+                        "new_file_mode": getattr(item, "new_file_mode", None)
+                        or "unknown",
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "git_commit_stats",
@@ -2215,35 +2268,41 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in data_batch:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "path": item.get("path"),
-                    "line_no": int(item.get("line_no") or 0),
-                    "author_email": item.get("author_email"),
-                    "author_name": item.get("author_name"),
-                    "author_when": self._normalize_datetime(item.get("author_when")),
-                    "commit_hash": item.get("commit_hash"),
-                    "line": item.get("line"),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "path": item.get("path"),
+                        "line_no": int(item.get("line_no") or 0),
+                        "author_email": item.get("author_email"),
+                        "author_name": item.get("author_name"),
+                        "author_when": self._normalize_datetime(
+                            item.get("author_when")
+                        ),
+                        "commit_hash": item.get("commit_hash"),
+                        "line": item.get("line"),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "path": getattr(item, "path"),
-                    "line_no": int(getattr(item, "line_no") or 0),
-                    "author_email": getattr(item, "author_email"),
-                    "author_name": getattr(item, "author_name"),
-                    "author_when": self._normalize_datetime(
-                        getattr(item, "author_when")
-                    ),
-                    "commit_hash": getattr(item, "commit_hash"),
-                    "line": getattr(item, "line"),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "path": getattr(item, "path"),
+                        "line_no": int(getattr(item, "line_no") or 0),
+                        "author_email": getattr(item, "author_email"),
+                        "author_name": getattr(item, "author_name"),
+                        "author_when": self._normalize_datetime(
+                            getattr(item, "author_when")
+                        ),
+                        "commit_hash": getattr(item, "commit_hash"),
+                        "line": getattr(item, "line"),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "git_blame",
@@ -2268,69 +2327,79 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in pr_data:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "number": int(item.get("number") or 0),
-                    "title": item.get("title"),
-                    "body": item.get("body"),
-                    "state": item.get("state"),
-                    "author_name": item.get("author_name"),
-                    "author_email": item.get("author_email"),
-                    "created_at": self._normalize_datetime(item.get("created_at")),
-                    "merged_at": self._normalize_datetime(item.get("merged_at")),
-                    "closed_at": self._normalize_datetime(item.get("closed_at")),
-                    "head_branch": item.get("head_branch"),
-                    "base_branch": item.get("base_branch"),
-                    "additions": item.get("additions"),
-                    "deletions": item.get("deletions"),
-                    "changed_files": item.get("changed_files"),
-                    "first_review_at": self._normalize_datetime(
-                        item.get("first_review_at")
-                    ),
-                    "first_comment_at": self._normalize_datetime(
-                        item.get("first_comment_at")
-                    ),
-                    "changes_requested_count": int(
-                        item.get("changes_requested_count", 0) or 0
-                    ),
-                    "reviews_count": int(item.get("reviews_count", 0) or 0),
-                    "comments_count": int(item.get("comments_count", 0) or 0),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "number": int(item.get("number") or 0),
+                        "title": item.get("title"),
+                        "body": item.get("body"),
+                        "state": item.get("state"),
+                        "author_name": item.get("author_name"),
+                        "author_email": item.get("author_email"),
+                        "created_at": self._normalize_datetime(item.get("created_at")),
+                        "merged_at": self._normalize_datetime(item.get("merged_at")),
+                        "closed_at": self._normalize_datetime(item.get("closed_at")),
+                        "head_branch": item.get("head_branch"),
+                        "base_branch": item.get("base_branch"),
+                        "additions": item.get("additions"),
+                        "deletions": item.get("deletions"),
+                        "changed_files": item.get("changed_files"),
+                        "first_review_at": self._normalize_datetime(
+                            item.get("first_review_at")
+                        ),
+                        "first_comment_at": self._normalize_datetime(
+                            item.get("first_comment_at")
+                        ),
+                        "changes_requested_count": int(
+                            item.get("changes_requested_count", 0) or 0
+                        ),
+                        "reviews_count": int(item.get("reviews_count", 0) or 0),
+                        "comments_count": int(item.get("comments_count", 0) or 0),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "number": int(getattr(item, "number") or 0),
-                    "title": getattr(item, "title"),
-                    "body": getattr(item, "body", None),
-                    "state": getattr(item, "state"),
-                    "author_name": getattr(item, "author_name"),
-                    "author_email": getattr(item, "author_email"),
-                    "created_at": self._normalize_datetime(getattr(item, "created_at")),
-                    "merged_at": self._normalize_datetime(getattr(item, "merged_at")),
-                    "closed_at": self._normalize_datetime(getattr(item, "closed_at")),
-                    "head_branch": getattr(item, "head_branch"),
-                    "base_branch": getattr(item, "base_branch"),
-                    "additions": getattr(item, "additions", None),
-                    "deletions": getattr(item, "deletions", None),
-                    "changed_files": getattr(item, "changed_files", None),
-                    "first_review_at": self._normalize_datetime(
-                        getattr(item, "first_review_at", None)
-                    ),
-                    "first_comment_at": self._normalize_datetime(
-                        getattr(item, "first_comment_at", None)
-                    ),
-                    "changes_requested_count": int(
-                        getattr(item, "changes_requested_count", 0) or 0
-                    ),
-                    "reviews_count": int(getattr(item, "reviews_count", 0) or 0),
-                    "comments_count": int(getattr(item, "comments_count", 0) or 0),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "number": int(getattr(item, "number") or 0),
+                        "title": getattr(item, "title"),
+                        "body": getattr(item, "body", None),
+                        "state": getattr(item, "state"),
+                        "author_name": getattr(item, "author_name"),
+                        "author_email": getattr(item, "author_email"),
+                        "created_at": self._normalize_datetime(
+                            getattr(item, "created_at")
+                        ),
+                        "merged_at": self._normalize_datetime(
+                            getattr(item, "merged_at")
+                        ),
+                        "closed_at": self._normalize_datetime(
+                            getattr(item, "closed_at")
+                        ),
+                        "head_branch": getattr(item, "head_branch"),
+                        "base_branch": getattr(item, "base_branch"),
+                        "additions": getattr(item, "additions", None),
+                        "deletions": getattr(item, "deletions", None),
+                        "changed_files": getattr(item, "changed_files", None),
+                        "first_review_at": self._normalize_datetime(
+                            getattr(item, "first_review_at", None)
+                        ),
+                        "first_comment_at": self._normalize_datetime(
+                            getattr(item, "first_comment_at", None)
+                        ),
+                        "changes_requested_count": int(
+                            getattr(item, "changes_requested_count", 0) or 0
+                        ),
+                        "reviews_count": int(getattr(item, "reviews_count", 0) or 0),
+                        "comments_count": int(getattr(item, "comments_count", 0) or 0),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "git_pull_requests",
@@ -2369,31 +2438,37 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in review_data:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "number": int(item.get("number") or 0),
-                    "review_id": str(item.get("review_id")),
-                    "reviewer": str(item.get("reviewer")),
-                    "state": str(item.get("state")),
-                    "submitted_at": self._normalize_datetime(item.get("submitted_at")),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "number": int(item.get("number") or 0),
+                        "review_id": str(item.get("review_id")),
+                        "reviewer": str(item.get("reviewer")),
+                        "state": str(item.get("state")),
+                        "submitted_at": self._normalize_datetime(
+                            item.get("submitted_at")
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "number": int(getattr(item, "number") or 0),
-                    "review_id": str(getattr(item, "review_id")),
-                    "reviewer": str(getattr(item, "reviewer")),
-                    "state": str(getattr(item, "state")),
-                    "submitted_at": self._normalize_datetime(
-                        getattr(item, "submitted_at")
-                    ),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "number": int(getattr(item, "number") or 0),
+                        "review_id": str(getattr(item, "review_id")),
+                        "reviewer": str(getattr(item, "reviewer")),
+                        "state": str(getattr(item, "state")),
+                        "submitted_at": self._normalize_datetime(
+                            getattr(item, "submitted_at")
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "git_pull_request_reviews",
@@ -2416,33 +2491,41 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in runs:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "run_id": str(item.get("run_id")),
-                    "status": item.get("status"),
-                    "queued_at": self._normalize_datetime(item.get("queued_at")),
-                    "started_at": self._normalize_datetime(item.get("started_at")),
-                    "finished_at": self._normalize_datetime(item.get("finished_at")),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "run_id": str(item.get("run_id")),
+                        "status": item.get("status"),
+                        "queued_at": self._normalize_datetime(item.get("queued_at")),
+                        "started_at": self._normalize_datetime(item.get("started_at")),
+                        "finished_at": self._normalize_datetime(
+                            item.get("finished_at")
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "run_id": str(getattr(item, "run_id")),
-                    "status": getattr(item, "status", None),
-                    "queued_at": self._normalize_datetime(
-                        getattr(item, "queued_at", None)
-                    ),
-                    "started_at": self._normalize_datetime(getattr(item, "started_at")),
-                    "finished_at": self._normalize_datetime(
-                        getattr(item, "finished_at", None)
-                    ),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "run_id": str(getattr(item, "run_id")),
+                        "status": getattr(item, "status", None),
+                        "queued_at": self._normalize_datetime(
+                            getattr(item, "queued_at", None)
+                        ),
+                        "started_at": self._normalize_datetime(
+                            getattr(item, "started_at")
+                        ),
+                        "finished_at": self._normalize_datetime(
+                            getattr(item, "finished_at", None)
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "ci_pipeline_runs",
@@ -2465,43 +2548,53 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in deployments:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "deployment_id": str(item.get("deployment_id")),
-                    "status": item.get("status"),
-                    "environment": item.get("environment"),
-                    "started_at": self._normalize_datetime(item.get("started_at")),
-                    "finished_at": self._normalize_datetime(item.get("finished_at")),
-                    "deployed_at": self._normalize_datetime(item.get("deployed_at")),
-                    "merged_at": self._normalize_datetime(item.get("merged_at")),
-                    "pull_request_number": item.get("pull_request_number"),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "deployment_id": str(item.get("deployment_id")),
+                        "status": item.get("status"),
+                        "environment": item.get("environment"),
+                        "started_at": self._normalize_datetime(item.get("started_at")),
+                        "finished_at": self._normalize_datetime(
+                            item.get("finished_at")
+                        ),
+                        "deployed_at": self._normalize_datetime(
+                            item.get("deployed_at")
+                        ),
+                        "merged_at": self._normalize_datetime(item.get("merged_at")),
+                        "pull_request_number": item.get("pull_request_number"),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "deployment_id": str(getattr(item, "deployment_id")),
-                    "status": getattr(item, "status", None),
-                    "environment": getattr(item, "environment", None),
-                    "started_at": self._normalize_datetime(
-                        getattr(item, "started_at", None)
-                    ),
-                    "finished_at": self._normalize_datetime(
-                        getattr(item, "finished_at", None)
-                    ),
-                    "deployed_at": self._normalize_datetime(
-                        getattr(item, "deployed_at", None)
-                    ),
-                    "merged_at": self._normalize_datetime(
-                        getattr(item, "merged_at", None)
-                    ),
-                    "pull_request_number": getattr(item, "pull_request_number", None),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "deployment_id": str(getattr(item, "deployment_id")),
+                        "status": getattr(item, "status", None),
+                        "environment": getattr(item, "environment", None),
+                        "started_at": self._normalize_datetime(
+                            getattr(item, "started_at", None)
+                        ),
+                        "finished_at": self._normalize_datetime(
+                            getattr(item, "finished_at", None)
+                        ),
+                        "deployed_at": self._normalize_datetime(
+                            getattr(item, "deployed_at", None)
+                        ),
+                        "merged_at": self._normalize_datetime(
+                            getattr(item, "merged_at", None)
+                        ),
+                        "pull_request_number": getattr(
+                            item, "pull_request_number", None
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "deployments",
@@ -2527,29 +2620,37 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in incidents:
             if isinstance(item, dict):
-                rows.append({
-                    "repo_id": self._normalize_uuid(item.get("repo_id")),
-                    "incident_id": str(item.get("incident_id")),
-                    "status": item.get("status"),
-                    "started_at": self._normalize_datetime(item.get("started_at")),
-                    "resolved_at": self._normalize_datetime(item.get("resolved_at")),
-                    "last_synced": self._normalize_datetime(
-                        item.get("last_synced") or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "incident_id": str(item.get("incident_id")),
+                        "status": item.get("status"),
+                        "started_at": self._normalize_datetime(item.get("started_at")),
+                        "resolved_at": self._normalize_datetime(
+                            item.get("resolved_at")
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
             else:
-                rows.append({
-                    "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                    "incident_id": str(getattr(item, "incident_id")),
-                    "status": getattr(item, "status", None),
-                    "started_at": self._normalize_datetime(getattr(item, "started_at")),
-                    "resolved_at": self._normalize_datetime(
-                        getattr(item, "resolved_at", None)
-                    ),
-                    "last_synced": self._normalize_datetime(
-                        getattr(item, "last_synced", None) or synced_at_default
-                    ),
-                })
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
+                        "incident_id": str(getattr(item, "incident_id")),
+                        "status": getattr(item, "status", None),
+                        "started_at": self._normalize_datetime(
+                            getattr(item, "started_at")
+                        ),
+                        "resolved_at": self._normalize_datetime(
+                            getattr(item, "resolved_at", None)
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
 
         await self._insert_rows(
             "incidents",
@@ -2573,24 +2674,30 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in teams:
             if isinstance(item, dict):
-                rows.append({
-                    "id": item.get("id"),
-                    "name": item.get("name"),
-                    "description": item.get("description"),
-                    "members": item.get("members") or [],
-                    "updated_at": self._normalize_datetime(item.get("updated_at")),
-                    "last_synced": synced_at,
-                })
+                rows.append(
+                    {
+                        "id": item.get("id"),
+                        "name": item.get("name"),
+                        "description": item.get("description"),
+                        "members": item.get("members") or [],
+                        "updated_at": self._normalize_datetime(item.get("updated_at")),
+                        "last_synced": synced_at,
+                    }
+                )
             else:
-                rows.append({
-                    "id": getattr(item, "id"),
-                    "team_uuid": self._normalize_uuid(getattr(item, "team_uuid")),
-                    "name": getattr(item, "name"),
-                    "description": getattr(item, "description"),
-                    "members": getattr(item, "members", []) or [],
-                    "updated_at": self._normalize_datetime(getattr(item, "updated_at")),
-                    "last_synced": synced_at,
-                })
+                rows.append(
+                    {
+                        "id": getattr(item, "id"),
+                        "team_uuid": self._normalize_uuid(getattr(item, "team_uuid")),
+                        "name": getattr(item, "name"),
+                        "description": getattr(item, "description"),
+                        "members": getattr(item, "members", []) or [],
+                        "updated_at": self._normalize_datetime(
+                            getattr(item, "updated_at")
+                        ),
+                        "last_synced": synced_at,
+                    }
+                )
 
         await self._insert_rows(
             "teams",
@@ -2651,38 +2758,40 @@ class ClickHouseStore:
             else:
                 repo_id_val = uuid.UUID(int=0)
 
-            rows.append({
-                "repo_id": repo_id_val,
-                "work_item_id": str(get("work_item_id")),
-                "provider": str(get("provider")),
-                "title": str(get("title")),
-                "description": get("description"),
-                "type": str(get("type")),
-                "status": str(get("status")),
-                "status_raw": str(get("status_raw") or ""),
-                "project_key": str(get("project_key") or ""),
-                "project_id": str(get("project_id") or ""),
-                "assignees": get("assignees") or [],
-                "reporter": str(get("reporter") or ""),
-                "created_at": self._normalize_datetime(get("created_at")),
-                "updated_at": self._normalize_datetime(get("updated_at")),
-                "started_at": self._normalize_datetime(get("started_at")),
-                "completed_at": self._normalize_datetime(get("completed_at")),
-                "closed_at": self._normalize_datetime(get("closed_at")),
-                "labels": get("labels") or [],
-                "story_points": float(get("story_points"))
-                if get("story_points") is not None
-                else None,
-                "sprint_id": str(get("sprint_id") or ""),
-                "sprint_name": str(get("sprint_name") or ""),
-                "parent_id": str(get("parent_id") or ""),
-                "epic_id": str(get("epic_id") or ""),
-                "url": str(get("url") or ""),
-                "priority_raw": str(get("priority_raw") or ""),
-                "service_class": str(get("service_class") or ""),
-                "due_at": self._normalize_datetime(get("due_at")),
-                "last_synced": synced_at,
-            })
+            rows.append(
+                {
+                    "repo_id": repo_id_val,
+                    "work_item_id": str(get("work_item_id")),
+                    "provider": str(get("provider")),
+                    "title": str(get("title")),
+                    "description": get("description"),
+                    "type": str(get("type")),
+                    "status": str(get("status")),
+                    "status_raw": str(get("status_raw") or ""),
+                    "project_key": str(get("project_key") or ""),
+                    "project_id": str(get("project_id") or ""),
+                    "assignees": get("assignees") or [],
+                    "reporter": str(get("reporter") or ""),
+                    "created_at": self._normalize_datetime(get("created_at")),
+                    "updated_at": self._normalize_datetime(get("updated_at")),
+                    "started_at": self._normalize_datetime(get("started_at")),
+                    "completed_at": self._normalize_datetime(get("completed_at")),
+                    "closed_at": self._normalize_datetime(get("closed_at")),
+                    "labels": get("labels") or [],
+                    "story_points": float(get("story_points"))
+                    if get("story_points") is not None
+                    else None,
+                    "sprint_id": str(get("sprint_id") or ""),
+                    "sprint_name": str(get("sprint_name") or ""),
+                    "parent_id": str(get("parent_id") or ""),
+                    "epic_id": str(get("epic_id") or ""),
+                    "url": str(get("url") or ""),
+                    "priority_raw": str(get("priority_raw") or ""),
+                    "service_class": str(get("service_class") or ""),
+                    "due_at": self._normalize_datetime(get("due_at")),
+                    "last_synced": synced_at,
+                }
+            )
 
         await self._insert_rows(
             "work_items",
@@ -2742,18 +2851,20 @@ class ClickHouseStore:
             else:
                 repo_id_val = uuid.UUID(int=0)
 
-            rows.append({
-                "repo_id": repo_id_val,
-                "work_item_id": str(get("work_item_id")),
-                "occurred_at": self._normalize_datetime(get("occurred_at")),
-                "provider": str(get("provider")),
-                "from_status": str(get("from_status")),
-                "to_status": str(get("to_status")),
-                "from_status_raw": str(get("from_status_raw") or ""),
-                "to_status_raw": str(get("to_status_raw") or ""),
-                "actor": str(get("actor") or ""),
-                "last_synced": synced_at,
-            })
+            rows.append(
+                {
+                    "repo_id": repo_id_val,
+                    "work_item_id": str(get("work_item_id")),
+                    "occurred_at": self._normalize_datetime(get("occurred_at")),
+                    "provider": str(get("provider")),
+                    "from_status": str(get("from_status")),
+                    "to_status": str(get("to_status")),
+                    "from_status_raw": str(get("from_status_raw") or ""),
+                    "to_status_raw": str(get("to_status_raw") or ""),
+                    "actor": str(get("actor") or ""),
+                    "last_synced": synced_at,
+                }
+            )
 
         await self._insert_rows(
             "work_item_transitions",
@@ -2789,15 +2900,17 @@ class ClickHouseStore:
                 else lambda k, default=None: getattr(item, k, default)
             )
 
-            rows.append({
-                "source_work_item_id": str(get("source_work_item_id")),
-                "target_work_item_id": str(get("target_work_item_id")),
-                "relationship_type": str(get("relationship_type") or ""),
-                "relationship_type_raw": str(get("relationship_type_raw") or ""),
-                "last_synced": self._normalize_datetime(
-                    get("last_synced") or synced_at_default
-                ),
-            })
+            rows.append(
+                {
+                    "source_work_item_id": str(get("source_work_item_id")),
+                    "target_work_item_id": str(get("target_work_item_id")),
+                    "relationship_type": str(get("relationship_type") or ""),
+                    "relationship_type_raw": str(get("relationship_type_raw") or ""),
+                    "last_synced": self._normalize_datetime(
+                        get("last_synced") or synced_at_default
+                    ),
+                }
+            )
 
         await self._insert_rows(
             "work_item_dependencies",
@@ -2827,17 +2940,19 @@ class ClickHouseStore:
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
         rows: List[Dict[str, Any]] = []
         for item in records:
-            rows.append({
-                "repo_id": self._normalize_uuid(item.get("repo_id")),
-                "work_item_id": str(item.get("work_item_id") or ""),
-                "pr_number": int(item.get("pr_number") or 0),
-                "confidence": float(item.get("confidence") or 1.0),
-                "provenance": str(item.get("provenance") or ""),
-                "evidence": str(item.get("evidence") or ""),
-                "last_synced": self._normalize_datetime(
-                    item.get("last_synced") or synced_at_default
-                ),
-            })
+            rows.append(
+                {
+                    "repo_id": self._normalize_uuid(item.get("repo_id")),
+                    "work_item_id": str(item.get("work_item_id") or ""),
+                    "pr_number": int(item.get("pr_number") or 0),
+                    "confidence": float(item.get("confidence") or 1.0),
+                    "provenance": str(item.get("provenance") or ""),
+                    "evidence": str(item.get("evidence") or ""),
+                    "last_synced": self._normalize_datetime(
+                        item.get("last_synced") or synced_at_default
+                    ),
+                }
+            )
 
         await self._insert_rows("work_graph_issue_pr", columns, rows)
 
@@ -2857,16 +2972,18 @@ class ClickHouseStore:
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
         rows: List[Dict[str, Any]] = []
         for item in records:
-            rows.append({
-                "repo_id": self._normalize_uuid(item.get("repo_id")),
-                "pr_number": int(item.get("pr_number") or 0),
-                "commit_hash": str(item.get("commit_hash") or ""),
-                "confidence": float(item.get("confidence") or 1.0),
-                "provenance": str(item.get("provenance") or ""),
-                "evidence": str(item.get("evidence") or ""),
-                "last_synced": self._normalize_datetime(
-                    item.get("last_synced") or synced_at_default
-                ),
-            })
+            rows.append(
+                {
+                    "repo_id": self._normalize_uuid(item.get("repo_id")),
+                    "pr_number": int(item.get("pr_number") or 0),
+                    "commit_hash": str(item.get("commit_hash") or ""),
+                    "confidence": float(item.get("confidence") or 1.0),
+                    "provenance": str(item.get("provenance") or ""),
+                    "evidence": str(item.get("evidence") or ""),
+                    "last_synced": self._normalize_datetime(
+                        item.get("last_synced") or synced_at_default
+                    ),
+                }
+            )
 
         await self._insert_rows("work_graph_pr_commit", columns, rows)

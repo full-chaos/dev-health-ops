@@ -144,7 +144,7 @@ Jira is **not** a replacement for pull request data — it’s used to track ass
 1. Start ClickHouse + Grafana:
 
 ```bash
-dev-hops grafana up
+docker compose -f compose.yml up -d
 ```
 
 1. Sync Git data into ClickHouse (choose one):

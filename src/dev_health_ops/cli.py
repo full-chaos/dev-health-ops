@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import logging
 import os
-import subprocess
 from pathlib import Path
 from typing import List, Optional
 
@@ -50,29 +49,6 @@ def _load_dotenv(path: Path) -> int:
         os.environ[key] = value
         loaded += 1
     return loaded
-
-
-def _cmd_grafana_up(_ns: argparse.Namespace) -> int:
-    cmd = [
-        "docker",
-        "compose",
-        "-f",
-        str(REPO_ROOT / "compose.yml"),
-        "up",
-        "-d",
-    ]
-    return subprocess.run(cmd, check=False).returncode
-
-
-def _cmd_grafana_down(_ns: argparse.Namespace) -> int:
-    cmd = [
-        "docker",
-        "compose",
-        "-f",
-        str(REPO_ROOT / "compose.yml"),
-        "down",
-    ]
-    return subprocess.run(cmd, check=False).returncode
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -136,20 +112,6 @@ def build_parser() -> argparse.ArgumentParser:
         dest="workers_command", required=True
     )
     workers_runner.register_commands(workers_subparsers)
-
-    # ---- grafana ----
-    graf = sub.add_parser(
-        "grafana", help="Start/stop the Grafana + ClickHouse dev stack."
-    )
-    graf_sub = graf.add_subparsers(dest="grafana_command", required=True)
-    graf_up = graf_sub.add_parser(
-        "up", help="docker compose up -d for grafana/docker-compose.yml"
-    )
-    graf_up.set_defaults(func=_cmd_grafana_up)
-    graf_down = graf_sub.add_parser(
-        "down", help="docker compose down for grafana/docker-compose.yml"
-    )
-    graf_down.set_defaults(func=_cmd_grafana_down)
 
     return parser
 

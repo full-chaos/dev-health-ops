@@ -16,7 +16,7 @@ This system is explicitly designed to avoid turning metrics into scorecards.
 - Persist: sinks (ClickHouse/Postgres/etc.)
 - Compute: materialized metrics + investment distributions
 - Serve: GraphQL analytics API
-- Visualize: dev-health-web + (optional) Grafana panels
+- Visualize: dev-health-web (primary) + optional Grafana dashboards (panel plugin lives in `dev-health-panels`)
 
 ## Product pillars
 1. **Investment View (canonical)**  

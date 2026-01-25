@@ -4,10 +4,10 @@ This repo ships Grafana provisioning for ClickHouse dashboards under `grafana/`.
 
 ## Start Grafana + ClickHouse (dev)
 
-From the repo root:
+From the repo root, use Docker Compose directly (the CLI grafana command is deprecated):
 
 ```bash
-python cli.py grafana up
+docker compose -f compose.yml up -d
 ```
 
 - Grafana: `http://localhost:3000` (default `admin` / `admin`)

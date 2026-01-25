@@ -328,6 +328,12 @@ class TestBatchProcessingCLIArguments:
         assert args.date is None
         assert args.backfill == 1
 
+    def test_grafana_subcommand_removed(self):
+        """Test that the deprecated grafana subcommand is not accepted."""
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["grafana", "up"])
+
     def test_gitlab_batch_processing_arguments_with_custom_values(self):
         """Test that GitLab batch processing arguments accept custom values."""
         parser = build_parser()

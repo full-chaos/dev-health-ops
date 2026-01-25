@@ -1,6 +1,10 @@
-# AGENTS — Single Source of Truth (dev-health-ops)
+# AGENTS — dev-health-ops
 
-This document is the **canonical** agent briefing for this repo: how it works, what not to break, and the minimum rules to move fast without causing architectural regressions. It consolidates prior agent guidance into one set of enforceable constraints.
+> **Canonical Reference:** See [`/AGENTS.md`](../AGENTS.md) for the unified Dev Health platform agent briefing.
+>
+> **Deep Dives:** See [`/docs/agent-instructions/`](../docs/agent-instructions/) for detailed topic documentation.
+
+This document contains **dev-health-ops specific** guidance. For cross-cutting concerns (Investment View, Work Graph contract, visualization rules), refer to the canonical AGENTS.md.
 
 ---
 

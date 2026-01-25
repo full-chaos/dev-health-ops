@@ -154,6 +154,21 @@ class SankeyRequestInput:
 
 
 @strawberry.input
+class PaginationInput:
+    """
+    Input for cursor-based pagination.
+
+    Supports forward pagination (first/after) and backward pagination (last/before).
+    Only one direction should be used at a time.
+    """
+
+    first: Optional[int] = None
+    after: Optional[str] = None
+    last: Optional[int] = None
+    before: Optional[str] = None
+
+
+@strawberry.input
 class AnalyticsRequestInput:
     """Batch request for analytics queries.
 
@@ -167,3 +182,22 @@ class AnalyticsRequestInput:
     sankey: Optional[SankeyRequestInput] = None
     use_investment: Optional[bool] = None
     filters: Optional[FilterInput] = None  # NEW: Filter parity with REST
+
+
+@strawberry.input
+class PaginatedBreakdownRequestInput:
+    """Request for a paginated breakdown query with cursor-based pagination."""
+
+    dimension: DimensionInput
+    measure: MeasureInput
+    date_range: DateRangeInput
+    pagination: Optional[PaginationInput] = None
+
+
+@strawberry.input
+class PaginatedCatalogValuesInput:
+    """Request for paginated catalog dimension values."""
+
+    dimension: DimensionInput
+    pagination: Optional[PaginationInput] = None
+    filters: Optional[FilterInput] = None

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Any, Coroutine, Dict, List, Optional
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -16,7 +17,11 @@ from ..cost import (
     validate_sub_request_count,
     validate_top_n,
 )
-from ..models.inputs import AnalyticsRequestInput
+from ..models.inputs import (
+    AnalyticsRequestInput,
+    BreakdownRequestInput,
+    TimeseriesRequestInput,
+)
 from ..models.outputs import (
     AnalyticsResult,
     BreakdownItem,
@@ -41,6 +46,97 @@ from ..sql.compiler import (
 logger = logging.getLogger(__name__)
 
 
+async def _execute_timeseries_query(
+    client: Any,
+    ts_req: TimeseriesRequestInput,
+    org_id: str,
+    timeout: int,
+    use_investment: bool,
+    filters: Optional[Any],
+) -> List[TimeseriesResult]:
+    """Execute a single timeseries query and return results."""
+    from api.queries.client import query_dicts
+
+    start = ts_req.date_range.start_date
+    end = ts_req.date_range.end_date
+
+    request = TimeseriesRequest(
+        dimension=ts_req.dimension.value,
+        measure=ts_req.measure.value,
+        interval=ts_req.interval.value,
+        start_date=start,
+        end_date=end,
+        use_investment=use_investment,
+    )
+
+    sql, params = compile_timeseries(request, org_id, timeout, filters=filters)
+
+    rows = await query_dicts(client, sql, params)
+    grouped: Dict[str, List[TimeseriesBucket]] = {}
+
+    for row in rows:
+        dim_val = str(row.get("dimension_value", ""))
+        bucket_date = row.get("bucket")
+        value = float(row.get("value", 0))
+
+        if dim_val not in grouped:
+            grouped[dim_val] = []
+
+        if isinstance(bucket_date, date):
+            grouped[dim_val].append(TimeseriesBucket(date=bucket_date, value=value))
+
+    return [
+        TimeseriesResult(
+            dimension=ts_req.dimension.value,
+            dimension_value=dim_val,
+            measure=ts_req.measure.value,
+            buckets=buckets,
+        )
+        for dim_val, buckets in grouped.items()
+    ]
+
+
+async def _execute_breakdown_query(
+    client: Any,
+    bd_req: BreakdownRequestInput,
+    org_id: str,
+    timeout: int,
+    use_investment: bool,
+    filters: Optional[Any],
+) -> BreakdownResult:
+    """Execute a single breakdown query and return results."""
+    from api.queries.client import query_dicts
+
+    start = bd_req.date_range.start_date
+    end = bd_req.date_range.end_date
+
+    request = BreakdownRequest(
+        dimension=bd_req.dimension.value,
+        measure=bd_req.measure.value,
+        start_date=start,
+        end_date=end,
+        top_n=bd_req.top_n,
+        use_investment=use_investment,
+    )
+
+    sql, params = compile_breakdown(request, org_id, timeout, filters=filters)
+
+    rows = await query_dicts(client, sql, params)
+    items = [
+        BreakdownItem(
+            key=str(row.get("dimension_value", "")),
+            value=float(row.get("value", 0)),
+        )
+        for row in rows
+    ]
+
+    return BreakdownResult(
+        dimension=bd_req.dimension.value,
+        measure=bd_req.measure.value,
+        items=items,
+    )
+
+
 async def resolve_analytics(
     context: GraphQLContext,
     batch: AnalyticsRequestInput,
@@ -48,7 +144,8 @@ async def resolve_analytics(
     """
     Resolve batch analytics query.
 
-    Validates cost limits, compiles SQL, executes queries, and returns results.
+    Validates cost limits, compiles SQL, executes queries IN PARALLEL,
+    and returns results.
 
     Args:
         context: GraphQL request context with org_id and client.
@@ -76,110 +173,87 @@ async def resolve_analytics(
         has_sankey=batch.sankey is not None,
     )
 
-    timeseries_results: List[TimeseriesResult] = []
-    breakdown_results: List[BreakdownResult] = []
-    sankey_result: Optional[SankeyResult] = None
-
     timeout = DEFAULT_LIMITS.query_timeout_seconds
 
-    # Execute timeseries queries
+    # Validate all requests upfront before executing any queries
     for ts_req in batch.timeseries:
-        start = ts_req.date_range.start_date
-        end = ts_req.date_range.end_date
-
-        validate_date_range(start, end)
-        validate_buckets(start, end, ts_req.interval.value)
-
-        request = TimeseriesRequest(
-            dimension=ts_req.dimension.value,
-            measure=ts_req.measure.value,
-            interval=ts_req.interval.value,
-            start_date=start,
-            end_date=end,
-            use_investment=batch.use_investment,
+        validate_date_range(ts_req.date_range.start_date, ts_req.date_range.end_date)
+        validate_buckets(
+            ts_req.date_range.start_date,
+            ts_req.date_range.end_date,
+            ts_req.interval.value,
         )
 
-        sql, params = compile_timeseries(
-            request, org_id, timeout, filters=batch.filters
-        )
-
-        try:
-            rows = await query_dicts(client, sql, params)
-            # Group by dimension_value
-            grouped: Dict[str, List[TimeseriesBucket]] = {}
-            for row in rows:
-                dim_val = str(row.get("dimension_value", ""))
-                bucket_date = row.get("bucket")
-                value = float(row.get("value", 0))
-
-                if dim_val not in grouped:
-                    grouped[dim_val] = []
-
-                if isinstance(bucket_date, date):
-                    grouped[dim_val].append(
-                        TimeseriesBucket(date=bucket_date, value=value)
-                    )
-
-            for dim_val, buckets in grouped.items():
-                timeseries_results.append(
-                    TimeseriesResult(
-                        dimension=ts_req.dimension.value,
-                        dimension_value=dim_val,
-                        measure=ts_req.measure.value,
-                        buckets=buckets,
-                    )
-                )
-        except Exception as e:
-            logger.error("Timeseries query failed: %s", e)
-            raise
-
-    # Execute breakdown queries
     for bd_req in batch.breakdowns:
-        start = bd_req.date_range.start_date
-        end = bd_req.date_range.end_date
-
-        validate_date_range(start, end)
+        validate_date_range(bd_req.date_range.start_date, bd_req.date_range.end_date)
         validate_top_n(bd_req.top_n)
 
-        request = BreakdownRequest(
-            dimension=bd_req.dimension.value,
-            measure=bd_req.measure.value,
-            start_date=start,
-            end_date=end,
-            top_n=bd_req.top_n,
-            use_investment=batch.use_investment,
+    if batch.sankey is not None:
+        validate_date_range(
+            batch.sankey.date_range.start_date, batch.sankey.date_range.end_date
         )
+        validate_sankey_limits(batch.sankey.max_nodes, batch.sankey.max_edges)
 
-        sql, params = compile_breakdown(request, org_id, timeout, filters=batch.filters)
+    # Build list of all query coroutines for parallel execution
+    timeseries_coros: List[Coroutine[Any, Any, List[TimeseriesResult]]] = [
+        _execute_timeseries_query(
+            client,
+            ts_req,
+            org_id,
+            timeout,
+            batch.use_investment,
+            batch.filters,
+        )
+        for ts_req in batch.timeseries
+    ]
 
-        try:
-            rows = await query_dicts(client, sql, params)
-            items = [
-                BreakdownItem(
-                    key=str(row.get("dimension_value", "")),
-                    value=float(row.get("value", 0)),
-                )
-                for row in rows
-            ]
-            breakdown_results.append(
-                BreakdownResult(
-                    dimension=bd_req.dimension.value,
-                    measure=bd_req.measure.value,
-                    items=items,
-                )
-            )
-        except Exception as e:
-            logger.error("Breakdown query failed: %s", e)
-            raise
+    breakdown_coros: List[Coroutine[Any, Any, BreakdownResult]] = [
+        _execute_breakdown_query(
+            client,
+            bd_req,
+            org_id,
+            timeout,
+            batch.use_investment,
+            batch.filters,
+        )
+        for bd_req in batch.breakdowns
+    ]
 
-    # Execute sankey query
+    # Execute all timeseries and breakdown queries in parallel
+    all_results = await asyncio.gather(
+        *timeseries_coros,
+        *breakdown_coros,
+        return_exceptions=True,
+    )
+
+    # Split results back into timeseries and breakdowns
+    num_timeseries = len(batch.timeseries)
+    timeseries_raw = all_results[:num_timeseries]
+    breakdown_raw = all_results[num_timeseries:]
+
+    # Process timeseries results (flatten nested lists)
+    timeseries_results: List[TimeseriesResult] = []
+    for i, result in enumerate(timeseries_raw):
+        if isinstance(result, Exception):
+            logger.error("Timeseries query %d failed: %s", i, result)
+            raise result
+        timeseries_results.extend(result)
+
+    # Process breakdown results
+    breakdown_results: List[BreakdownResult] = []
+    for i, result in enumerate(breakdown_raw):
+        if isinstance(result, Exception):
+            logger.error("Breakdown query %d failed: %s", i, result)
+            raise result
+        breakdown_results.append(result)
+
+    sankey_result: Optional[SankeyResult] = None
+
+    # Execute sankey query (already validated above)
     if batch.sankey is not None:
         sk_req = batch.sankey
         start = sk_req.date_range.start_date
         end = sk_req.date_range.end_date
-
-        validate_date_range(start, end)
-        validate_sankey_limits(sk_req.max_nodes, sk_req.max_edges)
 
         request = SankeyRequest(
             path=[d.value for d in sk_req.path],
@@ -201,8 +275,9 @@ async def resolve_analytics(
         edges: List[SankeyEdge] = []
 
         try:
-            # Execute nodes query
-            try:
+            # Execute nodes and edges queries in parallel
+            async def fetch_nodes() -> List[SankeyNode]:
+                result_nodes: List[SankeyNode] = []
                 for sql, params in nodes_queries:
                     rows = await query_dicts(client, sql, params)
                     if not rows:
@@ -211,7 +286,7 @@ async def resolve_analytics(
                         dim = str(row.get("dimension", ""))
                         node_id = str(row.get("node_id", ""))
                         value = float(row.get("value", 0))
-                        nodes.append(
+                        result_nodes.append(
                             SankeyNode(
                                 id=f"{dim}:{node_id}",
                                 label=node_id,
@@ -219,13 +294,10 @@ async def resolve_analytics(
                                 value=value,
                             )
                         )
-            except Exception as e:
-                logger.error("Sankey nodes query failed: %s", e)
-                # Continue with empty nodes is better than crashing?
-                # For Sankey, if nodes fail, edges likely will too or be useless.
+                return result_nodes
 
-            # Execute edges queries
-            try:
+            async def fetch_edges() -> List[SankeyEdge]:
+                result_edges: List[SankeyEdge] = []
                 for sql, params in edges_queries:
                     rows = await query_dicts(client, sql, params)
                     if not rows:
@@ -236,16 +308,32 @@ async def resolve_analytics(
                         source = str(row.get("source", ""))
                         target = str(row.get("target", ""))
                         value = float(row.get("value", 0))
-
-                        edges.append(
+                        result_edges.append(
                             SankeyEdge(
                                 source=f"{source_dim}:{source}",
                                 target=f"{target_dim}:{target}",
                                 value=value,
                             )
                         )
-            except Exception as e:
-                logger.error("Sankey edges query failed: %s", e)
+                return result_edges
+
+            # Execute nodes and edges in parallel
+            nodes_result, edges_result = await asyncio.gather(
+                fetch_nodes(),
+                fetch_edges(),
+                return_exceptions=True,
+            )
+
+            # Handle results/exceptions
+            if isinstance(nodes_result, Exception):
+                logger.error("Sankey nodes query failed: %s", nodes_result)
+            else:
+                nodes = nodes_result
+
+            if isinstance(edges_result, Exception):
+                logger.error("Sankey edges query failed: %s", edges_result)
+            else:
+                edges = edges_result
 
             # Calculate coverage metrics if requested
             coverage: Optional[SankeyCoverage] = None

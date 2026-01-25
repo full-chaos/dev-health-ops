@@ -20,6 +20,18 @@
             "query": "query RepoValues($orgId: String!) { catalog(orgId: $orgId, dimension: REPO) { values { value count } } }"
         },
         {
+            "id": "author-values",
+            "description": "Fetch distinct author values for catalog",
+            "schema_version": "1.0",
+            "query": "query AuthorValues($orgId: String!) { catalog(orgId: $orgId, dimension: AUTHOR) { values { value count } } }"
+        },
+        {
+            "id": "theme-values",
+            "description": "Fetch distinct theme values for catalog",
+            "schema_version": "1.0",
+            "query": "query ThemeValues($orgId: String!) { catalog(orgId: $orgId, dimension: THEME) { values { value count } } }"
+        },
+        {
             "id": "investment-breakdown",
             "description": "Fetch theme and subcategory breakdowns for Investment view",
             "schema_version": "1.0",
@@ -29,7 +41,43 @@
             "id": "investment-sankey",
             "description": "Fetch Sankey flow data for Investment view",
             "schema_version": "1.0",
-            "query": "query InvestmentSankey($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { sankey { nodes { id label dimension value } edges { source target value } } } }"
+            "query": "query InvestmentSankey($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { sankey { nodes { id label dimension value } edges { source target value } coverage { teamCoverage repoCoverage } } } }"
+        },
+        {
+            "id": "investment-full",
+            "description": "Fetch full investment data (breakdowns + sankey)",
+            "schema_version": "1.0",
+            "query": "query InvestmentFull($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { breakdowns { dimension measure items { key value } } sankey { nodes { id label dimension value } edges { source target value } coverage { teamCoverage repoCoverage } } } }"
+        },
+        {
+            "id": "timeseries-weekly",
+            "description": "Fetch weekly timeseries data",
+            "schema_version": "1.0",
+            "query": "query TimeseriesWeekly($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { timeseries { dimension dimensionValue measure buckets { date value } } } }"
+        },
+        {
+            "id": "team-analytics-bundle",
+            "description": "Fetch team-scoped analytics with breakdowns and timeseries",
+            "schema_version": "1.0",
+            "query": "query TeamAnalyticsBundle($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { timeseries { dimension dimensionValue measure buckets { date value } } breakdowns { dimension measure items { key value } } } }"
+        },
+        {
+            "id": "repo-analytics-bundle",
+            "description": "Fetch repo-scoped analytics with breakdowns and timeseries",
+            "schema_version": "1.0",
+            "query": "query RepoAnalyticsBundle($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { timeseries { dimension dimensionValue measure buckets { date value } } breakdowns { dimension measure items { key value } } } }"
+        },
+        {
+            "id": "breakdown-top10",
+            "description": "Fetch top-10 breakdown by dimension",
+            "schema_version": "1.0",
+            "query": "query BreakdownTop10($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { breakdowns { dimension measure items { key value } } } }"
+        },
+        {
+            "id": "sankey-flow",
+            "description": "Fetch generic sankey flow visualization",
+            "schema_version": "1.0",
+            "query": "query SankeyFlow($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { sankey { nodes { id label dimension value } edges { source target value } coverage { teamCoverage repoCoverage } } } }"
         }
     ]
 }

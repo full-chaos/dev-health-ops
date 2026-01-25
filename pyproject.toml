@@ -87,6 +87,7 @@ packages = [
   "llm.providers",
   "llm.explainers",
   "metrics",
+  "metrics.loaders",
   "metrics.sinks",
   "models",
   "processors",

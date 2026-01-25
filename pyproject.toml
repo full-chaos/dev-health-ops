@@ -45,6 +45,8 @@ dependencies = [
   "openai",
   "anthropic",
   "strawberry-graphql[fastapi]",
+  "celery[redis]>=5.3.0",
+  "redis>=5.0.0",
 ]
 
 [project.optional-dependencies]

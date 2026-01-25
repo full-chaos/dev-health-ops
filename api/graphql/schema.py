@@ -13,8 +13,6 @@ from .models.inputs import AnalyticsRequestInput, DimensionInput, FilterInput
 from .models.outputs import (
     AnalyticsResult,
     CatalogResult,
-    DrilldownResult,
-    DrilldownType,
     HomeResult,
     OpportunitiesResult,
     PersonResult,

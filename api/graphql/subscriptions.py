@@ -9,7 +9,6 @@ from typing import AsyncGenerator, Optional
 import strawberry
 from strawberry.types import Info
 
-from .context import GraphQLContext
 from .pubsub import get_pubsub, metrics_channel, task_channel, sync_channel
 
 logger = logging.getLogger(__name__)

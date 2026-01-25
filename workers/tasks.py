@@ -77,6 +77,9 @@ def run_daily_metrics(
                 provider=provider,
             )
         )
+        # Invalidate GraphQL cache after successful metrics update
+        _invalidate_metrics_cache(target_day.isoformat())
+
         return {
             "status": "success",
             "day": target_day.isoformat(),
@@ -86,6 +89,32 @@ def run_daily_metrics(
         logger.exception("Daily metrics task failed: %s", exc)
         # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
+def _invalidate_metrics_cache(day: str, org_id: str = "default") -> None:
+    """Invalidate GraphQL caches after metrics update."""
+    try:
+        from api.graphql.cache_invalidation import invalidate_on_metrics_update
+        from api.services.cache import create_cache
+
+        cache = create_cache(ttl_seconds=300)
+        count = invalidate_on_metrics_update(cache, org_id, day)
+        logger.info("Invalidated %d cache entries after metrics update", count)
+    except Exception as e:
+        logger.warning("Cache invalidation failed (non-fatal): %s", e)
+
+
+def _invalidate_sync_cache(sync_type: str, org_id: str = "default") -> None:
+    """Invalidate GraphQL caches after data sync."""
+    try:
+        from api.graphql.cache_invalidation import invalidate_on_sync_complete
+        from api.services.cache import create_cache
+
+        cache = create_cache(ttl_seconds=300)
+        count = invalidate_on_sync_complete(cache, org_id, sync_type)
+        logger.info("Invalidated %d cache entries after %s sync", count, sync_type)
+    except Exception as e:
+        logger.warning("Cache invalidation failed (non-fatal): %s", e)
 
 
 @celery_app.task(bind=True, max_retries=3, queue="metrics")
@@ -165,6 +194,10 @@ def run_work_items_sync(
             backfill_days=since_days,
             provider=provider,
         )
+
+        # Invalidate GraphQL cache after successful sync
+        _invalidate_sync_cache(provider)
+
         return {
             "status": "success",
             "provider": provider,

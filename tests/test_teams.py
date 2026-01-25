@@ -4,9 +4,9 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from models.teams import Team
-from storage import SQLAlchemyStore, MongoStore, ClickHouseStore
-from fixtures.generator import SyntheticDataGenerator
+from dev_health_ops.models.teams import Team
+from dev_health_ops.storage import SQLAlchemyStore, MongoStore, ClickHouseStore
+from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ def test_synthetic_teams_generation():
 @pytest.mark.asyncio
 async def test_cli_sync_teams_synthetic():
     """Test CLI sync teams command with synthetic provider."""
-    from providers.teams import sync_teams as _cmd_sync_teams
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
 
     with patch("asyncio.run") as mock_run:
         with patch("storage.resolve_db_type") as mock_resolve:
@@ -159,7 +159,7 @@ async def test_cli_sync_teams_synthetic():
 @pytest.mark.asyncio
 async def test_load_team_resolver_from_store_accepts_id_name_dicts():
     """Ensure team resolver handles dicts keyed by id/name."""
-    from providers.teams import load_team_resolver_from_store
+    from dev_health_ops.providers.teams import load_team_resolver_from_store
 
     class FakeStore:
         async def get_all_teams(self):

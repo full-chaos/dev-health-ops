@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from analytics.work_units import (
+from dev_health_ops.analytics.work_units import (
     compute_evidence_quality,
     compute_subcategory_scores,
     evidence_quality_band,

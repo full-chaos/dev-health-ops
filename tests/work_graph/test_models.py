@@ -2,7 +2,7 @@
 
 import pytest
 import uuid
-from work_graph.models import (
+from dev_health_ops.work_graph.models import (
     NodeType,
     EdgeType,
     Provenance,

@@ -7,9 +7,9 @@ from typing import Any, Dict, List
 
 import pytest
 
-from api.graphql.context import GraphQLContext
-from api.graphql.errors import AuthorizationError, CostLimitExceededError
-from api.graphql.resolvers.catalog import resolve_catalog
+from dev_health_ops.api.graphql.context import GraphQLContext
+from dev_health_ops.api.graphql.errors import AuthorizationError, CostLimitExceededError
+from dev_health_ops.api.graphql.resolvers.catalog import resolve_catalog
 
 
 class MockClient:
@@ -191,7 +191,7 @@ class TestCatalogWithMockedQueryDicts:
     @pytest.mark.asyncio
     async def test_catalog_with_dimension_values(self, context_with_data):
         """Test catalog fetches dimension values when dimension specified."""
-        from api.graphql.models.inputs import DimensionInput
+        from dev_health_ops.api.graphql.models.inputs import DimensionInput
 
         # The catalog resolver correctly uses the client from context
         # Just verify the flow works - actual query execution is tested in integration tests
@@ -211,14 +211,14 @@ class TestAuthzFunctions:
 
     def test_require_org_id_with_valid_context(self, mock_context):
         """Test require_org_id with valid context."""
-        from api.graphql.authz import require_org_id
+        from dev_health_ops.api.graphql.authz import require_org_id
 
         org_id = require_org_id(mock_context)
         assert org_id == "test-org"
 
     def test_enforce_org_scope(self):
         """Test enforce_org_scope adds org_id to params."""
-        from api.graphql.authz import enforce_org_scope
+        from dev_health_ops.api.graphql.authz import enforce_org_scope
 
         params = {"start_date": date(2025, 1, 1), "end_date": date(2025, 1, 31)}
         scoped = enforce_org_scope("my-org", params)
@@ -230,7 +230,7 @@ class TestAuthzFunctions:
 
     def test_enforce_org_scope_rejects_empty(self):
         """Test enforce_org_scope rejects empty org_id."""
-        from api.graphql.authz import enforce_org_scope
+        from dev_health_ops.api.graphql.authz import enforce_org_scope
 
         with pytest.raises(AuthorizationError):
             enforce_org_scope("", {})

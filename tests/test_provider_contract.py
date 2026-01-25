@@ -13,14 +13,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from providers.base import (
+from dev_health_ops.providers.base import (
     IngestionContext,
     IngestionWindow,
     Provider,
     ProviderBatch,
     ProviderCapabilities,
 )
-from providers.registry import (
+from dev_health_ops.providers.registry import (
     get_provider,
     is_registered,
     list_providers,
@@ -181,7 +181,7 @@ class TestJiraProvider:
         mock_client.close.return_value = None
 
         # Import and create provider
-        from providers.jira.provider import JiraProvider
+        from dev_health_ops.providers.jira.provider import JiraProvider
 
         provider = JiraProvider()
 
@@ -245,7 +245,7 @@ class TestJiraProvider:
         mock_client.iter_issue_comments.return_value = iter([])
         mock_client.close.return_value = None
 
-        from providers.jira.provider import JiraProvider
+        from dev_health_ops.providers.jira.provider import JiraProvider
 
         provider = JiraProvider()
         ctx = IngestionContext(

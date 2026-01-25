@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from models.git import (
+from dev_health_ops.models.git import (
     GitBlame,
     GitCommit,
     GitCommitStat,

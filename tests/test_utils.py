@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
-from cli import build_parser
-from utils import SKIP_EXTENSIONS, is_skippable
+from dev_health_ops.cli import build_parser
+from dev_health_ops.utils import SKIP_EXTENSIONS, is_skippable
 
 
 class TestIsSkippable:

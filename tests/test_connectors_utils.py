@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from connectors.utils.pagination import (AsyncPaginationHandler,
+from dev_health_ops.connectors.utils.pagination import (AsyncPaginationHandler,
                                          PaginationHandler)
-from connectors.utils.retry import RateLimiter, retry_with_backoff
+from dev_health_ops.connectors.utils.retry import RateLimiter, retry_with_backoff
 
 
 class TestRateLimiter:

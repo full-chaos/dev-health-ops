@@ -3,8 +3,8 @@ from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import app
-from api.models.schemas import (
+from dev_health_ops.api.main import app
+from dev_health_ops.api.models.schemas import (
     QuadrantAxes,
     QuadrantAxis,
     QuadrantPoint,

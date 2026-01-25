@@ -64,16 +64,13 @@ dev = [
 Repository = "https://github.com/chrisgeo/dev-health-ops"
 Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
 
-[project.scripts]
-dev-health-ops = "cli:main"
-dev-hops = "cli:main"
-
 [tool.setuptools_scm]
 version_scheme = "post-release"
 local_scheme = "dirty-tag"
 
 [tool.setuptools]
-packages = { find = { exclude = ["tests*", "docs*", "examples*", "data*", "grafana*", "docker*", "dist*", "build*"] } }
+package-dir = { "" = "src" }
+packages = { find = { where = ["src"], exclude = ["tests*", "docs*", "examples*", "data*", "grafana*", "docker*", "dist*", "build*"] } }
 py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
 include-package-data = true
 
@@ -88,29 +85,12 @@ authors = ["Chris Geo <chris@example.com>"]
 license = "MIT"
 readme = "README.md"
 packages = [
-    { include = "analytics" },
-    { include = "api" },
-    { include = "audit" },
-    { include = "connectors" },
-    { include = "fixtures" },
-    { include = "llm" },
-    { include = "metrics" },
-    { include = "models" },
-    { include = "processors" },
-    { include = "providers" },
-    { include = "work_graph" },
-    { include = "workers" },
-    { include = "config" },
-    { include = "alembic" },
+    { include = "dev_health_ops", from = "src" },
 ]
 include = [
-    "cli.py",
-    "investment_taxonomy.py",
-    "storage.py",
-    "utils.py",
-    "config/**/*",
-    "alembic.ini",
-    "alembic/**/*"
+    "src/dev_health_ops/config/**/*",
+    "src/dev_health_ops/alembic.ini",
+    "src/dev_health_ops/alembic/**/*"
 ]
 
 [tool.poetry.dependencies]
@@ -151,5 +131,9 @@ pytest-asyncio = "*"
 pytest-cov = "*"
 
 [tool.poetry.scripts]
-dev-health-ops = "cli:main"
-dev-hops = "cli:main"
+dev-health-ops = "dev_health_ops.cli:main"
+dev-hops = "dev_health_ops.cli:main"
+
+[project.scripts]
+dev-health-ops = "dev_health_ops.cli:main"
+dev-hops = "dev_health_ops.cli:main"

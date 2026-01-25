@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from providers.identity import IdentityResolver
-from providers.jira.normalize import jira_issue_to_work_item
-from providers.status_mapping import load_status_mapping
+from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.jira.normalize import jira_issue_to_work_item
+from dev_health_ops.providers.status_mapping import load_status_mapping
 
 
 def test_jira_issue_dict_parses_status_category_and_changelog() -> None:

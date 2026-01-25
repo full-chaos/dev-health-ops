@@ -1,6 +1,6 @@
 import argparse
 import pytest
-from fixtures.runner import run_fixtures_generation
+from dev_health_ops.fixtures.runner import run_fixtures_generation
 
 
 @pytest.mark.asyncio

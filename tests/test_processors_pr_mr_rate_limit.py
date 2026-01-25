@@ -3,8 +3,8 @@ import uuid
 
 import pytest
 
-from processors.github import _sync_github_prs_to_store
-from processors.gitlab import _sync_gitlab_mrs_to_store
+from dev_health_ops.processors.github import _sync_github_prs_to_store
+from dev_health_ops.processors.gitlab import _sync_gitlab_mrs_to_store
 
 
 class _NoSleepGate:

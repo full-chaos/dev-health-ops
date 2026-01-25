@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from providers.jira.client import build_jira_jql
+from dev_health_ops.providers.jira.client import build_jira_jql
 
 
 def test_build_jira_jql_formats_order_by() -> None:

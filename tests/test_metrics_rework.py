@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from metrics.compute import compute_daily_metrics
+from dev_health_ops.metrics.compute import compute_daily_metrics
 
 
 def test_pr_rework_ratio():

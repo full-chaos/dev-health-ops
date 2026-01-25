@@ -6,8 +6,8 @@ import sys
 
 sys.modules["redis"] = MagicMock()
 
-from api.services.cache import MemoryBackend, RedisBackend, TTLCache  # noqa: E402
-from api.main import health  # noqa: E402
+from dev_health_ops.api.services.cache import MemoryBackend, RedisBackend, TTLCache  # noqa: E402
+from dev_health_ops.api.main import health  # noqa: E402
 
 
 class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):

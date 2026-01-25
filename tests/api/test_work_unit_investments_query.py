@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-import api.queries.work_unit_investments as work_unit_investments
+import dev_health_ops.api.queries.work_unit_investments as work_unit_investments
 
 
 @pytest.mark.asyncio

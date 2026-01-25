@@ -1,11 +1,11 @@
 import pytest
 from datetime import date
 from unittest.mock import MagicMock, patch
-from api.services.investment_flow import (
+from dev_health_ops.api.services.investment_flow import (
     build_investment_flow_response,
     build_investment_repo_team_flow_response,
 )
-from api.models.filters import MetricFilter
+from dev_health_ops.api.models.filters import MetricFilter
 
 
 @pytest.mark.asyncio

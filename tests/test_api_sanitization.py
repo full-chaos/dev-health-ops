@@ -6,11 +6,11 @@ import json
 
 import pytest
 
-from api.models.filters import MetricFilter, ScopeFilter, TimeFilter
-from api.services.cache import TTLCache
-from api.services import explain as explain_service
-from api.services import home as home_service
-from api.services import people as people_service
+from dev_health_ops.api.models.filters import MetricFilter, ScopeFilter, TimeFilter
+from dev_health_ops.api.services.cache import TTLCache
+from dev_health_ops.api.services import explain as explain_service
+from dev_health_ops.api.services import home as home_service
+from dev_health_ops.api.services import people as people_service
 
 
 def _payload(model):

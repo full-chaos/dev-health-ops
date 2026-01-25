@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from providers.status_mapping import load_status_mapping
+from dev_health_ops.providers.status_mapping import load_status_mapping
 
 
 def test_jira_status_mapping_defaults() -> None:

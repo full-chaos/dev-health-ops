@@ -1,16 +1,16 @@
 from datetime import date, datetime, timezone
 import uuid
 
-from audit.rolling_aggregates import (
+from dev_health_ops.audit.rolling_aggregates import (
     ROLLING_TABLE_SPECS,
     run_rolling_aggregates_audit,
 )
-from metrics.schemas import (
+from dev_health_ops.metrics.schemas import (
     RepoMetricsDailyRecord,
     UserMetricsDailyRecord,
     WorkItemMetricsDailyRecord,
 )
-from metrics.sinks.sqlite import SQLiteMetricsSink
+from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 
 
 def test_rolling_aggregates_no_data(tmp_path):

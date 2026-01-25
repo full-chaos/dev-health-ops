@@ -19,8 +19,8 @@ from urllib.parse import urlparse
 
 import pytest
 
-from connectors import GitHubConnector, GitLabConnector
-from connectors.exceptions import APIException, AuthenticationException
+from dev_health_ops.connectors import GitHubConnector, GitLabConnector
+from dev_health_ops.connectors.exceptions import APIException, AuthenticationException
 
 # Skip integration tests if environment variable is set
 skip_integration = os.getenv("SKIP_INTEGRATION_TESTS", "0") == "1"

@@ -2,9 +2,9 @@ import pytest
 import uuid
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock
-from metrics.loaders.clickhouse import ClickHouseDataLoader
-from metrics.loaders.mongo import MongoDataLoader
-from metrics.loaders.sqlalchemy import SqlAlchemyDataLoader
+from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
+from dev_health_ops.metrics.loaders.mongo import MongoDataLoader
+from dev_health_ops.metrics.loaders.sqlalchemy import SqlAlchemyDataLoader
 from sqlalchemy import create_engine
 
 

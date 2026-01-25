@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from metrics.sinks.base import BaseMetricsSink
-from metrics.sinks.factory import (
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.sinks.factory import (
     SinkBackend,
     create_sink,
     detect_backend,

@@ -5,16 +5,16 @@ from datetime import datetime, timedelta, timezone, time as dt_time
 import pytest
 from sqlalchemy import text
 
-from fixtures.generator import SyntheticDataGenerator
-from metrics.job_daily import _normalize_sqlite_url
-from metrics.sinks.sqlite import SQLiteMetricsSink
-from metrics.compute import compute_daily_metrics
-from metrics.compute_wellbeing import compute_team_wellbeing_metrics_daily
-from metrics.compute_work_items import compute_work_item_metrics_daily
-from metrics.compute_ic import compute_ic_metrics_daily
-from metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
-from providers.teams import TeamResolver
-from storage import SQLAlchemyStore
+from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+from dev_health_ops.metrics.job_daily import _normalize_sqlite_url
+from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
+from dev_health_ops.metrics.compute import compute_daily_metrics
+from dev_health_ops.metrics.compute_wellbeing import compute_team_wellbeing_metrics_daily
+from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.compute_ic import compute_ic_metrics_daily
+from dev_health_ops.metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
+from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.storage import SQLAlchemyStore
 
 
 # Use a marker to allow skipping this slow benchmark

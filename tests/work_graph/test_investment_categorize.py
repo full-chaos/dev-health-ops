@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from work_graph.investment.categorize import categorize_text_bundle
-from work_graph.investment.types import TextBundle
+from dev_health_ops.work_graph.investment.categorize import categorize_text_bundle
+from dev_health_ops.work_graph.investment.types import TextBundle
 
 
 class StubProvider:

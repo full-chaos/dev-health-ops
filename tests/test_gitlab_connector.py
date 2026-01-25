@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from connectors import GitLabConnector
+from dev_health_ops.connectors import GitLabConnector
 
 
 class TestGitLabConnectorProjects:

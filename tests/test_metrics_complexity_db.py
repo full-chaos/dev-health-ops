@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-import metrics.job_complexity_db as job
+import dev_health_ops.metrics.job_complexity_db as job
 
 
 class FakeQueryResult:

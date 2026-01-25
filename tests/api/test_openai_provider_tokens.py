@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from llm.providers.openai import OpenAIProvider
+from dev_health_ops.llm.providers.openai import OpenAIProvider
 
 
 class _StubResponse:

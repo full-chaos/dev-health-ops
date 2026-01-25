@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from metrics.job_daily import run_daily_metrics_job  # noqa: E402
+from dev_health_ops.metrics.job_daily import run_daily_metrics_job  # noqa: E402
 
 
 def _parse_date(value: str) -> date:

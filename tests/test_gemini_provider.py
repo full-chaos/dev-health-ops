@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from llm.providers import get_provider
-from llm.providers.gemini import DEFAULT_GEMINI_BASE_URL, GeminiProvider
+from dev_health_ops.llm.providers import get_provider
+from dev_health_ops.llm.providers.gemini import DEFAULT_GEMINI_BASE_URL, GeminiProvider
 
 
 def test_gemini_provider_registration():

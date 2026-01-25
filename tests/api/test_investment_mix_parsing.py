@@ -1,6 +1,6 @@
 
 import json
-from llm.explainers.investment_mix_explainer import parse_and_validate_response
+from dev_health_ops.llm.explainers.investment_mix_explainer import parse_and_validate_response
 
 def test_parse_and_validate_response_handles_dict_summary():
     """Test that it handles summary as a dictionary containing 'statement'."""

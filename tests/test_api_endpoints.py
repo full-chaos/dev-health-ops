@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import app
-from api.models.schemas import (
+from dev_health_ops.api.main import app
+from dev_health_ops.api.models.schemas import (
     ConstraintCard,
     ConstraintEvidence,
     Coverage,
@@ -20,7 +20,7 @@ from api.models.schemas import (
     SankeyNode,
     SankeyResponse,
 )
-from api.models.filters import MetricFilter
+from dev_health_ops.api.models.filters import MetricFilter
 
 
 def _validate(model, payload):

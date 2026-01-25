@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from work_graph.builder import (
+from dev_health_ops.work_graph.builder import (
     BuildConfig,
     WorkGraphBuilder,
 )

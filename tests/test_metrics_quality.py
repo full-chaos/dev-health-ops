@@ -1,8 +1,8 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from metrics.compute import compute_daily_metrics
-from metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
+from dev_health_ops.metrics.compute import compute_daily_metrics
+from dev_health_ops.metrics.quality import compute_rework_churn_ratio, compute_single_owner_file_ratio
 
 
 def test_rework_churn_ratio_proxy():

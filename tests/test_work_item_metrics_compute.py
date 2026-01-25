@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from metrics.compute_work_items import compute_work_item_metrics_daily
-from models.work_items import WorkItem
-from providers.teams import TeamResolver
+from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.models.work_items import WorkItem
+from dev_health_ops.providers.teams import TeamResolver
 
 
 def test_work_item_cycle_time_percentiles() -> None:

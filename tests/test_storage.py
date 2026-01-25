@@ -7,9 +7,9 @@ import pytest_asyncio
 from pymongo import UpdateOne
 from sqlalchemy import select, text
 
-from models import GitBlame, GitCommit, GitCommitStat, GitFile, Repo
-from models.git import Base
-from storage import (
+from dev_health_ops.models import GitBlame, GitCommit, GitCommitStat, GitFile, Repo
+from dev_health_ops.models.git import Base
+from dev_health_ops.storage import (
     ClickHouseStore,
     MongoStore,
     SQLAlchemyStore,

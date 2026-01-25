@@ -2,13 +2,13 @@ import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timezone
 
-from processors.gitlab import (
+from dev_health_ops.processors.gitlab import (
     process_gitlab_project,
     _fetch_gitlab_pipelines_sync,
     _fetch_gitlab_deployments_sync,
     _fetch_gitlab_incidents_sync,
 )
-from models.git import CiPipelineRun, Deployment, Incident
+from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from metrics.compute import commit_size_bucket, compute_daily_metrics
+from dev_health_ops.metrics.compute import commit_size_bucket, compute_daily_metrics
 
 
 def test_commit_size_bucket_boundaries() -> None:

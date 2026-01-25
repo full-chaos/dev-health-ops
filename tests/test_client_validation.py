@@ -1,5 +1,5 @@
 import pytest
-from api.queries.client import query_dicts
+from dev_health_ops.api.queries.client import query_dicts
 
 
 @pytest.mark.asyncio

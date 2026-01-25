@@ -5,15 +5,15 @@ from datetime import datetime, timezone
 
 import pytest
 
-from api.models.filters import (
+from dev_health_ops.api.models.filters import (
     MetricFilter,
     ScopeFilter,
     TimeFilter,
     WhyFilter,
 )
-from api.services import investment as investment_service
-from api.services import sankey as sankey_service
-from api.queries import sankey as sankey_queries
+from dev_health_ops.api.services import investment as investment_service
+from dev_health_ops.api.services import sankey as sankey_service
+from dev_health_ops.api.queries import sankey as sankey_queries
 
 
 @asynccontextmanager

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from metrics.compute_work_items import compute_work_item_metrics_daily
-from models.work_items import WorkItem
+from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.models.work_items import WorkItem
 
 
 def test_unassigned_completed_items_are_tracked() -> None:

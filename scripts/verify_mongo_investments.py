@@ -3,8 +3,8 @@
 
 import uuid
 from datetime import datetime, timezone
-from metrics.sinks.mongo import MongoMetricsSink
-from metrics.schemas import (
+from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
+from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
 )

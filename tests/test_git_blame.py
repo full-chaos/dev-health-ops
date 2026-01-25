@@ -4,7 +4,7 @@ import logging
 import os
 from unittest.mock import MagicMock, patch
 
-from models.git import GitBlame, GitBlameMixin
+from dev_health_ops.models.git import GitBlame, GitBlameMixin
 
 
 class TestGitBlameMixin:

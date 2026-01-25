@@ -4,9 +4,9 @@ Tests for the base connector class.
 
 import pytest
 
-from connectors import GitConnector
-from connectors.base import BatchResult
-from connectors.models import Repository, RepoStats
+from dev_health_ops.connectors import GitConnector
+from dev_health_ops.connectors.base import BatchResult
+from dev_health_ops.connectors.models import Repository, RepoStats
 
 
 class TestBatchResult:

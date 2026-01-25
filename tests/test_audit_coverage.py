@@ -1,6 +1,6 @@
 import pytest
 
-from audit.coverage import (
+from dev_health_ops.audit.coverage import (
     AUDIT_PROVIDERS,
     compile_coverage_report,
     format_coverage_table,

@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from models.work_items import WorkItemStatusTransition
-from providers.identity import IdentityResolver
-from providers.jira.normalize import (
+from dev_health_ops.models.work_items import WorkItemStatusTransition
+from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.jira.normalize import (
     _normalize_relationship_type,
     _service_class_from_priority,
     detect_reopen_events,
@@ -191,7 +191,7 @@ def test_jira_comments_limit_no_limit() -> None:
     """Test that without JIRA_COMMENTS_LIMIT, all comments are fetched."""
     import os
     from unittest.mock import MagicMock, patch
-    from metrics.work_items import fetch_jira_work_items_with_extras
+    from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
     
     with patch.dict(os.environ, {"JIRA_COMMENTS_LIMIT": "0"}, clear=False):
         with patch("providers.jira.client.JiraClient") as MockClient:
@@ -213,7 +213,7 @@ def test_jira_comments_limit_no_limit() -> None:
             mock_client.iter_issue_comments.return_value = mock_comments
             
             identity = IdentityResolver(alias_to_canonical={})
-            from providers.status_mapping import StatusMapping
+            from dev_health_ops.providers.status_mapping import StatusMapping
             status_mapping = StatusMapping(
                 status_by_provider={},
                 label_status_by_provider={},
@@ -237,7 +237,7 @@ def test_jira_comments_limit_with_limit() -> None:
     """Test that JIRA_COMMENTS_LIMIT correctly limits the number of comments fetched."""
     import os
     from unittest.mock import MagicMock, patch
-    from metrics.work_items import fetch_jira_work_items_with_extras
+    from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
     
     with patch.dict(os.environ, {"JIRA_COMMENTS_LIMIT": "3"}, clear=False):
         with patch("providers.jira.client.JiraClient") as MockClient:
@@ -259,7 +259,7 @@ def test_jira_comments_limit_with_limit() -> None:
             mock_client.iter_issue_comments.return_value = mock_comments
             
             identity = IdentityResolver(alias_to_canonical={})
-            from providers.status_mapping import StatusMapping
+            from dev_health_ops.providers.status_mapping import StatusMapping
             status_mapping = StatusMapping(
                 status_by_provider={},
                 label_status_by_provider={},
@@ -282,7 +282,7 @@ def test_jira_comments_limit_with_limit() -> None:
 def test_jira_comments_error_handling() -> None:
     """Test that comment fetch errors are handled gracefully and don't halt sync."""
     from unittest.mock import MagicMock, patch
-    from metrics.work_items import fetch_jira_work_items_with_extras
+    from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
     
     with patch("providers.jira.client.JiraClient") as MockClient:
         mock_client = MagicMock()
@@ -296,7 +296,7 @@ def test_jira_comments_error_handling() -> None:
         mock_client.iter_issue_comments.side_effect = Exception("API Error")
         
         identity = IdentityResolver(alias_to_canonical={})
-        from providers.status_mapping import StatusMapping
+        from dev_health_ops.providers.status_mapping import StatusMapping
         status_mapping = StatusMapping(
                 status_by_provider={},
                 label_status_by_provider={},

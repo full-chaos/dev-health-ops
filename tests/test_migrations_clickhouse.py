@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from storage import ClickHouseStore
+from dev_health_ops.storage import ClickHouseStore
 
 @pytest.mark.asyncio
 async def test_clickhouse_migrations_dry_run_non_default_db():
@@ -33,7 +33,7 @@ async def test_clickhouse_migrations_dry_run_non_default_db():
         # Manually trigger ensure_tables (usually called in __aenter__)
         # We need to mock the migrations path to ensure it finds the real files
         # storage.py uses: Path(__file__).resolve().parent / "migrations" / "clickhouse"
-        # Since we are importing ClickHouseStore from storage, it uses storage.py's path.
+        # Since we are importing ClickHouseStore from dev_health_ops.storage, it uses storage.py's path.
         # This is fine, it should find the real files in the project.
         
         await store.__aenter__()

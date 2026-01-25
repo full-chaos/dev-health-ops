@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from processors.local import infer_merged_pull_requests_from_commits
+from dev_health_ops.processors.local import infer_merged_pull_requests_from_commits
 
 
 class DummyPerson:

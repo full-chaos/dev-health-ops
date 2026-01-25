@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from connectors.github import GitHubConnector
+from dev_health_ops.connectors.github import GitHubConnector
 from github.GithubException import UnknownObjectException
 
 

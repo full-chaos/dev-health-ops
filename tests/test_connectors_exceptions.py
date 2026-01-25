@@ -4,7 +4,7 @@ Tests for connector exceptions.
 
 import pytest
 
-from connectors.exceptions import (APIException, AuthenticationException,
+from dev_health_ops.connectors.exceptions import (APIException, AuthenticationException,
                                    ConnectorException, NotFoundException,
                                    PaginationException, RateLimitException)
 

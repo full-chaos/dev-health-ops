@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from api.models.schemas import (
+from dev_health_ops.api.models.schemas import (
     EvidenceQuality,
     InvestmentBreakdown,
     WorkUnitEffort,
@@ -20,9 +20,9 @@ from api.models.schemas import (
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
-from llm import get_provider
-from llm.providers.mock import MockProvider
-from api.services.work_unit_explain import explain_work_unit
+from dev_health_ops.llm import get_provider
+from dev_health_ops.llm.providers.mock import MockProvider
+from dev_health_ops.api.services.work_unit_explain import explain_work_unit
 
 
 def _sample_investment() -> WorkUnitInvestment:

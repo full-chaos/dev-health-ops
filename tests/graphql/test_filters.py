@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from api.graphql.models.inputs import (
+from dev_health_ops.api.graphql.models.inputs import (
     FilterInput,
     WhoFilterInput,
     WhatFilterInput,
@@ -13,7 +13,7 @@ from api.graphql.models.inputs import (
     ScopeLevelInput,
 )
 
-from api.graphql.sql.compiler import (
+from dev_health_ops.api.graphql.sql.compiler import (
     TimeseriesRequest,
     BreakdownRequest,
     compile_timeseries,

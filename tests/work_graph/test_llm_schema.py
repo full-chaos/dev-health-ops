@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from work_graph.investment.llm_schema import parse_llm_json, validate_llm_payload
-from work_graph.investment.taxonomy import SUBCATEGORIES
+from dev_health_ops.work_graph.investment.llm_schema import parse_llm_json, validate_llm_payload
+from dev_health_ops.work_graph.investment.taxonomy import SUBCATEGORIES
 
 
 def _source_texts():

@@ -1,7 +1,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from api.services.investment_mix_explain import explain_investment_mix
+from dev_health_ops.api.services.investment_mix_explain import explain_investment_mix
 
 @pytest.mark.asyncio
 async def test_explain_investment_mix_mismatch_warning():

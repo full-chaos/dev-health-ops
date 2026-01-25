@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from api.graphql.cost import (
+from dev_health_ops.api.graphql.cost import (
     CostLimits,
     DEFAULT_LIMITS,
     validate_buckets,
@@ -15,7 +15,7 @@ from api.graphql.cost import (
     validate_sub_request_count,
     validate_top_n,
 )
-from api.graphql.errors import CostLimitExceededError
+from dev_health_ops.api.graphql.errors import CostLimitExceededError
 
 
 class TestValidateDateRange:

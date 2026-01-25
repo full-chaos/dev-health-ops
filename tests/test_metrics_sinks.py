@@ -5,9 +5,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import text
 
-from metrics.schemas import RepoMetricsDailyRecord, WorkItemMetricsDailyRecord
-from metrics.sinks.clickhouse import ClickHouseMetricsSink
-from metrics.sinks.sqlite import SQLiteMetricsSink
+from dev_health_ops.metrics.schemas import RepoMetricsDailyRecord, WorkItemMetricsDailyRecord
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 
 
 def test_sqlite_sink_writes_repo_knowledge_metrics(tmp_path):

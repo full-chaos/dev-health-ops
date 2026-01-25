@@ -5,6 +5,7 @@ from dev_health_ops.fixtures.runner import (
     _build_repo_team_assignments,
     run_fixtures_generation,
 )
+from dev_health_ops.storage import SQLAlchemyStore
 
 
 @pytest.mark.asyncio
@@ -66,6 +67,42 @@ async def test_fixtures_generation_minimal_no_metrics(tmp_path):
     result = await run_fixtures_generation(ns)
     assert result == 0
     assert db_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_fixtures_generation_ensures_tables(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_ensure_tables.db"
+    db_uri = f"sqlite:///{db_file}"
+
+    called = {"value": False}
+    original = SQLAlchemyStore.ensure_tables
+
+    async def _wrapped(self):
+        called["value"] = True
+        return await original(self)
+
+    monkeypatch.setattr(SQLAlchemyStore, "ensure_tables", _wrapped)
+
+    ns = argparse.Namespace(
+        db=db_uri,
+        db_type="sqlite",
+        repo_name="test/ensure",
+        repo_count=1,
+        days=1,
+        commits_per_day=1,
+        pr_count=1,
+        seed=2,
+        provider="synthetic",
+        with_work_graph=False,
+        with_metrics=False,
+        team_count=1,
+    )
+
+    result = await run_fixtures_generation(ns)
+
+    assert result == 0
+    assert db_file.exists()
+    assert called["value"] is True
 
 
 def test_repo_team_assignments_distribution():

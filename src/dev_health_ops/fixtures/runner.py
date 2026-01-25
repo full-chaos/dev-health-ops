@@ -86,6 +86,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     db_type = resolve_db_type(ns.db, ns.db_type)
 
     async def _handler(store):
+        if isinstance(store, SQLAlchemyStore):
+            await store.ensure_tables()
+
         repo_count = max(1, ns.repo_count)
         base_name = ns.repo_name
         team_count = getattr(ns, "team_count", 8)

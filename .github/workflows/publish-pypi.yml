@@ -1,15 +1,14 @@
 name: Publish to PyPI
 
 on:
-  workflow_call:
+  release:
+    types: [published]
+  workflow_dispatch:
     inputs:
       tag:
-        description: 'The tag to build and publish'
+        description: "Tag to build and publish (e.g. v1.2.3)"
         required: true
         type: string
-    secrets:
-      PYPI_API_TOKEN:
-        required: false
 
 jobs:
   build-and-publish:
@@ -20,11 +19,12 @@ jobs:
       id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
     env:
       PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ env.TAG }}
           fetch-depth: 0
 
       - name: Set up Python

@@ -30,3 +30,11 @@ The CLI is implemented with argparse in `cli.py` and orchestrates sync, metrics,
 
 The Work Unit Investment API payloads include optional `work_unit_type` and `work_unit_name`
 fields for UI labels. These fields are intended to be exposed through GraphQL later unchanged.
+
+## Canonical investment view
+
+Investment categorization is computed at job time and persisted as distributions; UX-time systems may explain but must not recompute.
+
+- Concepts: `product/concepts.md`
+- Categorization contract: `llm/categorization-contract.md`
+- Investment View: `user-guide/investment-view.md`

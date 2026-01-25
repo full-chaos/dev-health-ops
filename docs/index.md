@@ -25,3 +25,13 @@ Developer health tooling drifted into expensive, opaque scoring systems that are
 - CLI reference: `cli.md`
 - Metrics: `metrics.md`
 - Grafana: `grafana.md`
+
+## Product documentation (PRD-style)
+
+These pages are the canonical narrative docs that complement the reference pages.
+
+- Product PRD: `product/prd.md`
+- Product brief: `product/product-brief.md`
+- Concepts and guardrails: `product/concepts.md`
+- Investment taxonomy: `product/investment-taxonomy.md`
+- Views and charts: `user-guide/views-index.md`

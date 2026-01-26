@@ -14,6 +14,7 @@ from typing import Any, List, Sequence
 from dev_health_ops.metrics.schemas import (
     CICDMetricsDailyRecord,
     CommitMetricsRecord,
+    DORAMetricsRecord,
     DeployMetricsDailyRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,

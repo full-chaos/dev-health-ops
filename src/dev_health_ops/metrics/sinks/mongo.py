@@ -19,6 +19,7 @@ from dev_health_ops.metrics.schemas import (
     ReviewEdgeDailyRecord,
     CICDMetricsDailyRecord,
     DeployMetricsDailyRecord,
+    DORAMetricsRecord,
     IncidentMetricsDailyRecord,
     ICLandscapeRollingRecord,
     FileComplexitySnapshot,
@@ -434,6 +435,12 @@ class MongoMetricsSink(BaseMetricsSink):
             doc["computed_at"] = _dt_to_mongo_datetime(row.computed_at)
             ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
         self.db["incident_metrics_daily"].bulk_write(ops, ordered=False)
+
+    def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
+        if not rows:
+            return
+        # DORA metrics persistence not yet implemented for Mongo sink.
+        return
 
     def write_ic_landscape_rolling(
         self, rows: Sequence[ICLandscapeRollingRecord]

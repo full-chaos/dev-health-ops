@@ -21,6 +21,7 @@ from dev_health_ops.metrics.schemas import (
     ReviewEdgeDailyRecord,
     CICDMetricsDailyRecord,
     DeployMetricsDailyRecord,
+    DORAMetricsRecord,
     IncidentMetricsDailyRecord,
     ICLandscapeRollingRecord,
     FileComplexitySnapshot,
@@ -1494,6 +1495,12 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         payload = [self._incident_row(r) for r in rows]
         with self.engine.begin() as conn:
             conn.execute(stmt, payload)
+
+    def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
+        if not rows:
+            return
+        # DORA metrics persistence not yet implemented for SQL sinks.
+        return
 
     def write_file_complexity_snapshots(
         self, rows: Sequence[FileComplexitySnapshot]

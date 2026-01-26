@@ -22,6 +22,7 @@ from dev_health_ops.metrics.schemas import (
     ReviewEdgeDailyRecord,
     CICDMetricsDailyRecord,
     DeployMetricsDailyRecord,
+    DORAMetricsRecord,
     IncidentMetricsDailyRecord,
     ICLandscapeRollingRecord,
     FileComplexitySnapshot,
@@ -594,6 +595,12 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             ],
             rows,
         )
+
+    def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
+        if not rows:
+            return
+        # DORA metrics persistence not yet implemented for ClickHouse sink.
+        return
 
     def write_file_complexity_snapshots(
         self, rows: Sequence[FileComplexitySnapshot]

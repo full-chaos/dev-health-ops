@@ -14,6 +14,7 @@ from typing import Any, List, Sequence
 from dev_health_ops.metrics.schemas import (
     CICDMetricsDailyRecord,
     CommitMetricsRecord,
+    DORAMetricsRecord,
     DeployMetricsDailyRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
@@ -180,6 +181,11 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[IncidentMetricsDailyRecord]
     ) -> None:
         """Write daily incident metrics."""
+        ...
+
+    @abstractmethod
+    def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
+        """Write pre-computed DORA metrics from providers."""
         ...
 
     # -------------------------------------------------------------------------

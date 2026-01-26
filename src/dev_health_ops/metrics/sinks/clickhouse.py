@@ -22,6 +22,7 @@ from dev_health_ops.metrics.schemas import (
     ReviewEdgeDailyRecord,
     CICDMetricsDailyRecord,
     DeployMetricsDailyRecord,
+    DORAMetricsRecord,
     IncidentMetricsDailyRecord,
     ICLandscapeRollingRecord,
     FileComplexitySnapshot,
@@ -590,6 +591,21 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "incidents_count",
                 "mttr_p50_hours",
                 "mttr_p90_hours",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "dora_metrics_daily",
+            [
+                "repo_id",
+                "day",
+                "metric_name",
+                "value",
                 "computed_at",
             ],
             rows,

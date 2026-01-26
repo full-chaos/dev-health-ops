@@ -22,6 +22,8 @@ from dev_health_ops.connectors.models import (
     Author,
     BlameRange,
     CommitStats,
+    DORAMetric,
+    DORAMetrics,
     FileBlame,
     Organization,
     PullRequest,
@@ -969,6 +971,51 @@ class GitLabConnector(GitConnector):
         return self.get_file_blame_by_project(
             project_name=f"{owner}/{repo}", file_path=path, ref=ref
         )
+
+    def get_dora_metrics(
+        self,
+        project_name: str,
+        metric: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        interval: str = "daily",
+    ) -> DORAMetrics:
+        """Retrieve DORA metrics for a GitLab project."""
+        try:
+            # First get project ID
+            gl_proj = self.gitlab.projects.get(project_name)
+            project_id = int(gl_proj.id)
+
+            raw_metrics = self.rest_client.get_dora_metrics(
+                project_id=project_id,
+                metric=metric,
+                start_date=start_date,
+                end_date=end_date,
+                interval=interval,
+            )
+
+            data_points = []
+            for item in raw_metrics:
+                dt = datetime.fromisoformat(item["date"])
+                data_points.append(
+                    DORAMetric(
+                        date=dt,
+                        value=float(item.get("value", 0.0)),
+                    )
+                )
+
+            return DORAMetrics(
+                metric_name=metric,
+                data_points=data_points,
+            )
+
+        except Exception as e:
+            try:
+                self._handle_gitlab_exception(e)
+            except Exception:
+                # Silently catch re-raised exceptions to return empty metrics
+                pass
+            return DORAMetrics(metric_name=metric, data_points=[])
 
     def get_rate_limit(self) -> Dict[str, Any]:
         """Get current rate limit status."""

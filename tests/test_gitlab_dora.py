@@ -3,7 +3,7 @@ Tests for GitLab DORA metrics integration.
 """
 
 from unittest.mock import Mock, patch
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
 

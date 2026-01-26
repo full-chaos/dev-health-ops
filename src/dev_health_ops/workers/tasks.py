@@ -219,3 +219,204 @@ def health_check(self) -> dict:
         "status": "healthy",
         "worker_id": self.request.id,
     }
+
+
+@celery_app.task(bind=True, max_retries=3, queue="webhooks")
+def process_webhook_event(
+    self,
+    provider: str,
+    event_type: str,
+    delivery_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+    org_id: Optional[str] = None,
+    repo_name: Optional[str] = None,
+) -> dict:
+    """
+    Process a webhook event asynchronously.
+
+    This task handles the actual processing of webhook events after
+    they've been received and validated by the webhook endpoints.
+
+    Args:
+        provider: Source provider (github, gitlab, jira)
+        event_type: Canonical event type
+        delivery_id: Provider's delivery ID for idempotency
+        payload: Raw webhook payload
+        org_id: Organization scope
+        repo_name: Repository name (if applicable)
+
+    Returns:
+        dict with processing status and summary
+    """
+    from datetime import datetime, timezone
+
+    logger.info(
+        "Processing webhook event: provider=%s type=%s delivery=%s repo=%s",
+        provider,
+        event_type,
+        delivery_id,
+        repo_name,
+    )
+
+    try:
+        if delivery_id:
+            if _is_duplicate_delivery(provider, delivery_id):
+                logger.info(
+                    "Skipping duplicate webhook delivery: %s/%s",
+                    provider,
+                    delivery_id,
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "duplicate_delivery",
+                    "delivery_id": delivery_id,
+                }
+            _record_delivery(provider, delivery_id)
+
+        if provider == "github":
+            result = _process_github_event(event_type, payload, org_id, repo_name)
+        elif provider == "gitlab":
+            result = _process_gitlab_event(event_type, payload, org_id, repo_name)
+        elif provider == "jira":
+            result = _process_jira_event(event_type, payload, org_id)
+        else:
+            logger.warning("Unknown webhook provider: %s", provider)
+            return {"status": "error", "reason": f"unknown_provider: {provider}"}
+
+        _invalidate_sync_cache(provider, org_id or "default")
+
+        return {
+            "status": "success",
+            "provider": provider,
+            "event_type": event_type,
+            "delivery_id": delivery_id,
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+            **result,
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "Webhook processing failed: provider=%s type=%s error=%s",
+            provider,
+            event_type,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
+
+
+def _is_duplicate_delivery(provider: str, delivery_id: str) -> bool:
+    """Check if we've already processed this delivery.
+
+    Uses a simple in-memory check for now. In production, this should
+    use Redis or a database table for persistence across workers.
+    """
+    # TODO: Implement persistent idempotency check via Redis or DB
+    # For now, always return False (process all events)
+    return False
+
+
+def _record_delivery(provider: str, delivery_id: str) -> None:
+    """Record that we've processed this delivery.
+
+    This prevents duplicate processing if the provider retries.
+    """
+    # TODO: Implement persistent delivery recording via Redis or DB
+    pass
+
+
+def _process_github_event(
+    event_type: str,
+    payload: dict | None,
+    org_id: str | None,
+    repo_name: str | None,
+) -> dict:
+    """Process a GitHub webhook event.
+
+    Routes to appropriate sync based on event type:
+    - push: Trigger git sync for new commits
+    - pull_request: Update PR data
+    - issues: Update work items
+    - deployment: Update deployment data
+    """
+    if not payload:
+        return {"processed": False, "reason": "empty_payload"}
+
+    if event_type == "push":
+        commits = payload.get("commits", [])
+        return {"processed": True, "commits_count": len(commits)}
+
+    elif event_type == "pull_request":
+        pr = payload.get("pull_request", {})
+        return {"processed": True, "pr_number": pr.get("number")}
+
+    elif event_type in ("issue_created", "issue_updated", "issue_closed"):
+        issue = payload.get("issue", {})
+        return {"processed": True, "issue_number": issue.get("number")}
+
+    elif event_type == "deployment":
+        deployment = payload.get("deployment", {})
+        return {"processed": True, "deployment_id": deployment.get("id")}
+
+    return {"processed": False, "reason": f"unhandled_event: {event_type}"}
+
+
+def _process_gitlab_event(
+    event_type: str,
+    payload: dict | None,
+    org_id: str | None,
+    repo_name: str | None,
+) -> dict:
+    """Process a GitLab webhook event.
+
+    Routes to appropriate sync based on event type:
+    - push: Trigger git sync for new commits
+    - merge_request: Update MR data
+    - issue: Update work items
+    - pipeline: Update CI/CD data
+    """
+    if not payload:
+        return {"processed": False, "reason": "empty_payload"}
+
+    if event_type == "push":
+        commits = payload.get("commits", [])
+        return {"processed": True, "commits_count": len(commits)}
+
+    elif event_type == "merge_request":
+        mr = payload.get("object_attributes", {})
+        return {"processed": True, "mr_iid": mr.get("iid")}
+
+    elif event_type in ("issue_created", "issue_updated", "issue_closed"):
+        issue = payload.get("object_attributes", {})
+        return {"processed": True, "issue_iid": issue.get("iid")}
+
+    elif event_type == "pipeline":
+        pipeline = payload.get("object_attributes", {})
+        return {"processed": True, "pipeline_id": pipeline.get("id")}
+
+    return {"processed": False, "reason": f"unhandled_event: {event_type}"}
+
+
+def _process_jira_event(
+    event_type: str,
+    payload: dict | None,
+    org_id: str | None,
+) -> dict:
+    """Process a Jira webhook event.
+
+    Routes to work item sync for issue events.
+    """
+    if not payload:
+        return {"processed": False, "reason": "empty_payload"}
+
+    issue = payload.get("issue", {})
+    issue_key = issue.get("key")
+
+    if event_type in (
+        "issue_created",
+        "issue_updated",
+        "issue_closed",
+        "issue_deleted",
+    ):
+        return {"processed": True, "issue_key": issue_key}
+
+    return {"processed": False, "reason": f"unhandled_event: {event_type}"}

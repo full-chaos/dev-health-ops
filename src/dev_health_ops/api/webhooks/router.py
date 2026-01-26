@@ -109,7 +109,8 @@ async def github_webhook(
     )
 
     if event_type == WebhookEventType.UNKNOWN:
-        logger.debug("Ignoring unsupported GitHub event: %s", x_github_event)
+        sanitized_event = x_github_event.replace("\r", "").replace("\n", "")
+        logger.debug("Ignoring unsupported GitHub event: %s", sanitized_event)
         return WebhookResponse(
             status="accepted",
             event_id=event.id,

@@ -172,11 +172,12 @@ async def gitlab_webhook(
         payload=payload,
     )
 
-    if event_type == WebhookEventType.UNKNOWN:
+        safe_gitlab_event = x_gitlab_event.replace("\r", "").replace("\n", "") if x_gitlab_event is not None else ""
+        logger.debug("Ignoring unsupported GitLab event: %s", safe_gitlab_event)
         logger.debug("Ignoring unsupported GitLab event: %s", x_gitlab_event)
         return WebhookResponse(
             status="accepted",
-            event_id=event.id,
+            message=f"Event type '{safe_gitlab_event}' not processed",
             message=f"Event type '{x_gitlab_event}' not processed",
         )
 

@@ -104,6 +104,7 @@ async def github_webhook(
         raw_event_type=f"{x_github_event}.{action}" if action else x_github_event,
         delivery_id=x_github_delivery,
         org_id=org_id,
+        repo_id=None,
         repo_name=repo_name,
         payload=payload,
     )
@@ -168,6 +169,7 @@ async def gitlab_webhook(
         raw_event_type=f"{x_gitlab_event}:{action}" if action else x_gitlab_event,
         delivery_id=delivery_id,
         org_id=org_id,
+        repo_id=None,
         repo_name=repo_name,
         payload=payload,
     )

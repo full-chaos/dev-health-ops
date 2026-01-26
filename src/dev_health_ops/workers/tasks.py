@@ -307,12 +307,19 @@ def process_webhook_event(
 def _is_duplicate_delivery(provider: str, delivery_id: str) -> bool:
     """Check if we've already processed this delivery.
 
-    Uses a simple in-memory check for now. In production, this should
-    use Redis or a database table for persistence across workers.
+    Uses Redis for persistence across workers if available, otherwise
+    falls back to a simple in-memory check.
     """
-    # TODO: Implement persistent idempotency check via Redis or DB
-    # For now, always return False (process all events)
-    return False
+    cache_key = f"webhook_delivery:{provider}:{delivery_id}"
+    try:
+        from dev_health_ops.api.services.cache import create_cache
+
+        # Use a short TTL for idempotency (e.g., 24 hours)
+        cache = create_cache(ttl_seconds=86400)
+        return cache.get(cache_key) is not None
+    except Exception as e:
+        logger.warning("Idempotency check failed (falling back to False): %s", e)
+        return False
 
 
 def _record_delivery(provider: str, delivery_id: str) -> None:
@@ -320,8 +327,14 @@ def _record_delivery(provider: str, delivery_id: str) -> None:
 
     This prevents duplicate processing if the provider retries.
     """
-    # TODO: Implement persistent delivery recording via Redis or DB
-    pass
+    cache_key = f"webhook_delivery:{provider}:{delivery_id}"
+    try:
+        from dev_health_ops.api.services.cache import create_cache
+
+        cache = create_cache(ttl_seconds=86400)
+        cache.set(cache_key, "processed")
+    except Exception as e:
+        logger.warning("Failed to record webhook delivery: %s", e)
 
 
 def _process_github_event(
@@ -330,34 +343,94 @@ def _process_github_event(
     org_id: str | None,
     repo_name: str | None,
 ) -> dict:
-    """Process a GitHub webhook event.
-
-    Routes to appropriate sync based on event type:
-    - push: Trigger git sync for new commits
-    - pull_request: Update PR data
-    - issues: Update work items
-    - deployment: Update deployment data
-    """
+    """Process a GitHub webhook event."""
     if not payload:
         return {"processed": False, "reason": "empty_payload"}
 
-    if event_type == "push":
-        commits = payload.get("commits", [])
-        return {"processed": True, "commits_count": len(commits)}
+    # Import specialized sync processors
+    from dev_health_ops.processors.github import process_github_repo
+    from dev_health_ops.storage import run_with_store, resolve_db_type
 
-    elif event_type == "pull_request":
-        pr = payload.get("pull_request", {})
-        return {"processed": True, "pr_number": pr.get("number")}
+    db_url = _get_db_url()
+    db_type = resolve_db_type(db_url, None)
 
-    elif event_type in ("issue_created", "issue_updated", "issue_closed"):
-        issue = payload.get("issue", {})
-        return {"processed": True, "issue_number": issue.get("number")}
+    # Repository owner and name from payload if not provided
+    repo_payload = payload.get("repository", {})
+    owner = repo_payload.get("owner", {}).get("login")
+    repo = repo_payload.get("name")
 
-    elif event_type == "deployment":
-        deployment = payload.get("deployment", {})
-        return {"processed": True, "deployment_id": deployment.get("id")}
+    if not (owner and repo):
+        # Fallback to provided repo_name if possible
+        if repo_name and "/" in repo_name:
+            owner, repo = repo_name.split("/", 1)
+        else:
+            return {"processed": False, "reason": "missing_repo_info"}
 
-    return {"processed": False, "reason": f"unhandled_event: {event_type}"}
+    token = os.getenv("GITHUB_TOKEN") or ""
+    if not token:
+        return {"processed": False, "reason": "missing_github_token"}
+
+    async def _sync_handler(store):
+        if event_type == "push":
+            await process_github_repo(
+                store=store,
+                owner=owner,
+                repo_name=repo,
+                token=token,
+                sync_git=True,
+                sync_prs=False,
+                sync_cicd=False,
+            )
+        elif event_type == "pull_request":
+            await process_github_repo(
+                store=store,
+                owner=owner,
+                repo_name=repo,
+                token=token,
+                sync_git=False,
+                sync_prs=True,
+                sync_cicd=False,
+            )
+        elif event_type in ("issue_created", "issue_updated", "issue_closed"):
+            await process_github_repo(
+                store=store,
+                owner=owner,
+                repo_name=repo,
+                token=token,
+                sync_git=False,
+                sync_prs=False,
+                sync_incidents=True,
+            )
+        elif event_type == "deployment":
+            await process_github_repo(
+                store=store,
+                owner=owner,
+                repo_name=repo,
+                token=token,
+                sync_git=False,
+                sync_prs=False,
+                sync_deployments=True,
+            )
+        elif event_type == "workflow_run":
+            await process_github_repo(
+                store=store,
+                owner=owner,
+                repo_name=repo,
+                token=token,
+                sync_git=False,
+                sync_prs=False,
+                sync_cicd=True,
+            )
+
+    # Execute sync
+    import asyncio
+
+    try:
+        asyncio.run(run_with_store(db_url, db_type, _sync_handler))
+        return {"processed": True, "repo": f"{owner}/{repo}", "event": event_type}
+    except Exception as e:
+        logger.error("Failed to process GitHub webhook %s: %s", event_type, e)
+        return {"processed": False, "error": str(e)}
 
 
 def _process_gitlab_event(
@@ -366,34 +439,78 @@ def _process_gitlab_event(
     org_id: str | None,
     repo_name: str | None,
 ) -> dict:
-    """Process a GitLab webhook event.
-
-    Routes to appropriate sync based on event type:
-    - push: Trigger git sync for new commits
-    - merge_request: Update MR data
-    - issue: Update work items
-    - pipeline: Update CI/CD data
-    """
+    """Process a GitLab webhook event."""
     if not payload:
         return {"processed": False, "reason": "empty_payload"}
 
-    if event_type == "push":
-        commits = payload.get("commits", [])
-        return {"processed": True, "commits_count": len(commits)}
+    from dev_health_ops.processors.gitlab import process_gitlab_project
+    from dev_health_ops.storage import run_with_store, resolve_db_type
 
-    elif event_type == "merge_request":
-        mr = payload.get("object_attributes", {})
-        return {"processed": True, "mr_iid": mr.get("iid")}
+    db_url = _get_db_url()
+    db_type = resolve_db_type(db_url, None)
 
-    elif event_type in ("issue_created", "issue_updated", "issue_closed"):
-        issue = payload.get("object_attributes", {})
-        return {"processed": True, "issue_iid": issue.get("iid")}
+    # Project ID from payload
+    project_payload = payload.get("project", {})
+    project_id = project_payload.get("id")
 
-    elif event_type == "pipeline":
-        pipeline = payload.get("object_attributes", {})
-        return {"processed": True, "pipeline_id": pipeline.get("id")}
+    if not project_id:
+        return {"processed": False, "reason": "missing_project_id"}
 
-    return {"processed": False, "reason": f"unhandled_event: {event_type}"}
+    token = os.getenv("GITLAB_TOKEN") or ""
+    gitlab_url = os.getenv("GITLAB_URL", "https://gitlab.com")
+    if not token:
+        return {"processed": False, "reason": "missing_gitlab_token"}
+
+    async def _sync_handler(store):
+        if event_type == "push":
+            await process_gitlab_project(
+                store=store,
+                project_id=project_id,
+                token=token,
+                gitlab_url=gitlab_url,
+                sync_git=True,
+                sync_prs=False,
+                sync_cicd=False,
+            )
+        elif event_type == "merge_request":
+            await process_gitlab_project(
+                store=store,
+                project_id=project_id,
+                token=token,
+                gitlab_url=gitlab_url,
+                sync_git=False,
+                sync_prs=True,
+                sync_cicd=False,
+            )
+        elif event_type in ("issue_created", "issue_updated", "issue_closed"):
+            await process_gitlab_project(
+                store=store,
+                project_id=project_id,
+                token=token,
+                gitlab_url=gitlab_url,
+                sync_git=False,
+                sync_prs=False,
+                sync_incidents=True,
+            )
+        elif event_type == "pipeline":
+            await process_gitlab_project(
+                store=store,
+                project_id=project_id,
+                token=token,
+                gitlab_url=gitlab_url,
+                sync_git=False,
+                sync_prs=False,
+                sync_cicd=True,
+            )
+
+    import asyncio
+
+    try:
+        asyncio.run(run_with_store(db_url, db_type, _sync_handler))
+        return {"processed": True, "project_id": project_id, "event": event_type}
+    except Exception as e:
+        logger.error("Failed to process GitLab webhook %s: %s", event_type, e)
+        return {"processed": False, "error": str(e)}
 
 
 def _process_jira_event(
@@ -401,22 +518,23 @@ def _process_jira_event(
     payload: dict | None,
     org_id: str | None,
 ) -> dict:
-    """Process a Jira webhook event.
-
-    Routes to work item sync for issue events.
-    """
+    """Process a Jira webhook event."""
     if not payload:
         return {"processed": False, "reason": "empty_payload"}
 
-    issue = payload.get("issue", {})
-    issue_key = issue.get("key")
+    from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
 
-    if event_type in (
-        "issue_created",
-        "issue_updated",
-        "issue_closed",
-        "issue_deleted",
-    ):
-        return {"processed": True, "issue_key": issue_key}
-
-    return {"processed": False, "reason": f"unhandled_event: {event_type}"}
+    try:
+        # Jira sync doesn't have a single-issue sync yet, so we trigger a broad sync
+        # for the provider. In a production system, we'd optimize this to sync only
+        # the specific issue key.
+        run_work_items_sync_job(
+            db_url=_get_db_url(),
+            day=date.today(),
+            backfill_days=1,
+            provider="jira",
+        )
+        return {"processed": True, "event": event_type}
+    except Exception as e:
+        logger.error("Failed to process Jira webhook %s: %s", event_type, e)
+        return {"processed": False, "error": str(e)}

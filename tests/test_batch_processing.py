@@ -11,7 +11,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from dev_health_ops import utils
 from dev_health_ops.connectors import (
     GitHubConnector,
     GitLabConnector,

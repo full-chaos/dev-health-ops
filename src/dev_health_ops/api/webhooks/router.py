@@ -172,13 +172,17 @@ async def gitlab_webhook(
         payload=payload,
     )
 
-        safe_gitlab_event = x_gitlab_event.replace("\r", "").replace("\n", "") if x_gitlab_event is not None else ""
+    if event_type == WebhookEventType.UNKNOWN:
+        safe_gitlab_event = (
+            x_gitlab_event.replace("\r", "").replace("\n", "")
+            if x_gitlab_event is not None
+            else ""
+        )
         logger.debug("Ignoring unsupported GitLab event: %s", safe_gitlab_event)
-        logger.debug("Ignoring unsupported GitLab event: %s", x_gitlab_event)
         return WebhookResponse(
             status="accepted",
+            event_id=event.id,
             message=f"Event type '{safe_gitlab_event}' not processed",
-            message=f"Event type '{x_gitlab_event}' not processed",
         )
 
     _dispatch_webhook_task(event)
@@ -236,13 +240,13 @@ async def jira_webhook(
         payload=payload,
     )
 
+    if event_type == WebhookEventType.UNKNOWN:
         safe_webhook_event = str(webhook_event).replace("\r", "").replace("\n", "")
         logger.debug("Ignoring unsupported Jira event: %s", safe_webhook_event)
-        logger.debug("Ignoring unsupported Jira event: %s", webhook_event)
         return WebhookResponse(
             status="accepted",
             event_id=event.id,
-            message=f"Event type '{webhook_event}' not processed",
+            message=f"Event type '{safe_webhook_event}' not processed",
         )
 
     _dispatch_webhook_task(event)

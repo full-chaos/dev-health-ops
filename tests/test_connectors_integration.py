@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import pytest
 
 from dev_health_ops.connectors import GitHubConnector, GitLabConnector
+from dev_health_ops.connectors.exceptions import ConnectorException
 
 # Skip integration tests if environment variable is set
 skip_integration = os.getenv("SKIP_INTEGRATION_TESTS", "0") == "1"
@@ -153,7 +154,10 @@ class TestGitLabIntegration:
 
         try:
             # Fetch first 10 public projects
-            projects = connector.list_projects(max_projects=10)
+            try:
+                projects = connector.list_projects(max_projects=10)
+            except ConnectorException as exc:
+                pytest.skip(f"GitLab API unavailable: {exc}")
 
             # Assertions
             assert len(projects) > 0, "Should fetch at least one project"
@@ -181,7 +185,12 @@ class TestGitLabIntegration:
 
         try:
             # Fetch first 10 repos from gitlab-org group
-            projects = connector.list_projects(group_name="gitlab-org", max_projects=10)
+            try:
+                projects = connector.list_projects(
+                    group_name="gitlab-org", max_projects=10
+                )
+            except ConnectorException as exc:
+                pytest.skip(f"GitLab API unavailable: {exc}")
 
             # Assertions
             assert len(projects) > 0, "Should fetch at least one project"

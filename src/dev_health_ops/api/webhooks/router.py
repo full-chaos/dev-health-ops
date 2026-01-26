@@ -280,6 +280,7 @@ async def webhooks_health() -> dict:
     celery_available = False
     try:
         from dev_health_ops.workers.celery_app import celery_app
+        celery_available = celery_app is not None
 
     except Exception as exc:
         # If Celery is not configured or unavailable, log and report as not available.

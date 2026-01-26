@@ -157,6 +157,9 @@ class MongoMetricsSink(BaseMetricsSink):
         self.db["cicd_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["deploy_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
         self.db["incident_metrics_daily"].create_index([("repo_id", 1), ("day", 1)])
+        self.db["dora_metrics_daily"].create_index(
+            [("repo_id", 1), ("day", 1), ("metric_name", 1)]
+        )
         self.db["ic_landscape_rolling_30d"].create_index(
             [("repo_id", 1), ("map_name", 1), ("as_of_day", 1), ("identity_id", 1)],
             unique=True,
@@ -439,8 +442,17 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         if not rows:
             return
-        # DORA metrics persistence not yet implemented for Mongo sink.
-        return
+        ops: List[ReplaceOne] = []
+        for row in rows:
+            doc = asdict(row)
+            doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}:{row.metric_name}"
+            doc["repo_id"] = str(row.repo_id)
+            doc["day"] = _day_to_mongo_datetime(row.day)
+            doc["metric_name"] = str(row.metric_name)
+            doc["value"] = float(row.value)
+            doc["computed_at"] = _dt_to_mongo_datetime(row.computed_at)
+            ops.append(ReplaceOne({"_id": doc["_id"]}, doc, upsert=True))
+        self.db["dora_metrics_daily"].bulk_write(ops, ordered=False)
 
     def write_ic_landscape_rolling(
         self, rows: Sequence[ICLandscapeRollingRecord]

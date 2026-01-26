@@ -599,8 +599,17 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         if not rows:
             return
-        # DORA metrics persistence not yet implemented for ClickHouse sink.
-        return
+        self._insert_rows(
+            "dora_metrics_daily",
+            [
+                "repo_id",
+                "day",
+                "metric_name",
+                "value",
+                "computed_at",
+            ],
+            rows,
+        )
 
     def write_file_complexity_snapshots(
         self, rows: Sequence[FileComplexitySnapshot]

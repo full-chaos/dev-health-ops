@@ -324,6 +324,16 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             )
             """,
             """
+            CREATE TABLE IF NOT EXISTS dora_metrics_daily (
+              repo_id TEXT NOT NULL,
+              day TEXT NOT NULL,
+              metric_name TEXT NOT NULL,
+              value REAL NOT NULL,
+              computed_at TEXT NOT NULL,
+              PRIMARY KEY (repo_id, day, metric_name)
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS ic_landscape_rolling_30d (
               repo_id TEXT NOT NULL,
               as_of_day TEXT NOT NULL,
@@ -446,6 +456,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "CREATE INDEX IF NOT EXISTS idx_cicd_metrics_daily_day ON cicd_metrics_daily(day)",
             "CREATE INDEX IF NOT EXISTS idx_deploy_metrics_daily_day ON deploy_metrics_daily(day)",
             "CREATE INDEX IF NOT EXISTS idx_incident_metrics_daily_day ON incident_metrics_daily(day)",
+            "CREATE INDEX IF NOT EXISTS idx_dora_metrics_daily_day ON dora_metrics_daily(day)",
             "CREATE INDEX IF NOT EXISTS idx_ic_landscape_rolling_30d_day ON ic_landscape_rolling_30d(as_of_day)",
             "CREATE INDEX IF NOT EXISTS idx_file_complexity_snapshots_day ON file_complexity_snapshots(as_of_day)",
             "CREATE INDEX IF NOT EXISTS idx_repo_complexity_daily_day ON repo_complexity_daily(day)",
@@ -994,6 +1005,16 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "computed_at": _dt_to_iso(data["computed_at"]),
         }
 
+    def _dora_row(self, row: DORAMetricsRecord) -> dict:
+        data = asdict(row)
+        return {
+            "repo_id": str(data["repo_id"]),
+            "day": data["day"].isoformat(),
+            "metric_name": str(data["metric_name"]),
+            "value": float(data["value"]),
+            "computed_at": _dt_to_iso(data["computed_at"]),
+        }
+
     def write_ic_landscape_rolling(
         self, rows: Sequence[ICLandscapeRollingRecord]
     ) -> None:
@@ -1499,8 +1520,21 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         if not rows:
             return
-        # DORA metrics persistence not yet implemented for SQL sinks.
-        return
+        stmt = text(
+            """
+            INSERT INTO dora_metrics_daily (
+              repo_id, day, metric_name, value, computed_at
+            ) VALUES (
+              :repo_id, :day, :metric_name, :value, :computed_at
+            )
+            ON CONFLICT(repo_id, day, metric_name) DO UPDATE SET
+              value=excluded.value,
+              computed_at=excluded.computed_at
+            """
+        )
+        payload = [self._dora_row(r) for r in rows]
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
 
     def write_file_complexity_snapshots(
         self, rows: Sequence[FileComplexitySnapshot]

@@ -1,0 +1,39 @@
+# Kustomize configuration for dev-health-ops
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: dev-health
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secrets.yaml
+  - clickhouse.yaml
+  - redis.yaml
+  - api.yaml
+  - worker.yaml
+  - cronjobs.yaml
+  - ingress.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: dev-health-ops
+
+# Image configuration (override in overlays)
+images:
+  - name: ghcr.io/your-org/dev-health-ops
+    newTag: latest
+
+# ConfigMap generator (alternative to static configmap.yaml)
+# configMapGenerator:
+#   - name: dev-health-config
+#     literals:
+#       - GRAPHQL_QUERY_TIMEOUT=30
+
+# Secret generator (use external-secrets or sealed-secrets in production)
+# secretGenerator:
+#   - name: dev-health-secrets
+#     type: Opaque
+#     files:
+#       - secrets/database-uri

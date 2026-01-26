@@ -1,0 +1,80 @@
+---
+# Ingress for dev-health API
+# Requires an Ingress Controller (nginx, traefik, etc.)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dev-health-ingress
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-ingress
+    app.kubernetes.io/part-of: dev-health-ops
+  annotations:
+    # Nginx Ingress annotations (adjust for your controller)
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    # Enable CORS for GraphQL playground
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # SSL redirect
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx  # Adjust based on your cluster
+  tls:
+    - hosts:
+        - dev-health.example.com
+      secretName: dev-health-tls
+  rules:
+    - host: dev-health.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dev-health-api
+                port:
+                  number: 8000
+---
+# NetworkPolicy to restrict traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dev-health-network-policy
+  namespace: dev-health
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx  # Adjust for your ingress namespace
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Allow internal communication
+    - from:
+        - podSelector: {}
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow internal communication
+    - to:
+        - podSelector: {}
+    # Allow external HTTPS (GitHub, GitLab, Jira APIs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

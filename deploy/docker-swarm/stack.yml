@@ -1,0 +1,192 @@
+version: "3.8"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    environment:
+      CLICKHOUSE_LISTEN_HOST: "0.0.0.0"
+      CLICKHOUSE_USER: ch
+      CLICKHOUSE_PASSWORD_FILE: /run/secrets/clickhouse_password
+      CLICKHOUSE_DB: default
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    secrets:
+      - clickhouse_password
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1"
+        reservations:
+          memory: 512M
+          cpus: "0.25"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dev-health-internal
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    deploy:
+      mode: replicated
+      replicas: 1
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.2"
+        reservations:
+          memory: 64M
+          cpus: "0.05"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - dev-health-internal
+
+  api:
+    image: ghcr.io/your-org/dev-health-ops:latest
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+    environment:
+      DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      GRAPHQL_QUERY_TIMEOUT: "30"
+      LOG_LEVEL: INFO
+    secrets:
+      - github_token
+      - gitlab_token
+      - jira_credentials
+    ports:
+      - "8000:8000"
+    deploy:
+      mode: replicated
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.1"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dev-health-api.rule=Host(`dev-health.example.com`)"
+        - "traefik.http.services.dev-health-api.loadbalancer.server.port=8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dev-health-internal
+      - dev-health-public
+
+  worker:
+    image: ghcr.io/your-org/dev-health-ops:latest
+    command:
+      - celery
+      - -A
+      - workers.celery_app
+      - worker
+      - --loglevel=info
+      - -Q
+      - default,metrics,sync
+      - --concurrency=4
+    environment:
+      DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      LOG_LEVEL: INFO
+    secrets:
+      - github_token
+      - gitlab_token
+      - jira_credentials
+    deploy:
+      mode: replicated
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1"
+        reservations:
+          memory: 256M
+          cpus: "0.1"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    networks:
+      - dev-health-internal
+
+volumes:
+  clickhouse_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  dev-health-internal:
+    driver: overlay
+    internal: true
+  dev-health-public:
+    driver: overlay
+
+secrets:
+  clickhouse_password:
+    external: true
+  github_token:
+    external: true
+  gitlab_token:
+    external: true
+  jira_credentials:
+    external: true

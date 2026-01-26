@@ -1,0 +1,184 @@
+---
+# CronJob for daily metrics computation
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dev-health-daily-metrics
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-metrics
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  # Run daily at 2 AM UTC
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 3600  # 1 hour timeout
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: metrics
+              image: ghcr.io/your-org/dev-health-ops:latest
+              command:
+                - dev-hops
+                - metrics
+                - daily
+              envFrom:
+                - configMapRef:
+                    name: dev-health-config
+                - secretRef:
+                    name: dev-health-secrets
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "2Gi"
+                  cpu: "1000m"
+---
+# CronJob for GitHub sync
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dev-health-sync-github
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-sync-github
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  # Run every 6 hours
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200  # 2 hour timeout
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              image: ghcr.io/your-org/dev-health-ops:latest
+              command:
+                - dev-hops
+                - sync
+                - work-items
+                - --provider
+                - github
+                - --backfill
+                - "1"
+              envFrom:
+                - configMapRef:
+                    name: dev-health-config
+                - secretRef:
+                    name: dev-health-secrets
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "500m"
+---
+# CronJob for GitLab sync
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dev-health-sync-gitlab
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-sync-gitlab
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  # Run every 6 hours (offset from GitHub)
+  schedule: "30 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200  # 2 hour timeout
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              image: ghcr.io/your-org/dev-health-ops:latest
+              command:
+                - dev-hops
+                - sync
+                - work-items
+                - --provider
+                - gitlab
+                - --backfill
+                - "1"
+              envFrom:
+                - configMapRef:
+                    name: dev-health-config
+                - secretRef:
+                    name: dev-health-secrets
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "500m"
+---
+# CronJob for Jira sync
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dev-health-sync-jira
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-sync-jira
+    app.kubernetes.io/component: cronjob
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  # Run every 4 hours
+  schedule: "0 */4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600  # 1 hour timeout
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              image: ghcr.io/your-org/dev-health-ops:latest
+              command:
+                - dev-hops
+                - sync
+                - work-items
+                - --provider
+                - jira
+                - --backfill
+                - "1"
+              envFrom:
+                - configMapRef:
+                    name: dev-health-config
+                - secretRef:
+                    name: dev-health-secrets
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "500m"

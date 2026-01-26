@@ -1,0 +1,37 @@
+---
+# ConfigMap for dev-health-ops application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dev-health-config
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health
+    app.kubernetes.io/component: config
+data:
+  # Database configuration (connection strings in secrets)
+  GRAPHQL_QUERY_TIMEOUT: "30"
+  BATCH_SIZE: "100"
+  MAX_WORKERS: "4"
+  
+  # API configuration
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  
+  # Celery configuration
+  CELERY_BROKER_URL: "redis://redis:6379/0"
+  CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+  
+  # GitLab configuration (for self-hosted)
+  GITLAB_URL: "https://gitlab.com"
+  
+  # Jira configuration
+  JIRA_FETCH_COMMENTS: "1"
+  
+  # GitHub configuration
+  GITHUB_INCLUDE_PRS: "true"
+  GITHUB_FETCH_COMMENTS: "true"
+  GITHUB_FETCH_MILESTONES: "true"
+  
+  # Logging
+  LOG_LEVEL: "INFO"

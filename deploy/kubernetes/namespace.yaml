@@ -1,0 +1,9 @@
+---
+# Namespace for dev-health-ops
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health
+    app.kubernetes.io/part-of: dev-health-ops

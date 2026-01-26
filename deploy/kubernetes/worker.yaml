@@ -1,0 +1,79 @@
+---
+# Celery Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-health-worker
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dev-health-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dev-health-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/your-org/dev-health-ops:latest
+          command:
+            - celery
+            - -A
+            - workers.celery_app
+            - worker
+            - --loglevel=info
+            - -Q
+            - default,metrics,sync
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          # Workers don't need HTTP probes, use exec probes
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - workers.celery_app
+                - inspect
+                - ping
+                - --timeout
+                - "10"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+---
+# Horizontal Pod Autoscaler for Workers
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dev-health-worker-hpa
+  namespace: dev-health
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: dev-health-worker
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

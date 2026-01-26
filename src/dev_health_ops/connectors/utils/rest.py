@@ -344,3 +344,38 @@ class GitLabRESTClient(RESTClient):
             page,
         )
         return mrs
+
+    def get_dora_metrics(
+        self,
+        project_id: int,
+        metric: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        interval: str = "daily",
+    ) -> List[Dict[str, Any]]:
+        """Retrieve DORA metrics for a project."""
+        endpoint = f"projects/{project_id}/dora/metrics"
+        params = {
+            "metric": metric,
+            "interval": interval,
+        }
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+
+        logger.debug(
+            "Fetching DORA metric '%s' for project %s (%s to %s, interval=%s)",
+            metric,
+            project_id,
+            start_date,
+            end_date,
+            interval,
+        )
+        metrics = self.get_list(endpoint, params=params)
+        logger.debug(
+            "Fetched %d DORA metric data points for project %s",
+            len(metrics),
+            project_id,
+        )
+        return metrics

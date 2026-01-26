@@ -127,3 +127,19 @@ class PullRequestCommit:
     message: Optional[str] = None
     author_name: Optional[str] = None
     author_email: Optional[str] = None
+
+
+@dataclass
+class DORAMetric:
+    """Represents a single DORA metric data point."""
+
+    date: datetime
+    value: float
+
+
+@dataclass
+class DORAMetrics:
+    """Represents a collection of DORA metrics for a project or group."""
+
+    metric_name: str  # deployment_frequency, lead_time_for_changes, etc.
+    data_points: List[DORAMetric] = field(default_factory=list)

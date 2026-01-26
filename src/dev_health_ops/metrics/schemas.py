@@ -356,6 +356,15 @@ class IncidentMetricsDailyRecord:
 
 
 @dataclass(frozen=True)
+class DORAMetricsRecord:
+    repo_id: uuid.UUID
+    day: date
+    metric_name: str
+    value: float
+    computed_at: datetime
+
+
+@dataclass(frozen=True)
 class FileComplexitySnapshot:
     repo_id: uuid.UUID
     as_of_day: date

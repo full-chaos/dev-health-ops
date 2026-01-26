@@ -182,6 +182,11 @@ class BaseMetricsSink(ABC):
         """Write daily incident metrics."""
         ...
 
+    @abstractmethod
+    def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
+        """Write pre-computed DORA metrics from providers."""
+        ...
+
     # -------------------------------------------------------------------------
     # Complexity / hotspot metrics
     # -------------------------------------------------------------------------

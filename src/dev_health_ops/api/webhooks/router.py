@@ -273,8 +273,9 @@ async def webhooks_health() -> dict:
     try:
         from dev_health_ops.workers.celery_app import celery_app
 
-        celery_available = celery_app.control.ping(timeout=1) is not None
-    except Exception:
+    except Exception as exc:
+        # If Celery is not configured or unavailable, log and report as not available.
+        logger.warning("Celery health check failed in /webhooks/health: %s", exc)
         pass
 
     return {

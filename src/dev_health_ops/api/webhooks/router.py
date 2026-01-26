@@ -235,7 +235,8 @@ async def jira_webhook(
         payload=payload,
     )
 
-    if event_type == WebhookEventType.UNKNOWN:
+        safe_webhook_event = str(webhook_event).replace("\r", "").replace("\n", "")
+        logger.debug("Ignoring unsupported Jira event: %s", safe_webhook_event)
         logger.debug("Ignoring unsupported Jira event: %s", webhook_event)
         return WebhookResponse(
             status="accepted",

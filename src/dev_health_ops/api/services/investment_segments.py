@@ -4,6 +4,7 @@ import json
 from datetime import datetime, time, timezone
 from typing import Dict, List, Optional, Tuple
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 
 from ..models.filters import MetricFilter
@@ -95,10 +96,10 @@ async def build_segment_investment(
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
 
-    async with clickhouse_client(db_url) as client:
-        repo_ids = await resolve_repo_filter_ids(client, filters)
+    async with clickhouse_client(db_url) as sink:
+        repo_ids = await resolve_repo_filter_ids(sink, filters)
         rows = await fetch_work_unit_investments(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             repo_ids=repo_ids or None,
@@ -184,9 +185,7 @@ async def build_segment_investment(
             for _, unit_id, run_id in contributions[:5]
             if unit_id and run_id
         ]
-        quote_rows = await fetch_work_unit_investment_quotes(
-            client, unit_runs=unit_runs
-        )
+        quote_rows = await fetch_work_unit_investment_quotes(sink, unit_runs=unit_runs)
 
     textual_evidence: List[Dict[str, object]] = []
     for quote in quote_rows or []:

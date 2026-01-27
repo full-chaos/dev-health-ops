@@ -5,20 +5,13 @@ import inspect
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List
 
-import clickhouse_connect
+from dev_health_ops.metrics.sinks.factory import create_sink
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 logger = logging.getLogger(__name__)
 
-_SHARED_CLIENT: Any = None
+_SHARED_SINK: BaseMetricsSink | None = None
 _SHARED_DSN: str | None = None
-
-
-def _rows_to_dicts(result: Any) -> List[Dict[str, Any]]:
-    col_names = list(getattr(result, "column_names", []) or [])
-    rows = list(getattr(result, "result_rows", []) or [])
-    if not col_names or not rows:
-        return []
-    return [dict(zip(col_names, row)) for row in rows]
 
 
 def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
@@ -63,76 +56,48 @@ def _sanitize_for_log(value: Any, max_length: int = 1000) -> Any:
     return _clean_scalar(str(value))
 
 
-async def get_global_client(dsn: str) -> Any:
-    """Get the shared ClickHouse client, initializing if needed."""
-    global _SHARED_CLIENT, _SHARED_DSN
+async def get_global_sink(dsn: str) -> BaseMetricsSink:
+    """Get the shared metrics sink, initializing if needed."""
+    global _SHARED_SINK, _SHARED_DSN
 
-    if _SHARED_CLIENT and dsn != _SHARED_DSN:
-        logger.info("Closing ClickHouse client due to DSN change")
-        # Attempt close if it has it
-        if hasattr(_SHARED_CLIENT, "close") and inspect.iscoroutinefunction(
-            _SHARED_CLIENT.close
-        ):
-            await _SHARED_CLIENT.close()
-        _SHARED_CLIENT = None
+    if _SHARED_SINK and dsn != _SHARED_DSN:
+        logger.info("Closing metrics sink due to DSN change")
+        _SHARED_SINK.close()
+        _SHARED_SINK = None
 
-    if _SHARED_CLIENT is None:
-        logger.info("Initializing global ClickHouse client for %s", dsn)
-        if hasattr(clickhouse_connect, "get_async_client"):
-            _SHARED_CLIENT = await clickhouse_connect.get_async_client(dsn=dsn)
-        else:
-            _SHARED_CLIENT = clickhouse_connect.get_client(dsn=dsn)
+    if _SHARED_SINK is None:
+        logger.info("Initializing global metrics sink for %s", dsn)
+        _SHARED_SINK = create_sink(dsn)
         _SHARED_DSN = dsn
-        logger.info("ClickHouse client initialized")
-    return _SHARED_CLIENT
+        logger.info("Metrics sink initialized")
+    return _SHARED_SINK
 
 
 @asynccontextmanager
-async def clickhouse_client(dsn: str) -> AsyncIterator[Any]:
-    global _SHARED_CLIENT, _SHARED_DSN
-
-    if _SHARED_CLIENT and dsn != _SHARED_DSN:
-        await close_global_client()
-
-    if _SHARED_CLIENT is None:
-        if hasattr(clickhouse_connect, "get_async_client"):
-            _SHARED_CLIENT = await clickhouse_connect.get_async_client(dsn=dsn)
-        else:
-            _SHARED_CLIENT = clickhouse_connect.get_client(dsn=dsn)
-        _SHARED_DSN = dsn
-
-    yield _SHARED_CLIENT
+async def clickhouse_client(dsn: str) -> AsyncIterator[BaseMetricsSink]:
+    """Compatibility wrapper for clickhouse_client context manager."""
+    sink = await get_global_sink(dsn)
+    yield sink
 
 
 async def close_global_client() -> None:
-    global _SHARED_CLIENT, _SHARED_DSN
-    if _SHARED_CLIENT:
-        close = getattr(_SHARED_CLIENT, "close", None)
-        if close is not None:
-            if inspect.iscoroutinefunction(close):
-                await close()
-            else:
-                close()
-    _SHARED_CLIENT = None
+    global _SHARED_SINK, _SHARED_DSN
+    if _SHARED_SINK:
+        _SHARED_SINK.close()
+    _SHARED_SINK = None
     _SHARED_DSN = None
 
 
 async def query_dicts(
-    client: Any, query: str, params: Dict[str, Any]
+    sink: BaseMetricsSink, query: str, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-    if client is None:
-        raise RuntimeError("ClickHouse client is None")
-    if not hasattr(client, "query"):
-        raise RuntimeError(
-            f"Invalid ClickHouse client: {type(client).__name__} (no 'query' method)"
-        )
+    if sink is None:
+        raise RuntimeError("Metrics sink is None")
+
     safe_query = _sanitize_for_log(query)
     safe_params = {
         _sanitize_for_log(k): _sanitize_for_log(v) for k, v in (params or {}).items()
     }
     logger.debug("Executing query: %s with params %s", safe_query, safe_params)
-    result = client.query(query, parameters=params)
-    if inspect.isawaitable(result):
-        result = await result
 
-    return _rows_to_dicts(result)
+    return sink.query_dicts(query, params)

@@ -75,6 +75,14 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         sql = sql.replace("toString(id)", "id")
         sql = sql.replace("ifNull(", "COALESCE(")
 
+        # Emulate ClickHouse date functions for SQLite/Postgres
+        if self.engine.dialect.name == "sqlite":
+            sql = sql.replace("toStartOfMonth(day)", "strftime('%Y-%m-01', day)")
+            sql = sql.replace("toStartOfWeek(day)", "date(day, 'weekday 0', '-6 days')")
+        else:
+            sql = sql.replace("toStartOfMonth(day)", "date_trunc('month', day)")
+            sql = sql.replace("toStartOfWeek(day)", "date_trunc('week', day)")
+
         sql = re.sub(r"argMax\((.*?),\s*computed_at\)", r"MAX(\1)", sql)
 
         with self.engine.connect() as conn:

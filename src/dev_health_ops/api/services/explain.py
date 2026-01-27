@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any, List
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter
 from ..models.schemas import Contributor, ExplainResponse
 from ..queries.client import clickhouse_client
@@ -129,13 +130,13 @@ async def build_explain_response(
     config = _METRIC_CONFIG.get(metric, _METRIC_CONFIG["cycle_time"])
     start_day, end_day, compare_start, compare_end = time_window(filters)
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         scope_filter, scope_params = await scope_filter_for_metric(
-            client, metric_scope=config["scope"], filters=filters
+            sink, metric_scope=config["scope"], filters=filters
         )
 
         current_value = await fetch_metric_value(
-            client,
+            sink,
             table=config["table"],
             column=config["column"],
             start_day=start_day,
@@ -145,7 +146,7 @@ async def build_explain_response(
             aggregator=config["aggregator"],
         )
         previous_value = await fetch_metric_value(
-            client,
+            sink,
             table=config["table"],
             column=config["column"],
             start_day=compare_start,
@@ -160,7 +161,7 @@ async def build_explain_response(
         delta_pct = _safe_float(_delta_pct(current_value, previous_value))
 
         drivers = await fetch_metric_driver_delta(
-            client,
+            sink,
             table=config["table"],
             column=config["column"],
             group_by=config["group_by"],
@@ -172,7 +173,7 @@ async def build_explain_response(
             scope_params=scope_params,
         )
         contributors = await fetch_metric_contributors(
-            client,
+            sink,
             table=config["table"],
             column=config["column"],
             group_by=config["group_by"],

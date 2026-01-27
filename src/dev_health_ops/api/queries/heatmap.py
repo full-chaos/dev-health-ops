@@ -4,10 +4,11 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Sequence
 
 from .client import query_dicts
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_review_wait_density(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -28,11 +29,11 @@ async def fetch_review_wait_density(
     """
     params = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_review_wait_evidence(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -67,11 +68,11 @@ async def fetch_review_wait_evidence(
         "limit": limit,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_repo_touchpoints(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -94,7 +95,7 @@ async def fetch_repo_touchpoints(
     """
     params = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params.update(scope_params)
-    top_rows = await query_dicts(client, top_query, params)
+    top_rows = await query_dicts(sink, top_query, params)
     repos = [str(row.get("repo")) for row in top_rows if row.get("repo")]
     if not repos:
         return []
@@ -119,11 +120,11 @@ async def fetch_repo_touchpoints(
         "repos": repos,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_hotspot_risk(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
@@ -146,7 +147,7 @@ async def fetch_hotspot_risk(
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}
     params.update(scope_params)
-    top_rows = await query_dicts(client, top_query, params)
+    top_rows = await query_dicts(sink, top_query, params)
     files = [str(row.get("file_key")) for row in top_rows if row.get("file_key")]
     if not files:
         return []
@@ -171,11 +172,11 @@ async def fetch_hotspot_risk(
         "files": files,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_hotspot_evidence(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     week_start: date,
     week_end: date,
@@ -209,11 +210,11 @@ async def fetch_hotspot_evidence(
         "limit": limit,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_individual_active_hours(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -233,11 +234,11 @@ async def fetch_individual_active_hours(
         GROUP BY weekday, hour
     """
     params = {"start_ts": start_ts, "end_ts": end_ts, "identities": list(identities)}
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_individual_active_evidence(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -274,4 +275,4 @@ async def fetch_individual_active_evidence(
         "identities": list(identities),
         "limit": limit,
     }
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)

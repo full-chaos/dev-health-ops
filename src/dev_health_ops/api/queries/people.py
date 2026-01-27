@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from .client import query_dicts
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from .sql_loader import load_sql
 
 
@@ -12,54 +13,54 @@ def _sql_params(value: Iterable[str]) -> List[str]:
 
 
 async def search_people(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     query: str,
     limit: int,
 ) -> List[Dict[str, Any]]:
     sql = load_sql("people/people_search.sql")
     params = {"query": query, "limit": limit}
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)
 
 
 async def resolve_person_identity(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     person_id: str,
 ) -> Optional[str]:
     sql = load_sql("people/person_lookup.sql")
-    rows = await query_dicts(client, sql, {"person_id": person_id})
+    rows = await query_dicts(sink, sql, {"person_id": person_id})
     if not rows:
         return None
     return str(rows[0].get("identity_id") or "") or None
 
 
 async def fetch_identity_coverage(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
 ) -> int:
     sql = load_sql("people/person_identity_coverage.sql")
-    rows = await query_dicts(client, sql, {"identities": _sql_params(identities)})
+    rows = await query_dicts(sink, sql, {"identities": _sql_params(identities)})
     if not rows:
         return 0
     return int(rows[0].get("sources") or 0)
 
 
 async def fetch_person_team_id(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
 ) -> Optional[str]:
     sql = load_sql("people/person_team.sql")
-    rows = await query_dicts(client, sql, {"identities": _sql_params(identities)})
+    rows = await query_dicts(sink, sql, {"identities": _sql_params(identities)})
     if not rows:
         return None
     return str(rows[0].get("team_id") or "") or None
 
 
 async def fetch_person_metric_value(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     table: str,
     column: str,
@@ -83,14 +84,14 @@ async def fetch_person_metric_value(
         "end_day": end_day,
         "identities": _sql_params(identities),
     }
-    rows = await query_dicts(client, sql, params)
+    rows = await query_dicts(sink, sql, params)
     if not rows:
         return 0.0
     return float(rows[0].get("value") or 0.0)
 
 
 async def fetch_person_metric_series(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     table: str,
     column: str,
@@ -114,11 +115,11 @@ async def fetch_person_metric_series(
         "end_day": end_day,
         "identities": _sql_params(identities),
     }
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)
 
 
 async def fetch_person_breakdown(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     table: str,
     column: str,
@@ -148,11 +149,11 @@ async def fetch_person_breakdown(
         "identities": _sql_params(identities),
         "limit": limit,
     }
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)
 
 
 async def fetch_person_work_mix(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
     start_day: date,
@@ -164,11 +165,11 @@ async def fetch_person_work_mix(
         "end_day": end_day,
         "identities": _sql_params(identities),
     }
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)
 
 
 async def fetch_person_flow_breakdown(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
     start_day: date,
@@ -180,11 +181,11 @@ async def fetch_person_flow_breakdown(
         "end_day": end_day,
         "identities": _sql_params(identities),
     }
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)
 
 
 async def fetch_person_collaboration(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
     start_day: date,
@@ -196,11 +197,11 @@ async def fetch_person_collaboration(
         "end_day": end_day,
         "identities": _sql_params(identities),
     }
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)
 
 
 async def fetch_person_pull_requests(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
     start_day: date,
@@ -221,11 +222,11 @@ async def fetch_person_pull_requests(
     }
     if cursor is not None:
         params["cursor"] = cursor
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)
 
 
 async def fetch_person_issues(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
     start_day: date,
@@ -246,4 +247,4 @@ async def fetch_person_issues(
     }
     if cursor is not None:
         params["cursor"] = cursor
-    return await query_dicts(client, sql, params)
+    return await query_dicts(sink, sql, params)

@@ -9,7 +9,7 @@ SQLite, and PostgreSQL backends.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from dev_health_ops.metrics.schemas import (
     CICDMetricsDailyRecord,
@@ -113,10 +113,17 @@ class BaseMetricsSink(ABC):
         ...
 
     @abstractmethod
-    def write_user_metrics(self, rows: Sequence[UserMetricsDailyRecord]) -> None:
-        """Write daily user-level metrics."""
-        ...
+    def query_dicts(
+        self, query: str, parameters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]: ...
 
+    async def __aenter__(self) -> "BaseMetricsSink":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    @property
     @abstractmethod
     def write_commit_metrics(self, rows: Sequence[CommitMetricsRecord]) -> None:
         """Write per-commit metrics."""

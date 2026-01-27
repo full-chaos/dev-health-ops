@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import HTTPException
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.schemas import HeatmapAxes, HeatmapCell, HeatmapLegend, HeatmapResponse
 from ..models.filters import MetricFilter, ScopeFilter, TimeFilter
 from ..queries.client import clickhouse_client
@@ -209,14 +210,14 @@ def _reverse_aliases(aliases: Dict[str, List[str]]) -> Dict[str, str]:
 
 
 async def _resolve_identity_variants(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     person_id: str,
 ) -> List[str]:
     aliases = load_identity_aliases()
     reverse = _reverse_aliases(aliases)
 
-    identity = await resolve_person_identity(client, person_id=person_id)
+    identity = await resolve_person_identity(sink, person_id=person_id)
     if identity:
         normalized = (identity or "").strip().lower()
         canonical = reverse.get(normalized, identity)
@@ -291,10 +292,10 @@ async def build_heatmap_response(
     start_ts = datetime.combine(start_day, datetime.min.time())
     end_ts = datetime.combine(end_day, datetime.min.time())
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         identities: List[str] = []
         if definition.type == "individual":
-            identities = await _resolve_identity_variants(client, person_id=scope_id)
+            identities = await _resolve_identity_variants(sink, person_id=scope_id)
             if not identities:
                 raise HTTPException(status_code=404, detail="Individual not found")
 
@@ -303,14 +304,14 @@ async def build_heatmap_response(
 
         if definition.metric == "review_wait_density":
             scope_filter, scope_params = await scope_filter_for_metric(
-                client,
+                sink,
                 metric_scope="repo",
                 filters=filters,
                 team_column="team_id",
                 repo_column="repo_id",
             )
             rows = await fetch_review_wait_density(
-                client,
+                sink,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 scope_filter=scope_filter,
@@ -325,7 +326,7 @@ async def build_heatmap_response(
                     weekday = -1
                 if 0 <= hour <= 23 and 1 <= weekday <= 7:
                     evidence = await fetch_review_wait_evidence(
-                        client,
+                        sink,
                         start_ts=start_ts,
                         end_ts=end_ts,
                         weekday=weekday,
@@ -336,14 +337,14 @@ async def build_heatmap_response(
                     )
         elif definition.metric == "repo_touchpoints":
             scope_filter, scope_params = await scope_filter_for_metric(
-                client,
+                sink,
                 metric_scope="repo",
                 filters=filters,
                 team_column="team_id",
                 repo_column="repo_id",
             )
             rows = await fetch_repo_touchpoints(
-                client,
+                sink,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 scope_filter=scope_filter,
@@ -352,14 +353,14 @@ async def build_heatmap_response(
             )
         elif definition.metric == "hotspot_risk":
             scope_filter, scope_params = await scope_filter_for_metric(
-                client,
+                sink,
                 metric_scope="repo",
                 filters=filters,
                 team_column="team_id",
                 repo_column="repo_id",
             )
             rows = await fetch_hotspot_risk(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 scope_filter=scope_filter,
@@ -375,7 +376,7 @@ async def build_heatmap_response(
                     week_end = None
                 if week_start and week_end:
                     evidence = await fetch_hotspot_evidence(
-                        client,
+                        sink,
                         week_start=week_start,
                         week_end=week_end,
                         file_key=y,
@@ -385,7 +386,7 @@ async def build_heatmap_response(
                     )
         elif definition.metric == "active_hours":
             rows = await fetch_individual_active_hours(
-                client,
+                sink,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 identities=identities,
@@ -399,7 +400,7 @@ async def build_heatmap_response(
                     weekday = -1
                 if 0 <= hour <= 23 and 1 <= weekday <= 7:
                     evidence = await fetch_individual_active_evidence(
-                        client,
+                        sink,
                         start_ts=start_ts,
                         end_ts=end_ts,
                         weekday=weekday,

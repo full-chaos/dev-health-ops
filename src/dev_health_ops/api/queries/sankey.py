@@ -4,10 +4,11 @@ from datetime import date, datetime
 from typing import Any, Dict, List
 
 from .client import query_dicts
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_investment_flow_items(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -31,11 +32,11 @@ async def fetch_investment_flow_items(
     """
     params = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_expense_counts(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
@@ -53,11 +54,11 @@ async def fetch_expense_counts(
     """
     params = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_expense_abandoned(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
@@ -73,11 +74,11 @@ async def fetch_expense_abandoned(
     """
     params = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_state_status_counts(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
@@ -96,11 +97,11 @@ async def fetch_state_status_counts(
     """
     params = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_hotspot_rows(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
@@ -160,4 +161,4 @@ async def fetch_hotspot_rows(
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)

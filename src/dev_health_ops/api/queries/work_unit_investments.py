@@ -4,10 +4,11 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .client import query_dicts
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_work_unit_investments(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -54,11 +55,11 @@ async def fetch_work_unit_investments(
         ORDER BY effort_value DESC
         LIMIT %(limit)s
     """
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_repo_scopes(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     repo_ids: Iterable[str],
 ) -> Dict[str, str]:
@@ -72,7 +73,7 @@ async def fetch_repo_scopes(
         FROM repos
         WHERE id IN %(repo_ids)s
     """
-    rows = await query_dicts(client, query, {"repo_ids": ids})
+    rows = await query_dicts(sink, query, {"repo_ids": ids})
     return {
         str(row.get("repo_id")): str(row.get("repo") or "")
         for row in rows
@@ -81,7 +82,7 @@ async def fetch_repo_scopes(
 
 
 async def fetch_work_item_team_assignments(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     work_item_ids: Iterable[str],
 ) -> Dict[str, Dict[str, str]]:
@@ -97,7 +98,7 @@ async def fetch_work_item_team_assignments(
         WHERE work_item_id IN %(work_item_ids)s
         GROUP BY work_item_id
     """
-    rows = await query_dicts(client, query, {"work_item_ids": ids})
+    rows = await query_dicts(sink, query, {"work_item_ids": ids})
     result: Dict[str, Dict[str, str]] = {}
     for row in rows:
         work_item_id = str(row.get("work_item_id") or "")
@@ -110,7 +111,7 @@ async def fetch_work_item_team_assignments(
 
 
 async def fetch_work_unit_investment_quotes(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     unit_runs: Iterable[Tuple[str, str]],
 ) -> List[Dict[str, Any]]:
@@ -127,4 +128,4 @@ async def fetch_work_unit_investment_quotes(
         FROM work_unit_investment_quotes
         WHERE (work_unit_id, categorization_run_id) IN %(pairs)s
     """
-    return await query_dicts(client, query, {"pairs": pairs})
+    return await query_dicts(sink, query, {"pairs": pairs})

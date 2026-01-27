@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter, SankeyContext
 from ..models.schemas import SankeyLink, SankeyNode, SankeyResponse
 from ..queries.client import clickhouse_client, query_dicts
@@ -120,12 +121,12 @@ def _links_from_edges(edges: Dict[Tuple[str, str], float]) -> List[SankeyLink]:
     return links
 
 
-async def _tables_present(client: Any, tables: List[str]) -> bool:
+async def _tables_present(sink: BaseMetricsSink, tables: List[str]) -> bool:
     if not tables:
         return True
     try:
         rows = await query_dicts(
-            client,
+            sink,
             """
             SELECT name
             FROM system.tables
@@ -146,7 +147,7 @@ async def _tables_present(client: Any, tables: List[str]) -> bool:
 
 
 async def _columns_present(
-    client: Any,
+    sink: BaseMetricsSink,
     table: str,
     columns: List[str],
 ) -> bool:
@@ -154,7 +155,7 @@ async def _columns_present(
         return True
     try:
         rows = await query_dicts(
-            client,
+            sink,
             """
             SELECT name
             FROM system.columns
@@ -176,11 +177,11 @@ async def _columns_present(
 
 
 async def _repo_scope_filter(
-    client: Any,
+    sink: BaseMetricsSink,
     filters: MetricFilter,
     repo_column: str = "repo_id",
 ) -> Tuple[str, Dict[str, Any]]:
-    repo_ids = await resolve_repo_filter_ids(client, filters)
+    repo_ids = await resolve_repo_filter_ids(sink, filters)
     if not repo_ids:
         return "", {}
     return build_scope_filter_multi("repo", repo_ids, repo_column=repo_column)
@@ -231,28 +232,30 @@ def _work_scope_filter(
 
 
 async def _build_investment_flow(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if not await _tables_present(client, ["work_unit_investments"]):
-        return [], []
-    if not await _columns_present(
-        client,
-        "work_unit_investments",
-        [
-            "theme_distribution_json",
-            "effort_value",
-            "from_ts",
-            "to_ts",
-            "repo_id",
-        ],
-    ):
-        return [], []
+    if sink.backend_type == "clickhouse":
+        if not await _tables_present(sink, ["work_unit_investments"]):
+            return [], []
+        if not await _columns_present(
+            sink,
+            "work_unit_investments",
+            [
+                "theme_distribution_json",
+                "effort_value",
+                "from_ts",
+                "to_ts",
+                "repo_id",
+            ],
+        ):
+            return [], []
+
     repo_filter, repo_params = await _repo_scope_filter(
-        client, filters, repo_column="repo_id"
+        sink, filters, repo_column="repo_id"
     )
     theme_filters = _category_theme_filters(filters)
     category_filter = " AND theme_kv.1 IN %(themes)s" if theme_filters else ""
@@ -263,7 +266,7 @@ async def _build_investment_flow(
     window_start = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
     window_end = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
     rows = await fetch_investment_flow_items(
-        client,
+        sink,
         start_ts=window_start,
         end_ts=window_end,
         scope_filter=scope_filter,
@@ -288,36 +291,38 @@ async def _build_investment_flow(
 
 
 async def _build_expense_flow(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if not await _tables_present(
-        client, ["work_item_metrics_daily", "work_item_cycle_times"]
-    ):
-        return [], []
-    if not await _columns_present(
-        client,
-        "work_item_metrics_daily",
-        [
-            "day",
-            "new_items_count",
-            "new_bugs_count",
-            "items_completed",
-            "bug_completed_ratio",
-            "team_id",
-            "work_scope_id",
-        ],
-    ):
-        return [], []
-    if not await _columns_present(
-        client,
-        "work_item_cycle_times",
-        ["day", "status", "team_id", "work_scope_id"],
-    ):
-        return [], []
+    if sink.backend_type == "clickhouse":
+        if not await _tables_present(
+            sink, ["work_item_metrics_daily", "work_item_cycle_times"]
+        ):
+            return [], []
+        if not await _columns_present(
+            sink,
+            "work_item_metrics_daily",
+            [
+                "day",
+                "new_items_count",
+                "new_bugs_count",
+                "items_completed",
+                "bug_completed_ratio",
+                "team_id",
+                "work_scope_id",
+            ],
+        ):
+            return [], []
+        if not await _columns_present(
+            sink,
+            "work_item_cycle_times",
+            ["day", "status", "team_id", "work_scope_id"],
+        ):
+            return [], []
+
     team_filter, team_params = _team_scope_filter(
         filters, team_column="ifNull(nullIf(team_id, ''), 'unassigned')"
     )
@@ -327,7 +332,7 @@ async def _build_expense_flow(
     scope_filter = f"{team_filter}{work_scope_filter}"
     scope_params = {**team_params, **work_scope_params}
     rows = await fetch_expense_counts(
-        client,
+        sink,
         start_day=start_day,
         end_day=end_day,
         scope_filter=scope_filter,
@@ -340,7 +345,7 @@ async def _build_expense_flow(
     bug_completed = float(row.get("bug_completed_estimate") or 0.0)
 
     abandoned_rows = await fetch_expense_abandoned(
-        client,
+        sink,
         start_day=start_day,
         end_day=end_day,
         scope_filter=scope_filter,
@@ -370,20 +375,22 @@ async def _build_expense_flow(
 
 
 async def _build_state_flow(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if not await _tables_present(client, ["work_item_state_durations_daily"]):
-        return [], []
-    if not await _columns_present(
-        client,
-        "work_item_state_durations_daily",
-        ["day", "status", "items_touched", "team_id", "work_scope_id"],
-    ):
-        return [], []
+    if sink.backend_type == "clickhouse":
+        if not await _tables_present(sink, ["work_item_state_durations_daily"]):
+            return [], []
+        if not await _columns_present(
+            sink,
+            "work_item_state_durations_daily",
+            ["day", "status", "items_touched", "team_id", "work_scope_id"],
+        ):
+            return [], []
+
     team_filter, team_params = _team_scope_filter(
         filters, team_column="ifNull(nullIf(team_id, ''), 'unassigned')"
     )
@@ -393,7 +400,7 @@ async def _build_state_flow(
     scope_filter = f"{team_filter}{work_scope_filter}"
     scope_params = {**team_params, **work_scope_params}
     rows = await fetch_state_status_counts(
-        client,
+        sink,
         start_day=start_day,
         end_day=end_day,
         scope_filter=scope_filter,
@@ -455,27 +462,29 @@ async def _build_state_flow(
 
 
 async def _build_hotspot_flow(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if not await _tables_present(client, ["file_metrics_daily", "repos"]):
-        return [], []
-    if not await _columns_present(
-        client,
-        "file_metrics_daily",
-        ["repo_id", "day", "path", "churn"],
-    ):
-        return [], []
-    if not await _columns_present(client, "repos", ["id", "repo"]):
-        return [], []
+    if sink.backend_type == "clickhouse":
+        if not await _tables_present(sink, ["file_metrics_daily", "repos"]):
+            return [], []
+        if not await _columns_present(
+            sink,
+            "file_metrics_daily",
+            ["repo_id", "day", "path", "churn"],
+        ):
+            return [], []
+        if not await _columns_present(sink, "repos", ["id", "repo"]):
+            return [], []
+
     scope_filter, scope_params = await _repo_scope_filter(
-        client, filters, repo_column="metrics.repo_id"
+        sink, filters, repo_column="metrics.repo_id"
     )
     rows = await fetch_hotspot_rows(
-        client,
+        sink,
         start_day=start_day,
         end_day=end_day,
         scope_filter=scope_filter,
@@ -526,31 +535,31 @@ async def build_sankey_response(
     resolved_filters = _apply_window_to_filters(filters, window_start, window_end)
     start_day, end_day, _, _ = time_window(resolved_filters)
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         if mode == "investment":
             nodes, links = await _build_investment_flow(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
             )
         elif mode == "expense":
             nodes, links = await _build_expense_flow(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
             )
         elif mode == "state":
             nodes, links = await _build_state_flow(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
             )
         elif mode == "hotspot":
             nodes, links = await _build_hotspot_flow(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
@@ -559,7 +568,7 @@ async def build_sankey_response(
             nodes, links = [], []
 
     return SankeyResponse(
-        mode=mode,
+        mode=cast(Literal["investment", "expense", "state", "hotspot"], mode),
         nodes=nodes,
         links=links,
         unit=definition.unit,

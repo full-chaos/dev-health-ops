@@ -4,7 +4,6 @@ import json
 from datetime import datetime, time, timezone
 from typing import Dict, List, Optional, Tuple
 
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 
 from ..models.filters import MetricFilter

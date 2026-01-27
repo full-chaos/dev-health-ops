@@ -257,31 +257,89 @@ async def build_investment_flow_response(
             theme_filters = [normalized_drill]
         top_n_repos = max(1, int(top_n_repos or 1))
 
-    async with clickhouse_client(db_url) as sink:
-        if sink.backend_type == "clickhouse":
-            if not await _tables_present(sink, ["work_unit_investments"]):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+        async with clickhouse_client(db_url) as sink:
+            if sink.backend_type == "clickhouse":
+                if not await _tables_present(sink, ["work_unit_investments"]):
+                    return SankeyResponse(
+                        mode="investment", nodes=[], links=[], unit=None
+                    )
 
-            required_cols = [
-                "from_ts",
-                "to_ts",
-                "repo_id",
-                "effort_value",
-                "subcategory_distribution_json",
-                "structural_evidence_json",
-            ]
-            if not await _columns_present(sink, "work_unit_investments", required_cols):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+                required_cols = [
+                    "from_ts",
+                    "to_ts",
+                    "repo_id",
+                    "effort_value",
+                    "subcategory_distribution_json",
+                    "structural_evidence_json",
+                ]
+                if not await _columns_present(
+                    sink, "work_unit_investments", required_cols
+                ):
+                    return SankeyResponse(
+                        mode="investment", nodes=[], links=[], unit=None
+                    )
 
-        scope_filter, scope_params = "", {}
-        if filters.scope.level in {"team", "repo"}:
-            repo_ids = await resolve_repo_filter_ids(sink, filters)
-            scope_filter, scope_params = build_scope_filter_multi(
-                "repo", repo_ids, repo_column="repo_id"
-            )
+            scope_filter, scope_params = "", {}
+            if filters.scope.level in {"team", "repo"}:
+                repo_ids = await resolve_repo_filter_ids(sink, filters)
+                scope_filter, scope_params = build_scope_filter_multi(
+                    "repo", repo_ids, repo_column="repo_id"
+                )
 
-        if flow_mode == "team_category_repo":
-            rows = await fetch_investment_team_category_repo_edges(
+            if flow_mode == "team_category_repo":
+                rows = await fetch_investment_team_category_repo_edges(
+                    sink,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    themes=theme_filters or None,
+                    subcategories=subcategory_filters or None,
+                )
+                nodes, links = _build_team_burden_sankey(
+                    rows,
+                    category_key="category",
+                    category_label_fn=_format_theme_label,
+                    top_n_repos=top_n_repos,
+                )
+                label = "Team → Category → Repo"
+                description = "Team burden flow with category rollups."
+            elif flow_mode == "team_category_subcategory_repo":
+                rows = await fetch_investment_team_subcategory_repo_edges(
+                    sink,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    themes=theme_filters or None,
+                    subcategories=subcategory_filters or None,
+                )
+                nodes, links = _build_team_theme_subcategory_repo_sankey(
+                    rows,
+                    top_n_repos=top_n_repos,
+                )
+                label = "Team → Category → Subcategory → Repo"
+                description = "Full 4-level team burden flow."
+            else:
+                rows = await fetch_investment_team_subcategory_repo_edges(
+                    sink,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    themes=theme_filters or None,
+                    subcategories=subcategory_filters or None,
+                )
+                nodes, links = _build_team_burden_sankey(
+                    rows,
+                    category_key="subcategory",
+                    category_label_fn=_format_subcategory_label,
+                    top_n_repos=top_n_repos,
+                )
+                label = "Team → Subcategory → Repo"
+                description = f"Showing subcategories within {_format_theme_label(normalized_drill or '')}."
+
+            unassigned_counts = await fetch_investment_unassigned_counts(
                 sink,
                 start_ts=start_ts,
                 end_ts=end_ts,
@@ -290,58 +348,6 @@ async def build_investment_flow_response(
                 themes=theme_filters or None,
                 subcategories=subcategory_filters or None,
             )
-            nodes, links = _build_team_burden_sankey(
-                rows,
-                category_key="category",
-                category_label_fn=_format_theme_label,
-                top_n_repos=top_n_repos,
-            )
-            label = "Team → Category → Repo"
-            description = "Team burden flow with category rollups."
-        elif flow_mode == "team_category_subcategory_repo":
-            rows = await fetch_investment_team_subcategory_repo_edges(
-                sink,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                themes=theme_filters or None,
-                subcategories=subcategory_filters or None,
-            )
-            nodes, links = _build_team_theme_subcategory_repo_sankey(
-                rows,
-                top_n_repos=top_n_repos,
-            )
-            label = "Team → Category → Subcategory → Repo"
-            description = "Full 4-level team burden flow."
-        else:
-            rows = await fetch_investment_team_subcategory_repo_edges(
-                sink,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                themes=theme_filters or None,
-                subcategories=subcategory_filters or None,
-            )
-            nodes, links = _build_team_burden_sankey(
-                rows,
-                category_key="subcategory",
-                category_label_fn=_format_subcategory_label,
-                top_n_repos=top_n_repos,
-            )
-            label = "Team → Subcategory → Repo"
-            description = f"Showing subcategories within {_format_theme_label(normalized_drill or '')}."
-
-        unassigned_counts = await fetch_investment_unassigned_counts(
-            sink,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            scope_filter=scope_filter,
-            scope_params=scope_params,
-            themes=theme_filters or None,
-            subcategories=subcategory_filters or None,
-        )
 
         total_value = sum(float(row.get("value") or 0.0) for row in rows)
         assigned_team_value = sum(

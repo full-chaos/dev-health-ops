@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from dev_health_ops.llm import get_provider
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,

@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 import math
 from typing import Any, Dict, List
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter
 from ..models.schemas import (
     ConstraintCard,

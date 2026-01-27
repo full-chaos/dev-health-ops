@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 
-from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
+from dev_health_ops.metrics.sinks.factory import detect_backend
 
 
 from .models.filters import (

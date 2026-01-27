@@ -46,8 +46,6 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.loaders.base import (
-    naive_utc,
-    parse_uuid,
     to_dataclass,
 )
 import logging

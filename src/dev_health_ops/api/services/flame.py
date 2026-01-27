@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.schemas import FlameFrame, FlameResponse, FlameTimeline
 from ..queries.client import clickhouse_client
 from ..queries.flame import (

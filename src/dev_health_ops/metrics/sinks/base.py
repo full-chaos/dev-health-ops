@@ -28,7 +28,6 @@ from dev_health_ops.metrics.schemas import (
     RepoMetricsDailyRecord,
     ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
-    UserMetricsDailyRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
@@ -81,6 +80,12 @@ class BaseMetricsSink(ABC):
         """Execute a query and return results as a list of dictionaries."""
         ...
 
+    async def __aenter__(self) -> "BaseMetricsSink":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     @property
     @abstractmethod
     def backend_type(self) -> str:
@@ -112,18 +117,6 @@ class BaseMetricsSink(ABC):
         """Write daily repo-level metrics."""
         ...
 
-    @abstractmethod
-    def query_dicts(
-        self, query: str, parameters: Dict[str, Any]
-    ) -> List[Dict[str, Any]]: ...
-
-    async def __aenter__(self) -> "BaseMetricsSink":
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        self.close()
-
-    @property
     @abstractmethod
     def write_commit_metrics(self, rows: Sequence[CommitMetricsRecord]) -> None:
         """Write per-commit metrics."""

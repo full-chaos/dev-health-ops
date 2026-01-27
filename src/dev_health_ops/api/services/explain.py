@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from typing import Any, List
 
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter
 from ..models.schemas import Contributor, ExplainResponse
 from ..queries.client import clickhouse_client

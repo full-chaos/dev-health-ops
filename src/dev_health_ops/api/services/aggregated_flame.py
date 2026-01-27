@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Dict, List, Literal, Optional
 
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.schemas import (
     AggregatedFlameMeta,
     AggregatedFlameNode,

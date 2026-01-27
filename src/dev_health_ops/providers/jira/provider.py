@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
 
 from dev_health_ops.models.work_items import (
     Sprint,

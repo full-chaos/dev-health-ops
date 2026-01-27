@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-from atlassian import JiraChangelogEvent, JiraChangelogItem, JiraIssue, JiraUser
+from atlassian import JiraChangelogEvent, JiraChangelogItem, JiraUser
 from dev_health_ops.providers.jira.normalize import (
     canonical_changelog_to_transitions,
 )

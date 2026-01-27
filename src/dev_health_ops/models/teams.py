@@ -39,3 +39,31 @@ class Team(Base):
         self.description = description
         self.members = members or []
         self.updated_at = updated_at or datetime.now(timezone.utc)
+
+
+class JiraProjectOpsTeamLink(Base):
+    __tablename__ = "jira_project_ops_team_links"
+
+    project_key = Column(Text, primary_key=True, comment="Jira project key")
+    ops_team_id = Column(Text, primary_key=True, comment="Atlassian Ops team ID")
+    project_name = Column(Text, nullable=False, comment="Jira project name")
+    ops_team_name = Column(Text, nullable=False, comment="Atlassian Ops team name")
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    def __init__(
+        self,
+        project_key: str,
+        ops_team_id: str,
+        project_name: str,
+        ops_team_name: str,
+        updated_at: Optional[datetime] = None,
+    ):
+        self.project_key = project_key
+        self.ops_team_id = ops_team_id
+        self.project_name = project_name
+        self.ops_team_name = ops_team_name
+        self.updated_at = updated_at or datetime.now(timezone.utc)

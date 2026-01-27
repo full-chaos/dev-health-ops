@@ -129,6 +129,45 @@ def fetch_jira_work_items_with_extras(
         "on",
     }
 
+    if _env_flag("JIRA_USE_PROVIDER", False):
+        from dev_health_ops.providers.base import IngestionContext, IngestionWindow
+        from dev_health_ops.providers.jira.provider import JiraProvider
+
+        ctx = IngestionContext(
+            window=IngestionWindow(updated_since=since, active_until=until)
+        )
+        if project_keys:
+            if len(project_keys) == 1:
+                ctx = IngestionContext(
+                    window=ctx.window,
+                    project_key=project_keys[0],
+                )
+            else:
+                logger.warning(
+                    "JiraProvider supports a single project_key override; using env JIRA_PROJECT_KEYS instead"
+                )
+
+        batch = JiraProvider(
+            status_mapping=status_mapping,
+            identity=identity,
+        ).ingest(ctx)
+        if batch.interactions == [] and _env_flag("JIRA_FETCH_COMMENTS", True):
+            logger.info(
+                "JiraProvider does not fetch comments; set JIRA_USE_PROVIDER=0 to use legacy comment ingestion"
+            )
+        if batch.dependencies == []:
+            logger.info(
+                "JiraProvider does not fetch dependency edges; set JIRA_USE_PROVIDER=0 to use legacy dependency ingestion"
+            )
+        return (
+            batch.work_items,
+            batch.status_transitions,
+            batch.dependencies,
+            batch.reopen_events,
+            batch.interactions,
+            batch.sprints,
+        )
+
     client = JiraClient.from_env()
     work_items: List[WorkItem] = []
     transitions: List[WorkItemStatusTransition] = []

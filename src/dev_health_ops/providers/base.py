@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, List, Optional
 if TYPE_CHECKING:
     from dev_health_ops.models.work_items import (
         Sprint,
+        Worklog,
         WorkItem,
         WorkItemDependency,
         WorkItemInteractionEvent,
@@ -87,6 +88,7 @@ class ProviderBatch:
     interactions: List["WorkItemInteractionEvent"] = field(default_factory=list)
     sprints: List["Sprint"] = field(default_factory=list)
     reopen_events: List["WorkItemReopenEvent"] = field(default_factory=list)
+    worklogs: List["Worklog"] = field(default_factory=list)
 
 
 class Provider(ABC):

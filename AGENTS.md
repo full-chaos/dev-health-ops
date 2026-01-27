@@ -33,6 +33,13 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 - If behavior changes, add/adjust tests.
 - Do not blur responsibilities across layers.
 
+## Atlassian AGG integration notes
+- Jira issue listing remains REST (JQL). GraphQL currently supports **fetch-by-key** only.
+- AGG GraphQL is used for enrichment (worklogs) and ops team mappings.
+- Enable worklog GraphQL enrichment with `ATLASSIAN_GQL_ENABLED=true` and `JIRA_FETCH_WORKLOGS=true`.
+- Use `JIRA_USE_PROVIDER=true` to route work-items ingestion through `JiraProvider`.
+- Ops teams are synced via `python cli.py sync teams --provider jira-ops` using AGG project queries.
+
 ## Deprecated repo-root agent docs
 The following repo-root files were historical duplicates and are no longer authoritative:
 - `AGENTS-INVESTMENT.md`

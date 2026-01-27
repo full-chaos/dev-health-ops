@@ -15,6 +15,12 @@ def _norm_key(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
+def _parse_project_types(value: Optional[str]) -> List[str]:
+    raw = value or ""
+    items = [item.strip().upper() for item in raw.split(",") if item.strip()]
+    return items or ["SERVICE_DESK"]
+
+
 @dataclass(frozen=True)
 class TeamResolver:
     member_to_team: Mapping[
@@ -51,10 +57,13 @@ def _build_member_to_team(teams_data: List) -> Dict[str, Tuple[str, str]]:
         if not team_id:
             continue
 
-        members = getattr(team, "members", []) or (
-            team.get("members") if isinstance(team, dict) else []
+        members_raw = (
+            getattr(team, "members", None)
+            or (team.get("members") if isinstance(team, dict) else None)
+            or []
         )
-        for member in members:
+        members_list: List[Any] = list(members_raw)
+        for member in members_list:
             key = _norm_key(str(member))
             if not key:
                 continue
@@ -103,6 +112,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
 
     provider = (ns.provider or "config").lower()
     teams_data: List[Team] = []
+    ops_links: List[JiraProjectOpsTeamLink] = []
 
     if provider == "config":
         import yaml
@@ -173,6 +183,62 @@ def sync_teams(ns: argparse.Namespace) -> int:
         finally:
             client.close()
 
+    elif provider == "jira-ops":
+        from atlassian.graph.api.jira_projects import (
+            iter_projects_with_opsgenie_linkable_teams,
+        )
+
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+        from dev_health_ops.providers.jira.atlassian_compat import (
+            build_atlassian_graphql_client,
+            get_atlassian_cloud_id,
+        )
+
+        cloud_id = get_atlassian_cloud_id()
+        if not cloud_id:
+            logging.error("ATLASSIAN_CLOUD_ID is required for jira-ops provider")
+            return 1
+
+        project_types = _parse_project_types(os.getenv("JIRA_OPS_PROJECT_TYPES"))
+        ops_team_cache: Dict[str, Team] = {}
+
+        client = build_atlassian_graphql_client()
+        try:
+            for project in iter_projects_with_opsgenie_linkable_teams(
+                client,
+                cloud_id=cloud_id,
+                project_types=project_types,
+            ):
+                for team in project.opsgenie_teams:
+                    team_id = f"ops:{team.id}"
+                    if team_id not in ops_team_cache:
+                        ops_team_cache[team_id] = Team(
+                            id=team_id,
+                            name=team.name,
+                            description=f"Atlassian Ops team linked to Jira {project.project.key}",
+                            members=[],
+                        )
+                    ops_links.append(
+                        JiraProjectOpsTeamLink(
+                            project_key=project.project.key,
+                            project_name=project.project.name,
+                            ops_team_id=team.id,
+                            ops_team_name=team.name,
+                        )
+                    )
+
+            teams_data.extend(list(ops_team_cache.values()))
+            logging.info(
+                "Fetched %d Jira project ops team links (teams=%d)",
+                len(ops_links),
+                len(teams_data),
+            )
+        except Exception as e:
+            logging.error(f"Failed to fetch Jira ops teams: {e}")
+            return 1
+        finally:
+            client.close()
+
     elif provider == "synthetic":
         from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
@@ -196,6 +262,12 @@ def sync_teams(ns: argparse.Namespace) -> int:
         if hasattr(store, "ensure_tables"):
             await store.ensure_tables()
         await store.insert_teams(teams_data)
+        if ops_links and hasattr(store, "insert_jira_project_ops_team_links"):
+            await store.insert_jira_project_ops_team_links(ops_links)
+            logging.info(
+                "Synced %d jira project ops team links to DB.",
+                len(ops_links),
+            )
         logging.info(f"Synced {len(teams_data)} teams to DB.")
 
     asyncio.run(run_with_store(ns.db, db_type, _handler))
@@ -215,7 +287,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     )
     teams.add_argument(
         "--provider",
-        choices=["config", "jira", "synthetic"],
+        choices=["config", "jira", "jira-ops", "synthetic"],
         default="config",
         help="Source of team data (default: config).",
     )

@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from dev_health_ops.models.work_items import (
     Sprint,
+    Worklog,
     WorkItem,
     WorkItemDependency,
     WorkItemInteractionEvent,
@@ -15,6 +16,9 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.status_mapping import StatusMapping
+
+if TYPE_CHECKING:
+    from atlassian import JiraChangelogEvent, JiraIssue, JiraSprint, JiraWorklog
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -540,3 +544,213 @@ def jira_issue_to_work_item(
         due_at=due_at,
     )
     return work_item, transitions
+
+
+def canonical_jira_issue_to_work_item(
+    *,
+    issue: "JiraIssue",
+    status_mapping: StatusMapping,
+    identity: IdentityResolver,
+    repo_id: Optional[Any] = None,
+) -> WorkItem:
+    work_item_id = f"jira:{issue.key}"
+
+    normalized_status = status_mapping.normalize_status(
+        provider="jira",
+        status_raw=issue.status,
+        labels=list(issue.labels),
+    )
+    normalized_type = status_mapping.normalize_type(
+        provider="jira",
+        type_raw=issue.issue_type,
+        labels=list(issue.labels),
+    )
+
+    assignees: List[str] = []
+    if issue.assignee is not None:
+        resolved = identity.resolve(
+            provider="jira",
+            email=issue.assignee.email,
+            account_id=issue.assignee.account_id,
+            display_name=issue.assignee.display_name,
+        )
+        if resolved and resolved != "unknown":
+            assignees.append(resolved)
+
+    reporter = None
+    if issue.reporter is not None:
+        reporter = identity.resolve(
+            provider="jira",
+            email=issue.reporter.email,
+            account_id=issue.reporter.account_id,
+            display_name=issue.reporter.display_name,
+        )
+        if reporter == "unknown":
+            reporter = None
+
+    created_at = _parse_datetime(issue.created_at) or datetime.now(timezone.utc)
+    updated_at = _parse_datetime(issue.updated_at) or created_at
+    resolved_at = _parse_datetime(issue.resolved_at)
+
+    sprint_id = issue.sprint_ids[0] if issue.sprint_ids else None
+
+    return WorkItem(
+        work_item_id=work_item_id,
+        provider="jira",
+        repo_id=repo_id,
+        project_key=issue.project_key,
+        project_id=None,
+        title=issue.key,
+        description=None,
+        type=normalized_type,
+        status=normalized_status,
+        status_raw=issue.status,
+        assignees=assignees,
+        reporter=reporter,
+        created_at=created_at,
+        updated_at=updated_at,
+        started_at=None,
+        completed_at=resolved_at,
+        closed_at=resolved_at,
+        labels=list(issue.labels),
+        story_points=issue.story_points,
+        sprint_id=sprint_id,
+        sprint_name=None,
+        parent_id=None,
+        epic_id=None,
+        url=None,
+        priority_raw=None,
+        service_class="standard",
+        due_at=None,
+    )
+
+
+def canonical_changelog_to_transitions(
+    *,
+    issue_key: str,
+    changelog_events: List["JiraChangelogEvent"],
+    status_mapping: StatusMapping,
+    identity: IdentityResolver,
+    labels: List[str],
+) -> List[WorkItemStatusTransition]:
+    work_item_id = f"jira:{issue_key}"
+    transitions: List[WorkItemStatusTransition] = []
+
+    sorted_events = sorted(changelog_events, key=lambda e: e.created_at)
+
+    for event in sorted_events:
+        occurred_at = _parse_datetime(event.created_at) or datetime.now(timezone.utc)
+
+        actor = None
+        if event.author is not None:
+            actor = identity.resolve(
+                provider="jira",
+                email=event.author.email,
+                account_id=event.author.account_id,
+                display_name=event.author.display_name,
+            )
+            if actor == "unknown":
+                actor = None
+
+        for item in event.items:
+            if item.field.lower() != "status":
+                continue
+
+            from_norm = status_mapping.normalize_status(
+                provider="jira",
+                status_raw=item.from_string,
+                labels=labels,
+            )
+            to_norm = status_mapping.normalize_status(
+                provider="jira",
+                status_raw=item.to_string,
+                labels=labels,
+            )
+            transitions.append(
+                WorkItemStatusTransition(
+                    work_item_id=work_item_id,
+                    provider="jira",
+                    occurred_at=occurred_at,
+                    from_status_raw=item.from_string,
+                    to_status_raw=item.to_string,
+                    from_status=from_norm,
+                    to_status=to_norm,
+                    actor=actor,
+                )
+            )
+
+    return transitions
+
+
+def derive_started_completed_from_transitions(
+    transitions: List[WorkItemStatusTransition],
+    normalized_status: str,
+    resolved_at: Optional[datetime],
+    updated_at: datetime,
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    started_at = None
+    completed_at = None
+
+    for t in transitions:
+        if started_at is None and t.to_status == "in_progress":
+            started_at = t.occurred_at
+        if completed_at is None and t.to_status in {"done", "canceled"}:
+            completed_at = t.occurred_at
+            break
+
+    if completed_at is None and normalized_status in {"done", "canceled"}:
+        completed_at = resolved_at or updated_at
+
+    return started_at, completed_at
+
+
+def canonical_worklog_to_model(
+    *,
+    issue_key: str,
+    worklog: "JiraWorklog",
+    identity: IdentityResolver,
+) -> Worklog:
+    author = None
+    if worklog.author is not None:
+        author = identity.resolve(
+            provider="jira",
+            email=worklog.author.email,
+            account_id=worklog.author.account_id,
+            display_name=worklog.author.display_name,
+        )
+        if author == "unknown":
+            author = None
+
+    started_at = _parse_datetime(worklog.started_at) or datetime.now(timezone.utc)
+    created_at = _parse_datetime(worklog.created_at) or started_at
+    updated_at = _parse_datetime(worklog.updated_at) or created_at
+
+    return Worklog(
+        work_item_id=f"jira:{issue_key}",
+        provider="jira",
+        worklog_id=worklog.worklog_id,
+        author=author,
+        started_at=started_at,
+        time_spent_seconds=worklog.time_spent_seconds,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+def canonical_sprint_to_model(
+    *,
+    sprint: "JiraSprint",
+) -> Sprint:
+    started_at = _parse_datetime(sprint.start_at)
+    ended_at = _parse_datetime(sprint.end_at)
+    completed_at = _parse_datetime(sprint.complete_at)
+
+    return Sprint(
+        provider="jira",
+        sprint_id=sprint.id,
+        name=sprint.name,
+        state=sprint.state,
+        started_at=started_at,
+        ended_at=ended_at,
+        completed_at=completed_at,
+    )

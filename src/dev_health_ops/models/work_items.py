@@ -157,3 +157,16 @@ class Sprint:
     ended_at: Optional[datetime]
     completed_at: Optional[datetime]
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True)
+class Worklog:
+    work_item_id: str
+    provider: WorkItemProvider
+    worklog_id: str
+    author: Optional[str]
+    started_at: datetime
+    time_spent_seconds: int
+    created_at: datetime
+    updated_at: datetime
+    last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

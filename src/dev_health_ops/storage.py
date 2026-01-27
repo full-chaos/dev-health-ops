@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Iterable
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
@@ -42,12 +42,19 @@ from dev_health_ops.models.git import (
     Incident,
     Repo,
 )
+
+if TYPE_CHECKING:
+    from dev_health_ops.models.atlassian_ops import (
+        AtlassianOpsAlert,
+        AtlassianOpsIncident,
+        AtlassianOpsSchedule,
+    )
+    from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
 from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemDependency,
     WorkItemStatusTransition,
 )
-from dev_health_ops.models.teams import Team
 
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot
 from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
@@ -1207,11 +1214,160 @@ class SQLAlchemyStore:
             ],
         )
 
+    async def insert_jira_project_ops_team_links(
+        self, links: List[JiraProjectOpsTeamLink]
+    ) -> None:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        if not links:
+            return
+
+        rows: List[Dict[str, Any]] = []
+        for item in links:
+            if isinstance(item, dict):
+                rows.append(item)
+            else:
+                rows.append(
+                    {
+                        "project_key": item.project_key,
+                        "ops_team_id": item.ops_team_id,
+                        "project_name": item.project_name,
+                        "ops_team_name": item.ops_team_name,
+                        "updated_at": item.updated_at,
+                    }
+                )
+
+        await self._upsert_many(
+            JiraProjectOpsTeamLink,
+            rows,
+            conflict_columns=["project_key", "ops_team_id"],
+            update_columns=[
+                "project_name",
+                "ops_team_name",
+                "updated_at",
+            ],
+        )
+
+    async def insert_atlassian_ops_incidents(
+        self, incidents: List[AtlassianOpsIncident]
+    ) -> None:
+        from dev_health_ops.models.atlassian_ops import AtlassianOpsIncidentModel
+
+        if not incidents:
+            return
+
+        rows: List[Dict[str, Any]] = []
+        for item in incidents:
+            rows.append(
+                {
+                    "id": item.id,
+                    "url": item.url,
+                    "summary": item.summary,
+                    "description": item.description,
+                    "status": item.status,
+                    "severity": item.severity,
+                    "created_at": item.created_at,
+                    "provider_id": item.provider_id,
+                    "last_synced": item.last_synced,
+                }
+            )
+
+        await self._upsert_many(
+            AtlassianOpsIncidentModel,
+            rows,
+            conflict_columns=["id"],
+            update_columns=[
+                "url",
+                "summary",
+                "description",
+                "status",
+                "severity",
+                "created_at",
+                "provider_id",
+                "last_synced",
+            ],
+        )
+
+    async def insert_atlassian_ops_alerts(
+        self, alerts: List[AtlassianOpsAlert]
+    ) -> None:
+        from dev_health_ops.models.atlassian_ops import AtlassianOpsAlertModel
+
+        if not alerts:
+            return
+
+        rows: List[Dict[str, Any]] = []
+        for item in alerts:
+            rows.append(
+                {
+                    "id": item.id,
+                    "status": item.status,
+                    "priority": item.priority,
+                    "created_at": item.created_at,
+                    "acknowledged_at": item.acknowledged_at,
+                    "snoozed_at": item.snoozed_at,
+                    "closed_at": item.closed_at,
+                    "last_synced": item.last_synced,
+                }
+            )
+
+        await self._upsert_many(
+            AtlassianOpsAlertModel,
+            rows,
+            conflict_columns=["id"],
+            update_columns=[
+                "status",
+                "priority",
+                "created_at",
+                "acknowledged_at",
+                "snoozed_at",
+                "closed_at",
+                "last_synced",
+            ],
+        )
+
+    async def insert_atlassian_ops_schedules(
+        self, schedules: List[AtlassianOpsSchedule]
+    ) -> None:
+        from dev_health_ops.models.atlassian_ops import AtlassianOpsScheduleModel
+
+        if not schedules:
+            return
+
+        rows: List[Dict[str, Any]] = []
+        for item in schedules:
+            rows.append(
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "timezone": item.timezone,
+                    "last_synced": item.last_synced,
+                }
+            )
+
+        await self._upsert_many(
+            AtlassianOpsScheduleModel,
+            rows,
+            conflict_columns=["id"],
+            update_columns=[
+                "name",
+                "timezone",
+                "last_synced",
+            ],
+        )
+
     async def get_all_teams(self) -> List["Team"]:
         from dev_health_ops.models.teams import Team
 
         assert self.session is not None
         result = await self.session.execute(select(Team))
+        return list(result.scalars().all())
+
+    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        assert self.session is not None
+        result = await self.session.execute(select(JiraProjectOpsTeamLink))
         return list(result.scalars().all())
 
 
@@ -1623,6 +1779,42 @@ class MongoStore:
             lambda obj: str(getattr(obj, "id")),
         )
 
+    async def insert_jira_project_ops_team_links(
+        self, links: List[JiraProjectOpsTeamLink]
+    ) -> None:
+        await self._upsert_many(
+            "jira_project_ops_team_links",
+            links,
+            lambda obj: f"{getattr(obj, 'project_key')}:{getattr(obj, 'ops_team_id')}",
+        )
+
+    async def insert_atlassian_ops_incidents(
+        self, incidents: List[AtlassianOpsIncident]
+    ) -> None:
+        await self._upsert_many(
+            "atlassian_ops_incidents",
+            incidents,
+            lambda obj: str(getattr(obj, "id")),
+        )
+
+    async def insert_atlassian_ops_alerts(
+        self, alerts: List[AtlassianOpsAlert]
+    ) -> None:
+        await self._upsert_many(
+            "atlassian_ops_alerts",
+            alerts,
+            lambda obj: str(getattr(obj, "id")),
+        )
+
+    async def insert_atlassian_ops_schedules(
+        self, schedules: List[AtlassianOpsSchedule]
+    ) -> None:
+        await self._upsert_many(
+            "atlassian_ops_schedules",
+            schedules,
+            lambda obj: str(getattr(obj, "id")),
+        )
+
     async def insert_work_item_dependencies(
         self, dependencies: List[WorkItemDependency]
     ) -> None:
@@ -1719,17 +1911,32 @@ class MongoStore:
         async for doc in cursor:
             teams.append(
                 Team(
-                    id=doc.get("id") or doc.get("_id"),
-                    team_uuid=uuid.UUID(str(doc.get("team_uuid")))
-                    if doc.get("team_uuid")
-                    else None,
-                    name=doc.get("name"),
+                    id=doc["id"],
+                    team_uuid=doc.get("team_uuid"),
+                    name=doc["name"],
                     description=doc.get("description"),
                     members=doc.get("members", []),
-                    updated_at=_parse_datetime_value(doc.get("updated_at")),
+                    updated_at=doc["updated_at"],
                 )
             )
         return teams
+
+    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        cursor = self.db["jira_project_ops_team_links"].find({})
+        links = []
+        async for doc in cursor:
+            links.append(
+                JiraProjectOpsTeamLink(
+                    project_key=doc["project_key"],
+                    ops_team_id=doc["ops_team_id"],
+                    project_name=doc["project_name"],
+                    ops_team_name=doc["ops_team_name"],
+                    updated_at=doc["updated_at"],
+                )
+            )
+        return links
 
     async def _upsert_many(
         self,
@@ -2713,6 +2920,158 @@ class ClickHouseStore:
             rows,
         )
 
+    async def insert_jira_project_ops_team_links(
+        self, links: List[JiraProjectOpsTeamLink]
+    ) -> None:
+        if not links:
+            return
+
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in links:
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "project_key": item.get("project_key"),
+                        "ops_team_id": item.get("ops_team_id"),
+                        "project_name": item.get("project_name"),
+                        "ops_team_name": item.get("ops_team_name"),
+                        "updated_at": self._normalize_datetime(item.get("updated_at")),
+                        "last_synced": synced_at,
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "project_key": getattr(item, "project_key"),
+                        "ops_team_id": getattr(item, "ops_team_id"),
+                        "project_name": getattr(item, "project_name"),
+                        "ops_team_name": getattr(item, "ops_team_name"),
+                        "updated_at": self._normalize_datetime(
+                            getattr(item, "updated_at")
+                        ),
+                        "last_synced": synced_at,
+                    }
+                )
+
+        await self._insert_rows(
+            "jira_project_ops_team_links",
+            [
+                "project_key",
+                "ops_team_id",
+                "project_name",
+                "ops_team_name",
+                "updated_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_atlassian_ops_incidents(
+        self, incidents: List[AtlassianOpsIncident]
+    ) -> None:
+        if not incidents:
+            return
+
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in incidents:
+            rows.append(
+                {
+                    "id": item.id,
+                    "url": item.url,
+                    "summary": item.summary,
+                    "description": item.description,
+                    "status": item.status,
+                    "severity": item.severity,
+                    "created_at": self._normalize_datetime(item.created_at),
+                    "provider_id": item.provider_id,
+                    "last_synced": synced_at,
+                }
+            )
+
+        await self._insert_rows(
+            "atlassian_ops_incidents",
+            [
+                "id",
+                "url",
+                "summary",
+                "description",
+                "status",
+                "severity",
+                "created_at",
+                "provider_id",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_atlassian_ops_alerts(
+        self, alerts: List[AtlassianOpsAlert]
+    ) -> None:
+        if not alerts:
+            return
+
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in alerts:
+            rows.append(
+                {
+                    "id": item.id,
+                    "status": item.status,
+                    "priority": item.priority,
+                    "created_at": self._normalize_datetime(item.created_at),
+                    "acknowledged_at": self._normalize_datetime(item.acknowledged_at),
+                    "snoozed_at": self._normalize_datetime(item.snoozed_at),
+                    "closed_at": self._normalize_datetime(item.closed_at),
+                    "last_synced": synced_at,
+                }
+            )
+
+        await self._insert_rows(
+            "atlassian_ops_alerts",
+            [
+                "id",
+                "status",
+                "priority",
+                "created_at",
+                "acknowledged_at",
+                "snoozed_at",
+                "closed_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_atlassian_ops_schedules(
+        self, schedules: List[AtlassianOpsSchedule]
+    ) -> None:
+        if not schedules:
+            return
+
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in schedules:
+            rows.append(
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "timezone": item.timezone,
+                    "last_synced": synced_at,
+                }
+            )
+
+        await self._insert_rows(
+            "atlassian_ops_schedules",
+            [
+                "id",
+                "name",
+                "timezone",
+                "last_synced",
+            ],
+            rows,
+        )
+
     async def get_all_teams(self) -> List["Team"]:
         from dev_health_ops.models.teams import Team
 
@@ -2736,6 +3095,28 @@ class ClickHouseStore:
                     )
                 )
         return teams
+
+    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        assert self.client is not None
+        query = "SELECT project_key, ops_team_id, project_name, ops_team_name, updated_at FROM jira_project_ops_team_links FINAL"
+        async with self._lock:
+            result = await asyncio.to_thread(self.client.query, query)
+
+        links = []
+        if result.result_rows:
+            for row in result.result_rows:
+                links.append(
+                    JiraProjectOpsTeamLink(
+                        project_key=row[0],
+                        ops_team_id=row[1],
+                        project_name=row[2],
+                        ops_team_name=row[3],
+                        updated_at=_parse_datetime_value(row[4]),
+                    )
+                )
+        return links
 
     async def insert_work_items(self, work_items: List["WorkItem"]) -> None:
         if not work_items:

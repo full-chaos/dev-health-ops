@@ -27,6 +27,7 @@ from dev_health_ops.providers.base import (
     ProviderCapabilities,
 )
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
+from dev_health_ops.providers.jira.atlassian_compat import atlassian_client_enabled
 from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,17 @@ class JiraProvider(Provider):
         - JIRA_FETCH_ALL: fetch all issues (ignores time window)
         - JIRA_FETCH_COMMENTS: whether to fetch comments (default: true)
         - JIRA_COMMENTS_LIMIT: max comments per issue (0 = no limit)
+        - ATLASSIAN_CLIENT_ENABLED: use new atlassian-client library
+        - ATLASSIAN_GQL_ENABLED: enable GraphQL worklog enrichment (REST fallback)
         """
+        if atlassian_client_enabled():
+            logger.info(
+                "Jira: using atlassian-client library (ATLASSIAN_CLIENT_ENABLED=true)"
+            )
+            return self._ingest_via_atlassian_client(ctx)
+        return self._ingest_via_legacy_client(ctx)
+
+    def _ingest_via_legacy_client(self, ctx: IngestionContext) -> ProviderBatch:
         from dev_health_ops.providers.jira.client import JiraClient, build_jira_jql
         from dev_health_ops.providers.jira.normalize import (
             detect_reopen_events,
@@ -312,4 +323,270 @@ class JiraProvider(Provider):
             interactions=interactions,
             sprints=sprints,
             reopen_events=reopen_events,
+        )
+
+    def _ingest_via_atlassian_client(self, ctx: IngestionContext) -> ProviderBatch:
+        from atlassian import (
+            iter_board_sprints_via_rest,
+            iter_issue_changelog_via_rest,
+            iter_issue_worklogs_via_rest,
+            iter_issues_via_rest,
+        )
+        from atlassian.graph.api.jira_worklogs import iter_issue_worklogs_via_graphql
+        from atlassian.rest.api.jira_boards import iter_boards_via_rest
+
+        from dev_health_ops.models.work_items import Worklog
+        from dev_health_ops.providers.jira.atlassian_compat import (
+            build_atlassian_rest_client,
+            build_atlassian_graphql_client,
+            get_atlassian_cloud_id,
+        )
+        from dev_health_ops.providers.jira.client import build_jira_jql
+        from dev_health_ops.providers.jira.normalize import (
+            canonical_changelog_to_transitions,
+            canonical_jira_issue_to_work_item,
+            canonical_sprint_to_model,
+            canonical_worklog_to_model,
+            derive_started_completed_from_transitions,
+            detect_reopen_events,
+        )
+
+        project_keys: Optional[Sequence[str]] = None
+        if ctx.project_key:
+            project_keys = [ctx.project_key]
+        else:
+            raw_keys = os.getenv("JIRA_PROJECT_KEYS") or ""
+            project_keys = [k.strip() for k in raw_keys.split(",") if k.strip()] or None
+
+        jql_override = (os.getenv("JIRA_JQL") or "").strip()
+        fetch_all = _env_flag("JIRA_FETCH_ALL", False)
+
+        updated_since: Optional[str] = None
+        active_until: Optional[str] = None
+        if ctx.window.updated_since:
+            updated_since = _to_utc(ctx.window.updated_since).date().isoformat()
+        if ctx.window.active_until:
+            active_until = _to_utc(ctx.window.active_until).date().isoformat()
+
+        jqls: List[str] = []
+        if jql_override:
+            jqls = [jql_override]
+        elif fetch_all:
+            if project_keys:
+                for key in project_keys:
+                    jqls.append(build_jira_jql(project_key=key))
+            else:
+                jqls.append(build_jira_jql())
+        else:
+            if project_keys:
+                for key in project_keys:
+                    jqls.append(
+                        build_jira_jql(
+                            project_key=key,
+                            updated_since=updated_since,
+                            active_until=active_until,
+                        )
+                    )
+            else:
+                jqls.append(
+                    build_jira_jql(
+                        updated_since=updated_since,
+                        active_until=active_until,
+                    )
+                )
+
+        cloud_id = get_atlassian_cloud_id()
+        if not cloud_id:
+            raise ValueError(
+                "ATLASSIAN_CLOUD_ID required when using atlassian-client. "
+                "Set ATLASSIAN_CLOUD_ID or derive from ATLASSIAN_JIRA_BASE_URL."
+            )
+
+        work_items: List[WorkItem] = []
+        transitions: List[WorkItemStatusTransition] = []
+        reopen_events: List[WorkItemReopenEvent] = []
+        sprints: List[Sprint] = []
+        worklogs: List[Worklog] = []
+        sprint_ids: set[str] = set()
+
+        fetch_worklogs = _env_flag("JIRA_FETCH_WORKLOGS", False)
+        use_graphql = _env_flag("ATLASSIAN_GQL_ENABLED", False)
+
+        client = build_atlassian_rest_client()
+        graphql_client = None
+        if use_graphql and fetch_worklogs:
+            graphql_client = build_atlassian_graphql_client()
+        try:
+            fetched_count = 0
+            for jql in jqls:
+                logger.debug("Jira (atlassian-client): JQL=%s", jql)
+                for issue in iter_issues_via_rest(client, cloud_id, jql):
+                    if ctx.limit is not None and fetched_count >= ctx.limit:
+                        break
+
+                    wi = canonical_jira_issue_to_work_item(
+                        issue=issue,
+                        status_mapping=self.status_mapping,
+                        identity=self.identity,
+                    )
+
+                    changelog_events = list(
+                        iter_issue_changelog_via_rest(client, issue_key=issue.key)
+                    )
+                    wi_transitions = canonical_changelog_to_transitions(
+                        issue_key=issue.key,
+                        changelog_events=changelog_events,
+                        status_mapping=self.status_mapping,
+                        identity=self.identity,
+                        labels=list(issue.labels),
+                    )
+
+                    started_at, completed_at = (
+                        derive_started_completed_from_transitions(
+                            transitions=wi_transitions,
+                            normalized_status=wi.status,
+                            resolved_at=wi.completed_at,
+                            updated_at=wi.updated_at,
+                        )
+                    )
+
+                    wi = WorkItem(
+                        work_item_id=wi.work_item_id,
+                        provider=wi.provider,
+                        repo_id=wi.repo_id,
+                        project_key=wi.project_key,
+                        project_id=wi.project_id,
+                        title=wi.title,
+                        description=wi.description,
+                        type=wi.type,
+                        status=wi.status,
+                        status_raw=wi.status_raw,
+                        assignees=wi.assignees,
+                        reporter=wi.reporter,
+                        created_at=wi.created_at,
+                        updated_at=wi.updated_at,
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        closed_at=wi.closed_at,
+                        labels=wi.labels,
+                        story_points=wi.story_points,
+                        sprint_id=wi.sprint_id,
+                        sprint_name=wi.sprint_name,
+                        parent_id=wi.parent_id,
+                        epic_id=wi.epic_id,
+                        url=wi.url,
+                        priority_raw=wi.priority_raw,
+                        service_class=wi.service_class,
+                        due_at=wi.due_at,
+                    )
+
+                    work_items.append(wi)
+                    transitions.extend(wi_transitions)
+                    reopen_events.extend(
+                        detect_reopen_events(
+                            work_item_id=wi.work_item_id,
+                            transitions=wi_transitions,
+                        )
+                    )
+
+                    if wi.sprint_id:
+                        sprint_ids.add(wi.sprint_id)
+
+                    if fetch_worklogs:
+                        if use_graphql and graphql_client is not None and cloud_id:
+                            try:
+                                for wl in iter_issue_worklogs_via_graphql(
+                                    graphql_client,
+                                    cloud_id=cloud_id,
+                                    issue_key=issue.key,
+                                ):
+                                    worklogs.append(
+                                        canonical_worklog_to_model(
+                                            issue_key=issue.key,
+                                            worklog=wl,
+                                            identity=self.identity,
+                                        )
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Jira: GraphQL worklog fetch failed for %s; falling back to REST: %s",
+                                    issue.key,
+                                    exc,
+                                )
+                                try:
+                                    for wl in iter_issue_worklogs_via_rest(
+                                        client, issue_key=issue.key
+                                    ):
+                                        worklogs.append(
+                                            canonical_worklog_to_model(
+                                                issue_key=issue.key,
+                                                worklog=wl,
+                                                identity=self.identity,
+                                            )
+                                        )
+                                except Exception as rest_exc:
+                                    logger.warning(
+                                        "Jira: failed to fetch worklogs for %s: %s",
+                                        issue.key,
+                                        rest_exc,
+                                    )
+                        else:
+                            try:
+                                for wl in iter_issue_worklogs_via_rest(
+                                    client, issue_key=issue.key
+                                ):
+                                    worklogs.append(
+                                        canonical_worklog_to_model(
+                                            issue_key=issue.key,
+                                            worklog=wl,
+                                            identity=self.identity,
+                                        )
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Jira: failed to fetch worklogs for %s: %s",
+                                    issue.key,
+                                    exc,
+                                )
+
+                    fetched_count += 1
+
+                if ctx.limit is not None and fetched_count >= ctx.limit:
+                    break
+
+            if _env_flag("JIRA_FETCH_BOARD_SPRINTS", False):
+                try:
+                    for board in iter_boards_via_rest(client):
+                        logger.debug(
+                            "Jira: fetching sprints for board %s (%s)",
+                            board.id,
+                            board.name,
+                        )
+                        for sprint in iter_board_sprints_via_rest(
+                            client, board_id=int(board.id)
+                        ):
+                            sprints.append(canonical_sprint_to_model(sprint=sprint))
+                except Exception as exc:
+                    logger.warning("Jira: failed to fetch board sprints: %s", exc)
+
+            logger.info(
+                "Jira (atlassian-client): fetched %d work items, %d worklogs, %d sprints (updated_since=%s)",
+                len(work_items),
+                len(worklogs),
+                len(sprints),
+                updated_since,
+            )
+        finally:
+            client.close()
+            if graphql_client is not None:
+                graphql_client.close()
+
+        return ProviderBatch(
+            work_items=work_items,
+            status_transitions=transitions,
+            dependencies=[],
+            interactions=[],
+            sprints=list(sprints),
+            reopen_events=reopen_events,
+            worklogs=worklogs,
         )

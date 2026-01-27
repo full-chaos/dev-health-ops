@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from dev_health_ops.models.teams import Team
+from sqlalchemy import select
+
+from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
 from dev_health_ops.storage import SQLAlchemyStore, MongoStore, ClickHouseStore
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
@@ -56,6 +58,22 @@ async def test_sqlalchemy_store_teams():
         assert t1.name == "Team 1 Updated"
         assert "m4" in t1.members
 
+        links = [
+            JiraProjectOpsTeamLink(
+                project_key="OPS",
+                ops_team_id="team-1",
+                project_name="Ops Project",
+                ops_team_name="Primary Ops",
+            )
+        ]
+        await store.insert_jira_project_ops_team_links(links)
+
+        result = await store.session.execute(select(JiraProjectOpsTeamLink))
+        rows = list(result.scalars().all())
+        assert len(rows) == 1
+        assert rows[0].project_key == "OPS"
+        assert rows[0].ops_team_id == "team-1"
+
 
 @pytest.mark.asyncio
 async def test_mongo_store_teams():
@@ -71,11 +89,24 @@ async def test_mongo_store_teams():
         await store.insert_teams(teams)
         assert store.db["teams"].bulk_write.called
 
+        store.db["jira_project_ops_team_links"].bulk_write = AsyncMock()
+        links = [
+            JiraProjectOpsTeamLink(
+                project_key="OPS",
+                ops_team_id="team-1",
+                project_name="Ops Project",
+                ops_team_name="Primary Ops",
+            )
+        ]
+        await store.insert_jira_project_ops_team_links(links)
+        assert store.db["jira_project_ops_team_links"].bulk_write.called
+
         # Mock get_all_teams
         mock_cursor = MagicMock()
         mock_cursor.__aiter__.return_value = [
             {
                 "id": "t1",
+                "team_uuid": uuid.uuid4(),
                 "name": "Team 1",
                 "members": ["m1"],
                 "updated_at": datetime.now(timezone.utc),
@@ -120,6 +151,17 @@ async def test_clickhouse_store_teams():
         retrieved = await store.get_all_teams()
         assert len(retrieved) == 1
         assert retrieved[0].id == "t1"
+
+        links = [
+            JiraProjectOpsTeamLink(
+                project_key="OPS",
+                ops_team_id="team-1",
+                project_name="Ops Project",
+                ops_team_name="Primary Ops",
+            )
+        ]
+        await store.insert_jira_project_ops_team_links(links)
+        assert mock_client.insert.called
 
 
 def test_synthetic_teams_generation():

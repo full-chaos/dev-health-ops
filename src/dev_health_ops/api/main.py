@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 import logging
 import os
 from typing import List, Literal, cast
+from urllib.parse import urlparse
 
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 
-from dev_health_ops.metrics.sinks.factory import detect_backend
+from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
 
 
 from .models.filters import (
@@ -128,6 +129,88 @@ def _db_url() -> str:
     )
 
 
+def _check_sqlalchemy_health(dsn: str) -> bool:
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(dsn, pool_pre_ping=True)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+    finally:
+        engine.dispose()
+
+
+async def _check_sqlalchemy_health_async(dsn: str) -> bool:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(dsn, pool_pre_ping=True)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+    finally:
+        await engine.dispose()
+
+
+def _dsn_uses_async_driver(dsn: str) -> bool:
+    scheme = urlparse(dsn).scheme.lower()
+    return "+asyncpg" in scheme or "+aiosqlite" in scheme
+
+
+def _check_mongo_health(dsn: str) -> bool:
+    from pymongo import MongoClient
+
+    client = MongoClient(dsn, serverSelectionTimeoutMS=2000)
+    try:
+        client.admin.command("ping")
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+async def _check_database_service(dsn: str) -> tuple[str, str]:
+    try:
+        backend = detect_backend(dsn)
+    except Exception as exc:
+        logger.warning(
+            "Unable to detect database backend for health check: %s",
+            _sanitize_for_log(exc),
+        )
+        return "database", "down"
+
+    if backend == SinkBackend.CLICKHOUSE:
+        try:
+            async with clickhouse_client(dsn) as client:
+                rows = await query_dicts(client, "SELECT 1 AS ok", {})
+            return backend.value, "ok" if rows else "down"
+        except Exception:
+            return backend.value, "down"
+
+    if backend in (SinkBackend.SQLITE, SinkBackend.POSTGRES):
+        if _dsn_uses_async_driver(dsn):
+            ok = await _check_sqlalchemy_health_async(dsn)
+        else:
+            ok = await asyncio.to_thread(_check_sqlalchemy_health, dsn)
+        return backend.value, "ok" if ok else "down"
+
+    if backend == SinkBackend.MONGO:
+        ok = await asyncio.to_thread(_check_mongo_health, dsn)
+        return backend.value, "ok" if ok else "down"
+
+    return backend.value, "down"
+
+
 def _filters_from_query(
     scope_type: str,
     scope_id: str,
@@ -198,11 +281,16 @@ app.include_router(webhooks_router)
 async def health() -> HealthResponse | JSONResponse:
     services = {}
     try:
-        async with clickhouse_client(_db_url()) as client:
-            rows = await query_dicts(client, "SELECT 1 AS ok", {})
-        services["clickhouse"] = "ok" if rows else "down"
-    except Exception:
-        services["clickhouse"] = "down"
+        db_url = _db_url()
+    except Exception as exc:
+        logger.warning(
+            "Database configuration missing for health check: %s",
+            _sanitize_for_log(exc),
+        )
+        services["database"] = "down"
+    else:
+        db_key, db_status = await _check_database_service(db_url)
+        services[db_key] = db_status
 
     try:
         services["redis"] = HOME_CACHE.status()

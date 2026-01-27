@@ -50,7 +50,6 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemStatusTransition,
 )
-from dev_health_ops.models.teams import Team
 
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot
 from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord

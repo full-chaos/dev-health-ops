@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Iterable
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
@@ -42,6 +42,9 @@ from dev_health_ops.models.git import (
     Incident,
     Repo,
 )
+
+if TYPE_CHECKING:
+    from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
 from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemDependency,
@@ -1207,6 +1210,40 @@ class SQLAlchemyStore:
             ],
         )
 
+    async def insert_jira_project_ops_team_links(
+        self, links: List[JiraProjectOpsTeamLink]
+    ) -> None:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        if not links:
+            return
+
+        rows: List[Dict[str, Any]] = []
+        for item in links:
+            if isinstance(item, dict):
+                rows.append(item)
+            else:
+                rows.append(
+                    {
+                        "project_key": item.project_key,
+                        "ops_team_id": item.ops_team_id,
+                        "project_name": item.project_name,
+                        "ops_team_name": item.ops_team_name,
+                        "updated_at": item.updated_at,
+                    }
+                )
+
+        await self._upsert_many(
+            JiraProjectOpsTeamLink,
+            rows,
+            conflict_columns=["project_key", "ops_team_id"],
+            update_columns=[
+                "project_name",
+                "ops_team_name",
+                "updated_at",
+            ],
+        )
+
     async def get_all_teams(self) -> List["Team"]:
         from dev_health_ops.models.teams import Team
 
@@ -1621,6 +1658,15 @@ class MongoStore:
             "teams",
             teams,
             lambda obj: str(getattr(obj, "id")),
+        )
+
+    async def insert_jira_project_ops_team_links(
+        self, links: List[JiraProjectOpsTeamLink]
+    ) -> None:
+        await self._upsert_many(
+            "jira_project_ops_team_links",
+            links,
+            lambda obj: f"{getattr(obj, 'project_key')}:{getattr(obj, 'ops_team_id')}",
         )
 
     async def insert_work_item_dependencies(
@@ -2707,6 +2753,53 @@ class ClickHouseStore:
                 "name",
                 "description",
                 "members",
+                "updated_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_jira_project_ops_team_links(
+        self, links: List[JiraProjectOpsTeamLink]
+    ) -> None:
+        if not links:
+            return
+
+        synced_at = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: List[Dict[str, Any]] = []
+        for item in links:
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "project_key": item.get("project_key"),
+                        "ops_team_id": item.get("ops_team_id"),
+                        "project_name": item.get("project_name"),
+                        "ops_team_name": item.get("ops_team_name"),
+                        "updated_at": self._normalize_datetime(item.get("updated_at")),
+                        "last_synced": synced_at,
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "project_key": getattr(item, "project_key"),
+                        "ops_team_id": getattr(item, "ops_team_id"),
+                        "project_name": getattr(item, "project_name"),
+                        "ops_team_name": getattr(item, "ops_team_name"),
+                        "updated_at": self._normalize_datetime(
+                            getattr(item, "updated_at")
+                        ),
+                        "last_synced": synced_at,
+                    }
+                )
+
+        await self._insert_rows(
+            "jira_project_ops_team_links",
+            [
+                "project_key",
+                "ops_team_id",
+                "project_name",
+                "ops_team_name",
                 "updated_at",
                 "last_synced",
             ],

@@ -118,6 +118,7 @@ class JiraProvider(Provider):
         - JIRA_FETCH_COMMENTS: whether to fetch comments (default: true)
         - JIRA_COMMENTS_LIMIT: max comments per issue (0 = no limit)
         - ATLASSIAN_CLIENT_ENABLED: use new atlassian-client library
+        - ATLASSIAN_GQL_ENABLED: enable GraphQL worklog enrichment (REST fallback)
         """
         if atlassian_client_enabled():
             logger.info(
@@ -331,11 +332,13 @@ class JiraProvider(Provider):
             iter_issue_worklogs_via_rest,
             iter_issues_via_rest,
         )
+        from atlassian.graph.api.jira_worklogs import iter_issue_worklogs_via_graphql
         from atlassian.rest.api.jira_boards import iter_boards_via_rest
 
         from dev_health_ops.models.work_items import Worklog
         from dev_health_ops.providers.jira.atlassian_compat import (
             build_atlassian_rest_client,
+            build_atlassian_graphql_client,
             get_atlassian_cloud_id,
         )
         from dev_health_ops.providers.jira.client import build_jira_jql
@@ -407,8 +410,12 @@ class JiraProvider(Provider):
         sprint_ids: set[str] = set()
 
         fetch_worklogs = _env_flag("JIRA_FETCH_WORKLOGS", False)
+        use_graphql = _env_flag("ATLASSIAN_GQL_ENABLED", False)
 
         client = build_atlassian_rest_client()
+        graphql_client = None
+        if use_graphql and fetch_worklogs:
+            graphql_client = build_atlassian_graphql_client()
         try:
             fetched_count = 0
             for jql in jqls:
@@ -486,23 +493,61 @@ class JiraProvider(Provider):
                         sprint_ids.add(wi.sprint_id)
 
                     if fetch_worklogs:
-                        try:
-                            for wl in iter_issue_worklogs_via_rest(
-                                client, issue_key=issue.key
-                            ):
-                                worklogs.append(
-                                    canonical_worklog_to_model(
-                                        issue_key=issue.key,
-                                        worklog=wl,
-                                        identity=self.identity,
+                        if use_graphql and graphql_client is not None and cloud_id:
+                            try:
+                                for wl in iter_issue_worklogs_via_graphql(
+                                    graphql_client,
+                                    cloud_id=cloud_id,
+                                    issue_key=issue.key,
+                                ):
+                                    worklogs.append(
+                                        canonical_worklog_to_model(
+                                            issue_key=issue.key,
+                                            worklog=wl,
+                                            identity=self.identity,
+                                        )
                                     )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Jira: GraphQL worklog fetch failed for %s; falling back to REST: %s",
+                                    issue.key,
+                                    exc,
                                 )
-                        except Exception as exc:
-                            logger.warning(
-                                "Jira: failed to fetch worklogs for %s: %s",
-                                issue.key,
-                                exc,
-                            )
+                                try:
+                                    for wl in iter_issue_worklogs_via_rest(
+                                        client, issue_key=issue.key
+                                    ):
+                                        worklogs.append(
+                                            canonical_worklog_to_model(
+                                                issue_key=issue.key,
+                                                worklog=wl,
+                                                identity=self.identity,
+                                            )
+                                        )
+                                except Exception as rest_exc:
+                                    logger.warning(
+                                        "Jira: failed to fetch worklogs for %s: %s",
+                                        issue.key,
+                                        rest_exc,
+                                    )
+                        else:
+                            try:
+                                for wl in iter_issue_worklogs_via_rest(
+                                    client, issue_key=issue.key
+                                ):
+                                    worklogs.append(
+                                        canonical_worklog_to_model(
+                                            issue_key=issue.key,
+                                            worklog=wl,
+                                            identity=self.identity,
+                                        )
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Jira: failed to fetch worklogs for %s: %s",
+                                    issue.key,
+                                    exc,
+                                )
 
                     fetched_count += 1
 
@@ -533,6 +578,8 @@ class JiraProvider(Provider):
             )
         finally:
             client.close()
+            if graphql_client is not None:
+                graphql_client.close()
 
         return ProviderBatch(
             work_items=work_items,

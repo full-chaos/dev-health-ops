@@ -5,12 +5,17 @@ from unittest.mock import patch
 
 import pytest
 
+from atlassian import BasicApiTokenAuth, CookieAuth, OAuthBearerAuth
+from atlassian.oauth_3lo import OAuthRefreshTokenAuth
 from dev_health_ops.providers.jira.atlassian_compat import (
     atlassian_client_enabled,
     get_atlassian_auth,
     get_atlassian_base_url,
     get_atlassian_cloud_id,
+    get_atlassian_graphql_auth,
+    get_atlassian_graphql_base_url,
     validate_atlassian_env,
+    validate_atlassian_graphql_env,
 )
 
 
@@ -141,3 +146,86 @@ class TestValidateAtlassianEnv:
         with patch.dict(os.environ, env, clear=True):
             errors = validate_atlassian_env()
             assert len(errors) == 2
+
+
+class TestGetAtlassianGraphqlBaseUrl:
+    def test_prefers_gql_base_url(self) -> None:
+        env = {
+            "ATLASSIAN_GQL_BASE_URL": "https://example.atlassian.net/gateway/api/graphql",
+            "ATLASSIAN_OAUTH_GQL_ENDPOINT": "https://api.atlassian.com/graphql",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            assert (
+                get_atlassian_graphql_base_url()
+                == "https://example.atlassian.net/gateway/api/graphql"
+            )
+
+    def test_falls_back_to_oauth_endpoint(self) -> None:
+        env = {"ATLASSIAN_OAUTH_GQL_ENDPOINT": "https://api.atlassian.com/graphql"}
+        with patch.dict(os.environ, env, clear=True):
+            assert (
+                get_atlassian_graphql_base_url() == "https://api.atlassian.com/graphql"
+            )
+
+    def test_defaults_to_api_atlassian_com(self) -> None:
+        env = {"ATLASSIAN_OAUTH_ACCESS_TOKEN": "token"}
+        with patch.dict(os.environ, env, clear=True):
+            assert get_atlassian_graphql_base_url() == "https://api.atlassian.com"
+
+    def test_returns_none_without_hint(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_atlassian_graphql_base_url() is None
+
+
+class TestGetAtlassianGraphqlAuth:
+    def test_refresh_token_auth(self) -> None:
+        env = {
+            "ATLASSIAN_OAUTH_REFRESH_TOKEN": "refresh",
+            "ATLASSIAN_CLIENT_ID": "client-id",
+            "ATLASSIAN_CLIENT_SECRET": "client-secret",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            auth = get_atlassian_graphql_auth()
+            assert isinstance(auth, OAuthRefreshTokenAuth)
+
+    def test_oauth_bearer_auth(self) -> None:
+        env = {"ATLASSIAN_OAUTH_ACCESS_TOKEN": "token"}
+        with patch.dict(os.environ, env, clear=True):
+            auth = get_atlassian_graphql_auth()
+            assert isinstance(auth, OAuthBearerAuth)
+
+    def test_basic_auth(self) -> None:
+        env = {
+            "ATLASSIAN_EMAIL": "user@example.com",
+            "ATLASSIAN_API_TOKEN": "token",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            auth = get_atlassian_graphql_auth()
+            assert isinstance(auth, BasicApiTokenAuth)
+
+    def test_cookie_auth(self) -> None:
+        env = {"ATLASSIAN_COOKIES_JSON": '{"cloud.session.token": "abc"}'}
+        with patch.dict(os.environ, env, clear=True):
+            auth = get_atlassian_graphql_auth()
+            assert isinstance(auth, CookieAuth)
+
+    def test_returns_none_if_missing(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_atlassian_graphql_auth() is None
+
+
+class TestValidateAtlassianGraphqlEnv:
+    def test_all_valid(self) -> None:
+        env = {
+            "ATLASSIAN_GQL_BASE_URL": "https://example.atlassian.net/gateway/api/graphql",
+            "ATLASSIAN_OAUTH_ACCESS_TOKEN": "token",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            assert validate_atlassian_graphql_env() == []
+
+    def test_missing_all(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            errors = validate_atlassian_graphql_env()
+            assert len(errors) == 2
+            assert any("GQL" in e for e in errors)
+            assert any("credentials" in e for e in errors)

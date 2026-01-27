@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 
-from dev_health_ops.metrics.sinks.factory import detect_backend
+from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
 
 
 from .models.filters import (
@@ -189,12 +189,26 @@ async def _check_database_service(dsn: str) -> tuple[str, str]:
         )
         return "database", "down"
 
-    try:
-        async with clickhouse_client(dsn) as sink:
-            rows = await query_dicts(sink, "SELECT 1 AS ok", {})
-        return backend.value, "ok" if rows else "down"
-    except Exception:
-        return backend.value, "down"
+    if backend == SinkBackend.CLICKHOUSE:
+        try:
+            async with clickhouse_client(dsn) as sink:
+                rows = await query_dicts(sink, "SELECT 1 AS ok", {})
+            return backend.value, "ok" if rows else "down"
+        except Exception:
+            return backend.value, "down"
+
+    if backend in (SinkBackend.SQLITE, SinkBackend.POSTGRES):
+        if _dsn_uses_async_driver(dsn):
+            ok = await _check_sqlalchemy_health_async(dsn)
+        else:
+            ok = await asyncio.to_thread(_check_sqlalchemy_health, dsn)
+        return backend.value, "ok" if ok else "down"
+
+    if backend == SinkBackend.MONGO:
+        ok = await asyncio.to_thread(_check_mongo_health, dsn)
+        return backend.value, "ok" if ok else "down"
+
+    return backend.value, "down"
 
 
 def _filters_from_query(

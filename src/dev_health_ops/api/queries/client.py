@@ -88,10 +88,15 @@ async def close_global_client() -> None:
 
 
 async def query_dicts(
-    sink: BaseMetricsSink, query: str, params: Dict[str, Any]
+    sink: Any, query: str, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
     if sink is None:
-        raise RuntimeError("Metrics sink is None")
+        raise RuntimeError("ClickHouse client is None")
+
+    if not hasattr(sink, "query_dicts") and not hasattr(sink, "query"):
+        raise RuntimeError(
+            f"Invalid ClickHouse client: {type(sink).__name__} (no 'query' method)"
+        )
 
     safe_query = _sanitize_for_log(query)
     safe_params = {
@@ -99,4 +104,13 @@ async def query_dicts(
     }
     logger.debug("Executing query: %s with params %s", safe_query, safe_params)
 
-    return sink.query_dicts(query, params)
+    if hasattr(sink, "query_dicts"):
+        return sink.query_dicts(query, params)
+
+    result = sink.query(query, parameters=params)
+
+    col_names = list(getattr(result, "column_names", []) or [])
+    rows = list(getattr(result, "result_rows", []) or [])
+    if not col_names or not rows:
+        return []
+    return [dict(zip(col_names, row)) for row in rows]

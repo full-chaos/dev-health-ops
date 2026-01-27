@@ -265,6 +265,12 @@ class WorkGraphBuilder:
 
             # Ensure timezone
             event_ts = last_synced
+            if isinstance(event_ts, str):
+                try:
+                    event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
+                except ValueError:
+                    event_ts = self._now
+
             if event_ts and event_ts.tzinfo is None:
                 event_ts = event_ts.replace(tzinfo=timezone.utc)
             if not event_ts:

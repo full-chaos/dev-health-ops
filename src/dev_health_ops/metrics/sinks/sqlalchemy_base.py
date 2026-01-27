@@ -86,8 +86,15 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
 
         sql = re.sub(r"argMax\((.*?),\s*computed_at\)", r"MAX(\1)", sql)
 
+        from sqlalchemy import bindparam
+
+        stmt = text(sql)
+        for k, v in parameters.items():
+            if isinstance(v, (list, tuple)):
+                stmt = stmt.bindparams(bindparam(k, expanding=True))
+
         with self.engine.connect() as conn:
-            result = conn.execute(text(sql), parameters).mappings().all()
+            result = conn.execute(stmt, parameters).mappings().all()
             return [dict(r) for r in result]
 
     @property
@@ -297,6 +304,9 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               completed_at TEXT,
               cycle_time_hours REAL,
               lead_time_hours REAL,
+              active_time_hours REAL,
+              wait_time_hours REAL,
+              flow_efficiency REAL,
               computed_at TEXT NOT NULL,
               PRIMARY KEY (provider, work_item_id)
             )
@@ -865,6 +875,31 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                     text(
                         "ALTER TABLE work_item_state_durations_daily "
                         "ADD COLUMN avg_wip REAL NOT NULL DEFAULT 0.0"
+                    )
+                )
+
+            if not self._table_has_column(
+                conn, "work_item_cycle_times", "active_time_hours"
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE work_item_cycle_times ADD COLUMN active_time_hours REAL"
+                    )
+                )
+            if not self._table_has_column(
+                conn, "work_item_cycle_times", "wait_time_hours"
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE work_item_cycle_times ADD COLUMN wait_time_hours REAL"
+                    )
+                )
+            if not self._table_has_column(
+                conn, "work_item_cycle_times", "flow_efficiency"
+            ):
+                conn.execute(
+                    text(
+                        "ALTER TABLE work_item_cycle_times ADD COLUMN flow_efficiency REAL"
                     )
                 )
 
@@ -1583,10 +1618,12 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO work_item_cycle_times (
               work_item_id, provider, day, work_scope_id, team_id, team_name, assignee, type, status,
-              created_at, started_at, completed_at, cycle_time_hours, lead_time_hours, computed_at
+              created_at, started_at, completed_at, cycle_time_hours, lead_time_hours,
+              active_time_hours, wait_time_hours, flow_efficiency, computed_at
             ) VALUES (
               :work_item_id, :provider, :day, :work_scope_id, :team_id, :team_name, :assignee, :type, :status,
-              :created_at, :started_at, :completed_at, :cycle_time_hours, :lead_time_hours, :computed_at
+              :created_at, :started_at, :completed_at, :cycle_time_hours, :lead_time_hours,
+              :active_time_hours, :wait_time_hours, :flow_efficiency, :computed_at
             )
             ON CONFLICT(provider, work_item_id) DO UPDATE SET
               day=excluded.day,
@@ -1601,6 +1638,9 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               completed_at=excluded.completed_at,
               cycle_time_hours=excluded.cycle_time_hours,
               lead_time_hours=excluded.lead_time_hours,
+              active_time_hours=excluded.active_time_hours,
+              wait_time_hours=excluded.wait_time_hours,
+              flow_efficiency=excluded.flow_efficiency,
               computed_at=excluded.computed_at
             """
         )

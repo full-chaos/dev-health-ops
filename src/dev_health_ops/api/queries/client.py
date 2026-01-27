@@ -72,6 +72,13 @@ async def get_global_sink(dsn: str) -> BaseMetricsSink:
     return _SHARED_SINK
 
 
+async def get_global_client(dsn: str) -> Any:
+    sink = await get_global_sink(dsn)
+    if hasattr(sink, "client"):
+        return getattr(sink, "client")
+    return sink
+
+
 @asynccontextmanager
 async def clickhouse_client(dsn: str) -> AsyncIterator[BaseMetricsSink]:
     """Compatibility wrapper for clickhouse_client context manager."""

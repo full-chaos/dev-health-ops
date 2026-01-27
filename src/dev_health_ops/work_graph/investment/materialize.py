@@ -347,7 +347,14 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         computed_at = datetime.now(timezone.utc)
         model_version = config.llm_model or config.llm_provider
 
-        for nodes, component_edges in components:
+        logger.info(
+            "Materializing investments for %d components (run_id=%s)",
+            len(components),
+            run_id,
+        )
+        for idx, (nodes, component_edges) in enumerate(components):
+            if idx % 10 == 0:
+                logger.info("Processing component %d/%d", idx, len(components))
             unit_nodes = list(dict.fromkeys(nodes))
             issue_node_ids = [
                 node_id for node_type, node_id in unit_nodes if node_type == "issue"
@@ -383,12 +390,14 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
             elif bundle.text_source_count == 0:
                 outcome = fallback_outcome("no_text_sources")
             else:
+                logger.info("Calling categorize_text_bundle for unit %s", unit_id)
                 outcome = await categorize_text_bundle(
                     bundle,
                     llm_provider=config.llm_provider,
                     llm_model=config.llm_model,
                     provider=provider_instance,
                 )
+                logger.info("categorize_text_bundle returned status=%s", outcome.status)
 
             theme_distribution = rollup_subcategories_to_themes(outcome.subcategories)
             evidence_quality_value = compute_evidence_quality(
@@ -396,6 +405,42 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 nodes_count=len(unit_nodes),
                 edges=component_edges,
             )
+            if outcome.status == "invalid_llm_output":
+                evidence_quality_value = min(float(evidence_quality_value), 0.3)
+
+            record = WorkUnitInvestmentRecord(
+                work_unit_id=unit_id,
+                work_unit_type="component",
+                work_unit_name=None,
+                from_ts=bounds.start,
+                to_ts=bounds.end,
+                repo_id=None,
+                provider=None,
+                effort_metric="active_hours",
+                effort_value=float(
+                    sum(active_hours.get(iid, 0.0) for iid in issue_node_ids)
+                ),
+                theme_distribution_json=theme_distribution,
+                subcategory_distribution_json=outcome.subcategories,
+                structural_evidence_json=json.dumps(
+                    {
+                        "issues": issue_node_ids,
+                        "prs": pr_node_ids,
+                        "commits": commit_node_ids,
+                    }
+                ),
+                evidence_quality=float(evidence_quality_value),
+                evidence_quality_band=evidence_quality_band(
+                    float(evidence_quality_value)
+                ),
+                categorization_status=outcome.status,
+                categorization_errors_json=json.dumps(outcome.errors),
+                categorization_model_version=model_version,
+                categorization_input_hash=bundle.input_hash,
+                categorization_run_id=run_id,
+                computed_at=computed_at,
+            )
+
             if outcome.status == "invalid_llm_output":
                 evidence_quality_value = min(evidence_quality_value, 0.3)
             evidence_band = evidence_quality_band(evidence_quality_value)
@@ -475,10 +520,12 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                         )
                     )
 
+        logger.info("Finished component loop, writing %d records to sink", len(records))
         if records:
             sink.write_work_unit_investments(records)
         if quote_records:
             sink.write_work_unit_investment_quotes(quote_records)
+        logger.info("Sink write complete")
 
         return {
             "components": len(components),

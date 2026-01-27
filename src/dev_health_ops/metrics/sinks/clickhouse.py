@@ -43,6 +43,7 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
+    Worklog,
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
@@ -64,6 +65,17 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     This sink is append-only: re-computations insert new rows with a newer
     `computed_at`. Queries can select the latest version via `argMax`.
     """
+
+    def query_dicts(
+        self, query: str, parameters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Execute a ClickHouse query and return results as list of dicts."""
+        result = self.client.query(query, parameters=parameters)
+        col_names = list(getattr(result, "column_names", []) or [])
+        rows = list(getattr(result, "result_rows", []) or [])
+        if not col_names or not rows:
+            return []
+        return [dict(zip(col_names, row)) for row in rows]
 
     @property
     def backend_type(self) -> str:
@@ -522,6 +534,25 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "started_at",
                 "ended_at",
                 "completed_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    def write_worklogs(self, rows: Sequence[Worklog]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "worklogs",
+            [
+                "work_item_id",
+                "provider",
+                "worklog_id",
+                "author",
+                "started_at",
+                "time_spent_seconds",
+                "created_at",
+                "updated_at",
                 "last_synced",
             ],
             rows,

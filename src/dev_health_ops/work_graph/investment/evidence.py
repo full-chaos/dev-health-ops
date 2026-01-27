@@ -24,9 +24,15 @@ class TimeBounds:
     end: datetime
 
 
-def _ensure_utc(value: Optional[datetime]) -> Optional[datetime]:
+def _ensure_utc(value: Optional[datetime | str]) -> Optional[datetime]:
     if value is None:
         return None
+    if isinstance(value, str):
+        try:
+            val_iso = value.replace(" ", "T")
+            value = datetime.fromisoformat(val_iso.replace("Z", "+00:00"))
+        except ValueError:
+            return None
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)

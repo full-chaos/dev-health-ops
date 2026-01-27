@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 import math
 from typing import Any, Dict, List
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter
 from ..models.schemas import (
     ConstraintCard,
@@ -173,7 +174,7 @@ def _format_delta(delta_pct: float) -> str:
 
 
 async def _metric_deltas(
-    client: Any,
+    sink: BaseMetricsSink,
     filters: MetricFilter,
     start_day: date,
     end_day: date,
@@ -184,19 +185,19 @@ async def _metric_deltas(
 
     for metric in _METRICS:
         scope_filter, scope_params = await scope_filter_for_metric(
-            client, metric_scope=metric["scope"], filters=filters
+            sink, metric_scope=metric["scope"], filters=filters
         )
 
         if metric["metric"] == "blocked_work":
             current_value, current_series = await fetch_blocked_hours(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 scope_filter=scope_filter,
                 scope_params=scope_params,
             )
             previous_value, _ = await fetch_blocked_hours(
-                client,
+                sink,
                 start_day=compare_start,
                 end_day=compare_end,
                 scope_filter=scope_filter,
@@ -207,7 +208,7 @@ async def _metric_deltas(
             spark = _spark_points(current_series, metric["transform"])
         else:
             current_value = await fetch_metric_value(
-                client,
+                sink,
                 table=metric["table"],
                 column=metric["column"],
                 start_day=start_day,
@@ -217,7 +218,7 @@ async def _metric_deltas(
                 aggregator=metric["aggregator"],
             )
             previous_value = await fetch_metric_value(
-                client,
+                sink,
                 table=metric["table"],
                 column=metric["column"],
                 start_day=compare_start,
@@ -229,7 +230,7 @@ async def _metric_deltas(
             current_value = _safe_float(current_value)
             previous_value = _safe_float(previous_value)
             series = await fetch_metric_series(
-                client,
+                sink,
                 table=metric["table"],
                 column=metric["column"],
                 start_day=start_day,
@@ -281,11 +282,11 @@ async def build_home_response(
 
     start_day, end_day, compare_start, compare_end = time_window(filters)
 
-    async with clickhouse_client(db_url) as client:
-        last_ingested = await fetch_last_ingested_at(client)
-        coverage = await fetch_coverage(client, start_day=start_day, end_day=end_day)
+    async with clickhouse_client(db_url) as sink:
+        last_ingested = await fetch_last_ingested_at(sink)
+        coverage = await fetch_coverage(sink, start_day=start_day, end_day=end_day)
         deltas = await _metric_deltas(
-            client,
+            sink,
             filters,
             start_day,
             end_day,
@@ -304,11 +305,11 @@ async def build_home_response(
         top_delta = max(deltas, key=lambda d: abs(d.delta_pct), default=None)
         if top_delta:
             scope_filter, scope_params = await scope_filter_for_metric(
-                client, metric_scope=_metric_scope(top_delta.metric), filters=filters
+                sink, metric_scope=_metric_scope(top_delta.metric), filters=filters
             )
 
             driver_rows = await fetch_metric_driver_delta(
-                client,
+                sink,
                 table=_metric_table(top_delta.metric),
                 column=_metric_column(top_delta.metric),
                 group_by=_metric_group(top_delta.metric),

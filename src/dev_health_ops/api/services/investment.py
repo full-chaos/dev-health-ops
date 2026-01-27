@@ -4,6 +4,7 @@ import math
 from datetime import datetime, time, timezone
 from typing import Any, Dict, List, Tuple
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter
 from ..models.schemas import (
     EvidenceQualityStats,
@@ -37,14 +38,14 @@ def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]
     return list(dict.fromkeys(themes)), list(dict.fromkeys(subcategories))
 
 
-async def _tables_present(client: Any, tables: List[str]) -> bool:
+async def _tables_present(sink: BaseMetricsSink, tables: List[str]) -> bool:
     if not tables:
         return True
     try:
         from ..queries.client import query_dicts
 
         rows = await query_dicts(
-            client,
+            sink,
             """
             SELECT name
             FROM system.tables
@@ -59,14 +60,16 @@ async def _tables_present(client: Any, tables: List[str]) -> bool:
     return all(table in present for table in tables)
 
 
-async def _columns_present(client: Any, table: str, columns: List[str]) -> bool:
+async def _columns_present(
+    sink: BaseMetricsSink, table: str, columns: List[str]
+) -> bool:
     if not columns:
         return True
     try:
         from ..queries.client import query_dicts
 
         rows = await query_dicts(
-            client,
+            sink,
             """
             SELECT name
             FROM system.columns
@@ -144,34 +147,37 @@ async def build_investment_response(
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
-    async with clickhouse_client(db_url) as client:
-        if not await _tables_present(client, ["work_unit_investments"]):
-            return InvestmentResponse(
-                theme_distribution={}, subcategory_distribution={}, edges=[]
-            )
-        if not await _columns_present(
-            client,
-            "work_unit_investments",
-            [
-                "from_ts",
-                "to_ts",
-                "repo_id",
-                "effort_value",
-                "theme_distribution_json",
-                "subcategory_distribution_json",
-            ],
-        ):
-            return InvestmentResponse(
-                theme_distribution={}, subcategory_distribution={}, edges=[]
-            )
+    async with clickhouse_client(db_url) as sink:
+        # Check tables/columns only if it's ClickHouse.
+        # For others, we assume schema parity as per recent implementation.
+        if sink.backend_type == "clickhouse":
+            if not await _tables_present(sink, ["work_unit_investments"]):
+                return InvestmentResponse(
+                    theme_distribution={}, subcategory_distribution={}, edges=[]
+                )
+            if not await _columns_present(
+                sink,
+                "work_unit_investments",
+                [
+                    "from_ts",
+                    "to_ts",
+                    "repo_id",
+                    "effort_value",
+                    "theme_distribution_json",
+                    "subcategory_distribution_json",
+                ],
+            ):
+                return InvestmentResponse(
+                    theme_distribution={}, subcategory_distribution={}, edges=[]
+                )
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
-            repo_ids = await resolve_repo_filter_ids(client, filters)
+            repo_ids = await resolve_repo_filter_ids(sink, filters)
             scope_filter, scope_params = build_scope_filter_multi(
                 "repo", repo_ids, repo_column="repo_id"
             )
         rows = await fetch_investment_breakdown(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             scope_filter=scope_filter,
@@ -182,7 +188,7 @@ async def build_investment_response(
 
         # Fetch evidence quality stats
         quality_row = await fetch_investment_quality_stats(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             scope_filter=scope_filter,
@@ -226,29 +232,30 @@ async def build_investment_sunburst(
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
-    async with clickhouse_client(db_url) as client:
-        if not await _tables_present(client, ["work_unit_investments"]):
-            return []
-        if not await _columns_present(
-            client,
-            "work_unit_investments",
-            [
-                "from_ts",
-                "to_ts",
-                "repo_id",
-                "effort_value",
-                "subcategory_distribution_json",
-            ],
-        ):
-            return []
+    async with clickhouse_client(db_url) as sink:
+        if sink.backend_type == "clickhouse":
+            if not await _tables_present(sink, ["work_unit_investments"]):
+                return []
+            if not await _columns_present(
+                sink,
+                "work_unit_investments",
+                [
+                    "from_ts",
+                    "to_ts",
+                    "repo_id",
+                    "effort_value",
+                    "subcategory_distribution_json",
+                ],
+            ):
+                return []
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
-            repo_ids = await resolve_repo_filter_ids(client, filters)
+            repo_ids = await resolve_repo_filter_ids(sink, filters)
             scope_filter, scope_params = build_scope_filter_multi(
                 "repo", repo_ids, repo_column="repo_id"
             )
         rows = await fetch_investment_sunburst(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             scope_filter=scope_filter,

@@ -257,33 +257,38 @@ async def build_investment_flow_response(
             theme_filters = [normalized_drill]
         top_n_repos = max(1, int(top_n_repos or 1))
 
-        async with clickhouse_client(db_url) as client:
-            if not await _tables_present(client, ["work_unit_investments"]):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+        async with clickhouse_client(db_url) as sink:
+            if sink.backend_type == "clickhouse":
+                if not await _tables_present(sink, ["work_unit_investments"]):
+                    return SankeyResponse(
+                        mode="investment", nodes=[], links=[], unit=None
+                    )
 
-            required_cols = [
-                "from_ts",
-                "to_ts",
-                "repo_id",
-                "effort_value",
-                "subcategory_distribution_json",
-                "structural_evidence_json",
-            ]
-            if not await _columns_present(
-                client, "work_unit_investments", required_cols
-            ):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+                required_cols = [
+                    "from_ts",
+                    "to_ts",
+                    "repo_id",
+                    "effort_value",
+                    "subcategory_distribution_json",
+                    "structural_evidence_json",
+                ]
+                if not await _columns_present(
+                    sink, "work_unit_investments", required_cols
+                ):
+                    return SankeyResponse(
+                        mode="investment", nodes=[], links=[], unit=None
+                    )
 
             scope_filter, scope_params = "", {}
             if filters.scope.level in {"team", "repo"}:
-                repo_ids = await resolve_repo_filter_ids(client, filters)
+                repo_ids = await resolve_repo_filter_ids(sink, filters)
                 scope_filter, scope_params = build_scope_filter_multi(
                     "repo", repo_ids, repo_column="repo_id"
                 )
 
             if flow_mode == "team_category_repo":
                 rows = await fetch_investment_team_category_repo_edges(
-                    client,
+                    sink,
                     start_ts=start_ts,
                     end_ts=end_ts,
                     scope_filter=scope_filter,
@@ -301,7 +306,7 @@ async def build_investment_flow_response(
                 description = "Team burden flow with category rollups."
             elif flow_mode == "team_category_subcategory_repo":
                 rows = await fetch_investment_team_subcategory_repo_edges(
-                    client,
+                    sink,
                     start_ts=start_ts,
                     end_ts=end_ts,
                     scope_filter=scope_filter,
@@ -317,7 +322,7 @@ async def build_investment_flow_response(
                 description = "Full 4-level team burden flow."
             else:
                 rows = await fetch_investment_team_subcategory_repo_edges(
-                    client,
+                    sink,
                     start_ts=start_ts,
                     end_ts=end_ts,
                     scope_filter=scope_filter,
@@ -335,7 +340,7 @@ async def build_investment_flow_response(
                 description = f"Showing subcategories within {_format_theme_label(normalized_drill or '')}."
 
             unassigned_counts = await fetch_investment_unassigned_counts(
-                client,
+                sink,
                 start_ts=start_ts,
                 end_ts=end_ts,
                 scope_filter=scope_filter,
@@ -391,31 +396,32 @@ async def build_investment_flow_response(
             top_n_repos=top_n_repos,
         )
 
-    async with clickhouse_client(db_url) as client:
-        if not await _tables_present(client, ["work_unit_investments"]):
-            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+    async with clickhouse_client(db_url) as sink:
+        if sink.backend_type == "clickhouse":
+            if not await _tables_present(sink, ["work_unit_investments"]):
+                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
-        # Check for required columns
-        required_cols = [
-            "from_ts",
-            "to_ts",
-            "repo_id",
-            "effort_value",
-            "subcategory_distribution_json",
-        ]
-        if not await _columns_present(client, "work_unit_investments", required_cols):
-            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+            # Check for required columns
+            required_cols = [
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "effort_value",
+                "subcategory_distribution_json",
+            ]
+            if not await _columns_present(sink, "work_unit_investments", required_cols):
+                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
-            repo_ids = await resolve_repo_filter_ids(client, filters)
+            repo_ids = await resolve_repo_filter_ids(sink, filters)
             scope_filter, scope_params = build_scope_filter_multi(
                 "repo", repo_ids, repo_column="repo_id"
             )
 
         # 1. Fetch both sets of edges
         repo_rows = await fetch_investment_subcategory_edges(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             scope_filter=scope_filter,
@@ -425,7 +431,7 @@ async def build_investment_flow_response(
         )
 
         team_rows = await fetch_investment_team_edges(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             scope_filter=scope_filter,
@@ -528,30 +534,31 @@ async def build_investment_repo_team_flow_response(
     if theme:
         theme_filters = [theme]
 
-    async with clickhouse_client(db_url) as client:
-        if not await _tables_present(client, ["work_unit_investments"]):
-            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+    async with clickhouse_client(db_url) as sink:
+        if sink.backend_type == "clickhouse":
+            if not await _tables_present(sink, ["work_unit_investments"]):
+                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
-        required_cols = [
-            "from_ts",
-            "to_ts",
-            "repo_id",
-            "effort_value",
-            "subcategory_distribution_json",
-            "structural_evidence_json",
-        ]
-        if not await _columns_present(client, "work_unit_investments", required_cols):
-            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+            required_cols = [
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "effort_value",
+                "subcategory_distribution_json",
+                "structural_evidence_json",
+            ]
+            if not await _columns_present(sink, "work_unit_investments", required_cols):
+                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
-            repo_ids = await resolve_repo_filter_ids(client, filters)
+            repo_ids = await resolve_repo_filter_ids(sink, filters)
             scope_filter, scope_params = build_scope_filter_multi(
                 "repo", repo_ids, repo_column="repo_id"
             )
 
         rows = await fetch_investment_repo_team_edges(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             scope_filter=scope_filter,

@@ -387,7 +387,7 @@ async def resolve_analytics(
                             )
                             GROUP BY work_unit_id
                         ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
-                        LEFT JOIN repos AS r ON r.id = repo_id
+                        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
                         """
 
                 assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"

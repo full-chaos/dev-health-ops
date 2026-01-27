@@ -96,11 +96,6 @@ class WorkGraphBuilder:
         self.config = config
         # Canonical pattern: a single sink owns the backend client + migrations.
         self.sink = create_sink(config.dsn)
-        if getattr(self.sink, "backend_type", None) != "clickhouse":
-            raise ValueError("WorkGraphBuilder currently requires a ClickHouse sink")
-        self.client = getattr(self.sink, "client", None)
-        if self.client is None:
-            raise ValueError("ClickHouse sink did not expose a client")
         self._now = datetime.now(timezone.utc)
         # NOTE: schema creation is handled by sink.ensure_schema()
         self.sink.ensure_schema()
@@ -233,11 +228,10 @@ class WorkGraphBuilder:
             relationship_type,
             relationship_type_raw,
             last_synced
-        FROM work_item_dependencies FINAL
+        FROM work_item_dependencies
         """
 
-        result = self.client.query(query)
-        rows = result.result_rows or []
+        rows = self.sink.query_dicts(query, {})
         logger.info("Found %d rows in work_item_dependencies", len(rows))
 
         if not rows:
@@ -246,7 +240,14 @@ class WorkGraphBuilder:
 
         edges = []
         for row in rows:
-            source_id, target_id, rel_type, rel_type_raw, last_synced = row
+            source_id = row.get("source_work_item_id")
+            target_id = row.get("target_work_item_id")
+            rel_type = row.get("relationship_type")
+            rel_type_raw = row.get("relationship_type_raw")
+            last_synced = row.get("last_synced")
+
+            if not source_id or not target_id:
+                continue
 
             # Map relationship type to EdgeType
             edge_type = DEPENDENCY_TYPE_MAP.get(
@@ -264,6 +265,12 @@ class WorkGraphBuilder:
 
             # Ensure timezone
             event_ts = last_synced
+            if isinstance(event_ts, str):
+                try:
+                    event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
+                except ValueError:
+                    event_ts = self._now
+
             if event_ts and event_ts.tzinfo is None:
                 event_ts = event_ts.replace(tzinfo=timezone.utc)
             if not event_ts:
@@ -305,23 +312,24 @@ class WorkGraphBuilder:
             number,
             title,
             created_at
-        FROM git_pull_requests FINAL
+        FROM git_pull_requests
         """
+        where_clauses = []
         if self.config.from_date:
-            pr_query += f" WHERE created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+            where_clauses.append(
+                f"created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+            )
         if self.config.to_date:
-            if "WHERE" in pr_query:
-                pr_query += f" AND created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
-            else:
-                pr_query += f" WHERE created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            where_clauses.append(
+                f"created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            )
         if self.config.repo_id:
-            if "WHERE" in pr_query:
-                pr_query += f" AND repo_id = '{self.config.repo_id}'"
-            else:
-                pr_query += f" WHERE repo_id = '{self.config.repo_id}'"
+            where_clauses.append(f"repo_id = '{self.config.repo_id}'")
 
-        pr_result = self.client.query(pr_query)
-        pr_rows = pr_result.result_rows or []
+        if where_clauses:
+            pr_query += " WHERE " + " AND ".join(where_clauses)
+
+        pr_rows = self.sink.query_dicts(pr_query, {})
         logger.info("Found %d PRs to process", len(pr_rows))
 
         if not pr_rows:
@@ -336,10 +344,9 @@ class WorkGraphBuilder:
             provider,
             project_key,
             project_id
-        FROM work_items FINAL
+        FROM work_items
         """
-        wi_result = self.client.query(wi_query)
-        wi_rows = wi_result.result_rows or []
+        wi_rows = self.sink.query_dicts(wi_query, {})
         logger.info("Found %d work items for lookup", len(wi_rows))
 
         # Build work item lookups
@@ -350,22 +357,24 @@ class WorkGraphBuilder:
         gl_issue_lookup: Dict[Tuple[str, str], str] = {}
 
         for wi_row in wi_rows:
-            repo_id, work_item_id, provider, project_key, project_id = wi_row
+            repo_id = wi_row.get("repo_id")
+            work_item_id = wi_row.get("work_item_id")
+            provider = wi_row.get("provider")
 
             if provider == "jira" and work_item_id:
                 # Extract key from work_item_id (format: "jira:ABC-123")
-                if work_item_id.startswith("jira:"):
-                    jira_key = work_item_id[5:]  # Remove "jira:" prefix
-                    jira_key_lookup[jira_key.upper()] = work_item_id
+                if str(work_item_id).startswith("jira:"):
+                    jira_key = str(work_item_id)[5:]  # Remove "jira:" prefix
+                    jira_key_lookup[jira_key.upper()] = str(work_item_id)
             elif provider == "github" and repo_id and work_item_id:
                 # Extract issue number from work_item_id (format: "gh:owner/repo#123")
-                if "#" in work_item_id:
-                    issue_num = work_item_id.split("#")[-1]
-                    gh_issue_lookup[(str(repo_id), issue_num)] = work_item_id
+                if "#" in str(work_item_id):
+                    issue_num = str(work_item_id).split("#")[-1]
+                    gh_issue_lookup[(str(repo_id), issue_num)] = str(work_item_id)
             elif provider == "gitlab" and repo_id and work_item_id:
-                if "#" in work_item_id:
-                    issue_num = work_item_id.split("#")[-1]
-                    gl_issue_lookup[(str(repo_id), issue_num)] = work_item_id
+                if "#" in str(work_item_id):
+                    issue_num = str(work_item_id).split("#")[-1]
+                    gl_issue_lookup[(str(repo_id), issue_num)] = str(work_item_id)
 
         logger.info(
             "Built lookups: jira=%d, github=%d, gitlab=%d",
@@ -374,16 +383,13 @@ class WorkGraphBuilder:
             len(gl_issue_lookup),
         )
 
-        # Debug: Log sample lookup keys
-        if gh_issue_lookup:
-            sample_gh_keys = list(gh_issue_lookup.keys())[:3]
-            logger.debug("Sample GitHub lookup keys: %s", sample_gh_keys)
-
         # Collect unique repo_ids from PRs for comparison
-        pr_repo_ids = set(str(row[0]) for row in pr_rows if row[0])
-        wi_repo_ids = set(
-            str(row[0]) for row in wi_rows if row[0] and row[2] == "github"
-        )
+        pr_repo_ids = {str(row.get("repo_id")) for row in pr_rows if row.get("repo_id")}
+        wi_repo_ids = {
+            str(row.get("repo_id"))
+            for row in wi_rows
+            if row.get("repo_id") and row.get("provider") == "github"
+        }
         logger.debug("PR repo_ids: %s", pr_repo_ids)
         logger.debug("Work item repo_ids (GitHub): %s", wi_repo_ids)
         logger.debug("Repo ID overlap: %s", pr_repo_ids & wi_repo_ids)
@@ -397,38 +403,42 @@ class WorkGraphBuilder:
         gl_refs_found = 0
 
         for pr_row in pr_rows:
-            repo_id, pr_number, title, created_at = pr_row
+            repo_id = pr_row.get("repo_id")
+            pr_number = pr_row.get("number")
+            title = pr_row.get("title")
+            created_at = pr_row.get("created_at")
             repo_id_str = str(repo_id)
 
             if not title:
                 continue
+            if pr_number is None:
+                continue
+            pr_number_int = int(pr_number)
 
             # Ensure timezone
             event_ts = created_at
+            if isinstance(event_ts, str):
+                try:
+                    event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
+                except ValueError:
+                    event_ts = self._now
             if event_ts and event_ts.tzinfo is None:
                 event_ts = event_ts.replace(tzinfo=timezone.utc)
             if not event_ts:
                 event_ts = self._now
 
             # Extract Jira keys
-            jira_refs = extract_jira_keys(title)
+            jira_refs = extract_jira_keys(str(title))
             jira_refs_found += len(jira_refs)
             for ref in jira_refs:
                 work_item_id = jira_key_lookup.get(ref.issue_key.upper())
-                if not work_item_id:
-                    logger.debug(
-                        "No match for Jira ref %s in lookup (PR #%s: %s)",
-                        ref.issue_key,
-                        pr_number,
-                        title[:50],
-                    )
                 if work_item_id:
                     edge_type = (
                         EdgeType.IMPLEMENTS
                         if ref.ref_type == RefType.CLOSES
                         else EdgeType.REFERENCES
                     )
-                    pr_id = generate_pr_id(uuid.UUID(repo_id_str), pr_number)
+                    pr_id = generate_pr_id(uuid.UUID(repo_id_str), pr_number_int)
                     edge_id = generate_edge_id(
                         NodeType.PR,
                         pr_id,
@@ -460,36 +470,27 @@ class WorkGraphBuilder:
                         WorkGraphIssuePR(
                             repo_id=uuid.UUID(repo_id_str),
                             work_item_id=work_item_id,
-                            pr_number=pr_number,
+                            pr_number=pr_number_int,
                             confidence=0.9,
                             provenance=Provenance.EXPLICIT_TEXT,
                             evidence=ref.raw_match,
                             last_synced=self._now,
                         )
                     )
-                    explicit_links.add((work_item_id, pr_number))
+                    explicit_links.add((work_item_id, pr_number_int))
 
             # Extract GitHub issue refs
-            gh_refs = extract_github_issue_refs(title)
+            gh_refs = extract_github_issue_refs(str(title))
             gh_refs_found += len(gh_refs)
             for ref in gh_refs:
                 work_item_id = gh_issue_lookup.get((repo_id_str, ref.issue_key))
-                if not work_item_id:
-                    logger.debug(
-                        "No match for GitHub ref #%s in repo %s (PR #%s: %s) - lookup key: %s",
-                        ref.issue_key,
-                        repo_id_str,
-                        pr_number,
-                        title[:50],
-                        (repo_id_str, ref.issue_key),
-                    )
                 if work_item_id:
                     edge_type = (
                         EdgeType.IMPLEMENTS
                         if ref.ref_type == RefType.CLOSES
                         else EdgeType.REFERENCES
                     )
-                    pr_id = generate_pr_id(uuid.UUID(repo_id_str), pr_number)
+                    pr_id = generate_pr_id(uuid.UUID(repo_id_str), pr_number_int)
                     edge_id = generate_edge_id(
                         NodeType.PR,
                         pr_id,
@@ -521,17 +522,17 @@ class WorkGraphBuilder:
                         WorkGraphIssuePR(
                             repo_id=uuid.UUID(repo_id_str),
                             work_item_id=work_item_id,
-                            pr_number=pr_number,
+                            pr_number=pr_number_int,
                             confidence=0.9,
                             provenance=Provenance.EXPLICIT_TEXT,
                             evidence=ref.raw_match,
                             last_synced=self._now,
                         )
                     )
-                    explicit_links.add((work_item_id, pr_number))
+                    explicit_links.add((work_item_id, pr_number_int))
 
             # Extract GitLab issue refs
-            gl_refs = extract_gitlab_issue_refs(title)
+            gl_refs = extract_gitlab_issue_refs(str(title))
             gl_refs_found += len(gl_refs)
             for ref in gl_refs:
                 work_item_id = gl_issue_lookup.get((repo_id_str, ref.issue_key))
@@ -541,7 +542,7 @@ class WorkGraphBuilder:
                         if ref.ref_type == RefType.CLOSES
                         else EdgeType.REFERENCES
                     )
-                    pr_id = generate_pr_id(uuid.UUID(repo_id_str), pr_number)
+                    pr_id = generate_pr_id(uuid.UUID(repo_id_str), pr_number_int)
                     edge_id = generate_edge_id(
                         NodeType.PR,
                         pr_id,
@@ -573,14 +574,14 @@ class WorkGraphBuilder:
                         WorkGraphIssuePR(
                             repo_id=uuid.UUID(repo_id_str),
                             work_item_id=work_item_id,
-                            pr_number=pr_number,
+                            pr_number=pr_number_int,
                             confidence=0.9,
                             provenance=Provenance.EXPLICIT_TEXT,
                             evidence=ref.raw_match,
                             last_synced=self._now,
                         )
                     )
-                    explicit_links.add((work_item_id, pr_number))
+                    explicit_links.add((work_item_id, pr_number_int))
 
         # Write edges
         edge_count = self._write_edges(edges)
@@ -623,7 +624,7 @@ class WorkGraphBuilder:
             repo_id,
             work_item_id,
             updated_at
-        FROM work_items FINAL
+        FROM work_items
         WHERE repo_id IS NOT NULL
         """
         if self.config.from_date:
@@ -632,8 +633,8 @@ class WorkGraphBuilder:
             wi_query += f" AND updated_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
         if self.config.repo_id:
             wi_query += f" AND repo_id = '{self.config.repo_id}'"
-        wi_result = self.client.query(wi_query)
-        wi_rows = wi_result.result_rows or []
+
+        wi_rows = self.sink.query_dicts(wi_query, {})
 
         if not wi_rows:
             return 0
@@ -644,33 +645,44 @@ class WorkGraphBuilder:
             repo_id,
             number,
             created_at
-        FROM git_pull_requests FINAL
+        FROM git_pull_requests
         """
+        where_clauses = []
         if self.config.from_date:
-            pr_query += f" WHERE created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+            where_clauses.append(
+                f"created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+            )
         if self.config.to_date:
-            if "WHERE" in pr_query:
-                pr_query += f" AND created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
-            else:
-                pr_query += f" WHERE created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            where_clauses.append(
+                f"created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            )
         if self.config.repo_id:
-            if "WHERE" in pr_query:
-                pr_query += f" AND repo_id = '{self.config.repo_id}'"
-            else:
-                pr_query += f" WHERE repo_id = '{self.config.repo_id}'"
-        pr_result = self.client.query(pr_query)
-        pr_rows = pr_result.result_rows or []
+            where_clauses.append(f"repo_id = '{self.config.repo_id}'")
+
+        if where_clauses:
+            pr_query += " WHERE " + " AND ".join(where_clauses)
+
+        pr_rows = self.sink.query_dicts(pr_query, {})
 
         if not pr_rows:
             return 0
 
         # Group PRs by repo
         prs_by_repo: Dict[str, List[Tuple[int, datetime]]] = {}
-        for repo_id, pr_number, created_at in pr_rows:
+        for row in pr_rows:
+            repo_id = row.get("repo_id")
+            pr_number = row.get("number")
+            created_at = row.get("created_at")
+
+            if repo_id is None or pr_number is None or created_at is None:
+                continue
+
             repo_key = str(repo_id)
-            if repo_key not in prs_by_repo:
-                prs_by_repo[repo_key] = []
-            prs_by_repo[repo_key].append((pr_number, created_at))
+            # Ensure created_at is datetime
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+
+            prs_by_repo.setdefault(repo_key, []).append((int(pr_number), created_at))
 
         window = timedelta(days=self.config.heuristic_days_window)
         edges: List[WorkGraphEdge] = []
@@ -679,14 +691,19 @@ class WorkGraphBuilder:
         linked_work_items = {work_item_id for work_item_id, _ in explicit_links}
 
         for wi_row in wi_rows:
-            repo_id, work_item_id, updated_at = wi_row
-            repo_key = str(repo_id)
+            repo_id = wi_row.get("repo_id")
+            work_item_id = str(wi_row.get("work_item_id"))
+            updated_at = wi_row.get("updated_at")
 
+            repo_key = str(repo_id)
             if repo_key not in prs_by_repo:
                 continue
 
             if work_item_id in linked_work_items:
                 continue
+
+            if isinstance(updated_at, str):
+                updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
 
             best: Optional[Tuple[int, datetime, float]] = None
             for pr_number, pr_created_at in prs_by_repo[repo_key]:
@@ -774,7 +791,7 @@ class WorkGraphBuilder:
             p.last_synced,
             pr.created_at
         FROM work_graph_issue_pr AS p
-        INNER JOIN git_pull_requests AS pr ON (p.repo_id = pr.repo_id AND p.pr_number = pr.number)
+        INNER JOIN git_pull_requests AS pr ON (toString(p.repo_id) = toString(pr.repo_id) AND p.pr_number = pr.number)
         """
         where_parts: List[str] = []
         if self.config.repo_id:
@@ -790,8 +807,7 @@ class WorkGraphBuilder:
         if where_parts:
             query += " WHERE " + " AND ".join(where_parts)
 
-        result = self.client.query(query)
-        rows = result.result_rows or []
+        rows = self.sink.query_dicts(query, {})
         logger.info("Found %d rows in work_graph_issue_pr", len(rows))
         if not rows:
             return set(), 0
@@ -799,28 +815,28 @@ class WorkGraphBuilder:
         edges: List[WorkGraphEdge] = []
         links: Set[Tuple[str, int]] = set()
         for row in rows:
-            (
-                repo_id,
-                work_item_id,
-                pr_number,
-                confidence,
-                provenance,
-                evidence,
-                _synced,
-                created_at,
-            ) = row
+            repo_id = row.get("repo_id")
+            work_item_id = str(row.get("work_item_id"))
+            pr_number = int(row.get("pr_number") or 0)
+            confidence = float(row.get("confidence") or 1.0)
+            provenance = row.get("provenance")
+            evidence = row.get("evidence")
+            created_at = row.get("created_at")
+
             repo_uuid = uuid.UUID(str(repo_id))
-            pr_id = generate_pr_id(repo_uuid, int(pr_number))
+            pr_id = generate_pr_id(repo_uuid, pr_number)
             edge_id = generate_edge_id(
                 NodeType.PR,
                 pr_id,
                 EdgeType.IMPLEMENTS,
                 NodeType.ISSUE,
-                str(work_item_id),
+                work_item_id,
             )
 
             # Ensure timezone
             event_ts = created_at
+            if isinstance(event_ts, str):
+                event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
             if event_ts and event_ts.tzinfo is None:
                 event_ts = event_ts.replace(tzinfo=timezone.utc)
             if not event_ts:
@@ -832,18 +848,18 @@ class WorkGraphBuilder:
                     source_type=NodeType.PR,
                     source_id=pr_id,
                     target_type=NodeType.ISSUE,
-                    target_id=str(work_item_id),
+                    target_id=work_item_id,
                     edge_type=EdgeType.IMPLEMENTS,
                     repo_id=repo_uuid,
-                    provenance=self._parse_provenance(provenance),
-                    confidence=float(confidence or 1.0),
+                    provenance=self._parse_provenance(str(provenance)),
+                    confidence=confidence,
                     evidence=str(evidence or "issue_pr_fast_path"),
                     discovered_at=self._now,
                     last_synced=self._now,
                     event_ts=event_ts,
                 )
             )
-            links.add((str(work_item_id), int(pr_number)))
+            links.add((work_item_id, pr_number))
 
         count = self._write_edges(edges)
         logger.info("Created %d issue->PR edges from fast-path table", count)
@@ -865,7 +881,7 @@ class WorkGraphBuilder:
             p.last_synced,
             c.author_when
         FROM work_graph_pr_commit AS p
-        INNER JOIN git_commits AS c ON (p.repo_id = c.repo_id AND p.commit_hash = c.hash)
+        INNER JOIN git_commits AS c ON (toString(p.repo_id) = toString(c.repo_id) AND p.commit_hash = c.hash)
         """
         where_parts: List[str] = []
         if self.config.repo_id:
@@ -881,29 +897,24 @@ class WorkGraphBuilder:
         if where_parts:
             query += " WHERE " + " AND ".join(where_parts)
 
-        # Optimize for distributed join if needed, but local join is fine here
-
-        result = self.client.query(query)
-        rows = result.result_rows or []
+        rows = self.sink.query_dicts(query, {})
         logger.info("Found %d rows in work_graph_pr_commit", len(rows))
         if not rows:
             return 0
 
         edges: List[WorkGraphEdge] = []
         for row in rows:
-            (
-                repo_id,
-                pr_number,
-                commit_hash,
-                confidence,
-                provenance,
-                evidence,
-                _synced,
-                author_when,
-            ) = row
+            repo_id = row.get("repo_id")
+            pr_number = int(row.get("pr_number") or 0)
+            commit_hash = str(row.get("commit_hash"))
+            confidence = float(row.get("confidence") or 1.0)
+            provenance = row.get("provenance")
+            evidence = row.get("evidence")
+            author_when = row.get("author_when")
+
             repo_uuid = uuid.UUID(str(repo_id))
-            pr_id = generate_pr_id(repo_uuid, int(pr_number))
-            commit_id = generate_commit_id(repo_uuid, str(commit_hash))
+            pr_id = generate_pr_id(repo_uuid, pr_number)
+            commit_id = generate_commit_id(repo_uuid, commit_hash)
             edge_id = generate_edge_id(
                 NodeType.PR,
                 pr_id,
@@ -914,6 +925,8 @@ class WorkGraphBuilder:
 
             # Ensure timezone
             event_ts = author_when
+            if isinstance(event_ts, str):
+                event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
             if event_ts and event_ts.tzinfo is None:
                 event_ts = event_ts.replace(tzinfo=timezone.utc)
             if not event_ts:
@@ -928,8 +941,8 @@ class WorkGraphBuilder:
                     target_id=commit_id,
                     edge_type=EdgeType.CONTAINS,
                     repo_id=repo_uuid,
-                    provenance=self._parse_provenance(provenance),
-                    confidence=float(confidence or 1.0),
+                    provenance=self._parse_provenance(str(provenance)),
+                    confidence=confidence,
                     evidence=str(evidence or "pr_commit_fast_path"),
                     discovered_at=self._now,
                     last_synced=self._now,
@@ -942,13 +955,15 @@ class WorkGraphBuilder:
         return count
 
     def _count_commit_file_edges(self) -> int:
-        """Count commit->file edges from the view."""
-        query = "SELECT count() FROM work_graph_commit_file"
+        """Count commit->file edges."""
+        # View work_graph_commit_file is specific to ClickHouse.
+        # For others, we count git_commit_stats rows.
+        query = "SELECT count(*) AS total FROM git_commit_stats"
         try:
-            result = self.client.query(query)
-            count = result.result_rows[0][0] if result.result_rows else 0
-            logger.info("Found %d commit->file edges (via view)", count)
-            return count
+            rows = self.sink.query_dicts(query, {})
+            count = rows[0].get("total") if rows else 0
+            logger.info("Found %d commit->file edges", count)
+            return int(count or 0)
         except Exception as e:
             logger.warning("Could not count commit->file edges: %s", e)
             return 0

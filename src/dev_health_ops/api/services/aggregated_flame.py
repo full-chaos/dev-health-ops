@@ -305,10 +305,10 @@ async def build_aggregated_flame_response(
     filters_used: Dict[str, Any] = {}
     approximation = ApproximationInfo()
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         if mode == "cycle_breakdown":
             rows = await fetch_cycle_breakdown(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 team_id=team_id,
@@ -319,7 +319,7 @@ async def build_aggregated_flame_response(
             if not rows:
                 # Approximation fallback: use milestones if state transition data is missing
                 rows = await fetch_cycle_milestones(
-                    client,
+                    sink,
                     start_day=start_day,
                     end_day=end_day,
                     team_id=team_id,
@@ -369,7 +369,7 @@ async def build_aggregated_flame_response(
 
         elif mode == "code_hotspots":
             rows = await fetch_code_hotspots(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 repo_id=repo_id,
@@ -385,7 +385,7 @@ async def build_aggregated_flame_response(
                 repo_ids: List[str] = [
                     str(row.get("repo_id")) for row in rows if row.get("repo_id")
                 ]
-                repo_names = await fetch_repo_names(client, repo_ids=repo_ids)
+                repo_names = await fetch_repo_names(sink, repo_ids=repo_ids)
                 root = _build_code_hotspots_tree(rows, repo_names)
 
             if repo_id:
@@ -406,7 +406,7 @@ async def build_aggregated_flame_response(
 
         else:  # throughput
             rows = await fetch_throughput_by_type(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 team_id=team_id,
@@ -417,7 +417,7 @@ async def build_aggregated_flame_response(
             if not rows:
                 # Fallback to simple throughput if typed data missing
                 rows = await fetch_throughput(
-                    client,
+                    sink,
                     start_day=start_day,
                     end_day=end_day,
                     team_id=team_id,

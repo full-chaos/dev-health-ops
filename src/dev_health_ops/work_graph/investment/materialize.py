@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from dev_health_ops.llm import get_provider
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
@@ -271,14 +272,14 @@ def _resolve_work_unit_label(
 
 
 def _resolve_repo_ids(
-    client: object,
+    sink: BaseMetricsSink,
     repo_ids: Optional[List[str]],
     team_ids: Optional[List[str]],
 ) -> Optional[List[str]]:
     if repo_ids:
         return repo_ids
     if team_ids:
-        return resolve_repo_ids_for_teams(client, team_ids=team_ids)
+        return resolve_repo_ids_for_teams(sink, team_ids=team_ids)
     return None
 
 
@@ -286,19 +287,13 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
     sink = create_sink(config.dsn)
     provider_instance = None
     try:
-        if getattr(sink, "backend_type", None) != "clickhouse":
-            raise ValueError("Investment materialization requires a ClickHouse sink")
-        client = getattr(sink, "client", None)
-        if client is None:
-            raise ValueError("ClickHouse sink did not expose a client")
-
         sink.ensure_schema()
 
         # Initialize LLM provider once (reusing connection pool)
         provider_instance = get_provider(config.llm_provider, model=config.llm_model)
 
-        repo_ids = _resolve_repo_ids(client, config.repo_ids, config.team_ids)
-        edges = fetch_work_graph_edges(client, repo_ids=repo_ids)
+        repo_ids = _resolve_repo_ids(sink, config.repo_ids, config.team_ids)
+        edges = fetch_work_graph_edges(sink, repo_ids=repo_ids)
         components = _build_components(edges)
         if not components:
             logger.info(
@@ -322,13 +317,13 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
             if node_type == "commit"
         }
 
-        work_items = fetch_work_items(client, work_item_ids=issue_ids)
-        active_hours = fetch_work_item_active_hours(client, work_item_ids=issue_ids)
+        work_items = fetch_work_items(sink, work_item_ids=issue_ids)
+        active_hours = fetch_work_item_active_hours(sink, work_item_ids=issue_ids)
         repo_prs = _group_prs_by_repo(pr_ids)
-        prs = fetch_pull_requests(client, repo_numbers=repo_prs)
+        prs = fetch_pull_requests(sink, repo_numbers=repo_prs)
         repo_commits = _group_commits_by_repo(commit_ids)
-        commits = fetch_commits(client, repo_commits=repo_commits)
-        commit_churn = fetch_commit_churn(client, repo_commits=repo_commits)
+        commits = fetch_commits(sink, repo_commits=repo_commits)
+        commit_churn = fetch_commit_churn(sink, repo_commits=repo_commits)
 
         work_item_map = {str(item.get("work_item_id")): item for item in work_items}
         pr_map = _map_prs(prs)
@@ -343,8 +338,8 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         epic_ids = {
             str(item.get("epic_id") or "") for item in work_items if item.get("epic_id")
         }
-        parent_titles = fetch_parent_titles(client, work_item_ids=parent_ids)
-        epic_titles = fetch_parent_titles(client, work_item_ids=epic_ids)
+        parent_titles = fetch_parent_titles(sink, work_item_ids=parent_ids)
+        epic_titles = fetch_parent_titles(sink, work_item_ids=epic_ids)
 
         records: List[WorkUnitInvestmentRecord] = []
         quote_records: List[WorkUnitInvestmentEvidenceQuoteRecord] = []
@@ -352,7 +347,14 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         computed_at = datetime.now(timezone.utc)
         model_version = config.llm_model or config.llm_provider
 
-        for nodes, component_edges in components:
+        logger.info(
+            "Materializing investments for %d components (run_id=%s)",
+            len(components),
+            run_id,
+        )
+        for idx, (nodes, component_edges) in enumerate(components):
+            if idx % 10 == 0:
+                logger.info("Processing component %d/%d", idx, len(components))
             unit_nodes = list(dict.fromkeys(nodes))
             issue_node_ids = [
                 node_id for node_type, node_id in unit_nodes if node_type == "issue"
@@ -388,12 +390,14 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
             elif bundle.text_source_count == 0:
                 outcome = fallback_outcome("no_text_sources")
             else:
+                logger.info("Calling categorize_text_bundle for unit %s", unit_id)
                 outcome = await categorize_text_bundle(
                     bundle,
                     llm_provider=config.llm_provider,
                     llm_model=config.llm_model,
                     provider=provider_instance,
                 )
+                logger.info("categorize_text_bundle returned status=%s", outcome.status)
 
             theme_distribution = rollup_subcategories_to_themes(outcome.subcategories)
             evidence_quality_value = compute_evidence_quality(
@@ -401,6 +405,42 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 nodes_count=len(unit_nodes),
                 edges=component_edges,
             )
+            if outcome.status == "invalid_llm_output":
+                evidence_quality_value = min(float(evidence_quality_value), 0.3)
+
+            record = WorkUnitInvestmentRecord(
+                work_unit_id=unit_id,
+                work_unit_type="component",
+                work_unit_name=None,
+                from_ts=bounds.start,
+                to_ts=bounds.end,
+                repo_id=None,
+                provider=None,
+                effort_metric="active_hours",
+                effort_value=float(
+                    sum(active_hours.get(iid, 0.0) for iid in issue_node_ids)
+                ),
+                theme_distribution_json=theme_distribution,
+                subcategory_distribution_json=outcome.subcategories,
+                structural_evidence_json=json.dumps(
+                    {
+                        "issues": issue_node_ids,
+                        "prs": pr_node_ids,
+                        "commits": commit_node_ids,
+                    }
+                ),
+                evidence_quality=float(evidence_quality_value),
+                evidence_quality_band=evidence_quality_band(
+                    float(evidence_quality_value)
+                ),
+                categorization_status=outcome.status,
+                categorization_errors_json=json.dumps(outcome.errors),
+                categorization_model_version=model_version,
+                categorization_input_hash=bundle.input_hash,
+                categorization_run_id=run_id,
+                computed_at=computed_at,
+            )
+
             if outcome.status == "invalid_llm_output":
                 evidence_quality_value = min(evidence_quality_value, 0.3)
             evidence_band = evidence_quality_band(evidence_quality_value)
@@ -480,10 +520,12 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                         )
                     )
 
+        logger.info("Finished component loop, writing %d records to sink", len(records))
         if records:
             sink.write_work_unit_investments(records)
         if quote_records:
             sink.write_work_unit_investment_quotes(quote_records)
+        logger.info("Sink write complete")
 
         return {
             "components": len(components),

@@ -148,10 +148,10 @@ async def build_work_unit_investments(
     repo_scopes: Dict[str, str] = {}
     team_assignments: Dict[str, Dict[str, str]] = {}
 
-    async with clickhouse_client(db_url) as client:
-        repo_ids = await resolve_repo_filter_ids(client, filters)
+    async with clickhouse_client(db_url) as sink:
+        repo_ids = await resolve_repo_filter_ids(sink, filters)
         rows = await fetch_work_unit_investments(
-            client,
+            sink,
             start_ts=start_ts,
             end_ts=end_ts,
             repo_ids=repo_ids or None,
@@ -188,19 +188,19 @@ async def build_work_unit_investments(
                 if row.get("work_unit_id") and row.get("categorization_run_id")
             ]
             quote_rows = await fetch_work_unit_investment_quotes(
-                client, unit_runs=unit_runs
+                sink, unit_runs=unit_runs
             )
 
         repo_id_values = [
             str(row.get("repo_id") or "") for row in rows if row.get("repo_id")
         ]
-        repo_scopes = await fetch_repo_scopes(client, repo_ids=repo_id_values)
+        repo_scopes = await fetch_repo_scopes(sink, repo_ids=repo_id_values)
 
         issue_ids: List[str] = []
         for row in rows:
             issue_ids.extend(_extract_issue_ids(row.get("structural_evidence_json")))
         team_assignments = await fetch_work_item_team_assignments(
-            client, work_item_ids=issue_ids
+            sink, work_item_ids=issue_ids
         )
 
     quotes_by_unit: Dict[str, List[Dict[str, object]]] = {}

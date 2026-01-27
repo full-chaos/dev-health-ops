@@ -4,10 +4,11 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Sequence
 
 from .client import query_dicts
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_review_wait_density(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -28,11 +29,11 @@ async def fetch_review_wait_density(
     """
     params = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_review_wait_evidence(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -67,11 +68,11 @@ async def fetch_review_wait_evidence(
         "limit": limit,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_repo_touchpoints(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -84,7 +85,7 @@ async def fetch_repo_touchpoints(
             repos.repo AS repo,
             count() AS total
         FROM git_commits
-        INNER JOIN repos ON repos.id = git_commits.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
         {scope_filter}
@@ -94,7 +95,7 @@ async def fetch_repo_touchpoints(
     """
     params = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params.update(scope_params)
-    top_rows = await query_dicts(client, top_query, params)
+    top_rows = await query_dicts(sink, top_query, params)
     repos = [str(row.get("repo")) for row in top_rows if row.get("repo")]
     if not repos:
         return []
@@ -105,7 +106,7 @@ async def fetch_repo_touchpoints(
             repos.repo AS repo,
             count() AS value
         FROM git_commits
-        INNER JOIN repos ON repos.id = git_commits.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
           AND repos.repo IN %(repos)s
@@ -119,11 +120,11 @@ async def fetch_repo_touchpoints(
         "repos": repos,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_hotspot_risk(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
@@ -136,7 +137,7 @@ async def fetch_hotspot_risk(
             concat(repos.repo, ':', path) AS file_key,
             sum(hotspot_score) AS total
         FROM file_metrics_daily
-        INNER JOIN repos ON repos.id = file_metrics_daily.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
         {scope_filter}
@@ -146,7 +147,7 @@ async def fetch_hotspot_risk(
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}
     params.update(scope_params)
-    top_rows = await query_dicts(client, top_query, params)
+    top_rows = await query_dicts(sink, top_query, params)
     files = [str(row.get("file_key")) for row in top_rows if row.get("file_key")]
     if not files:
         return []
@@ -157,7 +158,7 @@ async def fetch_hotspot_risk(
             concat(repos.repo, ':', path) AS file_key,
             sum(hotspot_score) AS value
         FROM file_metrics_daily
-        INNER JOIN repos ON repos.id = file_metrics_daily.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
           AND concat(repos.repo, ':', path) IN %(files)s
@@ -171,11 +172,11 @@ async def fetch_hotspot_risk(
         "files": files,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_hotspot_evidence(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     week_start: date,
     week_end: date,
@@ -194,7 +195,7 @@ async def fetch_hotspot_evidence(
             commits_count,
             hotspot_score
         FROM file_metrics_daily
-        INNER JOIN repos ON repos.id = file_metrics_daily.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(week_start)s
           AND day < %(week_end)s
           AND concat(repos.repo, ':', path) = %(file_key)s
@@ -209,11 +210,11 @@ async def fetch_hotspot_evidence(
         "limit": limit,
     }
     params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_individual_active_hours(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -233,11 +234,11 @@ async def fetch_individual_active_hours(
         GROUP BY weekday, hour
     """
     params = {"start_ts": start_ts, "end_ts": end_ts, "identities": list(identities)}
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)
 
 
 async def fetch_individual_active_evidence(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_ts: datetime,
     end_ts: datetime,
@@ -257,7 +258,7 @@ async def fetch_individual_active_evidence(
             git_commits.author_email AS author_email,
             git_commits.author_when AS author_when
         FROM git_commits
-        INNER JOIN repos ON repos.id = git_commits.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
           AND toDayOfWeek(author_when) = %(weekday)s
@@ -274,4 +275,4 @@ async def fetch_individual_active_evidence(
         "identities": list(identities),
         "limit": limit,
     }
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)

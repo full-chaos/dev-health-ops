@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any, Dict, List
 
 from .client import query_dicts
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 def _bucket_expr(bucket: str) -> str:
@@ -13,7 +14,7 @@ def _bucket_expr(bucket: str) -> str:
 
 
 async def fetch_quadrant_metric(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     table: str,
     value_expr: str,
@@ -48,4 +49,4 @@ async def fetch_quadrant_metric(
     params: Dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     if scope_params:
         params.update(scope_params)
-    return await query_dicts(client, query, params)
+    return await query_dicts(sink, query, params)

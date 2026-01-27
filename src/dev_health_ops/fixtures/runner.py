@@ -299,7 +299,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             provider="auto",
         )
 
-    if ns.with_work_graph and db_type == "clickhouse":
+    if ns.with_work_graph:
         from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
 
         config = BuildConfig(

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 import logging
 import os
-from typing import List, Literal, cast
+from typing import Any, List, Literal, cast
 from urllib.parse import urlparse
 
 
@@ -87,7 +87,7 @@ HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
 
 
-def _sanitize_for_log(value: str) -> str:
+def _sanitize_for_log(value: Any) -> str:
     """
     Remove characters that could be used to forge or split log entries.
 
@@ -191,8 +191,8 @@ async def _check_database_service(dsn: str) -> tuple[str, str]:
 
     if backend == SinkBackend.CLICKHOUSE:
         try:
-            async with clickhouse_client(dsn) as client:
-                rows = await query_dicts(client, "SELECT 1 AS ok", {})
+            async with clickhouse_client(dsn) as sink:
+                rows = await query_dicts(sink, "SELECT 1 AS ok", {})
             return backend.value, "ok" if rows else "down"
         except Exception:
             return backend.value, "down"
@@ -356,10 +356,10 @@ async def meta() -> MetaResponse | JSONResponse:
         version = "unknown"
         coverage: dict = {}
         if backend == "clickhouse":
-            async with clickhouse_client(db_url) as ch:
+            async with clickhouse_client(db_url) as sink:
                 try:
-                    result = ch.command("SELECT version()")
-                    version = str(result) if result else "unknown"
+                    result = sink.query_dicts("SELECT version() AS version", {})
+                    version = str(result[0]["version"]) if result else "unknown"
                 except Exception:
                     # Silently ignore version query failures - not critical for meta endpoint
                     pass
@@ -773,12 +773,12 @@ async def quadrant(
 async def drilldown_prs_post(payload: DrilldownRequest) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
-        async with clickhouse_client(_db_url()) as client:
+        async with clickhouse_client(_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                client, metric_scope="repo", filters=payload.filters
+                sink, metric_scope="repo", filters=payload.filters
             )
             items = await fetch_pull_requests(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 scope_filter=scope_filter,
@@ -804,12 +804,12 @@ async def drilldown_prs(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         start_day, end_day, _, _ = time_window(filters)
-        async with clickhouse_client(_db_url()) as client:
+        async with clickhouse_client(_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                client, metric_scope="repo", filters=filters
+                sink, metric_scope="repo", filters=filters
             )
             items = await fetch_pull_requests(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 scope_filter=scope_filter,
@@ -826,12 +826,12 @@ async def drilldown_prs(
 async def drilldown_issues_post(payload: DrilldownRequest) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
-        async with clickhouse_client(_db_url()) as client:
+        async with clickhouse_client(_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                client, metric_scope="team", filters=payload.filters
+                sink, metric_scope="team", filters=payload.filters
             )
             items = await fetch_issues(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 scope_filter=scope_filter,
@@ -857,12 +857,12 @@ async def drilldown_issues(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         start_day, end_day, _, _ = time_window(filters)
-        async with clickhouse_client(_db_url()) as client:
+        async with clickhouse_client(_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                client, metric_scope="team", filters=filters
+                sink, metric_scope="team", filters=filters
             )
             items = await fetch_issues(
-                client,
+                sink,
                 start_day=start_day,
                 end_day=end_day,
                 scope_filter=scope_filter,
@@ -1207,8 +1207,8 @@ async def sankey_post(payload: SankeyRequest) -> SankeyResponse:
 @app.get("/api/v1/filters/options", response_model=FilterOptionsResponse)
 async def filter_options() -> FilterOptionsResponse:
     try:
-        async with clickhouse_client(_db_url()) as client:
-            options = await fetch_filter_options(client)
+        async with clickhouse_client(_db_url()) as sink:
+            options = await fetch_filter_options(sink)
         return FilterOptionsResponse(**options)
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc

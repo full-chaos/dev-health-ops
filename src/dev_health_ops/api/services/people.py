@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.schemas import (
     CollaborationItem,
     CollaborationSection,
@@ -289,12 +290,12 @@ def _reverse_aliases(aliases: Dict[str, List[str]]) -> Dict[str, str]:
 
 
 async def _resolve_identity_context(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     person_id: str,
     aliases: Dict[str, List[str]],
 ) -> Tuple[str, List[str]]:
-    identity = await resolve_person_identity(client, person_id=person_id)
+    identity = await resolve_person_identity(sink, person_id=person_id)
     reverse = _reverse_aliases(aliases)
 
     if identity:
@@ -425,9 +426,9 @@ async def search_people_response(
     reverse_aliases = _reverse_aliases(aliases)
     limit = _bounded_limit(limit, _MAX_SEARCH_LIMIT)
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         rows = await query_people(
-            client,
+            sink,
             query=f"%{trimmed.lower()}%",
             limit=limit,
         )
@@ -476,17 +477,17 @@ async def build_person_summary_response(
     )
     aliases = load_identity_aliases()
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            client, person_id=person_id, aliases=aliases
+            sink, person_id=person_id, aliases=aliases
         )
         if not identity:
             raise ValueError("person not found")
 
         identity_inputs = _identity_inputs(identity, alias_list)
         person = _person_model(identity, alias_list)
-        last_ingested = await fetch_last_ingested_at(client)
-        coverage = await fetch_coverage(client, start_day=start_day, end_day=end_day)
+        last_ingested = await fetch_last_ingested_at(sink)
+        coverage = await fetch_coverage(sink, start_day=start_day, end_day=end_day)
         sources = {
             "github": "ok" if last_ingested else "down",
             "gitlab": "ok" if last_ingested else "down",
@@ -495,14 +496,14 @@ async def build_person_summary_response(
         }
 
         coverage_sources = await fetch_identity_coverage(
-            client, identities=identity_inputs
+            sink, identities=identity_inputs
         )
         identity_coverage_pct = _safe_float(_safe_float(coverage_sources) / 2.0 * 100.0)
 
         deltas: List[PersonDelta] = []
         for metric in _PERSON_METRICS:
             current_value = await fetch_person_metric_value(
-                client,
+                sink,
                 table=metric["table"],
                 column=metric["column"],
                 aggregator=metric["aggregator"],
@@ -513,7 +514,7 @@ async def build_person_summary_response(
                 extra_where=metric["extra_where"],
             )
             previous_value = await fetch_person_metric_value(
-                client,
+                sink,
                 table=metric["table"],
                 column=metric["column"],
                 aggregator=metric["aggregator"],
@@ -524,7 +525,7 @@ async def build_person_summary_response(
                 extra_where=metric["extra_where"],
             )
             series = await fetch_person_metric_series(
-                client,
+                sink,
                 table=metric["table"],
                 column=metric["column"],
                 aggregator=metric["aggregator"],
@@ -551,7 +552,7 @@ async def build_person_summary_response(
             )
 
         work_mix_rows = await fetch_person_work_mix(
-            client, identities=identity_inputs, start_day=start_day, end_day=end_day
+            sink, identities=identity_inputs, start_day=start_day, end_day=end_day
         )
         work_mix = [
             WorkMixItem(
@@ -563,7 +564,7 @@ async def build_person_summary_response(
         ]
 
         flow_rows = await fetch_person_flow_breakdown(
-            client, identities=identity_inputs, start_day=start_day, end_day=end_day
+            sink, identities=identity_inputs, start_day=start_day, end_day=end_day
         )
         flow_breakdown = [
             FlowStageItem(
@@ -575,7 +576,7 @@ async def build_person_summary_response(
         ]
 
         collab_rows = await fetch_person_collaboration(
-            client, identities=identity_inputs, start_day=start_day, end_day=end_day
+            sink, identities=identity_inputs, start_day=start_day, end_day=end_day
         )
         review_load: List[CollaborationItem] = []
         handoff_points: List[CollaborationItem] = []
@@ -632,9 +633,9 @@ async def build_person_metric_response(
     start_day, end_day, _, _ = _time_window(range_days, compare_days)
     aliases = load_identity_aliases()
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            client, person_id=person_id, aliases=aliases
+            sink, person_id=person_id, aliases=aliases
         )
         if not identity:
             raise ValueError("person not found")
@@ -642,7 +643,7 @@ async def build_person_metric_response(
         identity_inputs = _identity_inputs(identity, alias_list)
 
         series_rows = await fetch_person_metric_series(
-            client,
+            sink,
             table=config["table"],
             column=config["column"],
             aggregator=config["aggregator"],
@@ -667,7 +668,7 @@ async def build_person_metric_response(
             if not detail:
                 continue
             rows = await fetch_person_breakdown(
-                client,
+                sink,
                 table=detail["table"],
                 column=detail["column"],
                 aggregator=detail["aggregator"],
@@ -721,16 +722,16 @@ async def build_person_drilldown_prs_response(
     aliases = load_identity_aliases()
     limit = _bounded_limit(limit, _MAX_DRILLDOWN_LIMIT)
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            client, person_id=person_id, aliases=aliases
+            sink, person_id=person_id, aliases=aliases
         )
         if not identity:
             raise ValueError("person not found")
 
         identity_inputs = _identity_inputs(identity, alias_list)
         rows = await fetch_person_pull_requests(
-            client,
+            sink,
             identities=identity_inputs,
             start_day=start_day,
             end_day=end_day,
@@ -772,16 +773,16 @@ async def build_person_drilldown_issues_response(
     aliases = load_identity_aliases()
     limit = _bounded_limit(limit, _MAX_DRILLDOWN_LIMIT)
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            client, person_id=person_id, aliases=aliases
+            sink, person_id=person_id, aliases=aliases
         )
         if not identity:
             raise ValueError("person not found")
 
         identity_inputs = _identity_inputs(identity, alias_list)
         rows = await fetch_person_issues(
-            client,
+            sink,
             identities=identity_inputs,
             start_day=start_day,
             end_day=end_day,

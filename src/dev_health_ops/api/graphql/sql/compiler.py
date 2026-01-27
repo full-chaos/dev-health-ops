@@ -128,7 +128,7 @@ def _get_context_params(
 
         # Add repo join if REPO dimension is used
         if Dimension.REPO in dimensions:
-            joins.append("LEFT JOIN repos AS r ON r.id = repo_id")
+            joins.append("LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)")
 
         return {
             "source_table": "work_unit_investments",

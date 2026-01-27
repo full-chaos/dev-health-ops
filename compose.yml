@@ -1,16 +1,8 @@
 volumes:
   postgres_data:
     driver: local
-    driver_opts:
-      type: none
-      device: ./data/postgres
-      o: bind
   mongo_data:
     driver: local
-    driver_opts:
-      type: none
-      device: ./data/mongo
-      o: bind
   clickhouse_data:
     driver: local
 #    driver_opts:

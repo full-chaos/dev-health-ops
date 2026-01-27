@@ -9,7 +9,7 @@ SQLite, and PostgreSQL backends.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from dev_health_ops.metrics.schemas import (
     CICDMetricsDailyRecord,
@@ -28,15 +28,25 @@ from dev_health_ops.metrics.schemas import (
     RepoMetricsDailyRecord,
     ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
-    UserMetricsDailyRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
+    WorkGraphPRCommitRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
+    InvestmentExplanationRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
     WorkItemUserMetricsDailyRecord,
+)
+from dev_health_ops.models.work_items import (
+    Sprint,
+    WorkItem,
+    WorkItemDependency,
+    WorkItemInteractionEvent,
+    WorkItemReopenEvent,
+    WorkItemStatusTransition,
+    Worklog,
 )
 
 
@@ -62,6 +72,21 @@ class BaseMetricsSink(ABC):
         finally:
             sink.close()
     """
+
+    @abstractmethod
+    def query_dicts(
+        self, query: str, parameters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Execute a query and return results as a list of dictionaries."""
+        raise NotImplementedError(
+            "BaseMetricsSink.query_dicts() must be implemented by subclasses."
+        )
+
+    async def __aenter__(self) -> "BaseMetricsSink":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     @property
     @abstractmethod
@@ -92,11 +117,6 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
         """Write daily repo-level metrics."""
-        ...
-
-    @abstractmethod
-    def write_user_metrics(self, rows: Sequence[UserMetricsDailyRecord]) -> None:
-        """Write daily user-level metrics."""
         ...
 
     @abstractmethod
@@ -249,6 +269,20 @@ class BaseMetricsSink(ABC):
         pass
 
     # -------------------------------------------------------------------------
+    # Investment explanation caching
+    # -------------------------------------------------------------------------
+
+    def write_investment_explanation(self, record: InvestmentExplanationRecord) -> None:
+        """Write or replace an investment explanation to the cache."""
+        pass
+
+    def read_investment_explanation(
+        self, cache_key: str
+    ) -> Optional[InvestmentExplanationRecord]:
+        """Read a cached investment explanation by cache_key."""
+        return None
+
+    # -------------------------------------------------------------------------
     # Work graph (derived relationships)
     # -------------------------------------------------------------------------
 
@@ -264,6 +298,14 @@ class BaseMetricsSink(ABC):
             f"{self.__class__.__name__} does not support work graph issue↔PR links"
         )
 
+    def write_work_graph_pr_commit(
+        self, rows: Sequence[WorkGraphPRCommitRecord]
+    ) -> None:
+        """Write derived PR↔commit link rows."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support work graph PR↔commit links"
+        )
+
     # -------------------------------------------------------------------------
     # Team resolution / identity support
     # -------------------------------------------------------------------------
@@ -274,4 +316,42 @@ class BaseMetricsSink(ABC):
 
     async def insert_teams(self, teams: List[Any]) -> None:
         """Insert or update teams in the database."""
+        pass
+
+    # -------------------------------------------------------------------------
+    # Raw collection write methods (optional per sink)
+    # -------------------------------------------------------------------------
+
+    def write_work_items(self, work_items: Sequence[WorkItem]) -> None:
+        """Write raw work items."""
+        pass
+
+    def write_work_item_transitions(
+        self, transitions: Sequence[WorkItemStatusTransition]
+    ) -> None:
+        """Write raw work item status transitions."""
+        pass
+
+    def write_work_item_dependencies(self, rows: Sequence[WorkItemDependency]) -> None:
+        """Write raw work item dependencies."""
+        pass
+
+    def write_work_item_reopen_events(
+        self, rows: Sequence[WorkItemReopenEvent]
+    ) -> None:
+        """Write raw work item reopen events."""
+        pass
+
+    def write_work_item_interactions(
+        self, rows: Sequence[WorkItemInteractionEvent]
+    ) -> None:
+        """Write raw work item interaction events."""
+        pass
+
+    def write_sprints(self, rows: Sequence[Sprint]) -> None:
+        """Write raw sprint records."""
+        pass
+
+    def write_worklogs(self, rows: Sequence[Worklog]) -> None:
+        """Write raw worklog records."""
         pass

@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Tuple
 
 from ..models.filters import MetricFilter
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..queries.scopes import (
     build_scope_filter_multi,
     resolve_repo_ids,
@@ -45,16 +46,18 @@ def time_window(filters: MetricFilter) -> Tuple[date, date, date, date]:
     return start_day, end_day, compare_start, compare_end
 
 
-async def resolve_repo_filter_ids(client: Any, filters: MetricFilter) -> List[str]:
+async def resolve_repo_filter_ids(
+    sink: BaseMetricsSink, filters: MetricFilter
+) -> List[str]:
     repo_refs: List[str] = []
     if filters.scope.level == "repo":
         repo_refs.extend(filters.scope.ids)
     if filters.what.repos:
         repo_refs.extend(filters.what.repos)
     if filters.scope.level == "team" and filters.scope.ids:
-        team_repo_ids = await resolve_repo_ids_for_teams(client, filters.scope.ids)
+        team_repo_ids = await resolve_repo_ids_for_teams(sink, filters.scope.ids)
         repo_refs.extend(team_repo_ids)
-    return await resolve_repo_ids(client, repo_refs)
+    return await resolve_repo_ids(sink, repo_refs)
 
 
 def work_category_filter(
@@ -74,7 +77,7 @@ def work_category_filter(
 
 
 async def scope_filter_for_metric(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     metric_scope: str,
     filters: MetricFilter,
@@ -86,7 +89,7 @@ async def scope_filter_for_metric(
             "team", filters.scope.ids, team_column=team_column, repo_column=repo_column
         )
     if metric_scope == "repo":
-        repo_ids = await resolve_repo_filter_ids(client, filters)
+        repo_ids = await resolve_repo_filter_ids(sink, filters)
         return build_scope_filter_multi(
             "repo", repo_ids, team_column=team_column, repo_column=repo_column
         )

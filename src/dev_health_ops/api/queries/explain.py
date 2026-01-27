@@ -67,7 +67,7 @@ async def fetch_metric_driver_delta(
         SELECT
             current.id AS id,
             current.value AS value,
-            if(previous.value = 0, 0, (current.value - previous.value) / previous.value * 100) AS delta_pct
+            CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct
         FROM current
         LEFT JOIN previous ON current.id = previous.id
         ORDER BY delta_pct DESC

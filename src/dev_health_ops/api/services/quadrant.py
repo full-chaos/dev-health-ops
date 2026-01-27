@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter, ScopeFilter, TimeFilter
 from ..models.schemas import (
     QuadrantAnnotation,
@@ -325,14 +326,14 @@ def _reverse_aliases(aliases: Dict[str, List[str]]) -> Dict[str, str]:
 
 
 async def _resolve_identity_variants(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     person_id: str,
 ) -> List[str]:
     aliases = load_identity_aliases()
     reverse = _reverse_aliases(aliases)
 
-    identity = await resolve_person_identity(client, person_id=person_id)
+    identity = await resolve_person_identity(sink, person_id=person_id)
     if identity:
         normalized = (identity or "").strip().lower()
         canonical = reverse.get(normalized, identity)
@@ -477,23 +478,23 @@ async def build_quadrant_response(
 
     start_day, end_day, _, _ = time_window(filters)
 
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         team_filter: Optional[str] = None
         scope_filter = ""
         scope_params: Dict[str, Any] = {}
 
         if group_scope == "person":
-            identities = await _resolve_identity_variants(client, person_id=scope_id)
+            identities = await _resolve_identity_variants(sink, person_id=scope_id)
             if not identities:
                 raise HTTPException(status_code=404, detail="Individual not found")
-            team_filter = await fetch_person_team_id(client, identities=identities)
+            team_filter = await fetch_person_team_id(sink, identities=identities)
             scope_filter, scope_params = _cohort_scope_filter(team_filter)
 
         x_spec = _metric_spec(definition.x.metric, group_scope)
         y_spec = _metric_spec(definition.y.metric, group_scope)
 
         x_rows = await fetch_quadrant_metric(
-            client,
+            sink,
             table=x_spec.table,
             value_expr=x_spec.value_expr,
             start_day=start_day,
@@ -507,7 +508,7 @@ async def build_quadrant_response(
             scope_params=scope_params,
         )
         y_rows = await fetch_quadrant_metric(
-            client,
+            sink,
             table=y_spec.table,
             value_expr=y_spec.value_expr,
             start_day=start_day,

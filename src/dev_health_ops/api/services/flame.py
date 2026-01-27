@@ -128,7 +128,7 @@ async def build_flame_response(
     entity_type: str,
     entity_id: str,
 ) -> FlameResponse:
-    async with clickhouse_client(db_url) as client:
+    async with clickhouse_client(db_url) as sink:
         if entity_type == "pr":
             repo_id, suffix = _parse_repo_entity(entity_id)
             try:
@@ -138,12 +138,12 @@ async def build_flame_response(
                     status_code=400, detail="PR id must be numeric"
                 ) from exc
 
-            pr = await fetch_pull_request(client, repo_id=repo_id, number=number)
+            pr = await fetch_pull_request(sink, repo_id=repo_id, number=number)
             if not pr:
                 raise HTTPException(status_code=404, detail="PR not found")
 
             reviews = await fetch_pull_request_reviews(
-                client, repo_id=repo_id, number=number
+                sink, repo_id=repo_id, number=number
             )
 
             start = pr.get("created_at")
@@ -220,7 +220,7 @@ async def build_flame_response(
             return FlameResponse(entity=entity, timeline=timeline, frames=frames)
 
         if entity_type == "issue":
-            issue = await fetch_issue(client, work_item_id=entity_id)
+            issue = await fetch_issue(sink, work_item_id=entity_id)
             if not issue:
                 raise HTTPException(status_code=404, detail="Issue not found")
 
@@ -287,7 +287,7 @@ async def build_flame_response(
         if entity_type == "deployment":
             repo_id, deployment_id = _parse_repo_entity(entity_id)
             deployment = await fetch_deployment(
-                client, repo_id=repo_id, deployment_id=deployment_id
+                sink, repo_id=repo_id, deployment_id=deployment_id
             )
             if not deployment:
                 raise HTTPException(status_code=404, detail="Deployment not found")

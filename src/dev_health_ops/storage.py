@@ -1250,6 +1250,13 @@ class SQLAlchemyStore:
         result = await self.session.execute(select(Team))
         return list(result.scalars().all())
 
+    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        assert self.session is not None
+        result = await self.session.execute(select(JiraProjectOpsTeamLink))
+        return list(result.scalars().all())
+
 
 class MongoStore:
     """Async storage implementation backed by MongoDB (via Motor)."""
@@ -1764,17 +1771,32 @@ class MongoStore:
         async for doc in cursor:
             teams.append(
                 Team(
-                    id=doc.get("id") or doc.get("_id"),
-                    team_uuid=uuid.UUID(str(doc.get("team_uuid")))
-                    if doc.get("team_uuid")
-                    else None,
-                    name=doc.get("name"),
+                    id=doc["id"],
+                    team_uuid=doc["team_uuid"],
+                    name=doc["name"],
                     description=doc.get("description"),
                     members=doc.get("members", []),
-                    updated_at=_parse_datetime_value(doc.get("updated_at")),
+                    updated_at=doc["updated_at"],
                 )
             )
         return teams
+
+    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        cursor = self.db["jira_project_ops_team_links"].find({})
+        links = []
+        async for doc in cursor:
+            links.append(
+                JiraProjectOpsTeamLink(
+                    project_key=doc["project_key"],
+                    ops_team_id=doc["ops_team_id"],
+                    project_name=doc["project_name"],
+                    ops_team_name=doc["ops_team_name"],
+                    updated_at=doc["updated_at"],
+                )
+            )
+        return links
 
     async def _upsert_many(
         self,
@@ -2828,6 +2850,28 @@ class ClickHouseStore:
                     )
                 )
         return teams
+
+    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
+
+        assert self.client is not None
+        query = "SELECT project_key, ops_team_id, project_name, ops_team_name, updated_at FROM jira_project_ops_team_links FINAL"
+        async with self._lock:
+            result = await asyncio.to_thread(self.client.query, query)
+
+        links = []
+        if result.result_rows:
+            for row in result.result_rows:
+                links.append(
+                    JiraProjectOpsTeamLink(
+                        project_key=row[0],
+                        ops_team_id=row[1],
+                        project_name=row[2],
+                        ops_team_name=row[3],
+                        updated_at=_parse_datetime_value(row[4]),
+                    )
+                )
+        return links
 
     async def insert_work_items(self, work_items: List["WorkItem"]) -> None:
         if not work_items:

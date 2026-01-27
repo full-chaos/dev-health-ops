@@ -1912,7 +1912,7 @@ class MongoStore:
             teams.append(
                 Team(
                     id=doc["id"],
-                    team_uuid=doc["team_uuid"],
+                    team_uuid=doc.get("team_uuid"),
                     name=doc["name"],
                     description=doc.get("description"),
                     members=doc.get("members", []),

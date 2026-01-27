@@ -106,6 +106,7 @@ async def test_mongo_store_teams():
         mock_cursor.__aiter__.return_value = [
             {
                 "id": "t1",
+                "team_uuid": uuid.uuid4(),
                 "name": "Team 1",
                 "members": ["m1"],
                 "updated_at": datetime.now(timezone.utc),

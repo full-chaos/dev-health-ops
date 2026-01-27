@@ -71,8 +71,9 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
 
         sql = re.sub(r"%\((.*?)\)s", r":\1", query)
 
-        sql = sql.replace("toString(repo_id)", "repo_id")
-        sql = sql.replace("toString(id)", "id")
+        sql = re.sub(
+            r"toString\((.*?)\)", r"CAST(\1 AS VARCHAR)", sql, flags=re.IGNORECASE
+        )
         sql = sql.replace("ifNull(", "COALESCE(")
 
         # Emulate ClickHouse date functions for SQLite/Postgres

@@ -791,7 +791,7 @@ class WorkGraphBuilder:
             p.last_synced,
             pr.created_at
         FROM work_graph_issue_pr AS p
-        INNER JOIN git_pull_requests AS pr ON (p.repo_id = pr.repo_id AND p.pr_number = pr.number)
+        INNER JOIN git_pull_requests AS pr ON (toString(p.repo_id) = toString(pr.repo_id) AND p.pr_number = pr.number)
         """
         where_parts: List[str] = []
         if self.config.repo_id:
@@ -881,7 +881,7 @@ class WorkGraphBuilder:
             p.last_synced,
             c.author_when
         FROM work_graph_pr_commit AS p
-        INNER JOIN git_commits AS c ON (p.repo_id = c.repo_id AND p.commit_hash = c.hash)
+        INNER JOIN git_commits AS c ON (toString(p.repo_id) = toString(c.repo_id) AND p.commit_hash = c.hash)
         """
         where_parts: List[str] = []
         if self.config.repo_id:

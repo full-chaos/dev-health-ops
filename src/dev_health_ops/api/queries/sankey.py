@@ -22,7 +22,7 @@ async def fetch_investment_flow_items(
             ifNull(r.repo, toString(repo_id)) AS target,
             sum(theme_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s
             {scope_filter}

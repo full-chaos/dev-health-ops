@@ -1,27 +1,34 @@
 from __future__ import annotations
 
-from datetime import date
-from typing import Any, Dict, Optional
+from datetime import date, datetime
+from typing import Dict, Optional
 
 from .client import query_dicts
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
-async def fetch_last_ingested_at(client: Any) -> Optional[str]:
+async def fetch_last_ingested_at(sink: BaseMetricsSink) -> Optional[datetime]:
     query = """
         SELECT max(computed_at) AS last_ingested_at
         FROM repo_metrics_daily
     """
-    rows = await query_dicts(client, query, {})
+    rows = await query_dicts(sink, query, {})
     if not rows:
         return None
     value = rows[0].get("last_ingested_at")
     if value is None:
         return None
+    if isinstance(value, str):
+        try:
+            normalized = value.replace(" ", "T")
+            return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return None
     return value
 
 
 async def fetch_coverage(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     start_day: date,
     end_day: date,
@@ -30,7 +37,7 @@ async def fetch_coverage(
         SELECT countDistinct(id) AS total
         FROM repos
     """
-    repos_rows = await query_dicts(client, repos_query, {})
+    repos_rows = await query_dicts(sink, repos_query, {})
     total_repos = float((repos_rows[0].get("total") or 0) if repos_rows else 0)
 
     covered_query = """
@@ -39,7 +46,7 @@ async def fetch_coverage(
         WHERE day >= %(start_day)s AND day < %(end_day)s
     """
     covered_rows = await query_dicts(
-        client, covered_query, {"start_day": start_day, "end_day": end_day}
+        sink, covered_query, {"start_day": start_day, "end_day": end_day}
     )
     covered = float((covered_rows[0].get("covered") or 0) if covered_rows else 0)
     repos_covered_pct = (covered / total_repos * 100.0) if total_repos else 0.0
@@ -52,7 +59,7 @@ async def fetch_coverage(
         WHERE day >= %(start_day)s AND day < %(end_day)s
     """
     pr_rows = await query_dicts(
-        client, pr_link_query, {"start_day": start_day, "end_day": end_day}
+        sink, pr_link_query, {"start_day": start_day, "end_day": end_day}
     )
     linked = float((pr_rows[0].get("linked") or 0) if pr_rows else 0)
     total = float((pr_rows[0].get("total") or 0) if pr_rows else 0)
@@ -66,7 +73,7 @@ async def fetch_coverage(
         WHERE day >= %(start_day)s AND day < %(end_day)s
     """
     cycle_rows = await query_dicts(
-        client, cycle_query, {"start_day": start_day, "end_day": end_day}
+        sink, cycle_query, {"start_day": start_day, "end_day": end_day}
     )
     with_cycle = float((cycle_rows[0].get("with_cycle") or 0) if cycle_rows else 0)
     total_cycle = float((cycle_rows[0].get("total") or 0) if cycle_rows else 0)

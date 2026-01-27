@@ -85,7 +85,7 @@ async def fetch_repo_touchpoints(
             repos.repo AS repo,
             count() AS total
         FROM git_commits
-        INNER JOIN repos ON repos.id = git_commits.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
         {scope_filter}
@@ -106,7 +106,7 @@ async def fetch_repo_touchpoints(
             repos.repo AS repo,
             count() AS value
         FROM git_commits
-        INNER JOIN repos ON repos.id = git_commits.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
           AND repos.repo IN %(repos)s
@@ -137,7 +137,7 @@ async def fetch_hotspot_risk(
             concat(repos.repo, ':', path) AS file_key,
             sum(hotspot_score) AS total
         FROM file_metrics_daily
-        INNER JOIN repos ON repos.id = file_metrics_daily.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
         {scope_filter}
@@ -158,7 +158,7 @@ async def fetch_hotspot_risk(
             concat(repos.repo, ':', path) AS file_key,
             sum(hotspot_score) AS value
         FROM file_metrics_daily
-        INNER JOIN repos ON repos.id = file_metrics_daily.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
           AND concat(repos.repo, ':', path) IN %(files)s
@@ -195,7 +195,7 @@ async def fetch_hotspot_evidence(
             commits_count,
             hotspot_score
         FROM file_metrics_daily
-        INNER JOIN repos ON repos.id = file_metrics_daily.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(week_start)s
           AND day < %(week_end)s
           AND concat(repos.repo, ':', path) = %(file_key)s
@@ -258,7 +258,7 @@ async def fetch_individual_active_evidence(
             git_commits.author_email AS author_email,
             git_commits.author_when AS author_when
         FROM git_commits
-        INNER JOIN repos ON repos.id = git_commits.repo_id
+        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
           AND toDayOfWeek(author_when) = %(weekday)s

@@ -65,7 +65,7 @@ async def fetch_investment_edges(
             ifNull(r.repo, toString(repo_id)) AS target,
             sum(theme_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
@@ -103,7 +103,7 @@ async def fetch_investment_subcategory_edges(
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS target,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
@@ -212,7 +212,7 @@ async def fetch_investment_repo_team_edges(
             ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
@@ -278,7 +278,7 @@ async def fetch_investment_team_category_repo_edges(
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
@@ -344,7 +344,7 @@ async def fetch_investment_team_subcategory_repo_edges(
             ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
@@ -464,7 +464,7 @@ async def fetch_investment_sunburst(
             ifNull(r.repo, toString(repo_id)) AS scope,
             sum(subcategory_kv.2 * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON r.id = repo_id
+        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s

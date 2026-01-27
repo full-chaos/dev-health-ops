@@ -325,8 +325,15 @@ class JiraProvider(Provider):
         )
 
     def _ingest_via_atlassian_client(self, ctx: IngestionContext) -> ProviderBatch:
-        from atlassian import iter_issue_changelog_via_rest, iter_issues_via_rest
+        from atlassian import (
+            iter_board_sprints_via_rest,
+            iter_issue_changelog_via_rest,
+            iter_issue_worklogs_via_rest,
+            iter_issues_via_rest,
+        )
+        from atlassian.rest.api.jira_boards import iter_boards_via_rest
 
+        from dev_health_ops.models.work_items import Worklog
         from dev_health_ops.providers.jira.atlassian_compat import (
             build_atlassian_rest_client,
             get_atlassian_cloud_id,
@@ -335,6 +342,8 @@ class JiraProvider(Provider):
         from dev_health_ops.providers.jira.normalize import (
             canonical_changelog_to_transitions,
             canonical_jira_issue_to_work_item,
+            canonical_sprint_to_model,
+            canonical_worklog_to_model,
             derive_started_completed_from_transitions,
             detect_reopen_events,
         )
@@ -394,7 +403,10 @@ class JiraProvider(Provider):
         transitions: List[WorkItemStatusTransition] = []
         reopen_events: List[WorkItemReopenEvent] = []
         sprints: List[Sprint] = []
+        worklogs: List[Worklog] = []
         sprint_ids: set[str] = set()
+
+        fetch_worklogs = _env_flag("JIRA_FETCH_WORKLOGS", False)
 
         client = build_atlassian_rest_client()
         try:
@@ -473,14 +485,50 @@ class JiraProvider(Provider):
                     if wi.sprint_id:
                         sprint_ids.add(wi.sprint_id)
 
+                    if fetch_worklogs:
+                        try:
+                            for wl in iter_issue_worklogs_via_rest(
+                                client, issue_key=issue.key
+                            ):
+                                worklogs.append(
+                                    canonical_worklog_to_model(
+                                        issue_key=issue.key,
+                                        worklog=wl,
+                                        identity=self.identity,
+                                    )
+                                )
+                        except Exception as exc:
+                            logger.warning(
+                                "Jira: failed to fetch worklogs for %s: %s",
+                                issue.key,
+                                exc,
+                            )
+
                     fetched_count += 1
 
                 if ctx.limit is not None and fetched_count >= ctx.limit:
                     break
 
+            if _env_flag("JIRA_FETCH_BOARD_SPRINTS", False):
+                try:
+                    for board in iter_boards_via_rest(client):
+                        logger.debug(
+                            "Jira: fetching sprints for board %s (%s)",
+                            board.id,
+                            board.name,
+                        )
+                        for sprint in iter_board_sprints_via_rest(
+                            client, board_id=int(board.id)
+                        ):
+                            sprints.append(canonical_sprint_to_model(sprint=sprint))
+                except Exception as exc:
+                    logger.warning("Jira: failed to fetch board sprints: %s", exc)
+
             logger.info(
-                "Jira (atlassian-client): fetched %d work items (updated_since=%s)",
+                "Jira (atlassian-client): fetched %d work items, %d worklogs, %d sprints (updated_since=%s)",
                 len(work_items),
+                len(worklogs),
+                len(sprints),
                 updated_since,
             )
         finally:
@@ -493,4 +541,5 @@ class JiraProvider(Provider):
             interactions=[],
             sprints=list(sprints),
             reopen_events=reopen_events,
+            worklogs=worklogs,
         )

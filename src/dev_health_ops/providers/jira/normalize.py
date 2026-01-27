@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from dev_health_ops.models.work_items import (
     Sprint,
+    Worklog,
     WorkItem,
     WorkItemDependency,
     WorkItemInteractionEvent,
@@ -17,7 +18,7 @@ from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 if TYPE_CHECKING:
-    from atlassian import JiraChangelogEvent, JiraIssue
+    from atlassian import JiraChangelogEvent, JiraIssue, JiraSprint, JiraWorklog
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -701,3 +702,55 @@ def derive_started_completed_from_transitions(
         completed_at = resolved_at or updated_at
 
     return started_at, completed_at
+
+
+def canonical_worklog_to_model(
+    *,
+    issue_key: str,
+    worklog: "JiraWorklog",
+    identity: IdentityResolver,
+) -> Worklog:
+    author = None
+    if worklog.author is not None:
+        author = identity.resolve(
+            provider="jira",
+            email=worklog.author.email,
+            account_id=worklog.author.account_id,
+            display_name=worklog.author.display_name,
+        )
+        if author == "unknown":
+            author = None
+
+    started_at = _parse_datetime(worklog.started_at) or datetime.now(timezone.utc)
+    created_at = _parse_datetime(worklog.created_at) or started_at
+    updated_at = _parse_datetime(worklog.updated_at) or created_at
+
+    return Worklog(
+        work_item_id=f"jira:{issue_key}",
+        provider="jira",
+        worklog_id=worklog.worklog_id,
+        author=author,
+        started_at=started_at,
+        time_spent_seconds=worklog.time_spent_seconds,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+def canonical_sprint_to_model(
+    *,
+    sprint: "JiraSprint",
+) -> Sprint:
+    started_at = _parse_datetime(sprint.start_at)
+    ended_at = _parse_datetime(sprint.end_at)
+    completed_at = _parse_datetime(sprint.complete_at)
+
+    return Sprint(
+        provider="jira",
+        sprint_id=sprint.id,
+        name=sprint.name,
+        state=sprint.state,
+        started_at=started_at,
+        ended_at=ended_at,
+        completed_at=completed_at,
+    )

@@ -67,6 +67,82 @@ def _dt_to_mongo_datetime(value: datetime) -> datetime:
 class MongoMetricsSink(BaseMetricsSink):
     """MongoDB sink for derived daily metrics (idempotent upserts by stable _id)."""
 
+    def query_dicts(
+        self, query: str, parameters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        q = query.lower().strip()
+        params = parameters or {}
+
+        if "from work_graph_edges" in q:
+            f: Dict[str, Any] = {}
+            if "repo_id in" in q:
+                f["repo_id"] = {"$in": params.get("repo_ids", [])}
+            docs = list(self.db["work_graph_edges"].find(f))
+            for d in docs:
+                d["repo_id"] = str(d.get("repo_id")) if d.get("repo_id") else None
+            return docs
+
+        if "from work_items" in q:
+            f = {}
+            if "work_item_id in" in q:
+                f["work_item_id"] = {"$in": params.get("work_item_ids", [])}
+            return list(self.db["work_items"].find(f))
+
+        if "from work_item_cycle_times" in q:
+            f = {}
+            if "work_item_id in" in q:
+                f["work_item_id"] = {"$in": params.get("work_item_ids", [])}
+            return list(self.db["work_item_cycle_times"].find(f))
+
+        if "from git_pull_requests" in q:
+            f = {
+                "repo_id": str(params.get("repo_id")),
+                "number": {"$in": params.get("numbers", [])},
+            }
+            docs = list(self.db["git_pull_requests"].find(f))
+            for d in docs:
+                d["repo_id"] = str(d.get("repo_id"))
+            return docs
+
+        if "from git_commits" in q:
+            f = {
+                "repo_id": str(params.get("repo_id")),
+                "hash": {"$in": params.get("hashes", [])},
+            }
+            docs = list(self.db["git_commits"].find(f))
+            for d in docs:
+                d["repo_id"] = str(d.get("repo_id"))
+            return docs
+
+        if "from git_commit_stats" in q:
+            pipeline = [
+                {
+                    "$match": {
+                        "repo_id": str(params.get("repo_id")),
+                        "commit_hash": {"$in": params.get("hashes", [])},
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$commit_hash",
+                        "churn_loc": {"$sum": {"$add": ["$additions", "$deletions"]}},
+                    }
+                },
+                {"$project": {"commit_hash": "$_id", "churn_loc": 1, "_id": 0}},
+            ]
+            return list(self.db["git_commit_stats"].aggregate(pipeline))
+
+        if "from user_metrics_daily" in q:
+            f = {}
+            if "team_id in" in q:
+                f["team_id"] = {"$in": params.get("team_ids", [])}
+            docs = list(self.db["user_metrics_daily"].find(f, {"repo_id": 1}))
+            return [{"id": str(d["repo_id"])} for d in docs if "repo_id" in d]
+
+        raise NotImplementedError(
+            f"MongoMetricsSink.query_dicts does not support: {query[:100]}..."
+        )
+
     @property
     def backend_type(self) -> str:
         return "mongo"

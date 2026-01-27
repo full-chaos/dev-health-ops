@@ -64,6 +64,23 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     Subclasses must implement backend_type, _table_has_column, and __init__.
     """
 
+    def query_dicts(
+        self, query: str, parameters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        import re
+
+        sql = re.sub(r"%\((.*?)\)s", r":\1", query)
+
+        sql = sql.replace("toString(repo_id)", "repo_id")
+        sql = sql.replace("toString(id)", "id")
+        sql = sql.replace("ifNull(", "COALESCE(")
+
+        sql = re.sub(r"argMax\((.*?),\s*computed_at\)", r"MAX(\1)", sql)
+
+        with self.engine.connect() as conn:
+            result = conn.execute(text(sql), parameters).mappings().all()
+            return [dict(r) for r in result]
+
     @property
     @abstractmethod
     def backend_type(self) -> str:

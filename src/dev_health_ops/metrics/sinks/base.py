@@ -74,6 +74,13 @@ class BaseMetricsSink(ABC):
             sink.close()
     """
 
+    @abstractmethod
+    def query_dicts(
+        self, query: str, parameters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Execute a query and return results as a list of dictionaries."""
+        ...
+
     @property
     @abstractmethod
     def backend_type(self) -> str:

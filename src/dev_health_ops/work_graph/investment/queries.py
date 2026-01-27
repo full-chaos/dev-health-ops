@@ -5,23 +5,17 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 
-def _rows_to_dicts(result: Any) -> List[Dict[str, Any]]:
-    col_names = list(getattr(result, "column_names", []) or [])
-    rows = list(getattr(result, "result_rows", []) or [])
-    if not col_names or not rows:
-        return []
-    return [dict(zip(col_names, row)) for row in rows]
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 def query_dicts(
-    client: Any, query: str, params: Dict[str, Any]
+    sink: BaseMetricsSink, query: str, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-    result = client.query(query, parameters=params)
-    return _rows_to_dicts(result)
+    return sink.query_dicts(query, params)
 
 
 def fetch_work_graph_edges(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     repo_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
@@ -46,11 +40,11 @@ def fetch_work_graph_edges(
         FROM work_graph_edges
         {where_sql}
     """
-    return query_dicts(client, query, params)
+    return query_dicts(sink, query, params)
 
 
 def fetch_work_items(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     work_item_ids: Iterable[str],
 ) -> List[Dict[str, Any]]:
@@ -75,11 +69,11 @@ def fetch_work_items(
         FROM work_items
         WHERE work_item_id IN %(work_item_ids)s
     """
-    return query_dicts(client, query, params)
+    return query_dicts(sink, query, params)
 
 
 def fetch_parent_titles(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     work_item_ids: Iterable[str],
 ) -> Dict[str, str]:
@@ -94,7 +88,7 @@ def fetch_parent_titles(
         FROM work_items
         WHERE work_item_id IN %(work_item_ids)s
     """
-    rows = query_dicts(client, query, params)
+    rows = query_dicts(sink, query, params)
     return {
         str(row.get("work_item_id")): str(row.get("title") or "")
         for row in rows
@@ -103,7 +97,7 @@ def fetch_parent_titles(
 
 
 def fetch_work_item_active_hours(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     work_item_ids: Iterable[str],
 ) -> Dict[str, float]:
@@ -119,7 +113,7 @@ def fetch_work_item_active_hours(
         WHERE work_item_id IN %(work_item_ids)s
         GROUP BY work_item_id
     """
-    rows = query_dicts(client, query, params)
+    rows = query_dicts(sink, query, params)
     return {
         str(row.get("work_item_id")): float(row.get("active_time_hours") or 0.0)
         for row in rows
@@ -127,7 +121,7 @@ def fetch_work_item_active_hours(
 
 
 def fetch_pull_requests(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     repo_numbers: Dict[str, List[int]],
 ) -> List[Dict[str, Any]]:
@@ -151,12 +145,12 @@ def fetch_pull_requests(
             WHERE repo_id = %(repo_id)s
               AND number IN %(numbers)s
         """
-        rows.extend(query_dicts(client, query, params))
+        rows.extend(query_dicts(sink, query, params))
     return rows
 
 
 def fetch_commits(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     repo_commits: Dict[str, List[str]],
 ) -> List[Dict[str, Any]]:
@@ -176,12 +170,12 @@ def fetch_commits(
             WHERE repo_id = %(repo_id)s
               AND hash IN %(hashes)s
         """
-        rows.extend(query_dicts(client, query, params))
+        rows.extend(query_dicts(sink, query, params))
     return rows
 
 
 def fetch_commit_churn(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     repo_commits: Dict[str, List[str]],
 ) -> Dict[str, float]:
@@ -199,7 +193,7 @@ def fetch_commit_churn(
               AND commit_hash IN %(hashes)s
             GROUP BY commit_hash
         """
-        rows = query_dicts(client, query, params)
+        rows = query_dicts(sink, query, params)
         for row in rows:
             commit_hash = str(row.get("commit_hash") or "")
             churn_key = f"{repo_id}@{commit_hash}"
@@ -208,7 +202,7 @@ def fetch_commit_churn(
 
 
 def resolve_repo_ids_for_teams(
-    client: Any,
+    sink: BaseMetricsSink,
     *,
     team_ids: Iterable[str],
 ) -> List[str]:
@@ -220,5 +214,5 @@ def resolve_repo_ids_for_teams(
         FROM user_metrics_daily
         WHERE team_id IN %(team_ids)s
     """
-    rows = query_dicts(client, query, {"team_ids": team_list})
+    rows = query_dicts(sink, query, {"team_ids": team_list})
     return [str(row.get("id")) for row in rows if row.get("id")]

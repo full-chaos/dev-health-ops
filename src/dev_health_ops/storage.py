@@ -312,6 +312,37 @@ class SQLAlchemyStore:
             Column("actor", String),
             Column("last_synced", DateTime(timezone=True)),
         )
+        self._work_item_dependencies_table = Table(
+            "work_item_dependencies",
+            self._work_item_metadata,
+            Column("source_work_item_id", String, primary_key=True),
+            Column("target_work_item_id", String, primary_key=True),
+            Column("relationship_type", String, primary_key=True),
+            Column("relationship_type_raw", String),
+            Column("last_synced", DateTime(timezone=True)),
+        )
+        self._work_graph_issue_pr_table = Table(
+            "work_graph_issue_pr",
+            self._work_item_metadata,
+            Column("repo_id", String, primary_key=True),
+            Column("work_item_id", String, primary_key=True),
+            Column("pr_number", Integer, primary_key=True),
+            Column("confidence", Float),
+            Column("provenance", String),
+            Column("evidence", String),
+            Column("last_synced", DateTime(timezone=True)),
+        )
+        self._work_graph_pr_commit_table = Table(
+            "work_graph_pr_commit",
+            self._work_item_metadata,
+            Column("repo_id", String, primary_key=True),
+            Column("pr_number", Integer, primary_key=True),
+            Column("commit_hash", String, primary_key=True),
+            Column("confidence", Float),
+            Column("provenance", String),
+            Column("evidence", String),
+            Column("last_synced", DateTime(timezone=True)),
+        )
 
     def _insert_for_dialect(self, model: Any):
         dialect = self.engine.dialect.name
@@ -410,7 +441,7 @@ class SQLAlchemyStore:
             resolved_repo_id = uuid.UUID(str(repo_row[0]))
 
         # Table is created by metrics sinks; we define a lightweight Core table for queries.
-        snapshots = Table(
+        snapshots_table = Table(
             "file_complexity_snapshots",
             MetaData(),
             Column("repo_id", String),
@@ -428,41 +459,41 @@ class SQLAlchemyStore:
         )
 
         day_value = as_of_day.isoformat()
-        where_clause = snapshots.c.as_of_day <= day_value
+        where_clause = snapshots_table.c.as_of_day <= day_value
         if resolved_repo_id is not None:
             where_clause = and_(
-                where_clause, snapshots.c.repo_id == str(resolved_repo_id)
+                where_clause, snapshots_table.c.repo_id == str(resolved_repo_id)
             )
 
         latest = (
             select(
-                snapshots.c.repo_id,
-                func.max(snapshots.c.as_of_day).label("max_day"),
+                snapshots_table.c.repo_id,
+                func.max(snapshots_table.c.as_of_day).label("max_day"),
             )
             .where(where_clause)
-            .group_by(snapshots.c.repo_id)
+            .group_by(snapshots_table.c.repo_id)
             .subquery("latest")
         )
 
         query = select(
-            snapshots.c.repo_id,
-            snapshots.c.as_of_day,
-            snapshots.c.ref,
-            snapshots.c.file_path,
-            snapshots.c.language,
-            snapshots.c.loc,
-            snapshots.c.functions_count,
-            snapshots.c.cyclomatic_total,
-            snapshots.c.cyclomatic_avg,
-            snapshots.c.high_complexity_functions,
-            snapshots.c.very_high_complexity_functions,
-            snapshots.c.computed_at,
+            snapshots_table.c.repo_id,
+            snapshots_table.c.as_of_day,
+            snapshots_table.c.ref,
+            snapshots_table.c.file_path,
+            snapshots_table.c.language,
+            snapshots_table.c.loc,
+            snapshots_table.c.functions_count,
+            snapshots_table.c.cyclomatic_total,
+            snapshots_table.c.cyclomatic_avg,
+            snapshots_table.c.high_complexity_functions,
+            snapshots_table.c.very_high_complexity_functions,
+            snapshots_table.c.computed_at,
         ).select_from(
-            snapshots.join(
+            snapshots_table.join(
                 latest,
                 and_(
-                    snapshots.c.repo_id == latest.c.repo_id,
-                    snapshots.c.as_of_day == latest.c.max_day,
+                    snapshots_table.c.repo_id == latest.c.repo_id,
+                    snapshots_table.c.as_of_day == latest.c.max_day,
                 ),
             )
         )
@@ -1039,6 +1070,87 @@ class SQLAlchemyStore:
                 "resolved_at",
                 "last_synced",
             ],
+        )
+
+    async def insert_work_item_dependencies(
+        self, dependencies: List[WorkItemDependency]
+    ) -> None:
+        if not dependencies:
+            return
+        rows: List[Dict[str, Any]] = []
+        synced_at_default = datetime.now(timezone.utc)
+        for item in dependencies:
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "source_work_item_id": item.get("source_work_item_id"),
+                        "target_work_item_id": item.get("target_work_item_id"),
+                        "relationship_type": item.get("relationship_type"),
+                        "relationship_type_raw": item.get("relationship_type_raw"),
+                        "last_synced": item.get("last_synced") or synced_at_default,
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "source_work_item_id": getattr(item, "source_work_item_id"),
+                        "target_work_item_id": getattr(item, "target_work_item_id"),
+                        "relationship_type": getattr(item, "relationship_type"),
+                        "relationship_type_raw": getattr(item, "relationship_type_raw"),
+                        "last_synced": getattr(item, "last_synced", None)
+                        or synced_at_default,
+                    }
+                )
+
+        await self._upsert_many(
+            self._work_item_dependencies_table,
+            rows,
+            conflict_columns=[
+                "source_work_item_id",
+                "target_work_item_id",
+                "relationship_type",
+            ],
+            update_columns=["relationship_type_raw", "last_synced"],
+        )
+
+    async def insert_work_graph_issue_pr(self, records: List[Dict[str, Any]]) -> None:
+        if not records:
+            return
+        synced_at_default = datetime.now(timezone.utc)
+        payload = []
+        for r in records:
+            payload.append(
+                {
+                    **r,
+                    "repo_id": str(r["repo_id"]),
+                    "last_synced": r.get("last_synced") or synced_at_default,
+                }
+            )
+        await self._upsert_many(
+            self._work_graph_issue_pr_table,
+            payload,
+            conflict_columns=["repo_id", "work_item_id", "pr_number"],
+            update_columns=["confidence", "provenance", "evidence", "last_synced"],
+        )
+
+    async def insert_work_graph_pr_commit(self, records: List[Dict[str, Any]]) -> None:
+        if not records:
+            return
+        synced_at_default = datetime.now(timezone.utc)
+        payload = []
+        for r in records:
+            payload.append(
+                {
+                    **r,
+                    "repo_id": str(r["repo_id"]),
+                    "last_synced": r.get("last_synced") or synced_at_default,
+                }
+            )
+        await self._upsert_many(
+            self._work_graph_pr_commit_table,
+            payload,
+            conflict_columns=["repo_id", "pr_number", "commit_hash"],
+            update_columns=["confidence", "provenance", "evidence", "last_synced"],
         )
 
     async def insert_work_items(self, work_items: List["WorkItem"]) -> None:

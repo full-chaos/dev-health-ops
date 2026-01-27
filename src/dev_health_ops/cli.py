@@ -17,7 +17,7 @@ from dev_health_ops.fixtures import runner as fixtures_runner
 from dev_health_ops.work_graph import runner as work_graph_runner
 from dev_health_ops.workers import runner as workers_runner
 from dev_health_ops.api import runner as api_runner
-from dev_health_ops.metrics import job_work_items, job_daily, job_complexity_db
+from dev_health_ops.metrics import job_work_items, job_daily, job_complexity_db, job_dora
 from dev_health_ops.audit import completeness, schema, perf, coverage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -85,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     job_daily.register_commands(metrics_subparsers)
     job_complexity_db.register_commands(metrics_subparsers)
+    job_dora.register_commands(metrics_subparsers)
 
     # ---- audit ----
     audit_parser = sub.add_parser("audit", help="Run diagnostic audits.")

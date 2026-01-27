@@ -29,11 +29,25 @@ from dev_health_ops.metrics.schemas import (
     FileHotspotDaily,
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
+    InvestmentExplanationRecord,
     IssueTypeMetricsRecord,
+    WorkGraphEdgeRecord,
+    WorkGraphIssuePRRecord,
+    WorkGraphPRCommitRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
+from dev_health_ops.models.work_items import (
+    Sprint,
+    WorkItem,
+    WorkItemDependency,
+    WorkItemInteractionEvent,
+    WorkItemReopenEvent,
+    WorkItemStatusTransition,
+    Worklog,
+)
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.loaders.base import to_dataclass
 
 
 def _dt_to_iso(value: datetime) -> str:
@@ -445,6 +459,200 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               PRIMARY KEY (day, provider, team_id, issue_type_norm)
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS investment_explanations (
+              cache_key TEXT PRIMARY KEY,
+              explanation_json TEXT NOT NULL,
+              llm_provider TEXT NOT NULL,
+              llm_model TEXT,
+              computed_at TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_unit_investments (
+              work_unit_id TEXT NOT NULL,
+              work_unit_type TEXT,
+              work_unit_name TEXT,
+              from_ts TEXT NOT NULL,
+              to_ts TEXT NOT NULL,
+              repo_id TEXT,
+              provider TEXT,
+              effort_metric TEXT NOT NULL,
+              effort_value REAL NOT NULL,
+              theme_distribution_json TEXT NOT NULL,
+              subcategory_distribution_json TEXT NOT NULL,
+              structural_evidence_json TEXT,
+              evidence_quality REAL NOT NULL,
+              evidence_quality_band TEXT NOT NULL,
+              categorization_status TEXT NOT NULL,
+              categorization_errors_json TEXT,
+              categorization_model_version TEXT NOT NULL,
+              categorization_input_hash TEXT NOT NULL,
+              categorization_run_id TEXT NOT NULL,
+              computed_at TEXT NOT NULL,
+              PRIMARY KEY (work_unit_id, categorization_run_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_unit_investment_quotes (
+              work_unit_id TEXT NOT NULL,
+              quote TEXT NOT NULL,
+              source_type TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+              computed_at TEXT NOT NULL,
+              categorization_run_id TEXT NOT NULL,
+              PRIMARY KEY (work_unit_id, source_type, source_id, categorization_run_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_graph_edges (
+              edge_id TEXT PRIMARY KEY,
+              source_type TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+              target_type TEXT NOT NULL,
+              target_id TEXT NOT NULL,
+              edge_type TEXT NOT NULL,
+              repo_id TEXT,
+              provider TEXT,
+              provenance TEXT NOT NULL,
+              confidence REAL NOT NULL,
+              evidence TEXT,
+              discovered_at TEXT NOT NULL,
+              last_synced TEXT NOT NULL,
+              event_ts TEXT NOT NULL,
+              day TEXT NOT NULL
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_graph_issue_pr (
+              repo_id TEXT NOT NULL,
+              work_item_id TEXT NOT NULL,
+              pr_number INTEGER NOT NULL,
+              confidence REAL NOT NULL,
+              provenance TEXT NOT NULL,
+              evidence TEXT,
+              last_synced TEXT NOT NULL,
+              PRIMARY KEY (repo_id, work_item_id, pr_number)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_graph_pr_commit (
+              repo_id TEXT NOT NULL,
+              pr_number INTEGER NOT NULL,
+              commit_hash TEXT NOT NULL,
+              confidence REAL NOT NULL,
+              provenance TEXT NOT NULL,
+              evidence TEXT,
+              last_synced TEXT NOT NULL,
+              PRIMARY KEY (repo_id, pr_number, commit_hash)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_items (
+              work_item_id TEXT PRIMARY KEY,
+              provider TEXT NOT NULL,
+              title TEXT NOT NULL,
+              type TEXT NOT NULL,
+              status TEXT NOT NULL,
+              status_raw TEXT,
+              description TEXT,
+              repo_id TEXT,
+              project_key TEXT,
+              project_id TEXT,
+              assignees TEXT, -- JSON array
+              reporter TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              started_at TEXT,
+              completed_at TEXT,
+              closed_at TEXT,
+              labels TEXT, -- JSON array
+              story_points REAL,
+              sprint_id TEXT,
+              sprint_name TEXT,
+              parent_id TEXT,
+              epic_id TEXT,
+              url TEXT,
+              priority_raw TEXT,
+              service_class TEXT,
+              due_at TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_item_transitions (
+              work_item_id TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              occurred_at TEXT NOT NULL,
+              from_status_raw TEXT,
+              to_status_raw TEXT,
+              from_status TEXT NOT NULL,
+              to_status TEXT NOT NULL,
+              actor TEXT,
+              PRIMARY KEY (work_item_id, occurred_at, to_status)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_item_dependencies (
+              source_work_item_id TEXT NOT NULL,
+              target_work_item_id TEXT NOT NULL,
+              relationship_type TEXT NOT NULL,
+              relationship_type_raw TEXT NOT NULL,
+              last_synced TEXT NOT NULL,
+              PRIMARY KEY (source_work_item_id, target_work_item_id, relationship_type)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_item_reopen_events (
+              work_item_id TEXT NOT NULL,
+              occurred_at TEXT NOT NULL,
+              from_status TEXT NOT NULL,
+              to_status TEXT NOT NULL,
+              from_status_raw TEXT,
+              to_status_raw TEXT,
+              actor TEXT,
+              last_synced TEXT NOT NULL,
+              PRIMARY KEY (work_item_id, occurred_at)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS work_item_interactions (
+              work_item_id TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              interaction_type TEXT NOT NULL,
+              occurred_at TEXT NOT NULL,
+              actor TEXT,
+              body_length INTEGER NOT NULL,
+              last_synced TEXT NOT NULL,
+              PRIMARY KEY (work_item_id, occurred_at, interaction_type)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS sprints (
+              provider TEXT NOT NULL,
+              sprint_id TEXT NOT NULL,
+              name TEXT,
+              state TEXT,
+              started_at TEXT,
+              ended_at TEXT,
+              completed_at TEXT,
+              last_synced TEXT NOT NULL,
+              PRIMARY KEY (provider, sprint_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS worklogs (
+              work_item_id TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              worklog_id TEXT NOT NULL,
+              author TEXT,
+              started_at TEXT NOT NULL,
+              time_spent_seconds INTEGER NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              last_synced TEXT NOT NULL,
+              PRIMARY KEY (provider, worklog_id)
+            )
+            """,
             "CREATE INDEX IF NOT EXISTS idx_repo_metrics_daily_day ON repo_metrics_daily(day)",
             "CREATE INDEX IF NOT EXISTS idx_user_metrics_daily_day ON user_metrics_daily(day)",
             "CREATE INDEX IF NOT EXISTS idx_commit_metrics_day ON commit_metrics(day)",
@@ -464,6 +672,20 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "CREATE INDEX IF NOT EXISTS idx_investment_classifications_daily_day ON investment_classifications_daily(day)",
             "CREATE INDEX IF NOT EXISTS idx_investment_metrics_daily_day ON investment_metrics_daily(day)",
             "CREATE INDEX IF NOT EXISTS idx_issue_type_metrics_daily_day ON issue_type_metrics_daily(day)",
+            "CREATE INDEX IF NOT EXISTS idx_work_unit_investments_repo ON work_unit_investments(repo_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_unit_investment_quotes_wu ON work_unit_investment_quotes(work_unit_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_graph_edges_day ON work_graph_edges(day)",
+            "CREATE INDEX IF NOT EXISTS idx_work_graph_edges_source_target ON work_graph_edges(source_id, target_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_graph_issue_pr_repo ON work_graph_issue_pr(repo_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_graph_pr_commit_repo ON work_graph_pr_commit(repo_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_items_provider ON work_items(provider)",
+            "CREATE INDEX IF NOT EXISTS idx_work_items_repo ON work_items(repo_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_item_transitions_id ON work_item_transitions(work_item_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_item_dependencies_target ON work_item_dependencies(target_work_item_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_item_reopen_events_id ON work_item_reopen_events(work_item_id)",
+            "CREATE INDEX IF NOT EXISTS idx_work_item_interactions_id ON work_item_interactions(work_item_id)",
+            "CREATE INDEX IF NOT EXISTS idx_sprints_state ON sprints(state)",
+            "CREATE INDEX IF NOT EXISTS idx_worklogs_item ON worklogs(work_item_id)",
         ]
         with self.engine.begin() as conn:
             for stmt in stmts:
@@ -1809,16 +2031,495 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     def write_work_unit_investments(
         self, rows: Sequence[WorkUnitInvestmentRecord]
     ) -> None:
-        raise NotImplementedError(
-            "Work unit investment materialization is not supported for SQLite"
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_unit_investments (
+              work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts,
+              repo_id, provider, effort_metric, effort_value,
+              theme_distribution_json, subcategory_distribution_json,
+              structural_evidence_json, evidence_quality, evidence_quality_band,
+              categorization_status, categorization_errors_json,
+              categorization_model_version, categorization_input_hash,
+              categorization_run_id, computed_at
+            ) VALUES (
+              :work_unit_id, :work_unit_type, :work_unit_name, :from_ts, :to_ts,
+              :repo_id, :provider, :effort_metric, :effort_value,
+              :theme_distribution_json, :subcategory_distribution_json,
+              :structural_evidence_json, :evidence_quality, :evidence_quality_band,
+              :categorization_status, :categorization_errors_json,
+              :categorization_model_version, :categorization_input_hash,
+              :categorization_run_id, :computed_at
+            )
+            ON CONFLICT (work_unit_id, categorization_run_id) DO UPDATE SET
+              theme_distribution_json=excluded.theme_distribution_json,
+              subcategory_distribution_json=excluded.subcategory_distribution_json,
+              structural_evidence_json=excluded.structural_evidence_json,
+              evidence_quality=excluded.evidence_quality,
+              evidence_quality_band=excluded.evidence_quality_band,
+              categorization_status=excluded.categorization_status,
+              categorization_errors_json=excluded.categorization_errors_json,
+              computed_at=excluded.computed_at
+            """
         )
+        import json
+
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "repo_id": str(data["repo_id"]) if data["repo_id"] else None,
+                    "from_ts": _dt_to_iso(data["from_ts"]),
+                    "to_ts": _dt_to_iso(data["to_ts"]),
+                    "theme_distribution_json": json.dumps(
+                        data["theme_distribution_json"]
+                    ),
+                    "subcategory_distribution_json": json.dumps(
+                        data["subcategory_distribution_json"]
+                    ),
+                    "computed_at": _dt_to_iso(data["computed_at"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
 
     def write_work_unit_investment_quotes(
         self, rows: Sequence[WorkUnitInvestmentEvidenceQuoteRecord]
     ) -> None:
-        raise NotImplementedError(
-            "Work unit investment evidence quotes are not supported for SQLite"
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_unit_investment_quotes (
+              work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id
+            ) VALUES (
+              :work_unit_id, :quote, :source_type, :source_id, :computed_at, :categorization_run_id
+            )
+            ON CONFLICT (work_unit_id, source_type, source_id, categorization_run_id) DO NOTHING
+            """
         )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "computed_at": _dt_to_iso(data["computed_at"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    # -------------------------------------------------------------------------
+    # Investment explanation caching
+    # -------------------------------------------------------------------------
+
+    def write_investment_explanation(self, record: InvestmentExplanationRecord) -> None:
+        """Write or replace an investment explanation to the cache."""
+        stmt = text(
+            """
+            INSERT INTO investment_explanations (
+              cache_key, explanation_json, llm_provider, llm_model, computed_at
+            ) VALUES (
+              :cache_key, :explanation_json, :llm_provider, :llm_model, :computed_at
+            )
+            ON CONFLICT (cache_key) DO UPDATE SET
+              explanation_json=excluded.explanation_json,
+              llm_provider=excluded.llm_provider,
+              llm_model=excluded.llm_model,
+              computed_at=excluded.computed_at
+            """
+        )
+        payload = {
+            **asdict(record),
+            "computed_at": _dt_to_iso(record.computed_at),
+        }
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def read_investment_explanation(
+        self, cache_key: str
+    ) -> Optional[InvestmentExplanationRecord]:
+        """Read a cached investment explanation by cache_key."""
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        "SELECT * FROM investment_explanations WHERE cache_key = :key"
+                    ),
+                    {"key": cache_key},
+                )
+                .mappings()
+                .first()
+            )
+            if not row:
+                return None
+            return to_dataclass(InvestmentExplanationRecord, dict(row))
+
+    # -------------------------------------------------------------------------
+    # Work graph (derived relationships)
+    # -------------------------------------------------------------------------
+
+    def write_work_graph_edges(self, rows: Sequence[WorkGraphEdgeRecord]) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_graph_edges (
+              edge_id, source_type, source_id, target_type, target_id, edge_type,
+              repo_id, provider, provenance, confidence, evidence,
+              discovered_at, last_synced, event_ts, day
+            ) VALUES (
+              :edge_id, :source_type, :source_id, :target_type, :target_id, :edge_type,
+              :repo_id, :provider, :provenance, :confidence, :evidence,
+              :discovered_at, :last_synced, :event_ts, :day
+            )
+            ON CONFLICT (edge_id) DO UPDATE SET
+              last_synced=excluded.last_synced,
+              confidence=excluded.confidence,
+              evidence=excluded.evidence
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "repo_id": str(data["repo_id"]) if data["repo_id"] else None,
+                    "discovered_at": _dt_to_iso(data["discovered_at"]),
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                    "event_ts": _dt_to_iso(data["event_ts"]),
+                    "day": data["day"].isoformat(),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_work_graph_issue_pr(self, rows: Sequence[WorkGraphIssuePRRecord]) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_graph_issue_pr (
+              repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced
+            ) VALUES (
+              :repo_id, :work_item_id, :pr_number, :confidence, :provenance, :evidence, :last_synced
+            )
+            ON CONFLICT (repo_id, work_item_id, pr_number) DO UPDATE SET
+              confidence=excluded.confidence,
+              evidence=excluded.evidence,
+              last_synced=excluded.last_synced
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "repo_id": str(data["repo_id"]),
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_work_graph_pr_commit(
+        self, rows: Sequence[WorkGraphPRCommitRecord]
+    ) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_graph_pr_commit (
+              repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced
+            ) VALUES (
+              :repo_id, :pr_number, :commit_hash, :confidence, :provenance, :evidence, :last_synced
+            )
+            ON CONFLICT (repo_id, pr_number, commit_hash) DO UPDATE SET
+              confidence=excluded.confidence,
+              evidence=excluded.evidence,
+              last_synced=excluded.last_synced
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "repo_id": str(data["repo_id"]),
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    # -------------------------------------------------------------------------
+    # Raw collection write methods
+    # -------------------------------------------------------------------------
+
+    def write_work_items(self, work_items: Sequence[WorkItem]) -> None:
+        if not work_items:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_items (
+              work_item_id, provider, title, type, status, status_raw, description,
+              repo_id, project_key, project_id, assignees, reporter,
+              created_at, updated_at, started_at, completed_at, closed_at,
+              labels, story_points, sprint_id, sprint_name, parent_id, epic_id,
+              url, priority_raw, service_class, due_at
+            ) VALUES (
+              :work_item_id, :provider, :title, :type, :status, :status_raw, :description,
+              :repo_id, :project_key, :project_id, :assignees, :reporter,
+              :created_at, :updated_at, :started_at, :completed_at, :closed_at,
+              :labels, :story_points, :sprint_id, :sprint_name, :parent_id, :epic_id,
+              :url, :priority_raw, :service_class, :due_at
+            )
+            ON CONFLICT (work_item_id) DO UPDATE SET
+              title=excluded.title,
+              status=excluded.status,
+              status_raw=excluded.status_raw,
+              description=excluded.description,
+              updated_at=excluded.updated_at,
+              started_at=excluded.started_at,
+              completed_at=excluded.completed_at,
+              closed_at=excluded.closed_at,
+              labels=excluded.labels,
+              story_points=excluded.story_points,
+              sprint_id=excluded.sprint_id,
+              sprint_name=excluded.sprint_name,
+              priority_raw=excluded.priority_raw,
+              service_class=excluded.service_class,
+              due_at=excluded.due_at
+            """
+        )
+        import json
+
+        payload = []
+        for r in work_items:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "repo_id": str(data["repo_id"]) if data["repo_id"] else None,
+                    "assignees": json.dumps(data["assignees"]),
+                    "created_at": _dt_to_iso(data["created_at"]),
+                    "updated_at": _dt_to_iso(data["updated_at"]),
+                    "started_at": _dt_to_iso(data["started_at"])
+                    if data["started_at"]
+                    else None,
+                    "completed_at": _dt_to_iso(data["completed_at"])
+                    if data["completed_at"]
+                    else None,
+                    "closed_at": _dt_to_iso(data["closed_at"])
+                    if data["closed_at"]
+                    else None,
+                    "labels": json.dumps(data["labels"]),
+                    "due_at": _dt_to_iso(data["due_at"]) if data["due_at"] else None,
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_work_item_transitions(
+        self, transitions: Sequence[WorkItemStatusTransition]
+    ) -> None:
+        if not transitions:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_item_transitions (
+              work_item_id, provider, occurred_at, from_status_raw, to_status_raw,
+              from_status, to_status, actor
+            ) VALUES (
+              :work_item_id, :provider, :occurred_at, :from_status_raw, :to_status_raw,
+              :from_status, :to_status, :actor
+            )
+            ON CONFLICT (work_item_id, occurred_at, to_status) DO NOTHING
+            """
+        )
+        payload = []
+        for r in transitions:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "occurred_at": _dt_to_iso(data["occurred_at"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_work_item_dependencies(self, rows: Sequence[WorkItemDependency]) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_item_dependencies (
+              source_work_item_id, target_work_item_id, relationship_type,
+              relationship_type_raw, last_synced
+            ) VALUES (
+              :source_work_item_id, :target_work_item_id, :relationship_type,
+              :relationship_type_raw, :last_synced
+            )
+            ON CONFLICT (source_work_item_id, target_work_item_id, relationship_type) DO UPDATE SET
+              last_synced=excluded.last_synced
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_work_item_reopen_events(
+        self, rows: Sequence[WorkItemReopenEvent]
+    ) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_item_reopen_events (
+              work_item_id, occurred_at, from_status, to_status,
+              from_status_raw, to_status_raw, actor, last_synced
+            ) VALUES (
+              :work_item_id, :occurred_at, :from_status, :to_status,
+              :from_status_raw, :to_status_raw, :actor, :last_synced
+            )
+            ON CONFLICT (work_item_id, occurred_at) DO NOTHING
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "occurred_at": _dt_to_iso(data["occurred_at"]),
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_work_item_interactions(
+        self, rows: Sequence[WorkItemInteractionEvent]
+    ) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO work_item_interactions (
+              work_item_id, provider, interaction_type, occurred_at, actor,
+              body_length, last_synced
+            ) VALUES (
+              :work_item_id, :provider, :interaction_type, :occurred_at, :actor,
+              :body_length, :last_synced
+            )
+            ON CONFLICT (work_item_id, occurred_at, interaction_type) DO NOTHING
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "occurred_at": _dt_to_iso(data["occurred_at"]),
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_sprints(self, rows: Sequence[Sprint]) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO sprints (
+              provider, sprint_id, name, state, started_at, ended_at,
+              completed_at, last_synced
+            ) VALUES (
+              :provider, :sprint_id, :name, :state, :started_at, :ended_at,
+              :completed_at, :last_synced
+            )
+            ON CONFLICT (provider, sprint_id) DO UPDATE SET
+              name=excluded.name,
+              state=excluded.state,
+              started_at=excluded.started_at,
+              ended_at=excluded.ended_at,
+              completed_at=excluded.completed_at,
+              last_synced=excluded.last_synced
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "started_at": _dt_to_iso(data["started_at"])
+                    if data["started_at"]
+                    else None,
+                    "ended_at": _dt_to_iso(data["ended_at"])
+                    if data["ended_at"]
+                    else None,
+                    "completed_at": _dt_to_iso(data["completed_at"])
+                    if data["completed_at"]
+                    else None,
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def write_worklogs(self, rows: Sequence[Worklog]) -> None:
+        if not rows:
+            return
+        stmt = text(
+            """
+            INSERT INTO worklogs (
+              work_item_id, provider, worklog_id, author, started_at,
+              time_spent_seconds, created_at, updated_at, last_synced
+            ) VALUES (
+              :work_item_id, :provider, :worklog_id, :author, :started_at,
+              :time_spent_seconds, :created_at, :updated_at, :last_synced
+            )
+            ON CONFLICT (provider, worklog_id) DO UPDATE SET
+              author=excluded.author,
+              started_at=excluded.started_at,
+              time_spent_seconds=excluded.time_spent_seconds,
+              updated_at=excluded.updated_at,
+              last_synced=excluded.last_synced
+            """
+        )
+        payload = []
+        for r in rows:
+            data = asdict(r)
+            payload.append(
+                {
+                    **data,
+                    "started_at": _dt_to_iso(data["started_at"]),
+                    "created_at": _dt_to_iso(data["created_at"]),
+                    "updated_at": _dt_to_iso(data["updated_at"]),
+                    "last_synced": _dt_to_iso(data["last_synced"]),
+                }
+            )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
 
     # -------------------------------------------------------------------------
     # Team resolution / identity support

@@ -43,6 +43,7 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
+    Worklog,
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
@@ -522,6 +523,25 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "started_at",
                 "ended_at",
                 "completed_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    def write_worklogs(self, rows: Sequence[Worklog]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "worklogs",
+            [
+                "work_item_id",
+                "provider",
+                "worklog_id",
+                "author",
+                "started_at",
+                "time_spent_seconds",
+                "created_at",
+                "updated_at",
                 "last_synced",
             ],
             rows,

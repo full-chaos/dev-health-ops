@@ -49,6 +49,7 @@ dependencies = [
   "redis>=5.0.0",
   # Shared Atlassian client library (Jira REST/GraphQL)
   "atlassian-client @ git+https://github.com/full-chaos/atlassian.git@main#subdirectory=python",
+  "pytest-xdist (>=3.8.0,<4.0.0)",
 ]
 
 [project.optional-dependencies]

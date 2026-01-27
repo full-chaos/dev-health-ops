@@ -338,6 +338,79 @@ Use host cron or a separate scheduler service:
 0 */6 * * * docker compose -f compose.production.yml run --rm api dev-hops sync work-items --provider github --backfill 1
 ```
 
+### GitHub Actions (Runner Container)
+
+Use the `dev-hops-runner` image from `docker/Dockerfile` and repository secrets for credentials. Create separate workflows for sync and metrics schedules.
+
+`sync-work-items.yml`:
+
+```yaml
+name: Dev Health Sync
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-work-items:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/full-chaos/dev-health-ops/dev-hops-runner:latest
+    env:
+      DATABASE_URI: ${{ secrets.DATABASE_URI }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Sync work items
+        run: dev-hops sync work-items --provider github --backfill 1 --db "$DATABASE_URI"
+```
+
+`metrics-daily.yml`:
+
+```yaml
+name: Dev Health Metrics
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  metrics-daily:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/full-chaos/dev-health-ops/dev-hops-runner:latest
+    env:
+      DATABASE_URI: ${{ secrets.DATABASE_URI }}
+    steps:
+      - name: Compute daily metrics
+        run: dev-hops metrics daily --db "$DATABASE_URI"
+```
+
+### GitLab CI (Runner Container)
+
+Use pipeline schedules and masked CI/CD variables for credentials. Configure schedules in GitLab UI for the cron timing.
+
+```yaml
+stages:
+  - sync
+  - metrics
+
+sync-work-items:
+  stage: sync
+  image: ghcr.io/full-chaos/dev-health-ops/dev-hops-runner:latest
+  script:
+    - dev-hops sync work-items --provider gitlab --backfill 1 --db "$DATABASE_URI"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+metrics-daily:
+  stage: metrics
+  image: ghcr.io/full-chaos/dev-health-ops/dev-hops-runner:latest
+  script:
+    - dev-hops metrics daily --db "$DATABASE_URI"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+```
+
 ---
 
 ## Health Checks

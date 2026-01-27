@@ -78,7 +78,9 @@ class BaseMetricsSink(ABC):
         self, query: str, parameters: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """Execute a query and return results as a list of dictionaries."""
-        ...
+        raise NotImplementedError(
+            "BaseMetricsSink.query_dicts() must be implemented by subclasses."
+        )
 
     async def __aenter__(self) -> "BaseMetricsSink":
         return self

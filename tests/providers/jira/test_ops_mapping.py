@@ -1,7 +1,5 @@
 from __future__ import annotations
 from unittest.mock import MagicMock, patch, AsyncMock
-import asyncio
-import pytest
 from atlassian.canonical_models import (
     CanonicalProjectWithOpsgenieTeams,
     JiraProject,

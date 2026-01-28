@@ -15,6 +15,13 @@ async def fetch_pull_requests(
     scope_params: Dict[str, Any],
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
+    dialect = getattr(client, "dialect", None)
+    latency_expr = (
+        dialect.date_diff("hour", "created_at", "first_review_at")
+        if dialect
+        else "dateDiff('hour', created_at, first_review_at)"
+    )
+
     query = f"""
         SELECT
             repo_id,
@@ -24,8 +31,7 @@ async def fetch_pull_requests(
             created_at,
             merged_at,
             first_review_at,
-            if(first_review_at IS NULL, NULL,
-               dateDiff('hour', created_at, first_review_at)) AS review_latency_hours
+            {latency_expr} AS review_latency_hours
         FROM git_pull_requests
         WHERE created_at >= %(start_ts)s AND created_at < %(end_ts)s
         {scope_filter}

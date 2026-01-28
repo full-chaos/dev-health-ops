@@ -33,15 +33,16 @@ async def fetch_coverage(
     start_day: date,
     end_day: date,
 ) -> Dict[str, float]:
-    repos_query = """
-        SELECT countDistinct(id) AS total
+    dialect = sink.dialect
+    repos_query = f"""
+        SELECT {dialect.count_distinct("id")} AS total
         FROM repos
     """
     repos_rows = await query_dicts(sink, repos_query, {})
     total_repos = float((repos_rows[0].get("total") or 0) if repos_rows else 0)
 
-    covered_query = """
-        SELECT countDistinct(repo_id) AS covered
+    covered_query = f"""
+        SELECT {dialect.count_distinct("repo_id")} AS covered
         FROM repo_metrics_daily
         WHERE day >= %(start_day)s AND day < %(end_day)s
     """
@@ -51,9 +52,9 @@ async def fetch_coverage(
     covered = float((covered_rows[0].get("covered") or 0) if covered_rows else 0)
     repos_covered_pct = (covered / total_repos * 100.0) if total_repos else 0.0
 
-    pr_link_query = """
+    pr_link_query = f"""
         SELECT
-            countIf(work_scope_id != '') AS linked,
+            {dialect.count_if("work_scope_id != ''")} AS linked,
             count(*) AS total
         FROM work_item_cycle_times
         WHERE day >= %(start_day)s AND day < %(end_day)s
@@ -65,9 +66,9 @@ async def fetch_coverage(
     total = float((pr_rows[0].get("total") or 0) if pr_rows else 0)
     prs_linked_pct = (linked / total * 100.0) if total else 0.0
 
-    cycle_query = """
+    cycle_query = f"""
         SELECT
-            countIf(cycle_time_hours IS NOT NULL) AS with_cycle,
+            {dialect.count_if("cycle_time_hours IS NOT NULL")} AS with_cycle,
             count(*) AS total
         FROM work_item_cycle_times
         WHERE day >= %(start_day)s AND day < %(end_day)s

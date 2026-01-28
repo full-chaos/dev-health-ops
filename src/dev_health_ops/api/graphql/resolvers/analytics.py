@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date
-from typing import Any, Coroutine, Dict, List, Optional
+from typing import Any, Coroutine, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...sql.base_dialect import SqlDialect
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -53,6 +56,7 @@ async def _execute_timeseries_query(
     timeout: int,
     use_investment: bool,
     filters: Optional[Any],
+    dialect: Any,
 ) -> List[TimeseriesResult]:
     """Execute a single timeseries query and return results."""
     from dev_health_ops.api.queries.client import query_dicts
@@ -69,7 +73,7 @@ async def _execute_timeseries_query(
         use_investment=use_investment,
     )
 
-    sql, params = compile_timeseries(request, org_id, timeout, filters=filters)
+    sql, params = compile_timeseries(request, org_id, dialect, timeout, filters=filters)
 
     rows = await query_dicts(client, sql, params)
     grouped: Dict[str, List[TimeseriesBucket]] = {}
@@ -103,6 +107,7 @@ async def _execute_breakdown_query(
     timeout: int,
     use_investment: bool,
     filters: Optional[Any],
+    dialect: SqlDialect,
 ) -> BreakdownResult:
     """Execute a single breakdown query and return results."""
     from dev_health_ops.api.queries.client import query_dicts
@@ -119,7 +124,7 @@ async def _execute_breakdown_query(
         use_investment=use_investment,
     )
 
-    sql, params = compile_breakdown(request, org_id, timeout, filters=filters)
+    sql, params = compile_breakdown(request, org_id, dialect, timeout, filters=filters)
 
     rows = await query_dicts(client, sql, params)
     items = [
@@ -162,9 +167,19 @@ async def resolve_analytics(
 
     org_id = require_org_id(context)
     client = context.client
+    sink = context.sink
+    dialect = sink.dialect if sink else None
 
     if client is None:
         raise RuntimeError("Database client not available")
+
+    if dialect is None:
+        if hasattr(client, "dialect"):
+            dialect = client.dialect
+        else:
+            from dev_health_ops.api.sql.dialect import get_dialect
+
+            dialect = get_dialect()
 
     # Validate sub-request count
     validate_sub_request_count(
@@ -201,8 +216,9 @@ async def resolve_analytics(
             ts_req,
             org_id,
             timeout,
-            batch.use_investment,
+            bool(batch.use_investment),
             batch.filters,
+            dialect,
         )
         for ts_req in batch.timeseries
     ]
@@ -213,8 +229,9 @@ async def resolve_analytics(
             bd_req,
             org_id,
             timeout,
-            batch.use_investment,
+            bool(batch.use_investment),
             batch.filters,
+            dialect,
         )
         for bd_req in batch.breakdowns
     ]
@@ -268,14 +285,14 @@ async def resolve_analytics(
         )
 
         nodes_queries, edges_queries = compile_sankey(
-            request, org_id, timeout, filters=batch.filters
+            request, org_id, dialect, timeout, filters=batch.filters
         )
 
         nodes: List[SankeyNode] = []
         edges: List[SankeyEdge] = []
 
         try:
-            # Execute nodes and edges queries in parallel
+
             async def fetch_nodes() -> List[SankeyNode]:
                 result_nodes: List[SankeyNode] = []
                 for sql, params in nodes_queries:
@@ -339,14 +356,13 @@ async def resolve_analytics(
             coverage: Optional[SankeyCoverage] = None
             if batch.sankey is not None:
                 # Use a specific coverage query
-                # We need to calculate % of units with assigned team and assigned repo
                 from ..sql.validate import Dimension
 
                 team_col = Dimension.db_column(
-                    Dimension.TEAM, use_investment=bool(request.use_investment)
+                    Dimension.TEAM, dialect, use_investment=bool(request.use_investment)
                 )
                 repo_col = Dimension.db_column(
-                    Dimension.REPO, use_investment=bool(request.use_investment)
+                    Dimension.REPO, dialect, use_investment=bool(request.use_investment)
                 )
 
                 table = (
@@ -363,23 +379,23 @@ async def resolve_analytics(
                         "work_unit_investments.from_ts < %(end_date)s "
                         "AND work_unit_investments.to_ts >= %(start_date)s"
                     )
-                    joins = """
+                    joins = f"""
                         LEFT JOIN (
                             SELECT
                                 work_unit_id,
-                                argMax(team, cnt) AS team_label
+                                {dialect.arg_max("team", "cnt")} AS team_label
                             FROM (
                                 SELECT
                                     work_unit_investments.work_unit_id AS work_unit_id,
-                                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
+                                    {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
                                     count() AS cnt
                                 FROM work_unit_investments
-                                ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
+                                {dialect.array_join(dialect.json_extract("structural_evidence_json", "issues", "Array(String)"), "issue_id")}
                                 LEFT JOIN (
                                     SELECT
                                         work_item_id,
-                                        argMax(team_id, computed_at) AS team_id,
-                                        argMax(team_name, computed_at) AS team_name
+                                        {dialect.arg_max("team_id", "computed_at")} AS team_id,
+                                        {dialect.arg_max("team_name", "computed_at")} AS team_name
                                     FROM work_item_cycle_times
                                     GROUP BY work_item_id
                                 ) AS t ON t.work_item_id = issue_id
@@ -387,10 +403,14 @@ async def resolve_analytics(
                             )
                             GROUP BY work_unit_id
                         ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
-                        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
+                        LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
                         """
 
-                assigned_team_expr = f"lower(ifNull(nullIf({team_col}, ''), 'unassigned')) != 'unassigned'"
+                unassigned_label = "'unassigned'"
+                empty_label = "''"
+                null_team = dialect.null_if(team_col, empty_label)
+                team_expr = dialect.if_null(null_team, unassigned_label)
+                assigned_team_expr = f"lower({team_expr}) != 'unassigned'"
                 assigned_repo_expr = f"{repo_col} IS NOT NULL"
                 if request.use_investment:
                     assigned_repo_expr = f"lower({repo_col}) != 'unassigned'"
@@ -398,8 +418,8 @@ async def resolve_analytics(
                 coverage_sql = f"""
                     SELECT
                         count() as total,
-                        countIf({assigned_team_expr}) as assigned_team,
-                        countIf({assigned_repo_expr}) as assigned_repo
+                        {dialect.count_if(assigned_team_expr)} as assigned_team,
+                        {dialect.count_if(assigned_repo_expr)} as assigned_repo
                     FROM {base_table}
                     {joins}
                     WHERE {date_filter}

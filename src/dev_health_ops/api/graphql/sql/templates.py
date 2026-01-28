@@ -6,32 +6,39 @@ Column names are validated against allowlists before being inserted.
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, List, TYPE_CHECKING
 
 from .validate import BucketInterval, Dimension, Measure
+
+if TYPE_CHECKING:
+    from ...sql.base_dialect import SqlDialect
 
 
 def timeseries_template(
     dimension: Dimension,
     measure: Measure,
     interval: BucketInterval,
+    dialect: "SqlDialect",
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
     use_investment: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
+    timeout: int = 30,
 ) -> str:
     """Generate SQL template for timeseries query."""
-    dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
-    trunc_unit = BucketInterval.date_trunc_unit(interval)
+    dim_col = Dimension.db_column(dimension, dialect, use_investment=use_investment)
+    measure_expr = Measure.db_expression(
+        measure, dialect, use_investment=use_investment
+    )
 
     # Extract date column from filter for truncating
     date_col = date_filter.split(" ")[0]
+    bucket_expr = dialect.date_trunc(interval.value, date_col)
 
     return f"""
 SELECT
-    date_trunc('{trunc_unit}', {date_col}) AS bucket,
+    {bucket_expr} AS bucket,
     {dim_col} AS dimension_value,
     {measure_expr} AS value
 FROM {source_table}
@@ -40,22 +47,26 @@ WHERE {date_filter}
 {filter_clause}
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC
-SETTINGS max_execution_time = %(timeout)s
+{dialect.query_settings(timeout)}
 """
 
 
 def breakdown_template(
     dimension: Dimension,
     measure: Measure,
+    dialect: "SqlDialect",
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
     use_investment: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
+    timeout: int = 30,
 ) -> str:
     """Generate SQL template for breakdown (top-N aggregation) query."""
-    dim_col = Dimension.db_column(dimension, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
+    dim_col = Dimension.db_column(dimension, dialect, use_investment=use_investment)
+    measure_expr = Measure.db_expression(
+        measure, dialect, use_investment=use_investment
+    )
 
     return f"""
 SELECT
@@ -68,13 +79,14 @@ WHERE {date_filter}
 GROUP BY dimension_value
 ORDER BY value DESC
 LIMIT %(top_n)s
-SETTINGS max_execution_time = %(timeout)s
+{dialect.query_settings(timeout)}
 """
 
 
 def sankey_nodes_template(
     dimensions: List[Dimension],
     measure: Measure,
+    dialect: "SqlDialect",
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
@@ -82,15 +94,17 @@ def sankey_nodes_template(
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey nodes query."""
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
+    measure_expr = Measure.db_expression(
+        measure, dialect, use_investment=use_investment
+    )
 
     union_parts = []
     for dim in dimensions:
-        dim_col = Dimension.db_column(dim, use_investment=use_investment)
+        dim_col = Dimension.db_column(dim, dialect, use_investment=use_investment)
         part = f"""
 SELECT
     '{dim.value.upper()}' AS dimension,
-    toString({dim_col}) AS node_id,
+    {dialect.to_string(dim_col)} AS node_id,
     {measure_expr} AS value
 FROM {source_table}
 {extra_clauses}
@@ -102,17 +116,14 @@ LIMIT %(limit_per_dim)s
 """
         union_parts.append(part)
 
-    template = " UNION ALL ".join(union_parts)
-    return f"""
-{template}
-SETTINGS max_execution_time = %(timeout)s
-"""
+    return " UNION ALL ".join(union_parts)
 
 
 def sankey_edges_template(
     source_dim: Dimension,
     target_dim: Dimension,
     measure: Measure,
+    dialect: "SqlDialect",
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
@@ -120,16 +131,18 @@ def sankey_edges_template(
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey edges query."""
-    source_col = Dimension.db_column(source_dim, use_investment=use_investment)
-    target_col = Dimension.db_column(target_dim, use_investment=use_investment)
-    measure_expr = Measure.db_expression(measure, use_investment=use_investment)
+    source_col = Dimension.db_column(source_dim, dialect, use_investment=use_investment)
+    target_col = Dimension.db_column(target_dim, dialect, use_investment=use_investment)
+    measure_expr = Measure.db_expression(
+        measure, dialect, use_investment=use_investment
+    )
 
     return f"""
 SELECT
     '{source_dim.value.upper()}' AS source_dimension,
     '{target_dim.value.upper()}' AS target_dimension,
-    toString({source_col}) AS source,
-    toString({target_col}) AS target,
+    {dialect.to_string(source_col)} AS source,
+    {dialect.to_string(target_col)} AS target,
     {measure_expr} AS value
 FROM {source_table}
 {extra_clauses}
@@ -140,12 +153,12 @@ WHERE {date_filter}
 GROUP BY source, target
 ORDER BY value DESC
 LIMIT %(max_edges)s
-SETTINGS max_execution_time = %(timeout)s
 """
 
 
 def catalog_values_template(
     dimension: Dimension,
+    dialect: "SqlDialect",
     source_table: str = "investment_metrics_daily",
     extra_clauses: str = "",
     use_investment: bool = False,
@@ -153,19 +166,19 @@ def catalog_values_template(
     **kwargs: Any,
 ) -> str:
     """Generate SQL template for fetching distinct dimension values."""
-    dim_col = Dimension.db_column(dimension, use_investment=use_investment)
+    dim_col = Dimension.db_column(dimension, dialect, use_investment=use_investment)
+    dim_str = dialect.to_string(dim_col)
 
     return f"""
 SELECT
-    toString({dim_col}) AS value,
+    {dim_str} AS value,
     COUNT(*) AS count
 FROM {source_table}
 {extra_clauses}
 WHERE {dim_col} IS NOT NULL
-  AND toString({dim_col}) != ''
+  AND {dim_str} != ''
 {filter_clause}
 GROUP BY value
 ORDER BY count DESC
 LIMIT %(limit)s
-SETTINGS max_execution_time = %(timeout)s
 """

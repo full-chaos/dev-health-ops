@@ -9,7 +9,9 @@ SQLite, and PostgreSQL backends.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+
+from dev_health_ops.api.sql.base_dialect import SqlDialect
 
 from dev_health_ops.metrics.schemas import (
     CICDMetricsDailyRecord,
@@ -93,6 +95,13 @@ class BaseMetricsSink(ABC):
     def backend_type(self) -> str:
         """Return the backend type identifier (clickhouse, mongo, sqlite, postgres)."""
         ...
+
+    @property
+    def dialect(self) -> Any:
+        """Return the SQL dialect for this sink."""
+        from dev_health_ops.api.sql.dialect import get_dialect
+
+        return get_dialect(backend_type=self.backend_type)
 
     @abstractmethod
     def close(self) -> None:

@@ -29,34 +29,41 @@ async def resolve_home(
     """
     require_org_id(context)
     client = context.client
+    sink = context.sink
+    dialect = sink.dialect if sink else None
 
     if client is None:
         raise RuntimeError("Database client not available")
 
+    if dialect is None:
+        if hasattr(client, "dialect"):
+            dialect = client.dialect
+        else:
+            from dev_health_ops.api.sql.dialect import get_dialect
+
+            dialect = get_dialect()
+
     from dev_health_ops.api.queries.client import query_dicts
 
     # Get freshness data
-    freshness_sql = """
+    freshness_sql = f"""
         SELECT
-            max(ingested_at) as last_ingested_at
+            MAX(ingested_at) as last_ingested_at
         FROM investment_metrics_daily
-        WHERE day >= today() - 30
     """
     freshness_rows = await query_dicts(client, freshness_sql, {})
     last_ingested = None
     if freshness_rows and freshness_rows[0].get("last_ingested_at"):
         last_ingested = freshness_rows[0]["last_ingested_at"]
 
-    # Get metric deltas (comparing current period to previous)
-    deltas_sql = """
+    # Get metric deltas
+    deltas_sql = f"""
         SELECT
             'throughput' as metric,
             'Throughput' as label,
-            count(DISTINCT work_unit_id) as value,
+            {dialect.count_distinct("work_unit_id")} as value,
             'units' as unit
         FROM work_unit_investments
-        WHERE from_ts >= today() - 30
-        AND from_ts < today()
     """
     delta_rows = await query_dicts(client, deltas_sql, {})
 

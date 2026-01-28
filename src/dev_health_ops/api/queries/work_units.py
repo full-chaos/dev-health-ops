@@ -12,6 +12,7 @@ async def fetch_work_graph_edges(
     repo_ids: Optional[List[str]] = None,
     limit: int = 50000,
 ) -> List[Dict[str, Any]]:
+    dialect = getattr(client, "dialect", None)
     params: Dict[str, Any] = {"limit": int(limit)}
     filters = []
     if repo_ids:
@@ -22,6 +23,9 @@ async def fetch_work_graph_edges(
         params["repo_id"] = repo_id
     where_clause = " AND ".join(filters)
     where_sql = f"WHERE {where_clause}" if where_clause else ""
+
+    repo_id_col = dialect.to_string("repo_id") if dialect else "toString(repo_id)"
+
     query = f"""
         SELECT
             edge_id,
@@ -30,7 +34,7 @@ async def fetch_work_graph_edges(
             target_type,
             target_id,
             edge_type,
-            toString(repo_id) AS repo_id,
+            {repo_id_col} AS repo_id,
             provider,
             provenance,
             confidence,
@@ -47,15 +51,19 @@ async def fetch_work_items(
     *,
     work_item_ids: Iterable[str],
 ) -> List[Dict[str, Any]]:
+    dialect = getattr(client, "dialect", None)
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return []
+
+    repo_id_col = dialect.to_string("repo_id") if dialect else "toString(repo_id)"
+
     params = {"work_item_ids": ids}
-    query = """
+    query = f"""
         SELECT
             work_item_id,
             provider,
-            toString(repo_id) AS repo_id,
+            {repo_id_col} AS repo_id,
             title,
             description,
             type,
@@ -73,14 +81,22 @@ async def fetch_work_item_active_hours(
     *,
     work_item_ids: Iterable[str],
 ) -> Dict[str, float]:
+    dialect = getattr(client, "dialect", None)
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return {}
+
+    active_expr = (
+        dialect.arg_max("active_time_hours", "computed_at")
+        if dialect
+        else "argMax(active_time_hours, computed_at)"
+    )
+
     params = {"work_item_ids": ids}
-    query = """
+    query = f"""
         SELECT
             work_item_id,
-            argMax(active_time_hours, computed_at) AS active_time_hours
+            {active_expr} AS active_time_hours
         FROM work_item_cycle_times
         WHERE work_item_id IN %(work_item_ids)s
         GROUP BY work_item_id
@@ -97,14 +113,17 @@ async def fetch_pull_requests(
     *,
     repo_numbers: Dict[str, List[int]],
 ) -> List[Dict[str, Any]]:
+    dialect = getattr(client, "dialect", None)
+    repo_id_col = dialect.to_string("repo_id") if dialect else "toString(repo_id)"
+
     rows: List[Dict[str, Any]] = []
     for repo_id, numbers in repo_numbers.items():
         if not numbers:
             continue
         params = {"repo_id": repo_id, "numbers": numbers}
-        query = """
+        query = f"""
             SELECT
-                toString(repo_id) AS repo_id,
+                {repo_id_col} AS repo_id,
                 number,
                 title,
                 body,
@@ -126,14 +145,17 @@ async def fetch_commits(
     *,
     repo_commits: Dict[str, List[str]],
 ) -> List[Dict[str, Any]]:
+    dialect = getattr(client, "dialect", None)
+    repo_id_col = dialect.to_string("repo_id") if dialect else "toString(repo_id)"
+
     rows: List[Dict[str, Any]] = []
     for repo_id, hashes in repo_commits.items():
         if not hashes:
             continue
         params = {"repo_id": repo_id, "hashes": hashes}
-        query = """
+        query = f"""
             SELECT
-                toString(repo_id) AS repo_id,
+                {repo_id_col} AS repo_id,
                 hash,
                 message,
                 author_when,

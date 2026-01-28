@@ -28,6 +28,7 @@ from .validate import (
 
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
+    from ...sql.base_dialect import SqlDialect
 
 
 # Default query timeout in seconds
@@ -81,6 +82,7 @@ class CatalogValuesRequest:
 
 def _get_context_params(
     dimensions: List[Dimension],
+    dialect: "SqlDialect",
     force_investment: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Determine source table and extra clauses based on dimensions."""
@@ -94,28 +96,32 @@ def _get_context_params(
         joins = []
         # ALWAYS join subcategory distribution for investment queries
         joins.append(
-            "ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv"
+            dialect.array_join(
+                "subcategory_distribution_json",
+                "subcategory_kv",
+                "Array(Tuple(String, Float32))",
+            )
         )
 
         # Add team join if TEAM dimension is used
         if Dimension.TEAM in dimensions:
-            team_join = """
+            team_join = f"""
             LEFT JOIN (
                 SELECT
                     work_unit_id,
-                    argMax(team, cnt) AS team_label
+                    {dialect.arg_max("team", "cnt")} AS team_label
                 FROM (
                     SELECT
                         work_unit_investments.work_unit_id AS work_unit_id,
-                        ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
+                        {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
                         count() AS cnt
                     FROM work_unit_investments
-                    ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
+                    {dialect.array_join(dialect.json_extract("structural_evidence_json", "issues", "Array(String)"), "issue_id")}
                     LEFT JOIN (
                         SELECT
                             work_item_id,
-                            argMax(team_id, computed_at) AS team_id,
-                            argMax(team_name, computed_at) AS team_name
+                            {dialect.arg_max("team_id", "computed_at")} AS team_id,
+                            {dialect.arg_max("team_name", "computed_at")} AS team_name
                         FROM work_item_cycle_times
                         GROUP BY work_item_id
                     ) AS t ON t.work_item_id = issue_id
@@ -128,7 +134,9 @@ def _get_context_params(
 
         # Add repo join if REPO dimension is used
         if Dimension.REPO in dimensions:
-            joins.append("LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)")
+            joins.append(
+                f"LEFT JOIN repos AS r ON {dialect.to_string('r.id')} = {dialect.to_string('repo_id')}"
+            )
 
         return {
             "source_table": "work_unit_investments",
@@ -148,6 +156,7 @@ def _get_context_params(
 def compile_timeseries(
     request: TimeseriesRequest,
     org_id: str,
+    dialect: "SqlDialect",
     timeout: int = DEFAULT_TIMEOUT,
     filters: Optional["FilterInput"] = None,  # NEW: Filter support
 ) -> Tuple[str, Dict[str, Any]]:
@@ -157,6 +166,7 @@ def compile_timeseries(
     Args:
         request: The timeseries request parameters
         org_id: Organization ID for scoping
+        dialect: SQL dialect for generation
         timeout: Query timeout in seconds
         filters: Optional FilterInput for scope/category filtering
 
@@ -167,7 +177,9 @@ def compile_timeseries(
     measure = validate_measure(request.measure)
     interval = validate_bucket_interval(request.interval)
 
-    ctx = _get_context_params([dimension], force_investment=request.use_investment)
+    ctx = _get_context_params(
+        [dimension], dialect, force_investment=request.use_investment
+    )
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
@@ -175,7 +187,12 @@ def compile_timeseries(
     )
 
     sql = timeseries_template(
-        dimension, measure, interval, filter_clause=filter_clause, **ctx
+        dimension,
+        measure,
+        interval,
+        dialect,
+        filter_clause=filter_clause,
+        **ctx,
     )
 
     params: Dict[str, Any] = {
@@ -192,6 +209,7 @@ def compile_timeseries(
 def compile_breakdown(
     request: BreakdownRequest,
     org_id: str,
+    dialect: "SqlDialect",
     timeout: int = DEFAULT_TIMEOUT,
     filters: Optional["FilterInput"] = None,  # NEW: Filter support
 ) -> Tuple[str, Dict[str, Any]]:
@@ -201,14 +219,18 @@ def compile_breakdown(
     dimension = validate_dimension(request.dimension)
     measure = validate_measure(request.measure)
 
-    ctx = _get_context_params([dimension], force_investment=request.use_investment)
+    ctx = _get_context_params(
+        [dimension], dialect, force_investment=request.use_investment
+    )
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
         filters, use_investment=ctx.get("use_investment", False)
     )
 
-    sql = breakdown_template(dimension, measure, filter_clause=filter_clause, **ctx)
+    sql = breakdown_template(
+        dimension, measure, dialect, filter_clause=filter_clause, **ctx
+    )
 
     params: Dict[str, Any] = {
         "start_date": request.start_date,
@@ -225,6 +247,7 @@ def compile_breakdown(
 def compile_sankey(
     request: SankeyRequest,
     org_id: str,
+    dialect: "SqlDialect",
     timeout: int = DEFAULT_TIMEOUT,
     filters: Optional["FilterInput"] = None,  # NEW: Filter support
 ) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[Tuple[str, Dict[str, Any]]]]:
@@ -234,7 +257,9 @@ def compile_sankey(
     dimensions = validate_sankey_path(request.path)
     measure = validate_measure(request.measure)
 
-    ctx = _get_context_params(dimensions, force_investment=request.use_investment)
+    ctx = _get_context_params(
+        dimensions, dialect, force_investment=request.use_investment
+    )
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
@@ -246,7 +271,7 @@ def compile_sankey(
 
     # Build nodes query
     nodes_sql = sankey_nodes_template(
-        dimensions, measure, filter_clause=filter_clause, **ctx
+        dimensions, measure, dialect, filter_clause=filter_clause, **ctx
     )
     nodes_params: Dict[str, Any] = {
         "start_date": request.start_date,
@@ -264,7 +289,12 @@ def compile_sankey(
         target_dim = dimensions[i + 1]
 
         edge_sql = sankey_edges_template(
-            source_dim, target_dim, measure, filter_clause=filter_clause, **ctx
+            source_dim,
+            target_dim,
+            measure,
+            dialect,
+            filter_clause=filter_clause,
+            **ctx,
         )
         edge_params: Dict[str, Any] = {
             "start_date": request.start_date,
@@ -282,6 +312,7 @@ def compile_sankey(
 def compile_catalog_values(
     request: CatalogValuesRequest,
     org_id: str,
+    dialect: "SqlDialect",
     timeout: int = DEFAULT_TIMEOUT,
     filters: Optional["FilterInput"] = None,  # NEW: Filter support
 ) -> Tuple[str, Dict[str, Any]]:
@@ -290,14 +321,16 @@ def compile_catalog_values(
     """
     dimension = validate_dimension(request.dimension)
 
-    ctx = _get_context_params([dimension])
+    ctx = _get_context_params([dimension], dialect)
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
         filters, use_investment=ctx.get("use_investment", False)
     )
 
-    sql = catalog_values_template(dimension, filter_clause=filter_clause, **ctx)
+    sql = catalog_values_template(
+        dimension, dialect, filter_clause=filter_clause, **ctx
+    )
 
     params: Dict[str, Any] = {
         "limit": request.limit,

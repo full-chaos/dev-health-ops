@@ -26,9 +26,16 @@ from .filtering import resolve_repo_filter_ids, time_window
 logger = logging.getLogger(__name__)
 
 
-def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+def _ensure_utc(dt: Optional[datetime | str]) -> Optional[datetime]:
     if dt is None:
         return None
+    if isinstance(dt, str):
+        from dateutil.parser import parse as parse_datetime
+
+        try:
+            dt = parse_datetime(dt)
+        except (ValueError, TypeError):
+            return None
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)

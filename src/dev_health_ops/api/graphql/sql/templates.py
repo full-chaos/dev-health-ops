@@ -101,8 +101,7 @@ def sankey_nodes_template(
     union_parts = []
     for dim in dimensions:
         dim_col = Dimension.db_column(dim, dialect, use_investment=use_investment)
-        part = f"""
-SELECT
+        part = f"""(SELECT
     '{dim.value.upper()}' AS dimension,
     {dialect.to_string(dim_col)} AS node_id,
     {measure_expr} AS value
@@ -112,11 +111,10 @@ WHERE {date_filter}
 {filter_clause}
 GROUP BY node_id
 ORDER BY value DESC
-LIMIT %(limit_per_dim)s
-"""
+LIMIT %(limit_per_dim)s)"""
         union_parts.append(part)
 
-    return " UNION ALL ".join(union_parts)
+    return " UNION ALL\n".join(union_parts)
 
 
 def sankey_edges_template(

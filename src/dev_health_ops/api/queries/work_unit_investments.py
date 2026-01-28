@@ -18,11 +18,11 @@ async def fetch_work_unit_investments(
 ) -> List[Dict[str, Any]]:
     dialect = sink.dialect
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
-    # ClickHouse may prefer alias over column names in WHERE; always qualify columns
-    # to avoid accidentally referencing argMax(...) aliases.
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     filters: List[str] = [
-        "work_unit_investments.from_ts < %(end_ts)s",
-        "work_unit_investments.to_ts >= %(start_ts)s",
+        f"{from_ts_col} < %(end_ts)s",
+        f"{to_ts_col} >= %(start_ts)s",
     ]
     if repo_ids:
         filters.append("work_unit_investments.repo_id IN %(repo_ids)s")

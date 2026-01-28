@@ -33,6 +33,8 @@ async def fetch_investment_breakdown(
         filters.append(f"{subcat_key} IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     query = f"""
         SELECT
             {subcat_key} AS subcategory,
@@ -40,8 +42,8 @@ async def fetch_investment_breakdown(
             SUM({subcat_val} * effort_value) AS value
         FROM work_unit_investments
         {dialect.array_join("subcategory_distribution_json", "subcategory_kv", "Array(Tuple(String, Float32))")}
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY subcategory, theme
@@ -70,6 +72,8 @@ async def fetch_investment_edges(
     if themes:
         theme_filter = f" AND {theme_key} IN %(themes)s"
         params["themes"] = themes
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     query = f"""
         SELECT
             {theme_key} AS source,
@@ -78,8 +82,8 @@ async def fetch_investment_edges(
         FROM work_unit_investments
         LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
         {dialect.array_join("theme_distribution_json", "theme_kv", "Array(Tuple(String, Float32))")}
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {theme_filter}
         GROUP BY source, target
@@ -114,6 +118,8 @@ async def fetch_investment_subcategory_edges(
         filters.append(f"{subcat_key} IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     query = f"""
         SELECT
             {subcat_key} AS source,
@@ -122,8 +128,8 @@ async def fetch_investment_subcategory_edges(
         FROM work_unit_investments
         LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
         {dialect.array_join("subcategory_distribution_json", "subcategory_kv", "Array(Tuple(String, Float32))")}
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY source, target
@@ -163,6 +169,8 @@ async def fetch_investment_team_edges(
         dialect.json_extract("structural_evidence_json", "issues", "Array(String)"), 1
     )
 
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     query = f"""
         SELECT
             {subcat_key} AS source,
@@ -177,8 +185,8 @@ async def fetch_investment_team_edges(
             GROUP BY work_item_id
         ) AS t ON t.work_item_id = {issue_id_expr}
         {dialect.array_join("subcategory_distribution_json", "subcategory_kv", "Array(Tuple(String, Float32))")}
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY source, target
@@ -218,6 +226,8 @@ async def fetch_investment_repo_team_edges(
         "structural_evidence_json", "issues", "Array(String)"
     )
 
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     query = f"""
         WITH unit_team AS (
             SELECT
@@ -227,7 +237,7 @@ async def fetch_investment_repo_team_edges(
                 SELECT
                     work_unit_investments.work_unit_id AS work_unit_id,
                     {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
-                    count() AS cnt
+                    COUNT(*) AS cnt
                 FROM work_unit_investments
                 {dialect.array_join(issue_id_expr, "issue_id")}
                 LEFT JOIN (
@@ -238,8 +248,8 @@ async def fetch_investment_repo_team_edges(
                     FROM work_item_cycle_times
                     GROUP BY work_item_id
                 ) AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
+                WHERE {from_ts_col} < %(end_ts)s
+                  AND {to_ts_col} >= %(start_ts)s
                 {scope_filter}
                 GROUP BY work_unit_id, team
             )
@@ -254,8 +264,8 @@ async def fetch_investment_repo_team_edges(
         LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         {dialect.array_join("subcategory_distribution_json", "subcategory_kv", "Array(Tuple(String, Float32))")}
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY subcategory, repo, team
@@ -274,54 +284,67 @@ async def fetch_investment_team_category_repo_edges(
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+
+    subcat_key = dialect.tuple_element("subcategory_kv", 1)
+    subcat_val = dialect.tuple_element("subcategory_kv", 2)
+    theme_expr = dialect.split_by_char(".", subcat_key, 1)
+
     if themes:
-        filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
+        filters.append(f"{theme_expr} IN %(themes)s")
         params["themes"] = themes
     if subcategories:
-        filters.append("subcategory_kv.1 IN %(subcategories)s")
+        filters.append(f"{subcat_key} IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+
+    issue_id_expr = dialect.json_extract(
+        "structural_evidence_json", "issues", "Array(String)"
+    )
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
+
     query = f"""
         WITH unit_team AS (
             SELECT
                 work_unit_id,
-                argMax(team, cnt) AS team
+                {dialect.arg_max("team", "cnt")} AS team
             FROM (
                 SELECT
                     work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                    count() AS cnt
+                    {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
+                    COUNT(*) AS cnt
                 FROM work_unit_investments
-                ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
+                {dialect.array_join(issue_id_expr, "issue_id")}
                 LEFT JOIN (
                     SELECT
                         work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
+                        {dialect.arg_max("team_id", "computed_at")} AS team_id,
+                        {dialect.arg_max("team_name", "computed_at")} AS team_name
                     FROM work_item_cycle_times
                     GROUP BY work_item_id
                 ) AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
+                WHERE {from_ts_col} < %(end_ts)s
+                  AND {to_ts_col} >= %(start_ts)s
                 {scope_filter}
                 GROUP BY work_unit_id, team
             )
             GROUP BY work_unit_id
         )
         SELECT
-            ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
-            splitByChar('.', subcategory_kv.1)[1] AS category,
-            ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
-            sum(subcategory_kv.2 * effort_value) AS value
+            {dialect.if_null(dialect.null_if("unit_team.team", "''"), "'unassigned'")} AS team,
+            {theme_expr} AS category,
+            {dialect.if_null("r.repo", dialect.if_null(dialect.to_string("repo_id"), "'unassigned'"))} AS repo,
+            SUM({subcat_val} * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
+        LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
-        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        {dialect.array_join("subcategory_distribution_json", "subcategory_kv", "Array(Tuple(String, Float32))")}
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY team, category, repo
@@ -340,54 +363,67 @@ async def fetch_investment_team_subcategory_repo_edges(
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+
+    subcat_key = dialect.tuple_element("subcategory_kv", 1)
+    subcat_val = dialect.tuple_element("subcategory_kv", 2)
+    theme_expr = dialect.split_by_char(".", subcat_key, 1)
+
     if themes:
-        filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
+        filters.append(f"{theme_expr} IN %(themes)s")
         params["themes"] = themes
     if subcategories:
-        filters.append("subcategory_kv.1 IN %(subcategories)s")
+        filters.append(f"{subcat_key} IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+
+    issue_id_expr = dialect.json_extract(
+        "structural_evidence_json", "issues", "Array(String)"
+    )
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
+
     query = f"""
         WITH unit_team AS (
             SELECT
                 work_unit_id,
-                argMax(team, cnt) AS team
+                {dialect.arg_max("team", "cnt")} AS team
             FROM (
                 SELECT
                     work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                    count() AS cnt
+                    {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
+                    COUNT(*) AS cnt
                 FROM work_unit_investments
-                ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
+                {dialect.array_join(issue_id_expr, "issue_id")}
                 LEFT JOIN (
                     SELECT
                         work_item_id,
-                        argMax(team_id, computed_at) AS team_id,
-                        argMax(team_name, computed_at) AS team_name
+                        {dialect.arg_max("team_id", "computed_at")} AS team_id,
+                        {dialect.arg_max("team_name", "computed_at")} AS team_name
                     FROM work_item_cycle_times
                     GROUP BY work_item_id
                 ) AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
+                WHERE {from_ts_col} < %(end_ts)s
+                  AND {to_ts_col} >= %(start_ts)s
                 {scope_filter}
                 GROUP BY work_unit_id, team
             )
             GROUP BY work_unit_id
         )
         SELECT
-            ifNull(nullIf(unit_team.team, ''), 'unassigned') AS team,
-            subcategory_kv.1 AS subcategory,
-            ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS repo,
-            sum(subcategory_kv.2 * effort_value) AS value
+            {dialect.if_null(dialect.null_if("unit_team.team", "''"), "'unassigned'")} AS team,
+            {subcat_key} AS subcategory,
+            {dialect.if_null("r.repo", dialect.if_null(dialect.to_string("repo_id"), "'unassigned'"))} AS repo,
+            SUM({subcat_val} * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
+        LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
-        ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        {dialect.array_join("subcategory_distribution_json", "subcategory_kv", "Array(Tuple(String, Float32))")}
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY team, subcategory, repo
@@ -423,6 +459,9 @@ async def fetch_investment_unassigned_counts(
         )
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
+    missing_team_expr = dialect.if_null(dialect.null_if("unit_team.team", "''"), "''")
     query = f"""
         WITH unit_team AS (
             SELECT
@@ -432,7 +471,7 @@ async def fetch_investment_unassigned_counts(
                 SELECT
                     work_unit_investments.work_unit_id AS work_unit_id,
                     {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
-                    count() AS cnt
+                    COUNT(*) AS cnt
                 FROM work_unit_investments
                 {dialect.array_join(dialect.json_extract("structural_evidence_json", "issues", "Array(String)"), "issue_id")}
                 LEFT JOIN (
@@ -443,8 +482,8 @@ async def fetch_investment_unassigned_counts(
                     FROM work_item_cycle_times
                     GROUP BY work_item_id
                 ) AS t ON t.work_item_id = issue_id
-                WHERE work_unit_investments.from_ts < %(end_ts)s
-                  AND work_unit_investments.to_ts >= %(start_ts)s
+                WHERE {from_ts_col} < %(end_ts)s
+                  AND {to_ts_col} >= %(start_ts)s
                 {scope_filter}
                 {category_filter}
                 GROUP BY work_unit_id, team
@@ -454,11 +493,11 @@ async def fetch_investment_unassigned_counts(
         SELECT
             {dialect.count_distinct("work_unit_investments.work_unit_id")} AS total_count,
             {dialect.count_if("repo_id IS NULL")} AS missing_repo,
-            {dialect.count_if("ifNull(nullIf(unit_team.team, ''), '') = ''")} AS missing_team
+            {dialect.count_if(f"{missing_team_expr} = ''")} AS missing_team
         FROM work_unit_investments
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
     """
@@ -503,6 +542,8 @@ async def fetch_investment_sunburst(
         filters.append(f"{subcat_key} IN %(subcategories)s")
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     query = f"""
         SELECT
             {subcat_key} AS subcategory,
@@ -512,8 +553,8 @@ async def fetch_investment_sunburst(
         FROM work_unit_investments
         LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
         {dialect.array_join("subcategory_distribution_json", "subcategory_kv", "Array(Tuple(String, Float32))")}
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
         GROUP BY theme, subcategory, scope
@@ -551,6 +592,8 @@ async def fetch_investment_quality_stats(
         )
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
     query = f"""
         SELECT
             SUM(effort_value) AS total_effort,
@@ -563,8 +606,8 @@ async def fetch_investment_quality_stats(
             {dialect.count_if("evidence_quality IS NULL OR evidence_quality_band = ''")} AS unknown_count,
             {dialect.var_pop_if("evidence_quality", "evidence_quality IS NOT NULL")} AS quality_variance
         FROM work_unit_investments
-        WHERE work_unit_investments.from_ts < %(end_ts)s
-          AND work_unit_investments.to_ts >= %(start_ts)s
+        WHERE {from_ts_col} < %(end_ts)s
+          AND {to_ts_col} >= %(start_ts)s
         {scope_filter}
         {category_filter}
     """

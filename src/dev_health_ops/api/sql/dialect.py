@@ -87,6 +87,9 @@ class ClickHouseDialect(SqlDialect):
     def query_settings(self, timeout_seconds: int) -> str:
         return f"SETTINGS max_execution_time = {timeout_seconds}"
 
+    def to_timestamp_tz(self, column: str) -> str:
+        return column
+
 
 class PostgresDialect(SqlDialect):
     """PostgreSQL SQL dialect implementation."""
@@ -124,29 +127,47 @@ class PostgresDialect(SqlDialect):
     def array_join(
         self, column: str, alias: str, type_str: Optional[str] = None
     ) -> str:
-        return f"CROSS JOIN LATERAL unnest({column}) AS {alias}"
+        # Postgres stores JSON as TEXT; we must cast and use appropriate jsonb functions.
+        # type_str indicates ClickHouse type hint: "Array(Tuple(String, Float32))" = map,
+        # "Array(String)" = simple array.
+        if type_str and "Tuple" in type_str:
+            # Map expansion: {"key": value, ...} -> rows with (key, value)
+            return f"CROSS JOIN LATERAL jsonb_each_text({column}::jsonb) AS {alias}(key, value)"
+        # Array expansion: wrap in subquery so alias is a column name, not just table alias
+        # This allows downstream code to reference `alias` directly (e.g., `ON col = alias`)
+        return f"CROSS JOIN LATERAL (SELECT elem AS {alias} FROM jsonb_array_elements_text(({column})::jsonb) AS _t(elem)) AS _{alias}"
 
     def json_extract(self, column: str, path: str, type_str: str) -> str:
+        # For array types, return jsonb so array_join can expand it
+        if "Array" in type_str:
+            return f"({column}::jsonb->'{path}')"
         return f"{column}->>'{path}'"
 
     def split_by_char(self, char: str, column: str, index: int) -> str:
         return f"split_part({column}, '{char}', {index})"
 
     def map_key_access(self, column: str, key: str) -> str:
-        return f"{column}->>'{key}'"
+        return f"({column}::jsonb)->>'{key}'"
 
     def tuple_element(self, column: str, index: int) -> str:
+        # For jsonb_each_text results: alias has (key, value) columns
+        # index 1 = key (text), index 2 = value (need to cast to numeric)
+        if index == 1:
+            return f"{column}.key"
+        elif index == 2:
+            return f"({column}.value)::double precision"
         return f"{column}[{index}]"
 
     def array_element(self, column: str, index: int) -> str:
         return f"{column}[{index}]"
 
     def json_has_any_key(self, column: str, keys_param: str) -> str:
-        return f"{column} ?| {keys_param}"
+        # Column is TEXT containing JSON; cast to jsonb first
+        return f"({column}::jsonb) ?| {keys_param}"
 
     def json_has_any_theme(self, column: str, themes_param: str) -> str:
-        # Complex Postgres implementation using jsonb_object_keys and subquery
-        return f"EXISTS (SELECT 1 FROM jsonb_object_keys({column}) k WHERE split_part(k, '.', 1) IN {themes_param})"
+        # Column is TEXT containing JSON; cast to jsonb for jsonb_object_keys
+        return f"EXISTS (SELECT 1 FROM jsonb_object_keys({column}::jsonb) k WHERE split_part(k, '.', 1) IN {themes_param})"
 
     def day_of_week(self, column: str) -> str:
         return f"EXTRACT(ISODOW FROM {column})"
@@ -170,6 +191,9 @@ class PostgresDialect(SqlDialect):
 
     def query_settings(self, timeout_seconds: int) -> str:
         return f"-- statement_timeout: {timeout_seconds}s"
+
+    def to_timestamp_tz(self, column: str) -> str:
+        return f"({column})::timestamptz"
 
 
 class SQLiteDialect(SqlDialect):
@@ -261,6 +285,9 @@ class SQLiteDialect(SqlDialect):
 
     def query_settings(self, timeout_seconds: int) -> str:
         return ""
+
+    def to_timestamp_tz(self, column: str) -> str:
+        return f"datetime({column})"
 
 
 def get_dialect(

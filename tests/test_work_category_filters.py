@@ -145,6 +145,9 @@ async def test_sankey_investment_applies_work_category_filter(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sankey_investment_flow_query_avoids_maptoarray(monkeypatch):
+    from unittest.mock import MagicMock
+    from dev_health_ops.api.sql.dialect import ClickHouseDialect
+
     captured = {}
 
     async def _fake_query_dicts(_client, query, params):
@@ -154,8 +157,11 @@ async def test_sankey_investment_flow_query_avoids_maptoarray(monkeypatch):
 
     monkeypatch.setattr(sankey_queries, "query_dicts", _fake_query_dicts)
 
+    mock_sink = MagicMock()
+    mock_sink.dialect = ClickHouseDialect()
+
     await sankey_queries.fetch_investment_flow_items(
-        object(),
+        mock_sink,
         start_ts=datetime(2025, 1, 1, tzinfo=timezone.utc),
         end_ts=datetime(2025, 1, 2, tzinfo=timezone.utc),
         scope_filter="",

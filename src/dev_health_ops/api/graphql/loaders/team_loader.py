@@ -69,7 +69,7 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
                 team_id,
                 team_name,
                 org_id,
-                count() OVER (PARTITION BY team_id) as member_count
+                COUNT(*) OVER (PARTITION BY team_id) as member_count
             FROM work_item_cycle_times
             WHERE team_id IN %(team_ids)s
             ORDER BY team_id
@@ -146,7 +146,7 @@ class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
                 team_id,
                 team_name,
                 org_id,
-                count() OVER (PARTITION BY team_id) as member_count
+                COUNT(*) OVER (PARTITION BY team_id) as member_count
             FROM work_item_cycle_times
             WHERE lower(team_name) IN %(team_names)s
             ORDER BY team_name

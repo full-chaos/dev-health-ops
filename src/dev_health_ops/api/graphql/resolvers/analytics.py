@@ -375,9 +375,13 @@ async def resolve_analytics(
                 date_filter = "day >= %(start_date)s AND day <= %(end_date)s"
                 joins = ""
                 if request.use_investment:
+                    from_ts_col = dialect.to_timestamp_tz(
+                        "work_unit_investments.from_ts"
+                    )
+                    to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
                     date_filter = (
-                        "work_unit_investments.from_ts < %(end_date)s "
-                        "AND work_unit_investments.to_ts >= %(start_date)s"
+                        f"{from_ts_col} < %(end_date)s "
+                        f"AND {to_ts_col} >= %(start_date)s"
                     )
                     joins = f"""
                         LEFT JOIN (
@@ -388,7 +392,7 @@ async def resolve_analytics(
                                 SELECT
                                     work_unit_investments.work_unit_id AS work_unit_id,
                                     {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
-                                    count() AS cnt
+                                    COUNT(*) AS cnt
                                 FROM work_unit_investments
                                 {dialect.array_join(dialect.json_extract("structural_evidence_json", "issues", "Array(String)"), "issue_id")}
                                 LEFT JOIN (
@@ -417,7 +421,7 @@ async def resolve_analytics(
 
                 coverage_sql = f"""
                     SELECT
-                        count() as total,
+                        COUNT(*) as total,
                         {dialect.count_if(assigned_team_expr)} as assigned_team,
                         {dialect.count_if(assigned_repo_expr)} as assigned_repo
                     FROM {base_table}

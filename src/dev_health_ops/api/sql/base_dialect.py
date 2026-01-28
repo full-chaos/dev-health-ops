@@ -133,3 +133,8 @@ class SqlDialect(ABC):
     def query_settings(self, timeout_seconds: int) -> str:
         """Return query settings (e.g. timeout)."""
         pass
+
+    @abstractmethod
+    def to_timestamp_tz(self, column: str) -> str:
+        """Cast a column (possibly TEXT) to a timestamp with timezone for comparison."""
+        pass

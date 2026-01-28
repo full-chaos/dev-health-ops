@@ -16,15 +16,20 @@ async def fetch_investment_flow_items(
     scope_params: Dict[str, Any],
     limit: int,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
+    from_ts_col = dialect.to_timestamp_tz("from_ts")
+    to_ts_col = dialect.to_timestamp_tz("to_ts")
+    theme_key = dialect.tuple_element("theme_kv", 1)
+    theme_val = dialect.tuple_element("theme_kv", 2)
     query = f"""
         SELECT
-            theme_kv.1 AS source,
-            ifNull(r.repo, toString(repo_id)) AS target,
-            sum(theme_kv.2 * effort_value) AS value
+            {theme_key} AS source,
+            {dialect.if_null("r.repo", dialect.to_string("repo_id"))} AS target,
+            SUM({theme_val} * effort_value) AS value
         FROM work_unit_investments
-        LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
-        ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
-        WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s
+        LEFT JOIN repos AS r ON {dialect.to_string("r.id")} = {dialect.to_string("repo_id")}
+        {dialect.array_join("theme_distribution_json", "theme_kv", "Array(Tuple(String, Float32))")}
+        WHERE {from_ts_col} < %(end_ts)s AND {to_ts_col} >= %(start_ts)s
             {scope_filter}
         GROUP BY source, target
         ORDER BY value DESC

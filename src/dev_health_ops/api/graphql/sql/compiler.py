@@ -112,7 +112,7 @@ def _get_context_params(
                     SELECT
                         work_unit_investments.work_unit_id AS work_unit_id,
                         {dialect.if_null(dialect.null_if("t.team_name", "''"), dialect.null_if("t.team_id", "''"))} AS team,
-                        count() AS cnt
+                        COUNT(*) AS cnt
                     FROM work_unit_investments
                     {dialect.array_join(dialect.json_extract("structural_evidence_json", "issues", "Array(String)"), "issue_id")}
                     LEFT JOIN (
@@ -136,9 +136,12 @@ def _get_context_params(
                 f"LEFT JOIN repos AS r ON {dialect.to_string('r.id')} = {dialect.to_string('repo_id')}"
             )
 
+        # Use dialect.to_timestamp_tz() for timestamp columns stored as TEXT in Postgres
+        from_ts_col = dialect.to_timestamp_tz("work_unit_investments.from_ts")
+        to_ts_col = dialect.to_timestamp_tz("work_unit_investments.to_ts")
         return {
             "source_table": "work_unit_investments",
-            "date_filter": "work_unit_investments.from_ts < %(end_date)s AND work_unit_investments.to_ts >= %(start_date)s",
+            "date_filter": f"{from_ts_col} < %(end_date)s AND {to_ts_col} >= %(start_date)s",
             "extra_clauses": "\n".join(joins),
             "use_investment": True,
         }

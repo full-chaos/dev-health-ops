@@ -7,6 +7,7 @@ from datetime import date
 import pytest
 
 from dev_health_ops.api.graphql.errors import ValidationError
+from dev_health_ops.api.sql.dialect import ClickHouseDialect
 from dev_health_ops.api.graphql.sql.compiler import (
     BreakdownRequest,
     CatalogValuesRequest,
@@ -125,7 +126,8 @@ class TestCompileTimeseries:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1")
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(request, org_id="org1", dialect=dialect)
 
         assert "SELECT" in sql
         assert "date_trunc('day', day) AS bucket" in sql
@@ -147,8 +149,9 @@ class TestCompileTimeseries:
             end_date=date(2025, 1, 31),
         )
 
+        dialect = ClickHouseDialect()
         with pytest.raises(ValidationError):
-            compile_timeseries(request, "test-org")
+            compile_timeseries(request, "test-org", dialect=dialect)
 
     def test_org_id_always_in_params(self):
         """Test that org_id is always included in params."""
@@ -160,7 +163,8 @@ class TestCompileTimeseries:
             end_date=date(2025, 3, 31),
         )
 
-        _, params = compile_timeseries(request, "my-org-123")
+        dialect = ClickHouseDialect()
+        _, params = compile_timeseries(request, "my-org-123", dialect=dialect)
         assert params["org_id"] == "my-org-123"
 
 
@@ -177,7 +181,8 @@ class TestCompileBreakdown:
             end_date=date(2025, 1, 7),
             top_n=20,
         )
-        sql, params = compile_breakdown(request, org_id="org1")
+        dialect = ClickHouseDialect()
+        sql, params = compile_breakdown(request, org_id="org1", dialect=dialect)
 
         assert "SELECT" in sql
         assert "splitByChar('.', subcategory_kv.1)[1] AS dimension_value" in sql
@@ -198,7 +203,8 @@ class TestCompileBreakdown:
             top_n=10,
         )
 
-        _, params = compile_breakdown(request, "different-org")
+        dialect = ClickHouseDialect()
+        _, params = compile_breakdown(request, "different-org", dialect=dialect)
         assert params["org_id"] == "different-org"
 
 
@@ -217,7 +223,8 @@ class TestCompileSankey:
         )
         org_id = "test-org"
 
-        nodes_queries, edges_queries = compile_sankey(request, org_id)
+        dialect = ClickHouseDialect()
+        nodes_queries, edges_queries = compile_sankey(request, org_id, dialect=dialect)
 
         # Should have 1 nodes query and 2 edges queries (for 3-dim path)
         assert len(nodes_queries) == 1
@@ -249,8 +256,9 @@ class TestCompileSankey:
             max_edges=200,
         )
 
+        dialect = ClickHouseDialect()
         with pytest.raises(ValidationError):
-            compile_sankey(request, "test-org")
+            compile_sankey(request, "test-org", dialect=dialect)
 
 
 class TestCompileCatalogValues:
@@ -264,7 +272,8 @@ class TestCompileCatalogValues:
         )
         org_id = "test-org"
 
-        sql, params = compile_catalog_values(request, org_id)
+        dialect = ClickHouseDialect()
+        sql, params = compile_catalog_values(request, org_id, dialect=dialect)
 
         # Check SQL structure
         assert "SELECT" in sql
@@ -285,7 +294,8 @@ class TestCompileCatalogValues:
             limit=50,
         )
 
-        _, params = compile_catalog_values(request, "another-org")
+        dialect = ClickHouseDialect()
+        _, params = compile_catalog_values(request, "another-org", dialect=dialect)
         assert params["org_id"] == "another-org"
 
 
@@ -295,24 +305,30 @@ class TestDimensionDbColumn:
     @pytest.mark.parametrize("dim", list(Dimension))
     def test_all_dimensions_have_columns(self, dim):
         """Test that all dimensions map to database columns."""
-        col = Dimension.db_column(dim)
+        dialect = ClickHouseDialect()
+        col = Dimension.db_column(dim, dialect=dialect)
         assert col is not None
         assert len(col) > 0
 
     def test_specific_mappings(self):
         """Test specific dimension to database column mappings."""
+        dialect = ClickHouseDialect()
         # Non-investment (default)
-        assert Dimension.db_column(Dimension.TEAM) == "team_id"
-        assert Dimension.db_column(Dimension.REPO) == "repo_id"
-        assert Dimension.db_column(Dimension.THEME) == "investment_area"
+        assert Dimension.db_column(Dimension.TEAM, dialect=dialect) == "team_id"
+        assert Dimension.db_column(Dimension.REPO, dialect=dialect) == "repo_id"
+        assert (
+            Dimension.db_column(Dimension.THEME, dialect=dialect) == "investment_area"
+        )
 
         # Investment
         assert (
-            Dimension.db_column(Dimension.THEME, use_investment=True)
+            Dimension.db_column(Dimension.THEME, dialect=dialect, use_investment=True)
             == "splitByChar('.', subcategory_kv.1)[1]"
         )
         assert (
-            Dimension.db_column(Dimension.SUBCATEGORY, use_investment=True)
+            Dimension.db_column(
+                Dimension.SUBCATEGORY, dialect=dialect, use_investment=True
+            )
             == "subcategory_kv.1"
         )
 
@@ -323,22 +339,32 @@ class TestMeasureDbExpression:
     @pytest.mark.parametrize("measure", list(Measure))
     def test_all_measures_have_expressions(self, measure):
         """Test that all measures map to SQL expressions."""
-        expr = Measure.db_expression(measure)
+        dialect = ClickHouseDialect()
+        expr = Measure.db_expression(measure, dialect=dialect)
         assert expr is not None
         assert len(expr) > 0
 
     def test_specific_expressions(self):
         """Test specific measure to SQL expression mappings."""
+        dialect = ClickHouseDialect()
         # Non-investment (default)
-        assert Measure.db_expression(Measure.COUNT) == "SUM(work_items_completed)"
-        assert Measure.db_expression(Measure.THROUGHPUT) == "SUM(work_items_completed)"
+        assert (
+            Measure.db_expression(Measure.COUNT, dialect=dialect)
+            == "SUM(work_items_completed)"
+        )
+        assert (
+            Measure.db_expression(Measure.THROUGHPUT, dialect=dialect)
+            == "SUM(work_items_completed)"
+        )
 
         # Investment
         assert (
-            Measure.db_expression(Measure.COUNT, use_investment=True)
+            Measure.db_expression(Measure.COUNT, dialect=dialect, use_investment=True)
             == "SUM(subcategory_kv.2 * effort_value)"
         )
         assert (
-            Measure.db_expression(Measure.THROUGHPUT, use_investment=True)
+            Measure.db_expression(
+                Measure.THROUGHPUT, dialect=dialect, use_investment=True
+            )
             == "SUM(throughput)"
         )

@@ -90,11 +90,14 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
 
         stmt = text(sql)
         for k, v in parameters.items():
-            if isinstance(v, (list, tuple)):
+            if k in stmt._bindparams and isinstance(v, (list, tuple)):
                 stmt = stmt.bindparams(bindparam(k, expanding=True))
 
+        bound_keys = set(stmt._bindparams.keys())
+        exec_params = {k: v for k, v in parameters.items() if k in bound_keys}
+
         with self.engine.connect() as conn:
-            result = conn.execute(stmt, parameters).mappings().all()
+            result = conn.execute(stmt, exec_params).mappings().all()
             return [dict(r) for r in result]
 
     @property

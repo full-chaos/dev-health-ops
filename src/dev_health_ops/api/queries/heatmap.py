@@ -15,11 +15,12 @@ async def fetch_review_wait_density(
     scope_filter: str,
     scope_params: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     query = f"""
         SELECT
-            toDayOfWeek(created_at) AS weekday,
-            toHour(created_at) AS hour,
-            sum(dateDiff('minute', created_at, first_review_at)) / 60.0 AS value
+            {dialect.day_of_week("created_at")} AS weekday,
+            {dialect.hour("created_at")} AS hour,
+            SUM({dialect.date_diff("minute", "created_at", "first_review_at")}) / 60.0 AS value
         FROM git_pull_requests
         WHERE created_at >= %(start_ts)s
           AND created_at < %(end_ts)s
@@ -43,6 +44,7 @@ async def fetch_review_wait_evidence(
     scope_params: Dict[str, Any],
     limit: int,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     query = f"""
         SELECT
             repo_id,
@@ -54,8 +56,8 @@ async def fetch_review_wait_evidence(
         WHERE created_at >= %(start_ts)s
           AND created_at < %(end_ts)s
           AND first_review_at IS NOT NULL
-          AND toDayOfWeek(created_at) = %(weekday)s
-          AND toHour(created_at) = %(hour)s
+          AND {dialect.day_of_week("created_at")} = %(weekday)s
+          AND {dialect.hour("created_at")} = %(hour)s
         {scope_filter}
         ORDER BY created_at DESC
         LIMIT %(limit)s
@@ -80,12 +82,13 @@ async def fetch_repo_touchpoints(
     scope_params: Dict[str, Any],
     limit: int,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     top_query = f"""
         SELECT
             repos.repo AS repo,
             count() AS total
         FROM git_commits
-        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
+        INNER JOIN repos ON {dialect.to_string("repos.id")} = {dialect.to_string("git_commits.repo_id")}
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
         {scope_filter}
@@ -102,11 +105,11 @@ async def fetch_repo_touchpoints(
 
     query = f"""
         SELECT
-            toDate(author_when) AS day,
+            {dialect.to_date("author_when")} AS day,
             repos.repo AS repo,
             count() AS value
         FROM git_commits
-        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
+        INNER JOIN repos ON {dialect.to_string("repos.id")} = {dialect.to_string("git_commits.repo_id")}
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
           AND repos.repo IN %(repos)s
@@ -132,12 +135,13 @@ async def fetch_hotspot_risk(
     scope_params: Dict[str, Any],
     limit: int,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     top_query = f"""
         SELECT
-            concat(repos.repo, ':', path) AS file_key,
+            {dialect.concat("repos.repo", "':'", "path")} AS file_key,
             sum(hotspot_score) AS total
         FROM file_metrics_daily
-        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
+        INNER JOIN repos ON {dialect.to_string("repos.id")} = {dialect.to_string("file_metrics_daily.repo_id")}
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
         {scope_filter}
@@ -154,14 +158,14 @@ async def fetch_hotspot_risk(
 
     query = f"""
         SELECT
-            toStartOfWeek(day) AS week,
-            concat(repos.repo, ':', path) AS file_key,
+            {dialect.date_trunc("week", "day")} AS week,
+            {dialect.concat("repos.repo", "':'", "path")} AS file_key,
             sum(hotspot_score) AS value
         FROM file_metrics_daily
-        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
+        INNER JOIN repos ON {dialect.to_string("repos.id")} = {dialect.to_string("file_metrics_daily.repo_id")}
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
-          AND concat(repos.repo, ':', path) IN %(files)s
+          AND {dialect.concat("repos.repo", "':'", "path")} IN %(files)s
         {scope_filter}
         GROUP BY week, file_key
         ORDER BY week
@@ -185,6 +189,7 @@ async def fetch_hotspot_evidence(
     scope_params: Dict[str, Any],
     limit: int,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     query = f"""
         SELECT
             day,
@@ -195,10 +200,10 @@ async def fetch_hotspot_evidence(
             commits_count,
             hotspot_score
         FROM file_metrics_daily
-        INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
+        INNER JOIN repos ON {dialect.to_string("repos.id")} = {dialect.to_string("file_metrics_daily.repo_id")}
         WHERE day >= %(week_start)s
           AND day < %(week_end)s
-          AND concat(repos.repo, ':', path) = %(file_key)s
+          AND {dialect.concat("repos.repo", "':'", "path")} = %(file_key)s
         {scope_filter}
         ORDER BY day
         LIMIT %(limit)s
@@ -220,12 +225,13 @@ async def fetch_individual_active_hours(
     end_ts: datetime,
     identities: Sequence[str],
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     if not identities:
         return []
-    query = """
+    query = f"""
         SELECT
-            toDayOfWeek(author_when) AS weekday,
-            toHour(author_when) AS hour,
+            {dialect.day_of_week("author_when")} AS weekday,
+            {dialect.hour("author_when")} AS hour,
             count() AS value
         FROM git_commits
         WHERE author_when >= %(start_ts)s
@@ -247,9 +253,10 @@ async def fetch_individual_active_evidence(
     identities: Sequence[str],
     limit: int,
 ) -> List[Dict[str, Any]]:
+    dialect = sink.dialect
     if not identities:
         return []
-    query = """
+    query = f"""
         SELECT
             repos.repo AS repo,
             git_commits.hash AS commit_hash,
@@ -258,11 +265,11 @@ async def fetch_individual_active_evidence(
             git_commits.author_email AS author_email,
             git_commits.author_when AS author_when
         FROM git_commits
-        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
+        INNER JOIN repos ON {dialect.to_string("repos.id")} = {dialect.to_string("git_commits.repo_id")}
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
-          AND toDayOfWeek(author_when) = %(weekday)s
-          AND toHour(author_when) = %(hour)s
+          AND {dialect.day_of_week("author_when")} = %(weekday)s
+          AND {dialect.hour("author_when")} = %(hour)s
           AND (author_email IN %(identities)s OR author_name IN %(identities)s)
         ORDER BY author_when DESC
         LIMIT %(limit)s

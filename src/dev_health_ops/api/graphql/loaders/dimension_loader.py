@@ -10,6 +10,7 @@ from ..sql.validate import Dimension
 
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
+    from ...sql.base_dialect import SqlDialect
 
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ async def load_dimension_values(
     client: Any,
     dimension: str,
     org_id: str,
+    dialect: SqlDialect,
     limit: int = 100,
     timeout: int = 30,
     filters: Optional["FilterInput"] = None,  # NEW: Filter support
@@ -27,9 +29,10 @@ async def load_dimension_values(
     Load distinct values for a dimension.
 
     Args:
-        client: ClickHouse client instance.
+        client: DB client instance.
         dimension: The dimension to load values for.
         org_id: Organization ID for scoping.
+        dialect: SQL dialect implementation.
         limit: Maximum number of values to return.
         timeout: Query timeout in seconds.
         filters: Optional FilterInput to narrow down dimension values.
@@ -44,7 +47,9 @@ async def load_dimension_values(
         limit=limit,
     )
 
-    sql, params = compile_catalog_values(request, org_id, timeout, filters=filters)
+    sql, params = compile_catalog_values(
+        request, org_id, dialect, timeout, filters=filters
+    )
 
     logger.debug(
         "Loading dimension values for %s, org_id=%s, limit=%d, filters=%s",

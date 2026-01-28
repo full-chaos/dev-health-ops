@@ -78,11 +78,21 @@ async def resolve_catalog(
     # Optionally fetch dimension values
     values = None
     if dimension is not None and context.client is not None:
+        dialect = context.sink.dialect if context.sink else None
+        if dialect is None:
+            if hasattr(context.client, "dialect"):
+                dialect = context.client.dialect
+            else:
+                from dev_health_ops.api.sql.dialect import get_dialect
+
+                dialect = get_dialect()
+
         try:
             raw_values = await load_dimension_values(
                 client=context.client,
                 dimension=dimension.value,
                 org_id=org_id,
+                dialect=dialect,
                 limit=100,
                 filters=filters,
             )

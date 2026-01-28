@@ -21,10 +21,22 @@ async def fetch_metric_series(
     scope_params: Dict[str, Any],
     aggregator: str,
 ) -> List[Dict[str, Any]]:
+    # Attempt to get dialect from client
+    dialect = getattr(client, "dialect", None)
+    agg_expr = f"{aggregator}({column})"
+    if dialect and aggregator.startswith("quantile"):
+        # Extract probability if it's quantile(0.5)
+        import re
+
+        match = re.match(r"quantile\((.*?)\)", aggregator)
+        if match:
+            prob = float(match.group(1))
+            agg_expr = dialect.quantile(prob, column)
+
     query = f"""
         SELECT
             day,
-            {aggregator}({column}) AS value
+            {agg_expr} AS value
         FROM {table}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {scope_filter}
@@ -47,9 +59,20 @@ async def fetch_metric_value(
     scope_params: Dict[str, Any],
     aggregator: str,
 ) -> float:
+    # Attempt to get dialect from client
+    dialect = getattr(client, "dialect", None)
+    agg_expr = f"{aggregator}({column})"
+    if dialect and aggregator.startswith("quantile"):
+        import re
+
+        match = re.match(r"quantile\((.*?)\)", aggregator)
+        if match:
+            prob = float(match.group(1))
+            agg_expr = dialect.quantile(prob, column)
+
     query = f"""
         SELECT
-            {aggregator}({column}) AS value
+            {agg_expr} AS value
         FROM {table}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {scope_filter}

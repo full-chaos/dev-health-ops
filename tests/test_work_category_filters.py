@@ -19,9 +19,12 @@ from dev_health_ops.api.queries import sankey as sankey_queries
 @asynccontextmanager
 async def _fake_clickhouse_client(_dsn):
     from unittest.mock import MagicMock
+    from dev_health_ops.api.sql.dialect import ClickHouseDialect
 
     mock = MagicMock()
     mock.query.return_value = []
+    mock.backend_type = "clickhouse"
+    mock.dialect = ClickHouseDialect()
     yield mock
 
 

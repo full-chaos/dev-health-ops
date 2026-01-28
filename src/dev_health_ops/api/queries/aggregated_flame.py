@@ -67,6 +67,7 @@ async def fetch_code_hotspots(
 
     Returns rows with (repo_id, file_path, total_churn).
     """
+    dialect = getattr(client, "dialect", None)
     params: Dict[str, Any] = {
         "start_day": start_day,
         "end_day": end_day,
@@ -81,9 +82,11 @@ async def fetch_code_hotspots(
 
     where_clause = " AND ".join(filters)
 
+    repo_id_col = dialect.to_string("repo_id") if dialect else "toString(repo_id)"
+
     query = f"""
         SELECT
-            toString(repo_id) AS repo_id,
+            {repo_id_col} AS repo_id,
             path AS file_path,
             sum(churn) AS total_churn
         FROM file_metrics_daily
@@ -105,10 +108,13 @@ async def fetch_repo_names(
     if not repo_ids:
         return {}
 
+    dialect = getattr(client, "dialect", None)
+    repo_id_col = dialect.to_string("id") if dialect else "toString(id)"
+
     params = {"repo_ids": repo_ids}
-    query = """
+    query = f"""
         SELECT
-            toString(id) AS repo_id,
+            {repo_id_col} AS repo_id,
             repo AS repo_name
         FROM repos
         WHERE id IN %(repo_ids)s
@@ -183,16 +189,24 @@ async def fetch_throughput_by_type(
     """
     Fetch throughput by work item type from work_item_cycle_times.
     """
+    dialect = getattr(client, "dialect", None)
     params: Dict[str, Any] = {
         "start_day": start_day,
         "end_day": end_day,
         "limit": limit,
     }
 
+    start_expr = (
+        dialect.to_datetime("%(start_day)s") if dialect else "toDateTime(%(start_day)s)"
+    )
+    end_expr = (
+        dialect.to_datetime("%(end_day)s") if dialect else "toDateTime(%(end_day)s)"
+    )
+
     # Filter by completed_at date range, not day column
     filters = [
-        "completed_at >= toDateTime(%(start_day)s)",
-        "completed_at < toDateTime(%(end_day)s)",
+        f"completed_at >= {start_expr}",
+        f"completed_at < {end_expr}",
         "completed_at IS NOT NULL",
     ]
     if team_id:

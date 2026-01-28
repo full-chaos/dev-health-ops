@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Set
+from typing import List, Set, TYPE_CHECKING
 
 from ..errors import ValidationError
+
+if TYPE_CHECKING:
+    from ...sql.base_dialect import SqlDialect
 
 
 class Dimension(str, Enum):
@@ -23,16 +26,25 @@ class Dimension(str, Enum):
         return [d.value for d in cls]
 
     @classmethod
-    def db_column(cls, dim: "Dimension", use_investment: bool = False) -> str:
+    def db_column(
+        cls, dim: "Dimension", dialect: "SqlDialect", use_investment: bool = False
+    ) -> str:
         """Get the database column name for a dimension."""
         if use_investment:
             mapping = {
-                cls.TEAM: "ifNull(nullIf(ut.team_label, ''), 'unassigned')",
-                cls.REPO: "ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id)))",
+                cls.TEAM: dialect.if_null(
+                    dialect.null_if("ut.team_label", "''"), "'unassigned'"
+                ),
+                cls.REPO: dialect.if_null(
+                    "r.repo",
+                    dialect.if_null(dialect.to_string("repo_id"), "'unassigned'"),
+                ),
                 cls.AUTHOR: "author_id",
                 cls.WORK_TYPE: "work_item_type",
-                cls.THEME: "splitByChar('.', subcategory_kv.1)[1]",
-                cls.SUBCATEGORY: "subcategory_kv.1",
+                cls.THEME: dialect.split_by_char(
+                    ".", dialect.tuple_element("subcategory_kv", 1), 1
+                ),
+                cls.SUBCATEGORY: dialect.tuple_element("subcategory_kv", 1),
             }
         else:
             mapping = {
@@ -59,11 +71,13 @@ class Measure(str, Enum):
         return [m.value for m in cls]
 
     @classmethod
-    def db_expression(cls, measure: "Measure", use_investment: bool = False) -> str:
+    def db_expression(
+        cls, measure: "Measure", dialect: "SqlDialect", use_investment: bool = False
+    ) -> str:
         """Map measure to SQL expression."""
         if use_investment:
             mapping = {
-                cls.COUNT: "SUM(subcategory_kv.2 * effort_value)",
+                cls.COUNT: f"SUM({dialect.tuple_element('subcategory_kv', 2)} * effort_value)",
                 cls.CHURN_LOC: "SUM(churn_loc)",
                 cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
                 cls.THROUGHPUT: "SUM(throughput)",

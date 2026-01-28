@@ -24,64 +24,12 @@ from __future__ import annotations
 
 import logging
 import os
-from enum import Enum
 from typing import Optional
-from urllib.parse import urlparse
 
+from dev_health_ops.metrics.sinks.backend_types import detect_backend, SinkBackend
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 logger = logging.getLogger(__name__)
-
-
-class SinkBackend(str, Enum):
-    """Supported sink backend types."""
-
-    CLICKHOUSE = "clickhouse"
-    MONGO = "mongo"
-    SQLITE = "sqlite"
-    POSTGRES = "postgres"
-
-
-def detect_backend(dsn: str) -> SinkBackend:
-    """
-    Detect the sink backend type from a connection string.
-
-    Args:
-        dsn: Connection string (URL format)
-
-    Returns:
-        SinkBackend enum value
-
-    Raises:
-        ValueError: If the scheme is not recognized
-    """
-    parsed = urlparse(dsn)
-    scheme = parsed.scheme.lower()
-
-    # Handle SQLAlchemy-style schemes
-    if scheme in (
-        "clickhouse",
-        "clickhouse+native",
-        "clickhouse+http",
-        "clickhouse+https",
-    ):
-        return SinkBackend.CLICKHOUSE
-    elif scheme in ("mongodb", "mongodb+srv", "mongo"):
-        return SinkBackend.MONGO
-    elif scheme in ("sqlite", "sqlite+aiosqlite"):
-        return SinkBackend.SQLITE
-    elif scheme in (
-        "postgresql",
-        "postgresql+asyncpg",
-        "postgresql+psycopg2",
-        "postgres",
-    ):
-        return SinkBackend.POSTGRES
-    else:
-        raise ValueError(
-            f"Unknown sink scheme '{scheme}'. Supported: "
-            "clickhouse, mongo/mongodb, sqlite, postgres/postgresql"
-        )
 
 
 def create_sink(dsn: Optional[str] = None) -> BaseMetricsSink:

@@ -19,6 +19,7 @@ from dev_health_ops.api.graphql.sql.compiler import (
     compile_timeseries,
     compile_breakdown,
 )
+from dev_health_ops.api.sql.dialect import ClickHouseDialect
 
 
 class TestFilterTranslation:
@@ -36,7 +37,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(
+            request, org_id="org1", filters=filters, dialect=dialect
+        )
 
         assert "team_id IN %(scope_ids)s" in sql
         assert params["scope_ids"] == ["team-1", "team-2"]
@@ -53,7 +57,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(
+            request, org_id="org1", filters=filters, dialect=dialect
+        )
 
         assert "repo_id IN %(scope_ids)s" in sql
         assert params["scope_ids"] == ["repo-1"]
@@ -68,7 +75,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(
+            request, org_id="org1", filters=filters, dialect=dialect
+        )
 
         assert "author_id IN %(developer_ids)s" in sql
         assert params["developer_ids"] == ["dev-1", "dev-2"]
@@ -83,7 +93,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(
+            request, org_id="org1", filters=filters, dialect=dialect
+        )
 
         assert "repo_id IN %(repo_filter_ids)s" in sql
         assert params["repo_filter_ids"] == ["repo-a", "repo-b"]
@@ -98,7 +111,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(
+            request, org_id="org1", filters=filters, dialect=dialect
+        )
 
         # Non-investment table uses investment_area for category
         assert "investment_area IN %(work_categories)s" in sql
@@ -117,7 +133,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=filters)
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(
+            request, org_id="org1", filters=filters, dialect=dialect
+        )
 
         assert "team_id IN %(scope_ids)s" in sql
         assert "repo_id IN %(repo_filter_ids)s" in sql
@@ -137,7 +156,10 @@ class TestFilterTranslation:
             end_date=date(2025, 1, 7),
             use_investment=True,
         )
-        sql, params = compile_breakdown(request, org_id="org1", filters=filters)
+        dialect = ClickHouseDialect()
+        sql, params = compile_breakdown(
+            request, org_id="org1", filters=filters, dialect=dialect
+        )
 
         assert "FROM work_unit_investments" in sql
         assert "team_id IN %(scope_ids)s" in sql
@@ -155,7 +177,10 @@ class TestFilterTranslation:
             start_date=date(2025, 1, 1),
             end_date=date(2025, 1, 7),
         )
-        sql, params = compile_timeseries(request, org_id="org1", filters=None)
+        dialect = ClickHouseDialect()
+        sql, params = compile_timeseries(
+            request, org_id="org1", filters=None, dialect=dialect
+        )
         # Should only have the date filter in WHERE
         assert "scope_ids" not in params
         assert "work_categories" not in params

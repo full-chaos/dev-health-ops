@@ -10,6 +10,7 @@ import uuid
 from strawberry.fastapi import BaseContext
 
 if TYPE_CHECKING:
+    from dev_health_ops.metrics.sinks.base import BaseMetricsSink
     from .loaders import (
         DataLoaders,
         TeamLoader,
@@ -43,6 +44,7 @@ class GraphQLContext(BaseContext):
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     persisted_query_id: str | None = None
     client: Any = None
+    sink: Optional["BaseMetricsSink"] = None
     # DataLoaders - initialized per request for proper batching
     loaders: Optional["DataLoaders"] = None
     team_loader: Optional["TeamLoader"] = None
@@ -64,6 +66,7 @@ def build_context(
     db_url: str,
     persisted_query_id: str | None = None,
     client: Any = None,
+    sink: Optional["BaseMetricsSink"] = None,
     cache: Any = None,
 ) -> GraphQLContext:
     """
@@ -74,6 +77,7 @@ def build_context(
         db_url: Database connection URL.
         persisted_query_id: Optional persisted query ID.
         client: Optional pre-initialized DB client.
+        sink: Optional pre-initialized DB sink.
         cache: Optional cache backend for cross-request caching.
 
     Returns:
@@ -87,6 +91,7 @@ def build_context(
         db_url=db_url,
         persisted_query_id=persisted_query_id,
         client=client,
+        sink=sink,
         cache=cache,
     )
 

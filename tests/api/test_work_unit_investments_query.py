@@ -18,10 +18,16 @@ async def test_work_unit_investments_query_qualifies_columns(monkeypatch):
 
     monkeypatch.setattr(work_unit_investments, "query_dicts", _fake_query_dicts)
 
+    from dev_health_ops.api.sql.dialect import ClickHouseDialect
+    from unittest.mock import MagicMock
+
+    mock_sink = MagicMock()
+    mock_sink.dialect = ClickHouseDialect()
+
     start_ts = datetime(2025, 1, 1, tzinfo=timezone.utc)
     end_ts = datetime(2025, 1, 2, tzinfo=timezone.utc)
     await work_unit_investments.fetch_work_unit_investments(
-        object(),
+        mock_sink,
         start_ts=start_ts,
         end_ts=end_ts,
         repo_ids=None,

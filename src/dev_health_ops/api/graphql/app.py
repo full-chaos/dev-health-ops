@@ -54,16 +54,18 @@ async def get_context(request: Request) -> GraphQLContext:
     # Check for persisted query
     persisted_query_id = request.headers.get("X-Persisted-Query-Id")
 
-    # Get ClickHouse client
+    # Get ClickHouse client and sink
     client = None
+    sink = None
     try:
-        from dev_health_ops.api.queries.client import get_global_client
+        from dev_health_ops.api.queries.client import get_global_client, get_global_sink
         import asyncio
 
-        logger.debug("Getting ClickHouse client for %s", db_url)
+        logger.debug("Getting DB client and sink for %s", db_url)
         client = await asyncio.wait_for(get_global_client(db_url), timeout=5.0)
+        sink = await asyncio.wait_for(get_global_sink(db_url), timeout=5.0)
     except Exception as e:
-        logger.warning("Failed to get ClickHouse client: %s", e)
+        logger.warning("Failed to get DB client or sink: %s", e)
 
     # Get cache for cross-request caching
     cache = _get_cache()
@@ -75,6 +77,7 @@ async def get_context(request: Request) -> GraphQLContext:
         db_url=db_url,
         persisted_query_id=persisted_query_id,
         client=client,
+        sink=sink,
         cache=cache,
     )
 

@@ -136,13 +136,18 @@ def get_repo_uuid(repo_path: str) -> uuid.UUID:
         return uuid.UUID(bytes=uuid_bytes)
 
     except Exception as e:
-        # If anything fails, generate a random UUID
-        logging.warning(
-            "Could not derive UUID from git repository data: %s. "
-            "Generating random UUID.",
-            e,
-        )
-        return uuid.uuid4()
+        try:
+            abs_path = os.path.abspath(repo_path)
+            hash_obj = hashlib.sha256(abs_path.encode("utf-8"))
+            uuid_bytes = hash_obj.digest()[:16]
+            return uuid.UUID(bytes=uuid_bytes)
+        except Exception:
+            logging.warning(
+                "Could not derive UUID from git repository data or path: %s. "
+                "Generating random UUID.",
+                e,
+            )
+            return uuid.uuid4()
 
 
 class Repo(Base, GitRepo):

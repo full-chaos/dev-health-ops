@@ -304,7 +304,7 @@ class SqlAlchemyDataLoader(DataLoader):
         start: datetime,
         end: datetime,
     ) -> List[AtlassianOpsIncident]:
-        params = {"start": start.isoformat(), "end": end.isoformat()}
+        params = {"start": start, "end": end}
         query = "SELECT * FROM atlassian_ops_incidents WHERE created_at >= :start AND created_at < :end"
 
         incidents: List[AtlassianOpsIncident] = []
@@ -333,7 +333,7 @@ class SqlAlchemyDataLoader(DataLoader):
         start: datetime,
         end: datetime,
     ) -> List[AtlassianOpsAlert]:
-        params = {"start": start.isoformat(), "end": end.isoformat()}
+        params = {"start": start, "end": end}
         query = "SELECT * FROM atlassian_ops_alerts WHERE created_at >= :start AND created_at < :end"
 
         alerts: List[AtlassianOpsAlert] = []

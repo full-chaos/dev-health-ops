@@ -48,7 +48,7 @@ dependencies = [
   "celery[redis]>=5.3.0",
   "redis>=5.0.0",
   # Shared Atlassian client library (Jira REST/GraphQL)
-  "atlassian-client>=0.1.0",
+  "atlassian-gen-client>=0.1.0b3",
   "pytest-xdist (>=3.8.0,<4.0.0)",
 ]
 
@@ -73,7 +73,18 @@ local_scheme = "dirty-tag"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = { find = { where = ["src"], exclude = ["tests*", "docs*", "examples*", "data*", "grafana*", "docker*", "dist*", "build*"] } }
+packages = { find = { where = [
+  "src",
+], exclude = [
+  "tests*",
+  "docs*",
+  "examples*",
+  "data*",
+  "grafana*",
+  "docker*",
+  "dist*",
+  "build*",
+] } }
 py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
 include-package-data = true
 
@@ -87,13 +98,11 @@ description = "Open Source Development Team Operation Analytics"
 authors = ["Chris Geo <chris@example.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [
-    { include = "dev_health_ops", from = "src" },
-]
+packages = [{ include = "dev_health_ops", from = "src" }]
 include = [
-    "src/dev_health_ops/config/**/*",
-    "src/dev_health_ops/alembic.ini",
-    "src/dev_health_ops/alembic/**/*"
+  "src/dev_health_ops/config/**/*",
+  "src/dev_health_ops/alembic.ini",
+  "src/dev_health_ops/alembic/**/*",
 ]
 
 [tool.poetry.dependencies]
@@ -120,10 +129,10 @@ uvicorn = "*"
 radon = "*"
 openai = "*"
 anthropic = "*"
-strawberry-graphql = {extras = ["fastapi"], version = "*"}
-celery = {extras = ["redis"], version = ">=5.3.0"}
+strawberry-graphql = { extras = ["fastapi"], version = "*" }
+celery = { extras = ["redis"], version = ">=5.3.0" }
 redis = ">=5.0.0"
-atlassian-client = {version = ">=0.1.0", source = "github"}
+atlassian-gen-client = ">=0.1.0b3"
 
 [[tool.poetry.source]]
 name = "github"

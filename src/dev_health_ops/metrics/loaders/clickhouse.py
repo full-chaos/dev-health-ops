@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from dev_health_ops.metrics.loaders.base import (
@@ -20,6 +20,12 @@ from dev_health_ops.metrics.schemas import (
     DeploymentRow,
     IncidentRow,
 )
+from dev_health_ops.models.atlassian_ops import (
+    AtlassianOpsIncident,
+    AtlassianOpsAlert,
+    AtlassianOpsSchedule,
+)
+from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
 
 async def _clickhouse_query_dicts(
@@ -280,3 +286,116 @@ class ClickHouseDataLoader(DataLoader):
             if u:
                 res[u] = float(r["concentration"])
         return res
+
+    async def load_atlassian_ops_incidents(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsIncident]:
+        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        query = """
+        SELECT * FROM atlassian_ops_incidents
+        WHERE created_at >= {start:DateTime} AND created_at < {end:DateTime}
+        """
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
+
+        incidents: List[AtlassianOpsIncident] = []
+        for r in dicts:
+            incidents.append(
+                AtlassianOpsIncident(
+                    id=r.get("id", ""),
+                    url=r.get("url"),
+                    summary=r.get("summary", ""),
+                    description=r.get("description"),
+                    status=r.get("status", ""),
+                    severity=r.get("severity", ""),
+                    created_at=r.get("created_at") or datetime.now(timezone.utc),
+                    provider_id=r.get("provider_id"),
+                    last_synced=r.get("last_synced") or datetime.now(timezone.utc),
+                )
+            )
+        return incidents
+
+    async def load_atlassian_ops_alerts(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsAlert]:
+        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        query = """
+        SELECT * FROM atlassian_ops_alerts
+        WHERE created_at >= {start:DateTime} AND created_at < {end:DateTime}
+        """
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
+
+        alerts: List[AtlassianOpsAlert] = []
+        for r in dicts:
+            alerts.append(
+                AtlassianOpsAlert(
+                    id=r.get("id", ""),
+                    status=r.get("status", ""),
+                    priority=r.get("priority", ""),
+                    created_at=r.get("created_at") or datetime.now(timezone.utc),
+                    acknowledged_at=r.get("acknowledged_at"),
+                    snoozed_at=r.get("snoozed_at"),
+                    closed_at=r.get("closed_at"),
+                    last_synced=r.get("last_synced") or datetime.now(timezone.utc),
+                )
+            )
+        return alerts
+
+    async def load_atlassian_ops_schedules(
+        self,
+    ) -> List[AtlassianOpsSchedule]:
+        query = "SELECT * FROM atlassian_ops_schedules"
+        dicts = await _clickhouse_query_dicts(self.client, query, {})
+
+        schedules: List[AtlassianOpsSchedule] = []
+        for r in dicts:
+            schedules.append(
+                AtlassianOpsSchedule(
+                    id=r.get("id", ""),
+                    name=r.get("name", ""),
+                    timezone=r.get("timezone"),
+                    last_synced=r.get("last_synced") or datetime.now(timezone.utc),
+                )
+            )
+        return schedules
+
+    async def load_jira_project_ops_team_links(
+        self,
+    ) -> List[JiraProjectOpsTeamLink]:
+        query = "SELECT * FROM jira_project_ops_team_links"
+        dicts = await _clickhouse_query_dicts(self.client, query, {})
+
+        links: List[JiraProjectOpsTeamLink] = []
+        for r in dicts:
+            links.append(
+                JiraProjectOpsTeamLink(
+                    project_key=r.get("project_key", ""),
+                    ops_team_id=r.get("ops_team_id", ""),
+                    project_name=r.get("project_name", ""),
+                    ops_team_name=r.get("ops_team_name", ""),
+                    updated_at=r.get("updated_at") or datetime.now(timezone.utc),
+                )
+            )
+        return links
+
+    async def load_user_metrics_rolling_30d(
+        self,
+        as_of: date,
+    ) -> List[Dict[str, Any]]:
+        params = {"end": as_of, "start": as_of - timedelta(days=29)}
+        query = """
+        SELECT
+            identity_id,
+            any(team_id) as team_id,
+            sum(loc_touched) as churn_loc_30d,
+            sum(delivery_units) as delivery_units_30d,
+            median(cycle_p50_hours) as cycle_p50_30d_hours,
+            max(work_items_active) as wip_max_30d
+        FROM user_metrics_daily
+        WHERE day >= {start:Date} AND day <= {end:Date}
+        GROUP BY identity_id
+        """
+        return await _clickhouse_query_dicts(self.client, query, params)

@@ -1,53 +1,56 @@
 name: Integration Tests
 env:
-    GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-    GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+  GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
 on:
-    push:
-        branches: [ "main" ]
-    workflow_dispatch:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
 jobs:
-    integration:
-        name: Integration Tests (conditional)
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v6
+  integration:
+    name: Integration Tests (conditional)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v6
 
-            - name: Skip if no tokens
-              run: |
-                  if [ -z "$GITHUB_TOKEN" ] && [ -z "$GITLAB_TOKEN" ]; then
-                    echo "No tokens found — skipping integration tests"
-                    exit 0
-                  fi
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-                  GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
+      - name: Skip if no tokens
+        run: |
+          if [ -z "$GITHUB_TOKEN" ] && [ -z "$GITLAB_TOKEN" ]; then
+            echo "No tokens found — skipping integration tests"
+            exit 0
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
 
-            - name: Set up Python
-              uses: actions/setup-python@v6
-              with:
-                  python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
 
-            - name: Install dependencies
-              run: |
-                  python -m pip install --upgrade pip
-                  pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-            - name: Run integration tests
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-                  GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
-                  GITLAB_URL: ${{ secrets.GITLAB_URL }}
-                  SKIP_INTEGRATION_TESTS: ${{ secrets.SKIP_INTEGRATION_TESTS }}
-              run: |
-                  # Run only the explicit integration tests
-                  pytest tests/test_connectors_integration.py -q || true
-                  pytest tests/test_private_repo_access.py -q || true
+      - name: Run integration tests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          SKIP_INTEGRATION_TESTS: ${{ secrets.SKIP_INTEGRATION_TESTS }}
+        run: |
+          # Run only the explicit integration tests
+          pytest tests/test_connectors_integration.py -q || true
+          pytest tests/test_private_repo_access.py -q || true
 
-            - name: Upload integration test logs
-              if: always()
-              uses: actions/upload-artifact@v6
-              with:
-                  name: integration-logs
-                  path: |
-                      **/pytest.log
+      - name: Upload integration test logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: integration-logs
+          path: |
+            **/pytest.log

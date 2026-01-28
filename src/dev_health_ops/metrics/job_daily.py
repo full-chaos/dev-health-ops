@@ -13,13 +13,20 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
-from dev_health_ops.metrics.compute_ic import compute_ic_metrics_daily
+from dev_health_ops.metrics.compute_ic import (
+    compute_ic_metrics_daily,
+    compute_ic_landscape_rolling,
+)
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
-from dev_health_ops.metrics.identity import get_team_resolver, init_team_resolver
+from dev_health_ops.metrics.identity import (
+    get_team_resolver,
+    init_team_resolver,
+    load_team_map,
+)
 from dev_health_ops.metrics.knowledge import (
     compute_bus_factor,
     compute_code_ownership_gini,
@@ -394,6 +401,15 @@ async def run_daily_metrics_job(
         )
         for s in sinks:
             s.write_user_metrics(ic_metrics)
+
+        rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=d)
+        ic_landscape = compute_ic_landscape_rolling(
+            as_of_day=d,
+            rolling_stats=rolling_stats,
+            team_map=load_team_map(),
+        )
+        for s in sinks:
+            s.write_ic_landscape_rolling(ic_landscape)
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:

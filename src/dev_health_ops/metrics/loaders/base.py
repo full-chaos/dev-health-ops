@@ -4,17 +4,34 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Protocol
+from datetime import date, datetime, timezone
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+)
 
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    PullRequestRow,
-    PullRequestReviewRow,
-    PipelineRunRow,
     DeploymentRow,
     IncidentRow,
+    PipelineRunRow,
+    PullRequestReviewRow,
+    PullRequestRow,
 )
+
+if TYPE_CHECKING:
+    from dev_health_ops.models.atlassian_ops import (
+        AtlassianOpsAlert,
+        AtlassianOpsIncident,
+        AtlassianOpsSchedule,
+    )
+    from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
 
 # Type aliases for internal data structures - using imports from dev_health_ops.metrics.schemas
@@ -70,6 +87,41 @@ class DataLoader(Protocol):
         as_of: datetime,
     ) -> Dict[uuid.UUID, float]:
         """Load blame concentration stats for code ownership metrics."""
+        raise NotImplementedError()
+
+    async def load_atlassian_ops_incidents(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsIncident]:
+        """Load Atlassian Ops incidents."""
+        raise NotImplementedError()
+
+    async def load_atlassian_ops_alerts(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsAlert]:
+        """Load Atlassian Ops alerts."""
+        raise NotImplementedError()
+
+    async def load_atlassian_ops_schedules(
+        self,
+    ) -> List[AtlassianOpsSchedule]:
+        """Load Atlassian Ops schedules."""
+        raise NotImplementedError()
+
+    async def load_jira_project_ops_team_links(
+        self,
+    ) -> List[JiraProjectOpsTeamLink]:
+        """Load Jira project to Ops team mappings."""
+        raise NotImplementedError()
+
+    async def load_user_metrics_rolling_30d(
+        self,
+        as_of: date,
+    ) -> List[Dict[str, Any]]:
+        """Load 30-day rolling user metrics for IC landscape."""
         raise NotImplementedError()
 
 

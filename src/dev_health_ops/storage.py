@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import Iterable
@@ -2069,6 +2070,23 @@ class MongoStore:
             UpdateOne({"_id": doc["_id"]}, {"$set": doc}, upsert=True) for doc in docs
         ]
         await self.db[collection].bulk_write(operations, ordered=False)
+
+    async def _insert_rows(
+        self, collection: str, columns: List[str], rows: List[Dict[str, Any]]
+    ) -> None:
+        if not rows:
+            return
+
+        docs = []
+        for row in rows:
+            doc = {col: row.get(col) for col in columns}
+            key_string = ":".join(
+                str(row.get(col)) for col in columns if row.get(col) is not None
+            )
+            doc["_id"] = hashlib.sha256(key_string.encode()).hexdigest()
+            docs.append(doc)
+
+        await self.db[collection].insert_many(docs, ordered=False)
 
 
 class ClickHouseStore:

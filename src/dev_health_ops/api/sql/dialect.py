@@ -267,7 +267,7 @@ def get_dialect(
     dsn: Optional[str] = None, backend_type: Optional[str] = None
 ) -> SqlDialect:
     """Get a SQL dialect implementation based on DSN or backend type."""
-    from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
+    from dev_health_ops.metrics.sinks.backend_types import detect_backend, SinkBackend
 
     if dsn:
         backend_type = detect_backend(dsn).value

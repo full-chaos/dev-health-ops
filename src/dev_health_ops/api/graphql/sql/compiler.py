@@ -82,6 +82,7 @@ class CatalogValuesRequest:
 def _get_context_params(
     dimensions: List[Dimension],
     force_investment: Optional[bool] = None,
+    needs_team_join: bool = False,
 ) -> Dict[str, Any]:
     """Determine source table and extra clauses based on dimensions."""
     investment_dims = {Dimension.THEME, Dimension.SUBCATEGORY}
@@ -97,17 +98,19 @@ def _get_context_params(
             "ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv"
         )
 
-        # Add team join if TEAM dimension is used
-        if Dimension.TEAM in dimensions:
+        # Add team join if TEAM dimension is used or filters require it
+        if Dimension.TEAM in dimensions or needs_team_join:
             team_join = """
             LEFT JOIN (
                 SELECT
                     work_unit_id,
-                    argMax(team, cnt) AS team_label
+                    argMax(team_label, cnt) AS team_label,
+                    argMax(team_id, cnt) AS team_id
                 FROM (
                     SELECT
                         work_unit_investments.work_unit_id AS work_unit_id,
-                        ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
+                        t.team_id AS team_id,
+                        ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team_label,
                         count() AS cnt
                     FROM work_unit_investments
                     ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
@@ -119,7 +122,7 @@ def _get_context_params(
                         FROM work_item_cycle_times
                         GROUP BY work_item_id
                     ) AS t ON t.work_item_id = issue_id
-                    GROUP BY work_unit_id, team
+                    GROUP BY work_unit_id, team_id, team_label
                 )
                 GROUP BY work_unit_id
             ) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id
@@ -145,6 +148,12 @@ def _get_context_params(
     }
 
 
+def _needs_team_join(filters: Optional["FilterInput"]) -> bool:
+    if not filters or not filters.scope or not filters.scope.ids:
+        return False
+    return filters.scope.level.value == "team"
+
+
 def compile_timeseries(
     request: TimeseriesRequest,
     org_id: str,
@@ -167,7 +176,11 @@ def compile_timeseries(
     measure = validate_measure(request.measure)
     interval = validate_bucket_interval(request.interval)
 
-    ctx = _get_context_params([dimension], force_investment=request.use_investment)
+    ctx = _get_context_params(
+        [dimension],
+        force_investment=request.use_investment,
+        needs_team_join=_needs_team_join(filters),
+    )
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
@@ -201,7 +214,11 @@ def compile_breakdown(
     dimension = validate_dimension(request.dimension)
     measure = validate_measure(request.measure)
 
-    ctx = _get_context_params([dimension], force_investment=request.use_investment)
+    ctx = _get_context_params(
+        [dimension],
+        force_investment=request.use_investment,
+        needs_team_join=_needs_team_join(filters),
+    )
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
@@ -234,7 +251,11 @@ def compile_sankey(
     dimensions = validate_sankey_path(request.path)
     measure = validate_measure(request.measure)
 
-    ctx = _get_context_params(dimensions, force_investment=request.use_investment)
+    ctx = _get_context_params(
+        dimensions,
+        force_investment=request.use_investment,
+        needs_team_join=_needs_team_join(filters),
+    )
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
@@ -290,7 +311,10 @@ def compile_catalog_values(
     """
     dimension = validate_dimension(request.dimension)
 
-    ctx = _get_context_params([dimension])
+    ctx = _get_context_params(
+        [dimension],
+        needs_team_join=_needs_team_join(filters),
+    )
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(

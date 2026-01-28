@@ -166,16 +166,22 @@ def translate_filters(
 
     # Scope filter
     if filters.scope is not None:
-        clause, scope_params = translate_scope_filter(
-            level=filters.scope.level.value,
-            ids=filters.scope.ids,
-            team_column=team_column,
-            repo_column=repo_column,
-            author_column=author_column,
-        )
-        if clause:
-            clauses.append(clause)
-            params.update(scope_params)
+        if use_investment and filters.scope.level.value == "team" and filters.scope.ids:
+            clauses.append(
+                " AND (ut.team_label IN %(scope_ids)s OR ut.team_id IN %(scope_ids)s)"
+            )
+            params["scope_ids"] = filters.scope.ids
+        else:
+            clause, scope_params = translate_scope_filter(
+                level=filters.scope.level.value,
+                ids=filters.scope.ids,
+                team_column=team_column,
+                repo_column=repo_column,
+                author_column=author_column,
+            )
+            if clause:
+                clauses.append(clause)
+                params.update(scope_params)
 
     # Who filter - developers
     if filters.who is not None and filters.who.developers:

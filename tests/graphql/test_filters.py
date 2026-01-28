@@ -140,7 +140,8 @@ class TestFilterTranslation:
         sql, params = compile_breakdown(request, org_id="org1", filters=filters)
 
         assert "FROM work_unit_investments" in sql
-        assert "team_id IN %(scope_ids)s" in sql
+        assert "ut.team_label IN %(scope_ids)s" in sql
+        assert "ut.team_id IN %(scope_ids)s" in sql
         # Investment table uses subcategory_kv key for categories
         assert "splitByChar('.', subcategory_kv.1)[1] IN %(work_categories)s" in sql
         assert params["scope_ids"] == ["team-xyz"]

@@ -46,7 +46,7 @@ async def resolve_home(
     from dev_health_ops.api.queries.client import query_dicts
 
     # Get freshness data
-    freshness_sql = f"""
+    freshness_sql = """
         SELECT
             MAX(ingested_at) as last_ingested_at
         FROM investment_metrics_daily

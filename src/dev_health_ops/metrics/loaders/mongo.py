@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, date, timedelta, time
 from typing import Any, Dict, List, Optional, Tuple
 
 from dev_health_ops.metrics.loaders.base import (
@@ -20,6 +20,12 @@ from dev_health_ops.metrics.schemas import (
     DeploymentRow,
     IncidentRow,
 )
+from dev_health_ops.models.atlassian_ops import (
+    AtlassianOpsIncident,
+    AtlassianOpsAlert,
+    AtlassianOpsSchedule,
+)
+from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
 
 class MongoDataLoader(DataLoader):
@@ -250,3 +256,127 @@ class MongoDataLoader(DataLoader):
         if not results:
             return {}
         return {repo_id: float(results[0]["concentration"])}
+
+    async def load_atlassian_ops_incidents(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsIncident]:
+        sn = naive_utc(start)
+        en = naive_utc(end)
+
+        query = {"created_at": {"$gte": sn, "$lt": en}}
+        items_raw = list(self.db["atlassian_ops_incidents"].find(query))
+
+        incidents: List[AtlassianOpsIncident] = []
+        for item in items_raw:
+            incidents.append(
+                AtlassianOpsIncident(
+                    id=item.get("id", ""),
+                    url=item.get("url"),
+                    summary=item.get("summary", ""),
+                    description=item.get("description"),
+                    status=item.get("status", ""),
+                    severity=item.get("severity", ""),
+                    created_at=item.get("created_at") or datetime.now(timezone.utc),
+                    provider_id=item.get("provider_id"),
+                    last_synced=item.get("last_synced") or datetime.now(timezone.utc),
+                )
+            )
+        return incidents
+
+    async def load_atlassian_ops_alerts(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsAlert]:
+        sn = naive_utc(start)
+        en = naive_utc(end)
+
+        query = {"created_at": {"$gte": sn, "$lt": en}}
+        items_raw = list(self.db["atlassian_ops_alerts"].find(query))
+
+        alerts: List[AtlassianOpsAlert] = []
+        for item in items_raw:
+            alerts.append(
+                AtlassianOpsAlert(
+                    id=item.get("id", ""),
+                    status=item.get("status", ""),
+                    priority=item.get("priority", ""),
+                    created_at=item.get("created_at") or datetime.now(timezone.utc),
+                    acknowledged_at=item.get("acknowledged_at"),
+                    snoozed_at=item.get("snoozed_at"),
+                    closed_at=item.get("closed_at"),
+                    last_synced=item.get("last_synced") or datetime.now(timezone.utc),
+                )
+            )
+        return alerts
+
+    async def load_atlassian_ops_schedules(
+        self,
+    ) -> List[AtlassianOpsSchedule]:
+        items_raw = list(self.db["atlassian_ops_schedules"].find({}))
+
+        schedules: List[AtlassianOpsSchedule] = []
+        for item in items_raw:
+            schedules.append(
+                AtlassianOpsSchedule(
+                    id=item.get("id", ""),
+                    name=item.get("name", ""),
+                    timezone=item.get("timezone"),
+                    last_synced=item.get("last_synced") or datetime.now(timezone.utc),
+                )
+            )
+        return schedules
+
+    async def load_jira_project_ops_team_links(
+        self,
+    ) -> List[JiraProjectOpsTeamLink]:
+        items_raw = list(self.db["jira_project_ops_team_links"].find({}))
+
+        links: List[JiraProjectOpsTeamLink] = []
+        for item in items_raw:
+            links.append(
+                JiraProjectOpsTeamLink(
+                    project_key=item.get("project_key", ""),
+                    ops_team_id=item.get("ops_team_id", ""),
+                    project_name=item.get("project_name", ""),
+                    ops_team_name=item.get("ops_team_name", ""),
+                    updated_at=item.get("updated_at") or datetime.now(timezone.utc),
+                )
+            )
+        return links
+
+    async def load_user_metrics_rolling_30d(
+        self,
+        as_of: date,
+    ) -> List[Dict[str, Any]]:
+        start = datetime.combine(
+            as_of - timedelta(days=29), time.min, tzinfo=timezone.utc
+        )
+        end = datetime.combine(as_of, time.max, tzinfo=timezone.utc)
+
+        pipeline = [
+            {"$match": {"day": {"$gte": start, "$lte": end}}},
+            {
+                "$group": {
+                    "_id": "$identity_id",
+                    "team_id": {"$first": "$team_id"},
+                    "churn_loc_30d": {"$sum": "$loc_touched"},
+                    "delivery_units_30d": {"$sum": "$delivery_units"},
+                    "cycle_p50_30d_hours": {"$avg": "$cycle_p50_hours"},
+                    "wip_max_30d": {"$max": "$work_items_active"},
+                }
+            },
+            {
+                "$project": {
+                    "identity_id": "$_id",
+                    "team_id": 1,
+                    "churn_loc_30d": 1,
+                    "delivery_units_30d": 1,
+                    "cycle_p50_30d_hours": 1,
+                    "wip_max_30d": 1,
+                }
+            },
+        ]
+        return list(self.db["user_metrics_daily"].aggregate(pipeline))

@@ -48,7 +48,7 @@ dependencies = [
   "celery[redis]>=5.3.0",
   "redis>=5.0.0",
   # Shared Atlassian client library (Jira REST/GraphQL)
-  "atlassian-client @ git+https://github.com/full-chaos/atlassian.git@main#subdirectory=python",
+  "atlassian-client>=0.1.0",
   "pytest-xdist (>=3.8.0,<4.0.0)",
 ]
 
@@ -123,7 +123,12 @@ anthropic = "*"
 strawberry-graphql = {extras = ["fastapi"], version = "*"}
 celery = {extras = ["redis"], version = ">=5.3.0"}
 redis = ">=5.0.0"
-atlassian-client = {git = "https://github.com/full-chaos/atlassian.git", branch = "main", subdirectory = "python"}
+atlassian-client = {version = ">=0.1.0", source = "github"}
+
+[[tool.poetry.source]]
+name = "github"
+url = "https://pypi.pkg.github.com/full-chaos"
+priority = "supplemental"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "*"

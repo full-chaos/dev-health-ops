@@ -959,6 +959,14 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 ("review_reciprocity", "REAL NOT NULL DEFAULT 0.0"),
                 ("team_id", "TEXT"),
                 ("team_name", "TEXT"),
+                ("identity_id", "TEXT NOT NULL DEFAULT ''"),
+                ("loc_touched", "INTEGER NOT NULL DEFAULT 0"),
+                ("prs_opened", "INTEGER NOT NULL DEFAULT 0"),
+                ("work_items_completed", "INTEGER NOT NULL DEFAULT 0"),
+                ("work_items_active", "INTEGER NOT NULL DEFAULT 0"),
+                ("delivery_units", "INTEGER NOT NULL DEFAULT 0"),
+                ("cycle_p50_hours", "REAL NOT NULL DEFAULT 0.0"),
+                ("cycle_p90_hours", "REAL NOT NULL DEFAULT 0.0"),
             ]:
                 if not self._table_has_column(conn, "user_metrics_daily", col):
                     conn.execute(

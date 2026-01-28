@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
@@ -21,6 +21,12 @@ from dev_health_ops.metrics.schemas import (
     DeploymentRow,
     IncidentRow,
 )
+from dev_health_ops.models.atlassian_ops import (
+    AtlassianOpsIncident,
+    AtlassianOpsAlert,
+    AtlassianOpsSchedule,
+)
+from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
 
 def _to_dt(val: Any) -> Optional[datetime]:
@@ -292,3 +298,124 @@ class SqlAlchemyDataLoader(DataLoader):
                 if u:
                     return {u: float(row[1])}
         return {}
+
+    async def load_atlassian_ops_incidents(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsIncident]:
+        params = {"start": start.isoformat(), "end": end.isoformat()}
+        query = "SELECT * FROM atlassian_ops_incidents WHERE created_at >= :start AND created_at < :end"
+
+        incidents: List[AtlassianOpsIncident] = []
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(query), params).mappings().all()
+            for r in rows:
+                incidents.append(
+                    AtlassianOpsIncident(
+                        id=r.get("id", ""),
+                        url=r.get("url"),
+                        summary=r.get("summary", ""),
+                        description=r.get("description"),
+                        status=r.get("status", ""),
+                        severity=r.get("severity", ""),
+                        created_at=_to_dt(r.get("created_at"))
+                        or datetime.now(timezone.utc),
+                        provider_id=r.get("provider_id"),
+                        last_synced=_to_dt(r.get("last_synced"))
+                        or datetime.now(timezone.utc),
+                    )
+                )
+        return incidents
+
+    async def load_atlassian_ops_alerts(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> List[AtlassianOpsAlert]:
+        params = {"start": start.isoformat(), "end": end.isoformat()}
+        query = "SELECT * FROM atlassian_ops_alerts WHERE created_at >= :start AND created_at < :end"
+
+        alerts: List[AtlassianOpsAlert] = []
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(query), params).mappings().all()
+            for r in rows:
+                alerts.append(
+                    AtlassianOpsAlert(
+                        id=r.get("id", ""),
+                        status=r.get("status", ""),
+                        priority=r.get("priority", ""),
+                        created_at=_to_dt(r.get("created_at"))
+                        or datetime.now(timezone.utc),
+                        acknowledged_at=_to_dt(r.get("acknowledged_at")),
+                        snoozed_at=_to_dt(r.get("snoozed_at")),
+                        closed_at=_to_dt(r.get("closed_at")),
+                        last_synced=_to_dt(r.get("last_synced"))
+                        or datetime.now(timezone.utc),
+                    )
+                )
+        return alerts
+
+    async def load_atlassian_ops_schedules(
+        self,
+    ) -> List[AtlassianOpsSchedule]:
+        query = "SELECT * FROM atlassian_ops_schedules"
+
+        schedules: List[AtlassianOpsSchedule] = []
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(query)).mappings().all()
+            for r in rows:
+                schedules.append(
+                    AtlassianOpsSchedule(
+                        id=r.get("id", ""),
+                        name=r.get("name", ""),
+                        timezone=r.get("timezone"),
+                        last_synced=_to_dt(r.get("last_synced"))
+                        or datetime.now(timezone.utc),
+                    )
+                )
+        return schedules
+
+    async def load_jira_project_ops_team_links(
+        self,
+    ) -> List[JiraProjectOpsTeamLink]:
+        query = "SELECT * FROM jira_project_ops_team_links"
+
+        links: List[JiraProjectOpsTeamLink] = []
+        with self.engine.connect() as conn:
+            rows = conn.execute(text(query)).mappings().all()
+            for r in rows:
+                links.append(
+                    JiraProjectOpsTeamLink(
+                        project_key=r.get("project_key", ""),
+                        ops_team_id=r.get("ops_team_id", ""),
+                        project_name=r.get("project_name", ""),
+                        ops_team_name=r.get("ops_team_name", ""),
+                        updated_at=_to_dt(r.get("updated_at"))
+                        or datetime.now(timezone.utc),
+                    )
+                )
+        return links
+
+    async def load_user_metrics_rolling_30d(
+        self,
+        as_of: date,
+    ) -> List[Dict[str, Any]]:
+        start = as_of - timedelta(days=29)
+
+        query = """
+        SELECT
+            identity_id,
+            MAX(team_id) as team_id,
+            SUM(loc_touched) as churn_loc_30d,
+            SUM(delivery_units) as delivery_units_30d,
+            AVG(cycle_p50_hours) as cycle_p50_30d_hours,
+            MAX(work_items_active) as wip_max_30d
+        FROM user_metrics_daily
+        WHERE day >= :start AND day <= :end
+        GROUP BY identity_id
+        """
+        params = {"start": start.isoformat(), "end": as_of.isoformat()}
+
+        with self.engine.connect() as conn:
+            return [dict(r) for r in conn.execute(text(query), params).mappings().all()]

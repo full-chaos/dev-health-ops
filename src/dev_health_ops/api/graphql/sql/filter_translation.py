@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
+    from ...sql.base_dialect import SqlDialect
 
 
 def translate_scope_filter(
@@ -60,6 +61,7 @@ def translate_scope_filter(
 
 def translate_work_category_filter(
     categories: List[str],
+    dialect: "SqlDialect",
     use_investment: bool = False,
 ) -> Tuple[str, Dict[str, Any]]:
     """Translate work category filter to SQL predicate.
@@ -75,10 +77,10 @@ def translate_work_category_filter(
         return "", {}
 
     if use_investment:
-        # For investment queries, filter by theme via subcategory_kv
-        # Extract theme from subcategory key: "Theme.Subcategory" -> "Theme"
+        key_expr = dialect.tuple_element("subcategory_kv", 1)
+        theme_expr = dialect.split_by_char(".", key_expr, 1)
         return (
-            " AND splitByChar('.', subcategory_kv.1)[1] IN %(work_categories)s",
+            f" AND {theme_expr} IN %(work_categories)s",
             {"work_categories": categories},
         )
     else:
@@ -128,6 +130,7 @@ def translate_developer_filter(
 
 def translate_filters(
     filters: Optional["FilterInput"],
+    dialect: "SqlDialect",
     use_investment: bool = False,
     team_column: str = "team_id",
     repo_column: str = "repo_id",
@@ -201,6 +204,7 @@ def translate_filters(
     if filters.why is not None and filters.why.work_category:
         clause, cat_params = translate_work_category_filter(
             categories=filters.why.work_category,
+            dialect=dialect,
             use_investment=use_investment,
         )
         if clause:

@@ -29,8 +29,6 @@ from .validate import (
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
     from ...sql.base_dialect import SqlDialect
-
-
 # Default query timeout in seconds
 DEFAULT_TIMEOUT = 30
 
@@ -183,7 +181,7 @@ def compile_timeseries(
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
-        filters, use_investment=ctx.get("use_investment", False)
+        filters, dialect, use_investment=ctx.get("use_investment", False)
     )
 
     sql = timeseries_template(
@@ -225,7 +223,7 @@ def compile_breakdown(
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
-        filters, use_investment=ctx.get("use_investment", False)
+        filters, dialect, use_investment=ctx.get("use_investment", False)
     )
 
     sql = breakdown_template(
@@ -263,7 +261,7 @@ def compile_sankey(
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
-        filters, use_investment=ctx.get("use_investment", False)
+        filters, dialect, use_investment=ctx.get("use_investment", False)
     )
 
     # Calculate per-dimension node limit
@@ -325,7 +323,7 @@ def compile_catalog_values(
 
     # Translate filters to SQL clause
     filter_clause, filter_params = translate_filters(
-        filters, use_investment=ctx.get("use_investment", False)
+        filters, dialect, use_investment=ctx.get("use_investment", False)
     )
 
     sql = catalog_values_template(

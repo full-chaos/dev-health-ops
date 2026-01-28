@@ -56,7 +56,7 @@ async def _execute_timeseries_query(
     timeout: int,
     use_investment: bool,
     filters: Optional[Any],
-    dialect: Any,
+    dialect: SqlDialect,
 ) -> List[TimeseriesResult]:
     """Execute a single timeseries query and return results."""
     from dev_health_ops.api.queries.client import query_dicts

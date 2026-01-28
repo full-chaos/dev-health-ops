@@ -10,6 +10,7 @@ from ..sql.validate import Dimension
 
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
+    from ...sql.base_dialect import SqlDialect
 
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ async def load_dimension_values(
     client: Any,
     dimension: str,
     org_id: str,
-    dialect: "SqlDialect",
+    dialect: SqlDialect,
     limit: int = 100,
     timeout: int = 30,
     filters: Optional["FilterInput"] = None,  # NEW: Filter support

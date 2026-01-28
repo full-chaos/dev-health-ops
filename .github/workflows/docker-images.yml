@@ -29,9 +29,15 @@ permissions:
   id-token: write
 
 jobs:
-  build-and-push:
-    name: Build and push runner + API images
+  build:
+    name: Build Image
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [runner, api]
+        platform: [linux/amd64, linux/arm64]
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -39,106 +45,117 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.ref || github.event.pull_request.head.sha || github.ref }}
 
-      - name: Determine version
-        run: |
-          EVENT_NAME="${GITHUB_EVENT_NAME}"
-          SHA=$(git rev-parse HEAD)
-          SHORT_SHA=$(echo "${SHA}" | cut -c1-7)
-          
-          # Calculate Dynamic Registry (lowercase)
-          # This ensures we push to the package associated with THIS repository
-          REPO_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          CURRENT_REGISTRY="ghcr.io/${REPO_NAME_LOWER}"
-          
-          # Handle Manual Registry Override
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" && -n "${{ github.event.inputs.image_registry }}" ]]; then
-            CURRENT_REGISTRY="${{ github.event.inputs.image_registry }}"
-          fi
-
-          # Default Versioning (Branch/Manual on Branch)
-          PYTHON_VERSION="0.0.0.dev0+${SHORT_SHA}"
-          DOCKER_TAG="${SHORT_SHA}"
-          
-          # Release Overrides
-          if [[ "${EVENT_NAME}" == "release" ]]; then
-            RELEASE_TAG="${{ github.event.release.tag_name }}"
-            PYTHON_VERSION="${RELEASE_TAG}"
-            DOCKER_TAG="${RELEASE_TAG}"
-          fi
-          
-          # Construct Tag Lists
-          # Always include the specific version tag
-          RUNNER_TAGS="${CURRENT_REGISTRY}/dev-hops-runner:${DOCKER_TAG}"
-          API_TAGS="${CURRENT_REGISTRY}/dev-hops-api:${DOCKER_TAG}"
-          
-          # Conditionally add 'latest' tag
-          # Only for 'main' branch or proper Releases
-          if [[ "${EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == "main" ]] || [[ "${EVENT_NAME}" == "release" ]]; then
-             RUNNER_TAGS="${RUNNER_TAGS},${CURRENT_REGISTRY}/dev-hops-runner:latest"
-             API_TAGS="${API_TAGS},${CURRENT_REGISTRY}/dev-hops-api:latest"
-          fi
-
-          PUSH_IMAGES="true"
-          LOAD_IMAGE="false"
-          PLATFORMS="linux/amd64,linux/arm64"
-          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
-            PUSH_IMAGES="false"
-            LOAD_IMAGE="true"
-            PLATFORMS="linux/amd64"
-          fi
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
-            if [[ "${{ github.event.inputs.push_images }}" != "true" ]]; then
-              PUSH_IMAGES="false"
-              LOAD_IMAGE="true"
-              PLATFORMS="linux/amd64"
-            fi
-          fi
-          
-          {
-            echo "PYTHON_VERSION=${PYTHON_VERSION}"
-            echo "RUNNER_TAGS=${RUNNER_TAGS}"
-            echo "API_TAGS=${API_TAGS}"
-            echo "PUSH_IMAGES=${PUSH_IMAGES}"
-            echo "LOAD_IMAGE=${LOAD_IMAGE}"
-            echo "PLATFORMS=${PLATFORMS}"
-          } >> "$GITHUB_ENV"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Determine version
+        id: versioning
+        run: |
+          SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(echo "${SHA}" | cut -c1-7)
+          PYTHON_VERSION="0.0.0.dev0+${SHORT_SHA}"
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            PYTHON_VERSION="${{ github.event.release.tag_name }}"
+          fi
+          echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.event_name == 'release' }}
 
       - name: Log in to GitHub Container Registry
-        if: env.PUSH_IMAGES == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push runner image
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          target: runner
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
           build-args: |
-            SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.PYTHON_VERSION }}
-          platforms: ${{ env.PLATFORMS }}
-          tags: ${{ env.RUNNER_TAGS }}
-          push: ${{ env.PUSH_IMAGES == 'true' }}
-          load: ${{ env.LOAD_IMAGE == 'true' }}
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.versioning.outputs.python_version }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Build and push API image
-        uses: docker/build-push-action@v6
+      - name: Export digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+        uses: actions/upload-artifact@v4
         with:
-          context: .
-          file: docker/Dockerfile
-          target: api
-          build-args: |
-            SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.PYTHON_VERSION }}
-          platforms: ${{ env.PLATFORMS }}
-          tags: ${{ env.API_TAGS }}
-          push: ${{ env.PUSH_IMAGES == 'true' }}
-          load: ${{ env.LOAD_IMAGE == 'true' }}
+          name: digests-${{ matrix.target }}-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge Digests
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
+    strategy:
+      matrix:
+        target: [runner, api]
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.target }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.event_name == 'release' }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}:${{ steps.meta.outputs.version }}
+

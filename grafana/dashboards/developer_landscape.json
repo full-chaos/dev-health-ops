@@ -36,7 +36,7 @@
         {
           "format": 1,
           "rawQuery": true,
-          "rawSql": "SELECT max(v.as_of_day) as as_of_day, map_name, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, identity_id, argMax(x_raw, v.as_of_day) as x_raw, argMax(y_raw, v.as_of_day) as y_raw, argMax(x_norm, v.as_of_day) as x_norm, argMax(y_norm, v.as_of_day) as y_norm FROM stats.v_ic_landscape_points AS v WHERE map_name = 'churn_throughput' AND v.as_of_day >= toDate(toDateTime(intDiv($__from, 1000))) AND v.as_of_day < toDate(toDateTime(intDiv($__to, 1000))) AND ifNull(nullIf(team_id, ''), 'unassigned') IN (${team_id:sqlstring}) GROUP BY map_name, team_id, identity_id ORDER BY team_id, identity_id",
+          "rawSql": "SELECT max(v.as_of_day) as as_of_day, map_name, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, identity_id, argMax(x_raw, v.as_of_day) as x_raw, argMax(y_raw, v.as_of_day) as y_raw, argMax(x_norm, v.as_of_day) as x_norm, argMax(y_norm, v.as_of_day) as y_norm FROM stats.v_ic_landscape_points AS v WHERE map_name = 'churn_throughput' AND v.as_of_day >= toDate(toDateTime(intDiv($__from, 1000))) AND v.as_of_day < toDate(toDateTime(intDiv($__to, 1000))) AND match(ifNull(nullIf(team_id, ''), 'unassigned'), '${team_id:regex}') GROUP BY map_name, team_id, identity_id ORDER BY team_id, identity_id",
           "refId": "A"
         }
       ],
@@ -67,7 +67,7 @@
         {
           "format": 1,
           "rawQuery": true,
-          "rawSql": "SELECT max(v.as_of_day) as as_of_day, map_name, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, identity_id, argMax(x_raw, v.as_of_day) as x_raw, argMax(y_raw, v.as_of_day) as y_raw, argMax(x_norm, v.as_of_day) as x_norm, argMax(y_norm, v.as_of_day) as y_norm FROM stats.v_ic_landscape_points AS v WHERE map_name = 'cycle_throughput' AND v.as_of_day >= toDate(toDateTime(intDiv($__from, 1000))) AND v.as_of_day < toDate(toDateTime(intDiv($__to, 1000))) AND ifNull(nullIf(team_id, ''), 'unassigned') IN (${team_id:sqlstring}) GROUP BY map_name, team_id, identity_id ORDER BY team_id, identity_id",
+          "rawSql": "SELECT max(v.as_of_day) as as_of_day, map_name, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, identity_id, argMax(x_raw, v.as_of_day) as x_raw, argMax(y_raw, v.as_of_day) as y_raw, argMax(x_norm, v.as_of_day) as x_norm, argMax(y_norm, v.as_of_day) as y_norm FROM stats.v_ic_landscape_points AS v WHERE map_name = 'cycle_throughput' AND v.as_of_day >= toDate(toDateTime(intDiv($__from, 1000))) AND v.as_of_day < toDate(toDateTime(intDiv($__to, 1000))) AND match(ifNull(nullIf(team_id, ''), 'unassigned'), '${team_id:regex}') GROUP BY map_name, team_id, identity_id ORDER BY team_id, identity_id",
           "refId": "A"
         }
       ],
@@ -98,7 +98,7 @@
         {
           "format": 1,
           "rawQuery": true,
-          "rawSql": "SELECT max(v.as_of_day) as as_of_day, map_name, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, identity_id, argMax(x_raw, v.as_of_day) as x_raw, argMax(y_raw, v.as_of_day) as y_raw, argMax(x_norm, v.as_of_day) as x_norm, argMax(y_norm, v.as_of_day) as y_norm FROM stats.v_ic_landscape_points AS v WHERE map_name = 'wip_throughput' AND v.as_of_day >= toDate(toDateTime(intDiv($__from, 1000))) AND v.as_of_day < toDate(toDateTime(intDiv($__to, 1000))) AND ifNull(nullIf(team_id, ''), 'unassigned') IN (${team_id:sqlstring}) GROUP BY map_name, team_id, identity_id ORDER BY team_id, identity_id",
+          "rawSql": "SELECT max(v.as_of_day) as as_of_day, map_name, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, identity_id, argMax(x_raw, v.as_of_day) as x_raw, argMax(y_raw, v.as_of_day) as y_raw, argMax(x_norm, v.as_of_day) as x_norm, argMax(y_norm, v.as_of_day) as y_norm FROM stats.v_ic_landscape_points AS v WHERE map_name = 'wip_throughput' AND v.as_of_day >= toDate(toDateTime(intDiv($__from, 1000))) AND v.as_of_day < toDate(toDateTime(intDiv($__to, 1000))) AND match(ifNull(nullIf(team_id, ''), 'unassigned'), '${team_id:regex}') GROUP BY map_name, team_id, identity_id ORDER BY team_id, identity_id",
           "refId": "A"
         }
       ],
@@ -125,7 +125,8 @@
         "refresh": 1,
         "query": "SELECT id AS __value, name AS __text FROM teams UNION ALL SELECT 'unassigned' AS __value, 'Unassigned' AS __text ORDER BY __text",
         "multi": true,
-        "includeAll": true
+        "includeAll": true,
+        "allValue": ".*"
       }
     ]
   },

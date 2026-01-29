@@ -26,7 +26,8 @@
         "refresh": 1,
         "query": "SELECT id AS __value, name AS __text FROM teams UNION ALL SELECT 'unassigned' AS __value, 'Unassigned' AS __text ORDER BY __text",
         "multi": true,
-        "includeAll": true
+        "includeAll": true,
+        "allValue": ".*"
       }
     ]
   },
@@ -57,7 +58,7 @@
         {
           "refId": "A",
           "rawQuery": true,
-          "rawSql": "SELECT day AS time, ifNull(nullIf(team_id, ''), 'unassigned') AS metric, argMax(after_hours_commit_ratio, computed_at) AS value FROM team_metrics_daily WHERE ifNull(nullIf(team_id, ''), 'unassigned') IN (${team_id:sqlstring}) AND day >= toDate(toDateTime(intDiv($__from, 1000))) AND day < toDate(toDateTime(intDiv($__to, 1000))) GROUP BY day, metric ORDER BY day"
+          "rawSql": "SELECT day AS time, ifNull(nullIf(team_id, ''), 'unassigned') AS metric, argMax(after_hours_commit_ratio, computed_at) AS value FROM team_metrics_daily WHERE match(ifNull(nullIf(team_id, ''), 'unassigned'), '${team_id:regex}') AND day >= toDate(toDateTime(intDiv($__from, 1000))) AND day < toDate(toDateTime(intDiv($__to, 1000))) GROUP BY day, metric ORDER BY day"
         }
       ]
     },
@@ -87,7 +88,7 @@
         {
           "refId": "A",
           "rawQuery": true,
-          "rawSql": "SELECT toStartOfWeek(day) AS time, team_id AS metric, sum(weekend_latest) / nullIf(sum(commits_latest), 0) AS value FROM ( SELECT day, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, argMax(weekend_commits_count, computed_at) AS weekend_latest, argMax(commits_count, computed_at) AS commits_latest FROM team_metrics_daily WHERE ifNull(nullIf(team_id, ''), 'unassigned') IN (${team_id:sqlstring}) AND day >= toDate(toDateTime(intDiv($__from, 1000))) AND day < toDate(toDateTime(intDiv($__to, 1000))) GROUP BY day, team_id ) GROUP BY time, team_id ORDER BY time"
+          "rawSql": "SELECT toStartOfWeek(day) AS time, team_id AS metric, sum(weekend_latest) / nullIf(sum(commits_latest), 0) AS value FROM ( SELECT day, ifNull(nullIf(team_id, ''), 'unassigned') AS team_id, argMax(weekend_commits_count, computed_at) AS weekend_latest, argMax(commits_count, computed_at) AS commits_latest FROM team_metrics_daily WHERE match(ifNull(nullIf(team_id, ''), 'unassigned'), '${team_id:regex}') AND day >= toDate(toDateTime(intDiv($__from, 1000))) AND day < toDate(toDateTime(intDiv($__to, 1000))) GROUP BY day, team_id ) GROUP BY time, team_id ORDER BY time"
         }
       ]
     }

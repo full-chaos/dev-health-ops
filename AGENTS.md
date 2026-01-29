@@ -265,11 +265,15 @@ Explanation format:
 
 ## 8) What to do when you start a task
 
-1. Identify which layer you’re changing (connector, processor, metric, sink, viz).
-2. Re-state the relevant non-negotiables (WorkUnits are evidence; themes/subcats canonical; sinks only).
-3. Make the smallest possible change that achieves the outcome.
-4. Add a test (or update an existing one) for the new behavior.
-5. Ensure no new outputs bypass sinks.
+1. **Create a branch** if this is a new task unrelated to previous work on the current branch.
+   ```bash
+   git checkout -b <descriptive-branch-name>  # e.g., feat/add-metrics-validation
+   ```
+2. Identify which layer you're changing (connector, processor, metric, sink, viz).
+3. Re-state the relevant non-negotiables (WorkUnits are evidence; themes/subcats canonical; sinks only).
+4. Make the smallest possible change that achieves the outcome.
+5. Add a test (or update an existing one) for the new behavior.
+6. Ensure no new outputs bypass sinks.
 
 ---
 

@@ -556,3 +556,29 @@ class DailyMetricsResult:
         default_factory=list
     )
     review_edges: List[ReviewEdgeDailyRecord] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CapacityForecastRecord:
+    forecast_id: str
+    computed_at: datetime
+    team_id: Optional[str]
+    work_scope_id: Optional[str]
+    backlog_size: int
+    target_items: Optional[int]
+    target_date: Optional[date]
+    history_days: int
+    simulation_count: int
+    p50_days: Optional[int]
+    p85_days: Optional[int]
+    p95_days: Optional[int]
+    p50_date: Optional[date]
+    p85_date: Optional[date]
+    p95_date: Optional[date]
+    p50_items: Optional[int]
+    p85_items: Optional[int]
+    p95_items: Optional[int]
+    throughput_mean: float
+    throughput_stddev: float
+    insufficient_history: bool = False
+    high_variance: bool = False

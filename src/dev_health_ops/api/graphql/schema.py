@@ -9,7 +9,12 @@ import strawberry
 from strawberry.types import Info
 
 from .context import GraphQLContext
-from .models.inputs import AnalyticsRequestInput, DimensionInput, FilterInput
+from .models.inputs import (
+    AnalyticsRequestInput,
+    DimensionInput,
+    FilterInput,
+    WorkGraphEdgeFilterInput,
+)
 from .models.outputs import (
     AnalyticsResult,
     CatalogResult,
@@ -17,6 +22,7 @@ from .models.outputs import (
     OpportunitiesResult,
     PersonResult,
     PersonSearchResult,
+    WorkGraphEdgesResult,
 )
 from .resolvers.analytics import resolve_analytics
 from .resolvers.catalog import resolve_catalog
@@ -185,6 +191,19 @@ class Query:
 
         # Placeholder - would integrate with opportunities service
         return OR(items=[])
+
+    @strawberry.field(description="Query work graph edges with optional filters")
+    async def work_graph_edges(
+        self,
+        info: Info,
+        org_id: str,
+        filters: Optional[WorkGraphEdgeFilterInput] = None,
+    ) -> WorkGraphEdgesResult:
+        from .resolvers.work_graph import resolve_work_graph_edges
+
+        context = get_context(info)
+        context.org_id = org_id
+        return await resolve_work_graph_edges(context, filters)
 
 
 # Create the Strawberry schema with subscription support

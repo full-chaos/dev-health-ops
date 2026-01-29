@@ -342,3 +342,79 @@ class DrilldownResult:
 
     prs: Optional[List[PullRequestItem]] = None
     issues: Optional[List[IssueItem]] = None
+
+
+# =============================================================================
+# Work Graph types
+# =============================================================================
+
+
+@strawberry.enum
+class WorkGraphNodeType(Enum):
+    """Types of nodes in the work graph."""
+
+    ISSUE = "issue"
+    PR = "pr"
+    COMMIT = "commit"
+    FILE = "file"
+
+
+@strawberry.enum
+class WorkGraphEdgeType(Enum):
+    """Types of edges in the work graph."""
+
+    # Issue-to-issue relationships
+    BLOCKS = "blocks"
+    RELATES = "relates"
+    DUPLICATES = "duplicates"
+    IS_BLOCKED_BY = "is_blocked_by"
+    IS_RELATED_TO = "is_related_to"
+    IS_DUPLICATE_OF = "is_duplicate_of"
+    PARENT_OF = "parent_of"
+    CHILD_OF = "child_of"
+
+    # Issue-to-PR relationships
+    REFERENCES = "references"
+    IMPLEMENTS = "implements"
+    FIXES = "fixes"
+
+    # PR-to-commit relationships
+    CONTAINS = "contains"
+
+    # Commit-to-file relationships
+    TOUCHES = "touches"
+
+
+@strawberry.enum
+class WorkGraphProvenance(Enum):
+    """How an edge was discovered."""
+
+    NATIVE = "native"
+    EXPLICIT_TEXT = "explicit_text"
+    HEURISTIC = "heuristic"
+
+
+@strawberry.type
+class WorkGraphEdgeResult:
+    """A single edge in the work graph."""
+
+    edge_id: str
+    source_type: WorkGraphNodeType
+    source_id: str
+    target_type: WorkGraphNodeType
+    target_id: str
+    edge_type: WorkGraphEdgeType
+    provenance: WorkGraphProvenance
+    confidence: float
+    evidence: str
+    repo_id: Optional[str] = None
+    provider: Optional[str] = None
+
+
+@strawberry.type
+class WorkGraphEdgesResult:
+    """Result for work graph edges query."""
+
+    edges: List[WorkGraphEdgeResult]
+    total_count: int
+    page_info: PageInfo

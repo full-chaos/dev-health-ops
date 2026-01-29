@@ -201,3 +201,44 @@ class PaginatedCatalogValuesInput:
     dimension: DimensionInput
     pagination: Optional[PaginationInput] = None
     filters: Optional[FilterInput] = None
+
+
+@strawberry.enum
+class WorkGraphNodeTypeInput(Enum):
+    """Node type filter for work graph queries."""
+
+    ISSUE = "issue"
+    PR = "pr"
+    COMMIT = "commit"
+    FILE = "file"
+
+
+@strawberry.enum
+class WorkGraphEdgeTypeInput(Enum):
+    """Edge type filter for work graph queries."""
+
+    BLOCKS = "blocks"
+    RELATES = "relates"
+    DUPLICATES = "duplicates"
+    IS_BLOCKED_BY = "is_blocked_by"
+    IS_RELATED_TO = "is_related_to"
+    IS_DUPLICATE_OF = "is_duplicate_of"
+    PARENT_OF = "parent_of"
+    CHILD_OF = "child_of"
+    REFERENCES = "references"
+    IMPLEMENTS = "implements"
+    FIXES = "fixes"
+    CONTAINS = "contains"
+    TOUCHES = "touches"
+
+
+@strawberry.input
+class WorkGraphEdgeFilterInput:
+    """Filter options for work graph edge queries."""
+
+    repo_ids: Optional[List[str]] = None
+    source_type: Optional[WorkGraphNodeTypeInput] = None
+    target_type: Optional[WorkGraphNodeTypeInput] = None
+    edge_type: Optional[WorkGraphEdgeTypeInput] = None
+    node_id: Optional[str] = None
+    limit: int = 1000

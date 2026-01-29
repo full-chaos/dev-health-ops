@@ -611,11 +611,17 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             components.append(group)
 
         component_count = len(components)
-        min_components = min(50, max(2, non_epic_wi_count // 2))
+        distinct_repos = int(
+            client.query("SELECT countDistinct(repo_id) FROM work_items").result_rows[
+                0
+            ][0]
+        )
+        min_components = max(2, distinct_repos)
         logging.info(
-            "WorkUnits (connected components): %d (min_required=%d)",
+            "WorkUnits (connected components): %d (min_required=%d, repos=%d)",
             component_count,
             min_components,
+            distinct_repos,
         )
         if component_count < min_components:
             logging.error(

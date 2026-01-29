@@ -38,22 +38,26 @@ This checklist tracks what is complete and what remains to finalize `dev-health-
 
 ### Data + Fixtures
 
-- [ ] **Fixtures validation**: Ensure synthetic work items + commits generate non-zero Phase 2 metrics.
+- [ ] **Fixtures validation**: Ensure synthetic work items + commits generate non-zero Phase 2 metrics. ([#267](https://github.com/full-chaos/dev-health-ops/issues/267))
 
 ### Dashboards
 
 - [x] **Dashboards for CI/CD, deployments, incidents** (panels for success rate, duration, deploy counts, MTTR).
 - [x] **Investment Areas team filter**: use regex `match(...)` filters for the team variable in ClickHouse queries.
-- [ ] **Work tracking dashboards audit**: Validate filters and table joins for synthetic + real providers.
-- [ ] **Fix dashboard templating filters**: Ensure variable regex and `match(...)` filters do not return empty results.
+- [ ] **Work tracking dashboards audit**: Validate filters and table joins for synthetic + real providers. ([#266](https://github.com/full-chaos/dev-health-ops/issues/266))
+- [ ] **Fix dashboard templating filters**: Ensure variable regex and `match(...)` filters do not return empty results. ([#264](https://github.com/full-chaos/dev-health-ops/issues/264))
 
 ### Metrics Enhancements
 
 - [x] **Bus factor (true)**: Top contributors accounting for >50% of churn (Bus Factor) and Gini coefficient (Knowledge Distribution).
 - [x] **Predictability index**: Completion Rate (items completed / (completed + wip)).
-- [ ] **Capacity planning**: Forecast completion using historical throughput.
-- [ ] **Identity Linking**: Reliable mapping of Work Items (Jira/LinearB) to Git commits (e.g. via commit messages or smart matching).
-- [ ] **Work Item Repo Filtering by Tags/Settings**: Allow `sync work-items` to filter repos using `repos.tags` or `repos.settings` (beyond name glob).
+- [ ] **Capacity planning**: Forecast completion using historical throughput. ([#269](https://github.com/full-chaos/dev-health-ops/issues/269))
+- [ ] **Identity Linking**: Reliable mapping of Work Items (Jira/LinearB) to Git commits (e.g. via commit messages or smart matching). ([#268](https://github.com/full-chaos/dev-health-ops/issues/268))
+- [ ] **Work Item Repo Filtering by Tags/Settings**: Allow `sync work-items` to filter repos using `repos.tags` or `repos.settings` (beyond name glob). ([#270](https://github.com/full-chaos/dev-health-ops/issues/270))
+
+### API Enhancements
+
+- [ ] **GraphQL Work Graph API**: Add resolvers and types for work_graph_edges traversal queries. ([#265](https://github.com/full-chaos/dev-health-ops/issues/265))
 
 ### Testing + Docs
 

@@ -1,6 +1,6 @@
 # Dev Health: Product Requirements Document
 
-_Last updated: 2026-01-25_
+_Last updated: 2026-01-29_
 
 ## Purpose
 Dev Health is built to make operating modes visible using inspectable evidence. It answers:
@@ -39,6 +39,25 @@ This system is explicitly designed to avoid turning metrics into scorecards.
 - Every chart is traceable to (query → table/view → evidence).
 - Adding a provider or sink follows a documented contract.
 
+## Implementation Status (as of 2026-01-29)
+
+### Fully Implemented
+- **Investment View**: Theme/subcategory distributions, LLM categorization pipeline, InvestmentView component
+- **Flow & Constraints**: Cycle time, lead time, throughput, WIP metrics, State Flow Sankey
+- **Durability Risk**: Churn, hotspots, bus factor, code ownership Gini coefficient
+- **Well-being Signals**: After-hours ratio, weekend ratio in team_metrics_daily
+- **Quadrants**: All 4 required (Cycle×Throughput, WIP×Throughput, Churn×Throughput, Review Load×Latency)
+- **Visualizations**: Heatmaps, Flame diagrams (timeline + hierarchical), Sankey, Treemap, Sunburst
+- **Connectors**: GitHub, GitLab, Jira, Local Git, Synthetic
+- **DORA Metrics**: MTTR, change failure rate, deployment frequency, lead time
+
+### Remaining (see `docs/roadmap.md`)
+- Capacity planning (forecast completion)
+- Identity linking (Work Items → Git commits)
+- Work Item repo filtering by tags/settings
+- Dashboard filter fixes
+
 ## References
 - `dev-health-ops/AGENTS.md` (repo rules)
 - `docs/90-appendix/agent-instructions/*` (deep dives)
+- GitHub Project: https://github.com/orgs/full-chaos/projects/1

@@ -57,27 +57,28 @@ async def test_resolve_capacity_forecast_returns_result(
     mock_history = MagicMock(spec=ThroughputHistory)
     mock_history.daily_throughputs = [5, 10, 8, 12, 9]
 
+    mock_sink = MagicMock()
+
     with (
         patch(
-            "dev_health_ops.api.graphql.resolvers.capacity.load_throughput_from_clickhouse",
+            "dev_health_ops.metrics.job_capacity.load_throughput_from_sink",
+            new_callable=AsyncMock,
             return_value=mock_history,
         ),
         patch(
-            "dev_health_ops.api.graphql.resolvers.capacity.create_sink"
-        ) as mock_create_sink,
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=mock_sink,
+        ),
         patch(
-            "dev_health_ops.api.graphql.resolvers.capacity.get_backlog_from_sink",
+            "dev_health_ops.metrics.job_capacity.get_backlog_from_sink",
             new_callable=AsyncMock,
             return_value=50,
         ),
         patch(
-            "dev_health_ops.api.graphql.resolvers.capacity.forecast_capacity",
+            "dev_health_ops.metrics.compute_capacity.forecast_capacity",
             return_value=sample_forecast_result,
         ),
     ):
-        mock_sink = MagicMock()
-        mock_create_sink.return_value = mock_sink
-
         input_data = CapacityForecastInput(
             team_id="team-a",
             work_scope_id="project-1",
@@ -102,14 +103,23 @@ async def test_resolve_capacity_forecast_no_history_returns_none(mock_context):
 
     mock_history = MagicMock(spec=ThroughputHistory)
     mock_history.daily_throughputs = []
+    mock_sink = MagicMock()
 
-    with patch(
-        "dev_health_ops.api.graphql.resolvers.capacity.load_throughput_from_clickhouse",
-        return_value=mock_history,
+    with (
+        patch(
+            "dev_health_ops.metrics.job_capacity.load_throughput_from_sink",
+            new_callable=AsyncMock,
+            return_value=mock_history,
+        ),
+        patch(
+            "dev_health_ops.metrics.sinks.factory.create_sink",
+            return_value=mock_sink,
+        ),
     ):
         input_data = CapacityForecastInput(team_id="team-a")
         result = await resolve_capacity_forecast(mock_context, input_data)
         assert result is None
+        mock_sink.close.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -144,7 +154,7 @@ async def test_resolve_capacity_forecasts_returns_connection(mock_context):
     ]
 
     with patch(
-        "dev_health_ops.api.graphql.resolvers.capacity.query_dicts",
+        "dev_health_ops.api.queries.client.query_dicts",
         new_callable=AsyncMock,
         return_value=mock_rows,
     ):
@@ -162,7 +172,7 @@ async def test_resolve_capacity_forecasts_empty_returns_empty_connection(mock_co
     from dev_health_ops.api.graphql.resolvers.capacity import resolve_capacity_forecasts
 
     with patch(
-        "dev_health_ops.api.graphql.resolvers.capacity.query_dicts",
+        "dev_health_ops.api.queries.client.query_dicts",
         new_callable=AsyncMock,
         return_value=[],
     ):

@@ -75,11 +75,11 @@ async def resolve_capacity_forecast(
     context: GraphQLContext,
     input: Optional[CapacityForecastInput] = None,
 ) -> Optional[CapacityForecast]:
-    from dev_health_ops.metrics.compute_capacity import (
-        forecast_capacity,
-        load_throughput_from_clickhouse,
+    from dev_health_ops.metrics.compute_capacity import forecast_capacity
+    from dev_health_ops.metrics.job_capacity import (
+        get_backlog_from_sink,
+        load_throughput_from_sink,
     )
-    from dev_health_ops.metrics.job_capacity import get_backlog_from_sink
     from dev_health_ops.metrics.sinks.factory import create_sink
 
     require_org_id(context)
@@ -94,9 +94,10 @@ async def resolve_capacity_forecast(
     history_days = input.history_days if input else 90
     simulations = input.simulations if input else 10000
 
+    sink = create_sink(context.db_url)
     try:
-        history = load_throughput_from_clickhouse(
-            context.client,
+        history = await load_throughput_from_sink(
+            sink,
             team_id=team_id,
             work_scope_id=work_scope_id,
             history_days=history_days,
@@ -110,13 +111,9 @@ async def resolve_capacity_forecast(
             )
             return None
 
-        sink = create_sink(context.db_url)
-        try:
-            backlog = await get_backlog_from_sink(
-                sink, team_id=team_id, work_scope_id=work_scope_id
-            )
-        finally:
-            sink.close()
+        backlog = await get_backlog_from_sink(
+            sink, team_id=team_id, work_scope_id=work_scope_id
+        )
 
         items = target_items if target_items else backlog
         if items <= 0:
@@ -142,6 +139,8 @@ async def resolve_capacity_forecast(
     except Exception as e:
         logger.error("Failed to compute capacity forecast: %s", e)
         raise
+    finally:
+        sink.close()
 
 
 async def resolve_capacity_forecasts(

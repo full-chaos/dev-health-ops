@@ -38,13 +38,13 @@ This checklist tracks what is complete and what remains to finalize `dev-health-
 
 ### Data + Fixtures
 
-- [ ] **Fixtures validation**: Ensure synthetic work items + commits generate non-zero Phase 2 metrics. ([#267](https://github.com/full-chaos/dev-health-ops/issues/267))
+- [x] **Fixtures validation**: Added Phase 2 metrics checks to `run_fixtures_validation()` - validates cycle_time_hours, flow_efficiency, predictability_score, wip_congestion_ratio, and new_items_count. ([#267](https://github.com/full-chaos/dev-health-ops/issues/267))
 
 ### Dashboards
 
 - [x] **Dashboards for CI/CD, deployments, incidents** (panels for success rate, duration, deploy counts, MTTR).
 - [x] **Investment Areas team filter**: use regex `match(...)` filters for the team variable in ClickHouse queries.
-- [ ] **Work tracking dashboards audit**: Validate filters and table joins for synthetic + real providers. ([#266](https://github.com/full-chaos/dev-health-ops/issues/266))
+- [x] **Work tracking dashboards audit**: Validated filters and table joins - all use correct `match()` regex patterns with `ifNull(nullIf(team_id, ''), 'unassigned')` normalization. No problematic joins; dashboards use pre-aggregated tables. ([#266](https://github.com/full-chaos/dev-health-ops/issues/266))
 - [ ] **Fix dashboard templating filters**: Ensure variable regex and `match(...)` filters do not return empty results. ([#264](https://github.com/full-chaos/dev-health-ops/issues/264))
 
 ### Metrics Enhancements

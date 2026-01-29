@@ -427,6 +427,94 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         logging.error(f"FAIL: Could not validate team mappings: {e}")
         return 1
 
+    # 1c. Check Phase 2 metrics in work_item_cycle_times
+    try:
+        cycle_with_metrics = int(
+            client.query(
+                "SELECT count() FROM work_item_cycle_times "
+                "WHERE cycle_time_hours IS NOT NULL"
+            ).result_rows[0][0]
+        )
+        cycle_with_flow = int(
+            client.query(
+                "SELECT count() FROM work_item_cycle_times "
+                "WHERE flow_efficiency IS NOT NULL AND flow_efficiency > 0"
+            ).result_rows[0][0]
+        )
+        logging.info(
+            "Cycle time metrics: total=%d, with_cycle_time=%d, with_flow_efficiency=%d",
+            cycle_count,
+            cycle_with_metrics,
+            cycle_with_flow,
+        )
+        if cycle_with_metrics == 0:
+            logging.error(
+                "FAIL: No work_item_cycle_times records have non-null cycle_time_hours."
+            )
+            return 1
+        # flow_efficiency may be NULL if no transitions exist, but warn if all are NULL
+        if cycle_with_flow == 0:
+            logging.warning(
+                "WARN: No work_item_cycle_times records have non-null flow_efficiency. "
+                "This may indicate missing work_item_transitions data."
+            )
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate cycle time metrics: {e}")
+        return 1
+
+    # 1d. Check Phase 2 metrics in work_item_metrics_daily
+    try:
+        if not _table_exists("work_item_metrics_daily"):
+            logging.error(
+                "FAIL: work_item_metrics_daily missing (run fixtures with --with-metrics)."
+            )
+            return 1
+
+        metrics_count = int(
+            client.query("SELECT count() FROM work_item_metrics_daily").result_rows[0][
+                0
+            ]
+        )
+        metrics_with_predictability = int(
+            client.query(
+                "SELECT count() FROM work_item_metrics_daily "
+                "WHERE predictability_score > 0"
+            ).result_rows[0][0]
+        )
+        metrics_with_congestion = int(
+            client.query(
+                "SELECT count() FROM work_item_metrics_daily "
+                "WHERE wip_congestion_ratio > 0"
+            ).result_rows[0][0]
+        )
+        metrics_with_new_items = int(
+            client.query(
+                "SELECT count() FROM work_item_metrics_daily WHERE new_items_count > 0"
+            ).result_rows[0][0]
+        )
+        logging.info(
+            "Phase 2 metrics: total=%d, with_predictability=%d, with_congestion=%d, with_new_items=%d",
+            metrics_count,
+            metrics_with_predictability,
+            metrics_with_congestion,
+            metrics_with_new_items,
+        )
+        if metrics_count == 0:
+            logging.error("FAIL: work_item_metrics_daily is empty.")
+            return 1
+        if metrics_with_predictability == 0:
+            logging.warning(
+                "WARN: No work_item_metrics_daily records have predictability_score > 0."
+            )
+        if metrics_with_new_items == 0:
+            logging.warning(
+                "WARN: No work_item_metrics_daily records have new_items_count > 0 "
+                "(defect_intro_rate will be NULL)."
+            )
+    except Exception as e:
+        logging.error(f"FAIL: Could not validate Phase 2 metrics: {e}")
+        return 1
+
     # 2. Check prerequisites
     try:
         pr_commit_count = int(

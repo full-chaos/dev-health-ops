@@ -197,50 +197,75 @@ def monte_carlo_forecast(
 | No history | Return error, cannot forecast |
 | Extremely high variance | Flag in response, suggest longer history |
 
-## Visualization (Future)
+## Visualization
+
+Located at `/work?tab=capacity` in dev-health-web.
 
 ### Burndown with Confidence Bands
+
+Implemented as `ConfidenceBandChart` component showing three projection lines:
 
 ```
 Items
   ^
 50|████████████████████
   |  ████████████████████
-  |    ██████████████████████  <- P95 (conservative)
+  |    ██████████████████████  <- P95 (conservative - red)
   |      ████████████████████████
-  |        ██████████████████████████  <- P85 (target)
+  |        ██████████████████████████  <- P85 (target - amber)
   |          ████████████████████████████
-  |            ██████████████████████████████  <- P50 (optimistic)
+  |            ██████████████████████████████  <- P50 (optimistic - green)
   +-----------------------------------------> Days
               Today        P50    P85   P95
 ```
 
 ### Throughput Histogram
 
-Show historical throughput distribution with mean and standard deviation overlays.
+Implemented as `ThroughputHistogram` component showing:
+- Bar chart of throughput distribution (normal approximation)
+- Vertical line marking the mean
+- Shaded region for ±1 standard deviation
+
+### Forecast Summary Card
+
+`ForecastCard` component displays:
+- Backlog size and completion targets
+- P50/P85/P95 completion dates
+- Throughput statistics (mean ± stddev)
+- Warning indicators for:
+  - `insufficientHistory`: < 14 days of data
+  - `highVariance`: stddev > mean (unreliable forecast)
 
 ## Implementation Phases
 
-### Phase 1: Core Computation (Backend)
+### Phase 1: Core Computation (Backend) ✅
 - Monte Carlo simulation function
 - Throughput history loader
 - Backlog size query
 - ForecastResult dataclass
 
-### Phase 2: Storage & Persistence
+### Phase 2: Storage & Persistence ✅
 - `capacity_forecasts` table schema
 - ClickHouse sink implementation
 - SQLAlchemy sink implementation
 
-### Phase 3: CLI & Jobs
+### Phase 3: CLI & Jobs ✅
 - `forecast capacity` CLI command
 - Scheduled job for daily forecast refresh
 - Team/scope iteration
 
-### Phase 4: GraphQL API
+### Phase 4: GraphQL API ✅
 - `CapacityForecast` type
 - `capacityForecast` query resolver
 - `capacityForecasts` list query
+
+### Phase 5: Frontend UI (dev-health-web) ✅
+- **CapacityView component**: Main view at `/work?tab=capacity`
+- **ForecastCard**: Summary card with P50/P85/P95 dates and warning indicators
+- **ConfidenceBandChart**: ECharts-based burndown with confidence bands
+- **ThroughputHistogram**: Distribution chart with mean/stddev overlays
+- **GraphQL integration**: Uses `graphqlClient.query()` fetch pattern
+- **Sample data**: Test mode fallback for Playwright tests
 
 ## Non-Goals (v1)
 

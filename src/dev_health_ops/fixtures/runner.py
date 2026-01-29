@@ -8,6 +8,10 @@ from datetime import datetime, timedelta, timezone
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.work_graph.runner import materialize_fixture_investments
 from dev_health_ops.metrics.job_daily import run_daily_metrics_job
+from dev_health_ops.metrics.compute_work_item_state_durations import (
+    compute_work_item_state_durations_daily,
+)
+from dev_health_ops.providers.teams import load_team_resolver
 from dev_health_ops.storage import SQLAlchemyStore, resolve_db_type, run_with_store
 from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS
 
@@ -84,6 +88,7 @@ def _build_repo_team_assignments(all_teams, repo_count: int, seed: int | None):
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.db, ns.db_type)
+    fixture_data = {"work_items": [], "transitions": []}
 
     async def _handler(store):
         if isinstance(store, SQLAlchemyStore):
@@ -105,6 +110,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             logging.info("Inserted %d synthetic teams.", len(all_teams))
 
         allow_parallel_inserts = not isinstance(store, SQLAlchemyStore)
+
         sink = None
         if ns.with_metrics:
             from dev_health_ops.metrics.job_daily import (
@@ -184,12 +190,14 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     work_items,
                     allow_parallel=allow_parallel_inserts,
                 )
+                fixture_data["work_items"].extend(work_items)
             if hasattr(store, "insert_work_item_transitions"):
                 await _insert_batches(
                     store.insert_work_item_transitions,
                     transitions,
                     allow_parallel=allow_parallel_inserts,
                 )
+                fixture_data["transitions"].extend(transitions)
 
             dependencies = generator.generate_work_item_dependencies(work_items)
             if hasattr(store, "insert_work_item_dependencies"):
@@ -291,13 +299,53 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     await run_with_store(ns.db, db_type, _handler)
 
     if ns.with_metrics:
-        # Use the production daily metrics job so fixtures match real outputs.
         await run_daily_metrics_job(
             db_url=ns.db,
             day=now.date(),
             backfill_days=ns.days,
             provider="auto",
         )
+
+        if fixture_data["work_items"] and fixture_data["transitions"]:
+            from dev_health_ops.metrics.job_daily import (
+                ClickHouseMetricsSink,
+                MongoMetricsSink,
+                PostgresMetricsSink,
+                SQLiteMetricsSink,
+                _normalize_sqlite_url,
+            )
+
+            if db_type == "clickhouse":
+                sink = ClickHouseMetricsSink(ns.db)
+            elif db_type == "sqlite":
+                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.db))
+            elif db_type == "mongo":
+                sink = MongoMetricsSink(ns.db)
+            elif db_type == "postgres":
+                sink = PostgresMetricsSink(ns.db)
+            else:
+                sink = None
+
+            if sink:
+                team_resolver = load_team_resolver()
+                computed_at = now
+                end_day = now.date()
+                start_day = end_day - timedelta(days=ns.days - 1)
+
+                for day_offset in range(ns.days):
+                    day = start_day + timedelta(days=day_offset)
+                    state_durations = compute_work_item_state_durations_daily(
+                        day=day,
+                        work_items=fixture_data["work_items"],
+                        transitions=fixture_data["transitions"],
+                        computed_at=computed_at,
+                        team_resolver=team_resolver,
+                    )
+                    if state_durations:
+                        sink.write_work_item_state_durations(state_durations)
+
+                sink.close()
+                logging.info("Wrote work_item_state_durations for %d days", ns.days)
 
     if ns.with_work_graph:
         from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder

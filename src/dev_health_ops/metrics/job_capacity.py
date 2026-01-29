@@ -106,7 +106,7 @@ async def get_backlog_from_sink(
     work_scope_id: Optional[str] = None,
 ) -> int:
     backend = sink.backend_type
-    conditions = ["status NOT IN ('done', 'closed', 'cancelled', 'resolved')"]
+    conditions = []
     params = {}
 
     if team_id:
@@ -122,15 +122,26 @@ async def get_backlog_from_sink(
             conditions.append("work_scope_id = :work_scope_id")
         params["work_scope_id"] = work_scope_id
 
-    where_clause = " AND ".join(conditions)
-    query = f"SELECT COUNT(*) FROM work_items WHERE {where_clause}"
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+    query = f"""
+        SELECT wip_count_end_of_day
+        FROM work_item_metrics_daily
+        WHERE {where_clause}
+        ORDER BY day DESC
+        LIMIT 1
+    """
 
     if backend == "clickhouse":
         result = await asyncio.to_thread(sink.client.query, query, parameters=params)
-        return int(result.result_rows[0][0]) if result.result_rows else 0
+        if result.result_rows:
+            return int(result.result_rows[0][0])
+        return 0
     else:
         rows = sink.query_dicts(query, params)
-        return int(rows[0].get("count", 0)) if rows else 0
+        if rows:
+            return int(rows[0].get("wip_count_end_of_day", 0))
+        return 0
 
 
 async def discover_team_scopes(sink: Any) -> List[tuple[Optional[str], Optional[str]]]:

@@ -52,7 +52,7 @@ This checklist tracks what is complete and what remains to finalize `dev-health-
 - [x] **Bus factor (true)**: Top contributors accounting for >50% of churn (Bus Factor) and Gini coefficient (Knowledge Distribution).
 - [x] **Predictability index**: Completion Rate (items completed / (completed + wip)).
 - [ ] **Capacity planning**: Forecast completion using historical throughput. ([#269](https://github.com/full-chaos/dev-health-ops/issues/269))
-- [ ] **Identity Linking**: Reliable mapping of Work Items (Jira/LinearB) to Git commits (e.g. via commit messages or smart matching). ([#268](https://github.com/full-chaos/dev-health-ops/issues/268))
+- [x] **Identity Linking**: Parse commit messages, PR bodies, and branch names for issue refs (Jira keys, #123). Creates direct issue→commit and issue→PR edges. ([#268](https://github.com/full-chaos/dev-health-ops/issues/268))
 - [ ] **Work Item Repo Filtering by Tags/Settings**: Allow `sync work-items` to filter repos using `repos.tags` or `repos.settings` (beyond name glob). ([#270](https://github.com/full-chaos/dev-health-ops/issues/270))
 
 ### API Enhancements

@@ -259,7 +259,7 @@ def _print_forecast(result: ForecastResult) -> None:
         print("\n⚠️  WARNING: High throughput variance detected")
 
 
-async def _run_cli(args: argparse.Namespace) -> None:
+async def _run_cli(args: argparse.Namespace) -> int:
     target_date = None
     if args.target_date:
         target_date = date.fromisoformat(args.target_date)
@@ -278,10 +278,12 @@ async def _run_cli(args: argparse.Namespace) -> None:
 
     if not results:
         print("No forecasts generated. Check logs for warnings.")
-        return
+        return 1
 
     for result in results:
         _print_forecast(result)
+
+    return 0
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:

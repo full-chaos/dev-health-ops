@@ -418,3 +418,52 @@ class WorkGraphEdgesResult:
     edges: List[WorkGraphEdgeResult]
     total_count: int
     page_info: PageInfo
+
+
+# =============================================================================
+# Capacity Planning types
+# =============================================================================
+
+
+@strawberry.type
+class CapacityForecast:
+    """Result of a Monte Carlo capacity forecast."""
+
+    forecast_id: str
+    computed_at: str
+    team_id: Optional[str] = None
+    work_scope_id: Optional[str] = None
+    backlog_size: int
+    target_items: Optional[int] = None
+    target_date: Optional[date] = None
+    p50_date: Optional[date] = None
+    p85_date: Optional[date] = None
+    p95_date: Optional[date] = None
+    p50_days: Optional[int] = None
+    p85_days: Optional[int] = None
+    p95_days: Optional[int] = None
+    p50_items: Optional[int] = None
+    p85_items: Optional[int] = None
+    p95_items: Optional[int] = None
+    throughput_mean: float
+    throughput_stddev: float
+    history_days: int
+    insufficient_history: bool = False
+    high_variance: bool = False
+
+
+@strawberry.type
+class CapacityForecastEdge:
+    """Edge for capacity forecast connection."""
+
+    node: CapacityForecast
+    cursor: str
+
+
+@strawberry.type
+class CapacityForecastConnection:
+    """Paginated connection for capacity forecasts."""
+
+    edges: List[CapacityForecastEdge]
+    page_info: PageInfo
+    total_count: int

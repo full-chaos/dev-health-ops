@@ -242,3 +242,26 @@ class WorkGraphEdgeFilterInput:
     edge_type: Optional[WorkGraphEdgeTypeInput] = None
     node_id: Optional[str] = None
     limit: int = 1000
+
+
+@strawberry.input
+class CapacityForecastInput:
+    """Input for on-demand capacity forecast computation."""
+
+    team_id: Optional[str] = None
+    work_scope_id: Optional[str] = None
+    target_items: Optional[int] = None
+    target_date: Optional[date] = None
+    history_days: int = 90
+    simulations: int = 10000
+
+
+@strawberry.input
+class CapacityForecastFilterInput:
+    """Filter for querying persisted capacity forecasts."""
+
+    team_id: Optional[str] = None
+    work_scope_id: Optional[str] = None
+    from_date: Optional[date] = None
+    to_date: Optional[date] = None
+    limit: int = 10

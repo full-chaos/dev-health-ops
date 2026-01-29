@@ -34,7 +34,7 @@
         {
           "refId": "A",
           "rawQuery": true,
-          "rawSql": "SELECT source, target, sum(delivery_units) AS value FROM stats.v_investment_flow_edges WHERE ifNull(nullIf(team_id, ''), 'unassigned') IN (${team_id:sqlstring}) AND day >= toDate(toDateTime(intDiv($__from, 1000))) AND day < toDate(toDateTime(intDiv($__to, 1000))) GROUP BY source, target ORDER BY value DESC"
+          "rawSql": "SELECT source, target, sum(delivery_units) AS value FROM stats.v_investment_flow_edges WHERE match(ifNull(nullIf(team_id, ''), 'unassigned'), '${team_id:regex}') AND day >= toDate(toDateTime(intDiv($__from, 1000))) AND day < toDate(toDateTime(intDiv($__to, 1000))) GROUP BY source, target ORDER BY value DESC"
         }
       ],
       "options": {
@@ -65,7 +65,8 @@
         "refresh": 1,
         "query": "SELECT id AS __value, name AS __text FROM teams UNION ALL SELECT 'unassigned' AS __value, 'Unassigned' AS __text ORDER BY __text",
         "multi": true,
-        "includeAll": true
+        "includeAll": true,
+        "allValue": ".*"
       }
     ]
   },

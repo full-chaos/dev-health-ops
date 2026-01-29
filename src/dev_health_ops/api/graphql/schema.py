@@ -11,12 +11,16 @@ from strawberry.types import Info
 from .context import GraphQLContext
 from .models.inputs import (
     AnalyticsRequestInput,
+    CapacityForecastFilterInput,
+    CapacityForecastInput,
     DimensionInput,
     FilterInput,
     WorkGraphEdgeFilterInput,
 )
 from .models.outputs import (
     AnalyticsResult,
+    CapacityForecast,
+    CapacityForecastConnection,
     CatalogResult,
     HomeResult,
     OpportunitiesResult,
@@ -204,6 +208,32 @@ class Query:
         context = get_context(info)
         context.org_id = org_id
         return await resolve_work_graph_edges(context, filters)
+
+    @strawberry.field(description="Compute capacity forecast on-demand")
+    async def capacity_forecast(
+        self,
+        info: Info,
+        org_id: str,
+        input: Optional[CapacityForecastInput] = None,
+    ) -> Optional[CapacityForecast]:
+        from .resolvers.capacity import resolve_capacity_forecast
+
+        context = get_context(info)
+        context.org_id = org_id
+        return await resolve_capacity_forecast(context, input)
+
+    @strawberry.field(description="List persisted capacity forecasts")
+    async def capacity_forecasts(
+        self,
+        info: Info,
+        org_id: str,
+        filters: Optional[CapacityForecastFilterInput] = None,
+    ) -> CapacityForecastConnection:
+        from .resolvers.capacity import resolve_capacity_forecasts
+
+        context = get_context(info)
+        context.org_id = org_id
+        return await resolve_capacity_forecasts(context, filters)
 
 
 # Create the Strawberry schema with subscription support

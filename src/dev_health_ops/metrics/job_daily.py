@@ -22,6 +22,7 @@ from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.hotspots import compute_file_hotspots
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
     init_team_resolver,
@@ -307,6 +308,7 @@ async def run_daily_metrics_job(
         bus_factor_by_repo: Dict[uuid.UUID, int] = {}
         gini_by_repo: Dict[uuid.UUID, float] = {}
 
+        all_file_metrics = []
         for r_id in active_repos:
             rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
                 repo_id=str(r_id), window_stats=h_commit_rows
@@ -320,6 +322,13 @@ async def run_daily_metrics_job(
             gini_by_repo[r_id] = compute_code_ownership_gini(
                 repo_id=str(r_id), window_stats=h_commit_rows
             )
+            file_metrics = compute_file_hotspots(
+                repo_id=r_id,
+                day=d,
+                window_stats=h_commit_rows,
+                computed_at=computed_at,
+            )
+            all_file_metrics.extend(file_metrics)
 
         result = compute_daily_metrics(
             day=d,
@@ -393,6 +402,8 @@ async def run_daily_metrics_job(
             s.write_cicd_metrics(cicd_metrics)
             s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
+            if all_file_metrics:
+                s.write_file_metrics(all_file_metrics)
 
         ic_metrics = compute_ic_metrics_daily(
             git_metrics=result.user_metrics,

@@ -10,6 +10,7 @@ Each view answers a specific operational question. Views are explanations with d
 - PR Flow (stage breakdown)
 - Quadrants (raw-value state classification)
 - Flame diagrams (single-point decomposition)
+- Work Graph (entity relationships, related entities)
 
 ## Interpretation rules
 - Trends over snapshots.

@@ -219,11 +219,29 @@ class SyntheticDataGenerator:
                     continue
 
                 commit_hash = f"{random.getrandbits(128):032x}"
+                base_messages = [
+                    "fix typo",
+                    "add feature",
+                    "update docs",
+                    "refactor code",
+                    "optimize performance",
+                    "fix security vulnerability",
+                    "bump dependencies",
+                    "revert change",
+                    "add tests",
+                    "improve logging",
+                ]
+                message = f"Synthetic commit: {random.choice(base_messages)}"
+                if random.random() < 0.4:
+                    project_key = self.repo_name.split("/")[-1].upper()[:3]
+                    issue_num = random.randint(1, 200)
+                    prefix = random.choice(["", "Fixes ", "Closes ", "Refs "])
+                    message = f"{prefix}{project_key}-{issue_num}: {message}"
                 commits.append(
                     GitCommit(
                         repo_id=self.repo_id,
                         hash=commit_hash,
-                        message=f"Synthetic commit: {random.choice(['fix typo', 'add feature', 'update docs', 'refactor code', 'optimize performance', 'fix security vulnerability', 'bump dependencies', 'revert change', 'add tests', 'improve logging'])}",
+                        message=message,
                         author_name=author_name,
                         author_email=author_email,
                         author_when=commit_time,

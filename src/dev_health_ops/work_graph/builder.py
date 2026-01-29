@@ -174,6 +174,7 @@ class WorkGraphBuilder:
         stats = {
             "issue_issue_edges": 0,
             "issue_pr_edges": 0,
+            "issue_commit_edges": 0,
             "pr_commit_edges": 0,
             "commit_file_edges": 0,
             "heuristic_edges": 0,
@@ -193,6 +194,9 @@ class WorkGraphBuilder:
         issue_pr_explicit, parsed_count = self._build_issue_pr_edges()
         stats["issue_pr_edges"] += parsed_count
         issue_pr_explicit |= issue_pr_existing
+
+        # 3b. Build issue->commit edges from commit message parsing
+        stats["issue_commit_edges"] = self._build_issue_commit_edges_from_text_parsing()
 
         # 4. Build heuristic issue->PR edges for items not linked explicitly
         stats["heuristic_edges"] = self._build_heuristic_issue_pr_edges(
@@ -298,19 +302,20 @@ class WorkGraphBuilder:
 
     def _build_issue_pr_edges(self) -> Tuple[Set[Tuple[str, int]], int]:
         """
-        Build issue->PR edges from PR title text parsing.
+        Build issue->PR edges from PR title and body text parsing.
 
         Returns:
             Tuple of (set of (work_item_id, pr_number) pairs, edge count)
         """
-        logger.info("Building issue->PR edges from PR title parsing...")
+        logger.info("Building issue->PR edges from PR title/body parsing...")
 
-        # Query PRs
         pr_query = """
         SELECT
             repo_id,
             number,
             title,
+            body,
+            head_ref,
             created_at
         FROM git_pull_requests
         """
@@ -405,17 +410,18 @@ class WorkGraphBuilder:
         for pr_row in pr_rows:
             repo_id = pr_row.get("repo_id")
             pr_number = pr_row.get("number")
-            title = pr_row.get("title")
+            title = pr_row.get("title") or ""
+            body = pr_row.get("body") or ""
+            head_ref = pr_row.get("head_ref") or ""
             created_at = pr_row.get("created_at")
             repo_id_str = str(repo_id)
 
-            if not title:
+            if not title and not body and not head_ref:
                 continue
             if pr_number is None:
                 continue
             pr_number_int = int(pr_number)
 
-            # Ensure timezone
             event_ts = created_at
             if isinstance(event_ts, str):
                 try:
@@ -427,8 +433,8 @@ class WorkGraphBuilder:
             if not event_ts:
                 event_ts = self._now
 
-            # Extract Jira keys
-            jira_refs = extract_jira_keys(str(title))
+            text_to_parse = f"{title}\n{body}\n{head_ref}"
+            jira_refs = extract_jira_keys(text_to_parse)
             jira_refs_found += len(jira_refs)
             for ref in jira_refs:
                 work_item_id = jira_key_lookup.get(ref.issue_key.upper())
@@ -479,8 +485,7 @@ class WorkGraphBuilder:
                     )
                     explicit_links.add((work_item_id, pr_number_int))
 
-            # Extract GitHub issue refs
-            gh_refs = extract_github_issue_refs(str(title))
+            gh_refs = extract_github_issue_refs(text_to_parse)
             gh_refs_found += len(gh_refs)
             for ref in gh_refs:
                 work_item_id = gh_issue_lookup.get((repo_id_str, ref.issue_key))
@@ -531,8 +536,7 @@ class WorkGraphBuilder:
                     )
                     explicit_links.add((work_item_id, pr_number_int))
 
-            # Extract GitLab issue refs
-            gl_refs = extract_gitlab_issue_refs(str(title))
+            gl_refs = extract_gitlab_issue_refs(text_to_parse)
             gl_refs_found += len(gl_refs)
             for ref in gl_refs:
                 work_item_id = gl_issue_lookup.get((repo_id_str, ref.issue_key))
@@ -595,6 +599,240 @@ class WorkGraphBuilder:
         )
         logger.info("Created %d issue->PR edges from text parsing", edge_count)
         return explicit_links, edge_count
+
+    def _build_issue_commit_edges_from_text_parsing(self) -> int:
+        """Build issue->commit edges by parsing commit messages for issue refs."""
+        logger.info("Building issue->commit edges from commit message parsing...")
+
+        commit_query = """
+        SELECT
+            repo_id,
+            hash,
+            message,
+            author_when
+        FROM git_commits
+        WHERE message IS NOT NULL AND message != ''
+        """
+        where_clauses = []
+        if self.config.from_date:
+            where_clauses.append(
+                f"author_when >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
+            )
+        if self.config.to_date:
+            where_clauses.append(
+                f"author_when <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
+            )
+        if self.config.repo_id:
+            where_clauses.append(f"repo_id = '{self.config.repo_id}'")
+
+        if where_clauses:
+            commit_query += " AND " + " AND ".join(where_clauses)
+
+        commit_rows = self.sink.query_dicts(commit_query, {})
+        logger.info("Found %d commits to process for issue refs", len(commit_rows))
+
+        if not commit_rows:
+            return 0
+
+        wi_query = """
+        SELECT
+            repo_id,
+            work_item_id,
+            provider,
+            project_key,
+            project_id
+        FROM work_items
+        """
+        wi_rows = self.sink.query_dicts(wi_query, {})
+
+        jira_key_lookup: Dict[str, str] = {}
+        gh_issue_lookup: Dict[Tuple[str, str], str] = {}
+        gl_issue_lookup: Dict[Tuple[str, str], str] = {}
+
+        for wi_row in wi_rows:
+            repo_id = wi_row.get("repo_id")
+            work_item_id = wi_row.get("work_item_id")
+            provider = wi_row.get("provider")
+
+            if provider == "jira" and work_item_id:
+                if str(work_item_id).startswith("jira:"):
+                    jira_key = str(work_item_id)[5:]
+                    jira_key_lookup[jira_key.upper()] = str(work_item_id)
+            elif provider == "github" and repo_id and work_item_id:
+                if "#" in str(work_item_id):
+                    issue_num = str(work_item_id).split("#")[-1]
+                    gh_issue_lookup[(str(repo_id), issue_num)] = str(work_item_id)
+            elif provider == "gitlab" and repo_id and work_item_id:
+                if "#" in str(work_item_id):
+                    issue_num = str(work_item_id).split("#")[-1]
+                    gl_issue_lookup[(str(repo_id), issue_num)] = str(work_item_id)
+
+        logger.info(
+            "Built lookups for commits: jira=%d, github=%d, gitlab=%d",
+            len(jira_key_lookup),
+            len(gh_issue_lookup),
+            len(gl_issue_lookup),
+        )
+
+        edges: List[WorkGraphEdge] = []
+        jira_refs_found = 0
+        gh_refs_found = 0
+        gl_refs_found = 0
+        seen_edges: Set[str] = set()
+
+        for commit_row in commit_rows:
+            repo_id = commit_row.get("repo_id")
+            commit_hash = commit_row.get("hash")
+            message = commit_row.get("message") or ""
+            author_when = commit_row.get("author_when")
+
+            if not message or not commit_hash:
+                continue
+
+            repo_id_str = str(repo_id)
+            repo_uuid = uuid.UUID(repo_id_str)
+            commit_id = generate_commit_id(repo_uuid, str(commit_hash))
+
+            event_ts = author_when
+            if isinstance(event_ts, str):
+                try:
+                    event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
+                except ValueError:
+                    event_ts = self._now
+            if event_ts and event_ts.tzinfo is None:
+                event_ts = event_ts.replace(tzinfo=timezone.utc)
+            if not event_ts:
+                event_ts = self._now
+
+            jira_refs = extract_jira_keys(message)
+            jira_refs_found += len(jira_refs)
+            for ref in jira_refs:
+                work_item_id = jira_key_lookup.get(ref.issue_key.upper())
+                if work_item_id:
+                    edge_type = (
+                        EdgeType.IMPLEMENTS
+                        if ref.ref_type == RefType.CLOSES
+                        else EdgeType.REFERENCES
+                    )
+                    edge_id = generate_edge_id(
+                        NodeType.COMMIT,
+                        commit_id,
+                        edge_type,
+                        NodeType.ISSUE,
+                        work_item_id,
+                    )
+                    if edge_id in seen_edges:
+                        continue
+                    seen_edges.add(edge_id)
+
+                    edges.append(
+                        WorkGraphEdge(
+                            edge_id=edge_id,
+                            source_type=NodeType.COMMIT,
+                            source_id=commit_id,
+                            target_type=NodeType.ISSUE,
+                            target_id=work_item_id,
+                            edge_type=edge_type,
+                            repo_id=repo_uuid,
+                            provider="jira",
+                            provenance=Provenance.EXPLICIT_TEXT,
+                            confidence=0.85,
+                            evidence=ref.raw_match,
+                            discovered_at=self._now,
+                            last_synced=self._now,
+                            event_ts=event_ts,
+                        )
+                    )
+
+            gh_refs = extract_github_issue_refs(message)
+            gh_refs_found += len(gh_refs)
+            for ref in gh_refs:
+                work_item_id = gh_issue_lookup.get((repo_id_str, ref.issue_key))
+                if work_item_id:
+                    edge_type = (
+                        EdgeType.IMPLEMENTS
+                        if ref.ref_type == RefType.CLOSES
+                        else EdgeType.REFERENCES
+                    )
+                    edge_id = generate_edge_id(
+                        NodeType.COMMIT,
+                        commit_id,
+                        edge_type,
+                        NodeType.ISSUE,
+                        work_item_id,
+                    )
+                    if edge_id in seen_edges:
+                        continue
+                    seen_edges.add(edge_id)
+
+                    edges.append(
+                        WorkGraphEdge(
+                            edge_id=edge_id,
+                            source_type=NodeType.COMMIT,
+                            source_id=commit_id,
+                            target_type=NodeType.ISSUE,
+                            target_id=work_item_id,
+                            edge_type=edge_type,
+                            repo_id=repo_uuid,
+                            provider="github",
+                            provenance=Provenance.EXPLICIT_TEXT,
+                            confidence=0.85,
+                            evidence=ref.raw_match,
+                            discovered_at=self._now,
+                            last_synced=self._now,
+                            event_ts=event_ts,
+                        )
+                    )
+
+            gl_refs = extract_gitlab_issue_refs(message)
+            gl_refs_found += len(gl_refs)
+            for ref in gl_refs:
+                work_item_id = gl_issue_lookup.get((repo_id_str, ref.issue_key))
+                if work_item_id:
+                    edge_type = (
+                        EdgeType.IMPLEMENTS
+                        if ref.ref_type == RefType.CLOSES
+                        else EdgeType.REFERENCES
+                    )
+                    edge_id = generate_edge_id(
+                        NodeType.COMMIT,
+                        commit_id,
+                        edge_type,
+                        NodeType.ISSUE,
+                        work_item_id,
+                    )
+                    if edge_id in seen_edges:
+                        continue
+                    seen_edges.add(edge_id)
+
+                    edges.append(
+                        WorkGraphEdge(
+                            edge_id=edge_id,
+                            source_type=NodeType.COMMIT,
+                            source_id=commit_id,
+                            target_type=NodeType.ISSUE,
+                            target_id=work_item_id,
+                            edge_type=edge_type,
+                            repo_id=repo_uuid,
+                            provider="gitlab",
+                            provenance=Provenance.EXPLICIT_TEXT,
+                            confidence=0.85,
+                            evidence=ref.raw_match,
+                            discovered_at=self._now,
+                            last_synced=self._now,
+                            event_ts=event_ts,
+                        )
+                    )
+
+        edge_count = self._write_edges(edges)
+        logger.info(
+            "Commit message refs: jira=%d, github=%d, gitlab=%d",
+            jira_refs_found,
+            gh_refs_found,
+            gl_refs_found,
+        )
+        logger.info("Created %d issue->commit edges from commit messages", edge_count)
+        return edge_count
 
     def _build_heuristic_issue_pr_edges(
         self, explicit_links: Set[Tuple[str, int]]

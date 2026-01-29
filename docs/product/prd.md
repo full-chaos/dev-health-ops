@@ -53,12 +53,11 @@ This system is explicitly designed to avoid turning metrics into scorecards.
 - **Connectors**: GitHub, GitLab, Jira, Local Git, Synthetic
 - **DORA Metrics**: MTTR, change failure rate, deployment frequency, lead time
 - **Work Graph API**: GraphQL `workGraphEdges` query with filters (PR #273)
+- **Identity Linking**: Issue→commit edges via commit message parsing; issue→PR edges via title, body, and branch name parsing
 
 ### Remaining (see `docs/roadmap.md`)
 - Capacity planning (forecast completion)
-- Identity linking (Work Items → Git commits)
 - Work Item repo filtering by tags/settings
-- Dashboard filter fixes
 - Work Graph Frontend: Related entities UI, interactive explorer (dev-health-web#88)
 
 ## References

@@ -57,7 +57,14 @@ This checklist tracks what is complete and what remains to finalize `dev-health-
 
 ### API Enhancements
 
-- [ ] **GraphQL Work Graph API**: Add resolvers and types for work_graph_edges traversal queries. ([#265](https://github.com/full-chaos/dev-health-ops/issues/265))
+- [x] **GraphQL Work Graph API**: Add resolvers and types for work_graph_edges traversal queries. ([#265](https://github.com/full-chaos/dev-health-ops/issues/265), [PR #273](https://github.com/full-chaos/dev-health-ops/pull/273))
+
+### Frontend (dev-health-web)
+
+- [ ] **Work Graph GraphQL types**: Add query definitions and TypeScript types for workGraphEdges API. ([dev-health-web#89](https://github.com/full-chaos/dev-health-web/issues/89))
+- [ ] **Related Entities - Issue page**: Show linked PRs, blocking issues on issue detail page. ([dev-health-web#90](https://github.com/full-chaos/dev-health-web/issues/90))
+- [ ] **Related Entities - PR page**: Show linked issues and commits on PR detail page. ([dev-health-web#91](https://github.com/full-chaos/dev-health-web/issues/91))
+- [ ] **Work Graph Explorer**: Interactive graph visualization for entity relationships. ([dev-health-web#92](https://github.com/full-chaos/dev-health-web/issues/92))
 
 ### Testing + Docs
 

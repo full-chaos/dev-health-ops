@@ -27,6 +27,8 @@ This system is explicitly designed to avoid turning metrics into scorecards.
    Churn, hotspots, ownership concentration.
 4. **Well-being signals (team-level)**  
    After-hours and weekend ratios; pattern drift.
+5. **Work Graph (entity relationships)**  
+   Traversable graph of issues → PRs → commits → files with provenance tracking.
 
 ## Guardrails (non-negotiable)
 - No person-to-person comparisons.
@@ -50,12 +52,14 @@ This system is explicitly designed to avoid turning metrics into scorecards.
 - **Visualizations**: Heatmaps, Flame diagrams (timeline + hierarchical), Sankey, Treemap, Sunburst
 - **Connectors**: GitHub, GitLab, Jira, Local Git, Synthetic
 - **DORA Metrics**: MTTR, change failure rate, deployment frequency, lead time
+- **Work Graph API**: GraphQL `workGraphEdges` query with filters (PR #273)
 
 ### Remaining (see `docs/roadmap.md`)
 - Capacity planning (forecast completion)
 - Identity linking (Work Items → Git commits)
 - Work Item repo filtering by tags/settings
 - Dashboard filter fixes
+- Work Graph Frontend: Related entities UI, interactive explorer (dev-health-web#88)
 
 ## References
 - `dev-health-ops/AGENTS.md` (repo rules)

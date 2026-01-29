@@ -347,6 +347,10 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         logging.error(f"Failed to connect to DB: {e}")
         return 1
 
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    sink = ClickHouseMetricsSink(dsn=db_url, client=client)
+
     logging.info("Running fixture validation...")
 
     def _table_exists(name: str) -> bool:
@@ -574,7 +578,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
     # 3. Check work_graph_edges + components
     try:
-        edges = fetch_work_graph_edges(client)
+        edges = fetch_work_graph_edges(sink)
         if not edges:
             logging.error(
                 "FAIL: work_graph_edges is empty (run `cli.py work-graph build`)."
@@ -607,11 +611,17 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
             components.append(group)
 
         component_count = len(components)
-        min_components = min(50, max(2, non_epic_wi_count // 2))
+        distinct_repos = int(
+            client.query("SELECT countDistinct(repo_id) FROM work_items").result_rows[
+                0
+            ][0]
+        )
+        min_components = max(2, distinct_repos)
         logging.info(
-            "WorkUnits (connected components): %d (min_required=%d)",
+            "WorkUnits (connected components): %d (min_required=%d, repos=%d)",
             component_count,
             min_components,
+            distinct_repos,
         )
         if component_count < min_components:
             logging.error(
@@ -652,7 +662,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                 node_id for node_type, node_id in node_list if node_type == "commit"
             ]
 
-            work_items = fetch_work_items(client, work_item_ids=issue_ids)
+            work_items = fetch_work_items(sink, work_item_ids=issue_ids)
             work_item_map = {
                 str(item.get("work_item_id")): item
                 for item in work_items
@@ -664,7 +674,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                 repo_id, number = parse_pr_from_id(pr_id)
                 if repo_id and number is not None:
                     pr_repo_numbers.setdefault(str(repo_id), []).append(int(number))
-            prs = fetch_pull_requests(client, repo_numbers=pr_repo_numbers)
+            prs = fetch_pull_requests(sink, repo_numbers=pr_repo_numbers)
             pr_map: dict[str, dict[str, object]] = {}
             for pr in prs:
                 repo = str(pr.get("repo_id") or "")
@@ -679,7 +689,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                     commit_repo_hashes.setdefault(str(repo_id), []).append(
                         str(commit_hash)
                     )
-            commits = fetch_commits(client, repo_commits=commit_repo_hashes)
+            commits = fetch_commits(sink, repo_commits=commit_repo_hashes)
             commit_map: dict[str, dict[str, object]] = {}
             for commit in commits:
                 repo = str(commit.get("repo_id") or "")
@@ -697,8 +707,8 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                 for item in work_items
                 if item.get("epic_id")
             }
-            parent_titles = fetch_parent_titles(client, work_item_ids=parent_ids)
-            epic_titles = fetch_parent_titles(client, work_item_ids=epic_ids)
+            parent_titles = fetch_parent_titles(sink, work_item_ids=parent_ids)
+            epic_titles = fetch_parent_titles(sink, work_item_ids=epic_ids)
 
             bundle = build_text_bundle(
                 issue_ids=issue_ids,

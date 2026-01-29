@@ -10,6 +10,7 @@ import clickhouse_connect
 import logging
 import asyncio
 from dev_health_ops.metrics.schemas import (
+    CapacityForecastRecord,
     CommitMetricsRecord,
     RepoMetricsDailyRecord,
     TeamMetricsDailyRecord,
@@ -1218,3 +1219,38 @@ class ClickHouseMetricsSink(BaseMetricsSink):
 
     def now_utc(self) -> datetime:
         return datetime.now(timezone.utc)
+
+    def write_capacity_forecasts(self, rows: Sequence[CapacityForecastRecord]) -> None:
+        if not rows:
+            return
+        data = []
+        for r in rows:
+            data.append(
+                {
+                    "forecast_id": r.forecast_id,
+                    "computed_at": _dt_to_clickhouse_datetime(r.computed_at),
+                    "team_id": r.team_id,
+                    "work_scope_id": r.work_scope_id,
+                    "backlog_size": r.backlog_size,
+                    "target_items": r.target_items,
+                    "target_date": r.target_date,
+                    "history_days": r.history_days,
+                    "simulation_count": r.simulation_count,
+                    "p50_days": r.p50_days,
+                    "p85_days": r.p85_days,
+                    "p95_days": r.p95_days,
+                    "p50_date": r.p50_date,
+                    "p85_date": r.p85_date,
+                    "p95_date": r.p95_date,
+                    "p50_items": r.p50_items,
+                    "p85_items": r.p85_items,
+                    "p95_items": r.p95_items,
+                    "throughput_mean": r.throughput_mean,
+                    "throughput_stddev": r.throughput_stddev,
+                    "insufficient_history": 1 if r.insufficient_history else 0,
+                    "high_variance": 1 if r.high_variance else 0,
+                }
+            )
+        column_names = list(data[0].keys())
+        matrix = [[row[col] for col in column_names] for row in data]
+        self.client.insert("capacity_forecasts", matrix, column_names=column_names)

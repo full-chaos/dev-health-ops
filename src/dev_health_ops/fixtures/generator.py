@@ -1326,16 +1326,14 @@ class SyntheticDataGenerator:
                     )
                 )
 
-        # 2. Blocks/Blocked By (Random)
-        # Randomly pick pairs of items
         candidates = [i for i in items if i.type != "epic"]
         if len(candidates) > 2:
-            num_links = len(candidates) // 5
-            for _ in range(num_links):
-                source = random.choice(candidates)
-                target = random.choice(candidates)
-                if source.work_item_id == target.work_item_id:
-                    continue
+            num_links = min(len(candidates) // 20, 10)
+            for idx in range(num_links):
+                source_idx = (idx * 7) % len(candidates)
+                target_idx = (source_idx + 1) % len(candidates)
+                source = candidates[source_idx]
+                target = candidates[target_idx]
 
                 dependencies.append(
                     WorkItemDependency(
@@ -1439,14 +1437,9 @@ class SyntheticDataGenerator:
         prs: List[GitPullRequest],
         *,
         min_coverage: float = 0.7,
+        cluster_size: int = 5,
     ) -> List[Dict[str, Any]]:
-        """
-        Generate rows suitable for insertion into work_graph_issue_pr.
-
-        Targets:
-        - >= min_coverage of work items link to at least one PR
-        - some PRs link to multiple work items and vice versa
-        """
+        """Generate work_graph_issue_pr rows with isolated clusters for multiple components."""
         if not work_items or not prs:
             return []
 
@@ -1461,41 +1454,53 @@ class SyntheticDataGenerator:
         random.shuffle(candidates)
         linked_items = candidates[:target_count]
 
-        popular_prs = set(
-            random.sample(
-                pr_numbers, k=max(1, min(len(pr_numbers), len(pr_numbers) // 10))
-            )
-        )
-        multi_pr_item_count = max(1, int(len(linked_items) * 0.15))
-        multi_pr_items = {
-            str(wi.work_item_id)
-            for wi in random.sample(
-                linked_items, k=min(multi_pr_item_count, len(linked_items))
-            )
-        }
-
         synced_at = datetime.now(timezone.utc)
         links: List[Dict[str, Any]] = []
 
-        for idx, wi in enumerate(linked_items):
-            assigned = {pr_numbers[idx % len(pr_numbers)]}
-            if str(wi.work_item_id) in multi_pr_items and len(pr_numbers) > 1:
-                assigned.add(random.choice(pr_numbers))
-            if popular_prs and random.random() < 0.25:
-                assigned.add(random.choice(list(popular_prs)))
+        num_clusters = max(1, len(linked_items) // cluster_size)
+        pr_idx = 0
 
-            for pr_number in sorted(assigned):
+        for cluster_idx in range(num_clusters):
+            start = cluster_idx * cluster_size
+            end = min(start + cluster_size, len(linked_items))
+            cluster_items = linked_items[start:end]
+
+            if not cluster_items:
+                continue
+
+            cluster_prs = [pr_numbers[pr_idx % len(pr_numbers)]]
+            pr_idx += 1
+
+            if len(pr_numbers) > 1 and random.random() < 0.3:
+                second_pr = pr_numbers[pr_idx % len(pr_numbers)]
+                if second_pr != cluster_prs[0]:
+                    cluster_prs.append(second_pr)
+                pr_idx += 1
+
+            for wi in cluster_items:
                 links.append(
                     {
                         "repo_id": str(self.repo_id),
                         "work_item_id": str(wi.work_item_id),
-                        "pr_number": int(pr_number),
+                        "pr_number": cluster_prs[0],
                         "confidence": 1.0,
                         "provenance": "synthetic",
                         "evidence": "generated_fixture",
                         "last_synced": synced_at,
                     }
                 )
+                if len(cluster_prs) > 1 and random.random() < 0.2:
+                    links.append(
+                        {
+                            "repo_id": str(self.repo_id),
+                            "work_item_id": str(wi.work_item_id),
+                            "pr_number": cluster_prs[1],
+                            "confidence": 1.0,
+                            "provenance": "synthetic",
+                            "evidence": "generated_fixture",
+                            "last_synced": synced_at,
+                        }
+                    )
 
         return links
 

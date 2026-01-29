@@ -315,7 +315,7 @@ class WorkGraphBuilder:
             number,
             title,
             body,
-            head_ref,
+            head_branch,
             created_at
         FROM git_pull_requests
         """
@@ -412,11 +412,11 @@ class WorkGraphBuilder:
             pr_number = pr_row.get("number")
             title = pr_row.get("title") or ""
             body = pr_row.get("body") or ""
-            head_ref = pr_row.get("head_ref") or ""
+            head_branch = pr_row.get("head_branch") or ""
             created_at = pr_row.get("created_at")
             repo_id_str = str(repo_id)
 
-            if not title and not body and not head_ref:
+            if not title and not body and not head_branch:
                 continue
             if pr_number is None:
                 continue
@@ -433,7 +433,7 @@ class WorkGraphBuilder:
             if not event_ts:
                 event_ts = self._now
 
-            text_to_parse = f"{title}\n{body}\n{head_ref}"
+            text_to_parse = f"{title}\n{body}\n{head_branch}"
             jira_refs = extract_jira_keys(text_to_parse)
             jira_refs_found += len(jira_refs)
             for ref in jira_refs:

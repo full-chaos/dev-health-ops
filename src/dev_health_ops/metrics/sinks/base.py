@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Sequence
 
 from dev_health_ops.metrics.schemas import (
+    CapacityForecastRecord,
     CICDMetricsDailyRecord,
     CommitMetricsRecord,
     DORAMetricsRecord,
@@ -301,9 +302,17 @@ class BaseMetricsSink(ABC):
     def write_work_graph_pr_commit(
         self, rows: Sequence[WorkGraphPRCommitRecord]
     ) -> None:
-        """Write derived PR↔commit link rows."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support work graph PR↔commit links"
+        )
+
+    # -------------------------------------------------------------------------
+    # Capacity planning forecasts
+    # -------------------------------------------------------------------------
+
+    def write_capacity_forecasts(self, rows: Sequence[CapacityForecastRecord]) -> None:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support capacity forecasts"
         )
 
     # -------------------------------------------------------------------------

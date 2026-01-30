@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload digest
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: digests-${{ matrix.target }}-${{ strategy.job-index }}
           path: /tmp/digests/*
@@ -122,7 +122,7 @@ jobs:
         target: [runner, api]
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: /tmp/digests
           pattern: digests-${{ matrix.target }}-*

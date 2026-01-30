@@ -223,3 +223,145 @@ class Membership(Base):
 
     def __repr__(self) -> str:
         return f"<Membership user={self.user_id} org={self.org_id} role={self.role}>"
+
+
+class Permission(Base):
+    """Permission definition for RBAC.
+
+    Permissions are defined as resource:action pairs (e.g., metrics:read, settings:write).
+    They are assigned to roles via RolePermission.
+    """
+
+    __tablename__ = "permissions"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False, unique=True, index=True)
+    description = Column(Text, nullable=True)
+    resource = Column(Text, nullable=False, index=True)
+    action = Column(Text, nullable=False)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("resource", "action", name="uq_permission_resource_action"),
+        Index("ix_permissions_resource_action", "resource", "action"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Permission {self.name}>"
+
+
+class RolePermission(Base):
+    """Maps roles to permissions.
+
+    This is a static mapping that defines what each role can do.
+    Roles inherit permissions: owner > admin > member > viewer.
+    """
+
+    __tablename__ = "role_permissions"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    role = Column(Text, nullable=False, index=True)
+    permission_id = Column(
+        GUID(),
+        ForeignKey("permissions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    permission = relationship("Permission")
+
+    __table_args__ = (
+        UniqueConstraint("role", "permission_id", name="uq_role_permission"),
+        Index("ix_role_permissions_role", "role"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<RolePermission role={self.role} permission_id={self.permission_id}>"
+
+
+# Standard permission definitions
+STANDARD_PERMISSIONS = [
+    # Analytics
+    ("analytics:read", "analytics", "read", "View analytics dashboards and metrics"),
+    ("analytics:export", "analytics", "export", "Export analytics data"),
+    # Metrics
+    ("metrics:read", "metrics", "read", "View computed metrics"),
+    ("metrics:compute", "metrics", "compute", "Trigger metric computation jobs"),
+    # Work Items
+    ("work_items:read", "work_items", "read", "View work items and investments"),
+    ("work_items:sync", "work_items", "sync", "Sync work items from providers"),
+    # Git Data
+    ("git:read", "git", "read", "View git commits and PRs"),
+    ("git:sync", "git", "sync", "Sync git data from repositories"),
+    # Teams
+    ("teams:read", "teams", "read", "View team configurations"),
+    ("teams:write", "teams", "write", "Create and modify teams"),
+    # Settings
+    ("settings:read", "settings", "read", "View organization settings"),
+    ("settings:write", "settings", "write", "Modify organization settings"),
+    # Integrations/Credentials
+    ("integrations:read", "integrations", "read", "View integration configurations"),
+    (
+        "integrations:write",
+        "integrations",
+        "write",
+        "Configure integrations and credentials",
+    ),
+    # Members
+    ("members:read", "members", "read", "View organization members"),
+    ("members:invite", "members", "invite", "Invite new members"),
+    ("members:manage", "members", "manage", "Manage member roles and remove members"),
+    # Organization
+    ("org:read", "org", "read", "View organization details"),
+    ("org:write", "org", "write", "Modify organization details"),
+    ("org:delete", "org", "delete", "Delete the organization"),
+    # Admin
+    ("admin:users", "admin", "users", "Manage all users (superuser only)"),
+    ("admin:orgs", "admin", "orgs", "Manage all organizations (superuser only)"),
+]
+
+# Default permissions for each role (cumulative - higher roles inherit lower)
+ROLE_PERMISSIONS = {
+    MemberRole.VIEWER: [
+        "analytics:read",
+        "metrics:read",
+        "work_items:read",
+        "git:read",
+        "teams:read",
+        "settings:read",
+        "members:read",
+        "org:read",
+    ],
+    MemberRole.MEMBER: [
+        # Inherits VIEWER permissions plus:
+        "analytics:export",
+    ],
+    MemberRole.ADMIN: [
+        # Inherits MEMBER permissions plus:
+        "metrics:compute",
+        "work_items:sync",
+        "git:sync",
+        "teams:write",
+        "settings:write",
+        "integrations:read",
+        "integrations:write",
+        "members:invite",
+        "members:manage",
+        "org:write",
+    ],
+    MemberRole.OWNER: [
+        # Inherits ADMIN permissions plus:
+        "org:delete",
+    ],
+}

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
-WorkItemProvider = Literal["jira", "github", "gitlab"]
+WorkItemProvider = Literal["jira", "github", "gitlab", "linear"]
 
 # Normalized status buckets used for cross-provider rollups.
 WorkItemStatusCategory = Literal[

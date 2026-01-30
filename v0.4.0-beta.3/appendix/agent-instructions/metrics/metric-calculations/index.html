@@ -1,0 +1,2335 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Metric Calculation Details - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#metric-calculation-details" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Metric Calculation Details
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../CONNECTOR_USAGE/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../PRIVATE_REPO_TESTING/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_8" id="__nav_7_8_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_8">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../graphql/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL (Legacy)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../grafana/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Grafana
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Agent Instructions (index)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#git-repository-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Git &amp; Repository Metrics
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Git & Repository Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daily-user-metrics-user_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily User Metrics (user_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daily-repo-metrics-repo_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily Repo Metrics (repo_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#work-item-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work Item Metrics
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Work Item Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#normalization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Normalization
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#status-normalization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Status Normalization
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#daily-work-item-metrics-work_item_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily Work Item Metrics (work_item_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#work-scope-id-convention" class="md-nav__link">
+    <span class="md-ellipsis">
+      Work Scope ID Convention
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#team-well-being-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Team Well-Being Metrics
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Team Well-Being Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daily-team-metrics-team_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily Team Metrics (team_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ic-landscape-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      IC Landscape Metrics
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="IC Landscape Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rolling-30-day-metrics-ic_landscape_rolling_30d" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rolling 30-Day Metrics (ic_landscape_rolling_30d)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#landscape-maps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Landscape Maps
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-complexity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code Complexity
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Code Complexity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daily-complexity-metrics-repo_complexity_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily Complexity Metrics (repo_complexity_daily)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#investment-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Investment Metrics
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Investment Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daily-investment-investment_metrics_daily" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily Investment (investment_metrics_daily)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#edge-cases-null-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Edge Cases &amp; Null Handling
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Edge Cases & Null Handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#missing-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Missing Data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recomputation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recomputation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="metric-calculation-details">Metric Calculation Details<a class="headerlink" href="#metric-calculation-details" title="Permanent link">&para;</a></h1>
+<p>Deep-dive into how metrics are computed, including formulas, edge cases, and implementation notes.</p>
+<hr />
+<h2 id="git-repository-metrics">Git &amp; Repository Metrics<a class="headerlink" href="#git-repository-metrics" title="Permanent link">&para;</a></h2>
+<h3 id="daily-user-metrics-user_metrics_daily">Daily User Metrics (<code>user_metrics_daily</code>)<a class="headerlink" href="#daily-user-metrics-user_metrics_daily" title="Permanent link">&para;</a></h3>
+<p><strong>Key:</strong> <code>(repo_id, author_email, day)</code></p>
+<p>Note: <code>author_email</code> falls back to <code>author_name</code> when email is missing.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>commits_count</code></td>
+<td>Count of commits on day</td>
+</tr>
+<tr>
+<td><code>loc_added</code></td>
+<td>Sum of additions</td>
+</tr>
+<tr>
+<td><code>loc_deleted</code></td>
+<td>Sum of deletions</td>
+</tr>
+<tr>
+<td><code>loc_touched</code></td>
+<td><code>loc_added + loc_deleted</code></td>
+</tr>
+<tr>
+<td><code>files_changed</code></td>
+<td>Distinct files changed (union across day)</td>
+</tr>
+<tr>
+<td><code>large_commits</code></td>
+<td>Commits where <code>total_loc &gt; 300</code></td>
+</tr>
+<tr>
+<td><code>avg_commit_size</code></td>
+<td><code>loc_touched / commits_count</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>PR Metrics (for PRs merged that day):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prs_authored</code></td>
+<td>PRs created on day</td>
+</tr>
+<tr>
+<td><code>prs_merged</code></td>
+<td>PRs merged on day</td>
+</tr>
+<tr>
+<td><code>pr_cycle_p50_hours</code></td>
+<td>Median of <code>(merged_at - created_at)</code></td>
+</tr>
+<tr>
+<td><code>pr_cycle_p75_hours</code></td>
+<td>75th percentile</td>
+</tr>
+<tr>
+<td><code>pr_cycle_p90_hours</code></td>
+<td>90th percentile</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Collaboration Metrics (nullable):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pr_pickup_time_p50_hours</code></td>
+<td>PR created → first interaction</td>
+</tr>
+<tr>
+<td><code>pr_first_review_p50_hours</code></td>
+<td>PR created → first review</td>
+</tr>
+<tr>
+<td><code>pr_review_time_p50_hours</code></td>
+<td>First review → merge</td>
+</tr>
+<tr>
+<td><code>reviews_given</code></td>
+<td>Count of review submissions</td>
+</tr>
+<tr>
+<td><code>changes_requested_given</code></td>
+<td>Count of change requests</td>
+</tr>
+</tbody>
+</table>
+<h3 id="daily-repo-metrics-repo_metrics_daily">Daily Repo Metrics (<code>repo_metrics_daily</code>)<a class="headerlink" href="#daily-repo-metrics-repo_metrics_daily" title="Permanent link">&para;</a></h3>
+<p><strong>Key:</strong> <code>(repo_id, day)</code></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>commits_count</code></td>
+<td>Total commits</td>
+</tr>
+<tr>
+<td><code>loc_touched</code></td>
+<td>Sum of all additions + deletions</td>
+</tr>
+<tr>
+<td><code>avg_commit_size</code></td>
+<td><code>loc_touched / commits_count</code></td>
+</tr>
+<tr>
+<td><code>large_commit_ratio</code></td>
+<td>Large commits / total commits</td>
+</tr>
+<tr>
+<td><code>prs_merged</code></td>
+<td>PRs merged on day</td>
+</tr>
+<tr>
+<td><code>pr_cycle_p50_hours</code></td>
+<td>Median PR cycle time</td>
+</tr>
+<tr>
+<td><code>pr_cycle_p75_hours</code></td>
+<td>75th percentile</td>
+</tr>
+<tr>
+<td><code>pr_cycle_p90_hours</code></td>
+<td>90th percentile</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Quality Metrics (best-effort):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>large_pr_ratio</code></td>
+<td>Large PRs / total PRs</td>
+</tr>
+<tr>
+<td><code>pr_rework_ratio</code></td>
+<td>PRs with multiple review rounds / total</td>
+</tr>
+<tr>
+<td><code>bus_factor</code></td>
+<td>Minimum developers for 50% of churn</td>
+</tr>
+<tr>
+<td><code>code_ownership_gini</code></td>
+<td>Gini coefficient of contribution</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="work-item-metrics">Work Item Metrics<a class="headerlink" href="#work-item-metrics" title="Permanent link">&para;</a></h2>
+<h3 id="normalization">Normalization<a class="headerlink" href="#normalization" title="Permanent link">&para;</a></h3>
+<p>Work items from all providers normalize to unified <code>WorkItem</code> model:</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">WorkItem</span><span class="p">:</span>
+    <span class="n">provider</span><span class="p">:</span> <span class="nb">str</span>          <span class="c1"># jira, github, gitlab</span>
+    <span class="n">work_item_id</span><span class="p">:</span> <span class="nb">str</span>      <span class="c1"># Provider-native ID</span>
+    <span class="n">work_scope_id</span><span class="p">:</span> <span class="nb">str</span>     <span class="c1"># Project/repo identifier</span>
+    <span class="n">team_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="c1"># Assigned team</span>
+    <span class="n">created_at</span><span class="p">:</span> <span class="n">datetime</span>
+    <span class="n">started_at</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">datetime</span><span class="p">]</span>   <span class="c1"># First in_progress</span>
+    <span class="n">completed_at</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">datetime</span><span class="p">]</span> <span class="c1"># First done/canceled</span>
+</code></pre></div>
+<h3 id="status-normalization">Status Normalization<a class="headerlink" href="#status-normalization" title="Permanent link">&para;</a></h3>
+<p>Statuses map to canonical categories:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backlog</code></td>
+<td>Not yet scheduled</td>
+</tr>
+<tr>
+<td><code>todo</code></td>
+<td>Scheduled but not started</td>
+</tr>
+<tr>
+<td><code>in_progress</code></td>
+<td>Active work</td>
+</tr>
+<tr>
+<td><code>in_review</code></td>
+<td>Awaiting review</td>
+</tr>
+<tr>
+<td><code>blocked</code></td>
+<td>Work cannot proceed</td>
+</tr>
+<tr>
+<td><code>done</code></td>
+<td>Successfully completed</td>
+</tr>
+<tr>
+<td><code>canceled</code></td>
+<td>Abandoned</td>
+</tr>
+</tbody>
+</table>
+<h3 id="daily-work-item-metrics-work_item_metrics_daily">Daily Work Item Metrics (<code>work_item_metrics_daily</code>)<a class="headerlink" href="#daily-work-item-metrics-work_item_metrics_daily" title="Permanent link">&para;</a></h3>
+<p><strong>Key:</strong> <code>(day, provider, work_scope_id, team_id)</code></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>items_started</code></td>
+<td>Items transitioning to <code>in_progress</code></td>
+</tr>
+<tr>
+<td><code>items_completed</code></td>
+<td>Items transitioning to <code>done</code> or <code>canceled</code></td>
+</tr>
+<tr>
+<td><code>items_completed_unassigned</code></td>
+<td>Completed items with no assignee</td>
+</tr>
+<tr>
+<td><code>wip_count_end_of_day</code></td>
+<td>Items in <code>in_progress</code>, <code>in_review</code>, <code>blocked</code></td>
+</tr>
+<tr>
+<td><code>cycle_time_p50_hours</code></td>
+<td>Median <code>completed_at - started_at</code></td>
+</tr>
+<tr>
+<td><code>cycle_time_p90_hours</code></td>
+<td>90th percentile cycle time</td>
+</tr>
+<tr>
+<td><code>lead_time_p50_hours</code></td>
+<td>Median <code>completed_at - created_at</code></td>
+</tr>
+<tr>
+<td><code>lead_time_p90_hours</code></td>
+<td>90th percentile lead time</td>
+</tr>
+<tr>
+<td><code>wip_age_p50_hours</code></td>
+<td>Median age of WIP items</td>
+</tr>
+<tr>
+<td><code>wip_age_p90_hours</code></td>
+<td>90th percentile WIP age</td>
+</tr>
+<tr>
+<td><code>bug_completed_ratio</code></td>
+<td>Bugs / total completed</td>
+</tr>
+<tr>
+<td><code>story_points_completed</code></td>
+<td>Sum of story points (Jira only)</td>
+</tr>
+<tr>
+<td><code>predictability_score</code></td>
+<td><code>items_completed / (items_completed + wip_count)</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="work-scope-id-convention">Work Scope ID Convention<a class="headerlink" href="#work-scope-id-convention" title="Permanent link">&para;</a></h3>
+<p>Provider-native identifier for work scope:</p>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Format</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Jira</td>
+<td>Project key</td>
+<td><code>ABC</code></td>
+</tr>
+<tr>
+<td>GitHub Issues</td>
+<td>Repository full name</td>
+<td><code>owner/repo</code></td>
+</tr>
+<tr>
+<td>GitHub Projects v2</td>
+<td><code>ghprojv2:&lt;org&gt;#&lt;number&gt;</code></td>
+<td><code>ghprojv2:myorg#3</code></td>
+</tr>
+<tr>
+<td>GitLab</td>
+<td>Project full path</td>
+<td><code>group/project</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="team-well-being-metrics">Team Well-Being Metrics<a class="headerlink" href="#team-well-being-metrics" title="Permanent link">&para;</a></h2>
+<h3 id="daily-team-metrics-team_metrics_daily">Daily Team Metrics (<code>team_metrics_daily</code>)<a class="headerlink" href="#daily-team-metrics-team_metrics_daily" title="Permanent link">&para;</a></h3>
+<p><strong>Key:</strong> <code>(team_id, day)</code></p>
+<p>Computed from commits (deduplicated by hash) with team mapping.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>after_hours_commit_ratio</code></td>
+<td>Commits outside business hours on weekdays</td>
+</tr>
+<tr>
+<td><code>weekend_commit_ratio</code></td>
+<td>Commits on weekends</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Configuration:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BUSINESS_TIMEZONE</code></td>
+<td><code>UTC</code></td>
+<td>Timezone for hour calculation</td>
+</tr>
+<tr>
+<td><code>BUSINESS_HOURS_START</code></td>
+<td><code>9</code></td>
+<td>Start of business hours</td>
+</tr>
+<tr>
+<td><code>BUSINESS_HOURS_END</code></td>
+<td><code>17</code></td>
+<td>End of business hours</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="ic-landscape-metrics">IC Landscape Metrics<a class="headerlink" href="#ic-landscape-metrics" title="Permanent link">&para;</a></h2>
+<h3 id="rolling-30-day-metrics-ic_landscape_rolling_30d">Rolling 30-Day Metrics (<code>ic_landscape_rolling_30d</code>)<a class="headerlink" href="#rolling-30-day-metrics-ic_landscape_rolling_30d" title="Permanent link">&para;</a></h3>
+<p>Normalized by team percentiles (0–1) for visualization.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>churn_loc_30d</code></td>
+<td>Rolling 30d sum of LOC touched</td>
+</tr>
+<tr>
+<td><code>delivery_units_30d</code></td>
+<td><code>prs_merged + work_items_completed</code></td>
+</tr>
+<tr>
+<td><code>cycle_p50_30d_hours</code></td>
+<td>Median of daily median PR cycle times</td>
+</tr>
+<tr>
+<td><code>wip_max_30d</code></td>
+<td>Max active work items over 30d</td>
+</tr>
+</tbody>
+</table>
+<h3 id="landscape-maps">Landscape Maps<a class="headerlink" href="#landscape-maps" title="Permanent link">&para;</a></h3>
+<p><strong>Map 1: Churn × Throughput</strong>
+- X: <code>log(churn_loc_30d)</code>
+- Y: <code>delivery_units_30d</code></p>
+<p><strong>Map 2: Cycle Time × Throughput</strong>
+- X: <code>log(cycle_p50_30d_hours)</code>
+- Y: <code>delivery_units_30d</code></p>
+<p><strong>Map 3: WIP × Throughput</strong>
+- X: <code>wip_max_30d</code>
+- Y: <code>delivery_units_30d</code></p>
+<p>Each coordinate normalized to team percentile rank.</p>
+<hr />
+<h2 id="code-complexity">Code Complexity<a class="headerlink" href="#code-complexity" title="Permanent link">&para;</a></h2>
+<h3 id="daily-complexity-metrics-repo_complexity_daily">Daily Complexity Metrics (<code>repo_complexity_daily</code>)<a class="headerlink" href="#daily-complexity-metrics-repo_complexity_daily" title="Permanent link">&para;</a></h3>
+<p>Computed via <code>radon</code> scanning historical git references.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cyclomatic_total</code></td>
+<td>Sum of CC for all functions</td>
+</tr>
+<tr>
+<td><code>cyclomatic_avg</code></td>
+<td>Mean CC per function</td>
+</tr>
+<tr>
+<td><code>high_complexity_functions</code></td>
+<td>Functions with CC &gt; 15</td>
+</tr>
+<tr>
+<td><code>very_high_complexity_functions</code></td>
+<td>Functions with CC &gt; 25</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="investment-metrics">Investment Metrics<a class="headerlink" href="#investment-metrics" title="Permanent link">&para;</a></h2>
+<h3 id="daily-investment-investment_metrics_daily">Daily Investment (<code>investment_metrics_daily</code>)<a class="headerlink" href="#daily-investment-investment_metrics_daily" title="Permanent link">&para;</a></h3>
+<p>Categorizes effort into investment areas via rule-based classifier.</p>
+<p><strong>Artifacts classified:</strong>
+- Work items: Based on labels, components, title keywords
+- Commits (churn): Based on file path patterns</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Calculation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>investment_area</code></td>
+<td>Assigned category</td>
+</tr>
+<tr>
+<td><code>project_stream</code></td>
+<td>Secondary grouping</td>
+</tr>
+<tr>
+<td><code>delivery_units</code></td>
+<td>Story points or item count</td>
+</tr>
+<tr>
+<td><code>churn_loc</code></td>
+<td>LOC associated with area</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Configuration:</strong> <code>config/investment_areas.yaml</code></p>
+<hr />
+<h2 id="edge-cases-null-handling">Edge Cases &amp; Null Handling<a class="headerlink" href="#edge-cases-null-handling" title="Permanent link">&para;</a></h2>
+<h3 id="missing-data">Missing Data<a class="headerlink" href="#missing-data" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No <code>started_at</code></td>
+<td>Excluded from cycle-time distributions</td>
+</tr>
+<tr>
+<td>No status history</td>
+<td>No state duration rows</td>
+</tr>
+<tr>
+<td>No review facts</td>
+<td>Pickup/review fields remain NULL</td>
+</tr>
+<tr>
+<td>No assignee</td>
+<td>Counted under <code>team_id=''</code> and <code>user_identity='unassigned'</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="recomputation">Recomputation<a class="headerlink" href="#recomputation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>All metrics are <strong>append-only</strong> with <code>computed_at</code> timestamp</li>
+<li>Use <code>argMax(..., computed_at)</code> to get latest value</li>
+<li>Safe to recompute any day (idempotent via compound keys)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

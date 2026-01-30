@@ -1,0 +1,2204 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>AGENTS — Single Source of Truth (dev-health-ops) - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#agents-single-source-of-truth-dev-health-ops" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              AGENTS — Single Source of Truth (dev-health-ops)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CONNECTOR_USAGE/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../PRIVATE_REPO_TESTING/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_8" id="__nav_7_8_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_8">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graphql/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL (Legacy)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Grafana
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent-instructions/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Agent Instructions (index)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-read-first-order-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      0) Read-first (order matters)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-mission-and-product-intent" class="md-nav__link">
+    <span class="md-ellipsis">
+      1) Mission and product intent
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1) Mission and product intent">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#investment-view-is-canonical" class="md-nav__link">
+    <span class="md-ellipsis">
+      Investment View is canonical
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-system-architecture-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      2) System architecture (pipeline)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2) System architecture (pipeline)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-data-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.1 Data flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-storage-backends-supported" class="md-nav__link">
+    <span class="md-ellipsis">
+      2.2 Storage backends (supported)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-the-non-negotiable-work-graph-investment-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      3) The non-negotiable Work Graph + Investment contract
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3) The non-negotiable Work Graph + Investment contract">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-core-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.1 Core contract
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-canonical-taxonomy" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.2 Canonical taxonomy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.2 Canonical taxonomy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#themes-fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Themes (fixed)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subcategories-fixed-per-theme" class="md-nav__link">
+    <span class="md-ellipsis">
+      Subcategories (fixed per theme)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-data-model-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      3.3 Data model guarantees
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-llm-usage-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      4) LLM usage rules
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4) LLM usage rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-compute-time-categorization-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.1 Compute-time categorization (required)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-ux-time-explanations-allowed-constrained" class="md-nav__link">
+    <span class="md-ellipsis">
+      4.2 UX-time explanations (allowed, constrained)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-visualization-rules-grafana-web" class="md-nav__link">
+    <span class="md-ellipsis">
+      5) Visualization rules (Grafana + web)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5) Visualization rules (Grafana + web)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-investment-views" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 Investment views
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-drill-down-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 Drill-down contract
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-grafana-query-conventions-when-touching-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 Grafana query conventions (when touching dashboards)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-developer-workflow-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      6) Developer workflow (CLI)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6) Developer workflow (CLI)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#61-sync-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.1 Sync data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#62-generate-synthetic-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.2 Generate synthetic data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#63-compute-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      6.3 Compute metrics
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-engineering-rules-for-agents" class="md-nav__link">
+    <span class="md-ellipsis">
+      7) Engineering rules for agents
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7) Engineering rules for agents">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#71-change-discipline" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.1 Change discipline
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#72-correct-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.2 Correct boundaries
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#73-performance-and-reliability" class="md-nav__link">
+    <span class="md-ellipsis">
+      7.3 Performance and reliability
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-what-to-do-when-you-start-a-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      8) What to do when you start a task
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-quick-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      9) Quick reference
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9) Quick reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hard-bans" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hard bans
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#allowed-references-to-dev-health-web" class="md-nav__link">
+    <span class="md-ellipsis">
+      Allowed references to dev-health-web
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#landing-the-plane-session-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Landing the Plane (Session Completion)
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="agents-single-source-of-truth-dev-health-ops">AGENTS — Single Source of Truth (dev-health-ops)<a class="headerlink" href="#agents-single-source-of-truth-dev-health-ops" title="Permanent link">&para;</a></h1>
+<p>This document is the <strong>canonical</strong> agent briefing for this repo: how it works, what not to break, and the minimum rules to move fast without causing architectural regressions. It consolidates prior agent guidance into one set of enforceable constraints.</p>
+<hr />
+<h2 id="0-read-first-order-matters">0) Read-first (order matters)<a class="headerlink" href="#0-read-first-order-matters" title="Permanent link">&para;</a></h2>
+<ol>
+<li><code>cli.py</code></li>
+<li><code>processors/local.py</code></li>
+<li><code>connectors/__init__.py</code></li>
+</ol>
+<p>Goal: understand <strong>boundaries</strong> (ingest → normalize → persist → metricize → visualize) before touching anything.</p>
+<hr />
+<h2 id="1-mission-and-product-intent">1) Mission and product intent<a class="headerlink" href="#1-mission-and-product-intent" title="Permanent link">&para;</a></h2>
+<p><code>dev-health-ops</code> is an OSS analytics platform for <strong>team operating modes</strong> and developer health, backed by provider data (GitHub, GitLab, Jira, local Git) and computed metrics stored in DB sinks.</p>
+<h3 id="investment-view-is-canonical">Investment View is canonical<a class="headerlink" href="#investment-view-is-canonical" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Signals is retired</strong> (POC only). Do not extend it.</li>
+<li>The platform answers: <strong>“Where is human effort actually being invested, and what is the cost to people when certain work dominates?”</strong></li>
+</ul>
+<hr />
+<h2 id="2-system-architecture-pipeline">2) System architecture (pipeline)<a class="headerlink" href="#2-system-architecture-pipeline" title="Permanent link">&para;</a></h2>
+<h3 id="21-data-flow">2.1 Data flow<a class="headerlink" href="#21-data-flow" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Connectors (<code>connectors/</code>)</strong></p>
+</li>
+<li>
+<p>Fetch raw provider data.</p>
+</li>
+<li>
+<p>Network I/O should be async and batch-friendly.</p>
+</li>
+<li>
+<p><strong>Processors (<code>processors/</code>)</strong></p>
+</li>
+<li>
+<p>Normalize/transform connector outputs into internal models.</p>
+</li>
+<li>
+<p><strong>Storage / Sinks (<code>metrics/sinks/</code>)</strong></p>
+</li>
+<li>
+<p>Persist computed outputs.</p>
+</li>
+<li>
+<p><strong>No file exports. No debug dumps. No JSON/YAML output paths.</strong></p>
+</li>
+<li>
+<p><strong>Metrics (<code>metrics/</code>)</strong></p>
+</li>
+<li>
+<p>Compute higher-level rollups (daily/backfills/etc.) from persisted data.</p>
+</li>
+<li>
+<p><strong>Visualization (Grafana + dev-health-web)</strong></p>
+</li>
+<li>
+<p>UI renders <strong>persisted</strong> data.</p>
+</li>
+<li><code>dev-health-web</code> is visualization-only: it must not become the source of truth.</li>
+</ol>
+<h3 id="22-storage-backends-supported">2.2 Storage backends (supported)<a class="headerlink" href="#22-storage-backends-supported" title="Permanent link">&para;</a></h3>
+<ul>
+<li>PostgreSQL (SQLAlchemy + Alembic)</li>
+<li>ClickHouse (analytics store)</li>
+<li>MongoDB</li>
+<li>SQLite</li>
+</ul>
+<p>Backend selection:</p>
+<ul>
+<li>CLI <code>--db</code> flag or <code>DATABASE_URI</code></li>
+<li>Secondary sink via <code>SECONDARY_DATABASE_URI</code> when using <code>sink='both'</code>.</li>
+</ul>
+<hr />
+<h2 id="3-the-non-negotiable-work-graph-investment-contract">3) The non-negotiable Work Graph + Investment contract<a class="headerlink" href="#3-the-non-negotiable-work-graph-investment-contract" title="Permanent link">&para;</a></h2>
+<h3 id="31-core-contract">3.1 Core contract<a class="headerlink" href="#31-core-contract" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>WorkUnits are evidence containers, not categories.</strong></li>
+<li>LLM decides <strong>subcategory distributions</strong> at <strong>compute time only</strong>.</li>
+<li><strong>Theme roll-up is deterministic</strong> from subcategories.</li>
+<li>UX renders <strong>only persisted distributions and edges</strong>.</li>
+<li>LLM explanations may run on-demand but <strong>must not alter persisted decisions</strong>.</li>
+<li><strong>Sinks only</strong> for persistence (no output files).</li>
+</ul>
+<h3 id="32-canonical-taxonomy">3.2 Canonical taxonomy<a class="headerlink" href="#32-canonical-taxonomy" title="Permanent link">&para;</a></h3>
+<h4 id="themes-fixed">Themes (fixed)<a class="headerlink" href="#themes-fixed" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Feature Delivery</li>
+<li>Operational / Support</li>
+<li>Maintenance / Tech Debt</li>
+<li>Quality / Reliability</li>
+<li>Risk / Security</li>
+</ul>
+<p>Rules:</p>
+<ul>
+<li>No synonyms.</li>
+<li>No overrides.</li>
+<li>No per-team configuration.</li>
+<li>Provider-native labels/types are <strong>inputs only</strong> and must be normalized away.</li>
+</ul>
+<h4 id="subcategories-fixed-per-theme">Subcategories (fixed per theme)<a class="headerlink" href="#subcategories-fixed-per-theme" title="Permanent link">&para;</a></h4>
+<ul>
+<li>There is a small curated set per theme.</li>
+<li>Subcategories provide resolution without fragmenting language.</li>
+<li>Subcategory probabilities roll up to theme probabilities.</li>
+</ul>
+<h3 id="33-data-model-guarantees">3.3 Data model guarantees<a class="headerlink" href="#33-data-model-guarantees" title="Permanent link">&para;</a></h3>
+<p>For every WorkUnit (evidence container):</p>
+<ul>
+<li>Theme probabilities sum to ~1.0</li>
+<li>Subcategory probabilities sum to theme probabilities</li>
+<li>Evidence arrays exist (may be empty)</li>
+<li>Evidence quality always emitted</li>
+<li>Categorization never returns “unknown”</li>
+</ul>
+<hr />
+<h2 id="4-llm-usage-rules">4) LLM usage rules<a class="headerlink" href="#4-llm-usage-rules" title="Permanent link">&para;</a></h2>
+<h3 id="41-compute-time-categorization-required">4.1 Compute-time categorization (required)<a class="headerlink" href="#41-compute-time-categorization-required" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Output must be <strong>strict JSON</strong> matching <code>work_graph/investment/llm_schema.py</code>.</li>
+<li>Keys must be from canonical subcategory registry.</li>
+<li>Probabilities must be normalized and valid.</li>
+<li>Evidence quotes must be <strong>extractive substrings</strong> from provided inputs.</li>
+<li>Retry policy: <strong>one repair attempt</strong> only.</li>
+<li>On failure: mark invalid + apply deterministic fallback.</li>
+<li>Persist audit fields for every run.</li>
+</ul>
+<h3 id="42-ux-time-explanations-allowed-constrained">4.2 UX-time explanations (allowed, constrained)<a class="headerlink" href="#42-ux-time-explanations-allowed-constrained" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Explanations can only use <strong>persisted distributions and stored evidence</strong>.</li>
+<li>Explanations must not recompute categories/edges/weights.</li>
+<li>All explanation output must be labeled AI-generated.</li>
+</ul>
+<p>Language constraints:</p>
+<ul>
+<li>Allowed: <em>appears, leans, suggests</em></li>
+<li>Forbidden: <em>is, was, detected, determined</em></li>
+</ul>
+<p>Explanation format:</p>
+<ul>
+<li>SUMMARY (max 3 sentences)</li>
+<li>REASONS (specific evidence)</li>
+<li>UNCERTAINTY (limits + evidence quality)</li>
+</ul>
+<hr />
+<h2 id="5-visualization-rules-grafana-web">5) Visualization rules (Grafana + web)<a class="headerlink" href="#5-visualization-rules-grafana-web" title="Permanent link">&para;</a></h2>
+<h3 id="51-investment-views">5.1 Investment views<a class="headerlink" href="#51-investment-views" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Treemap: <strong>Theme-level by default</strong></li>
+<li>Sunburst: Theme → (optional) scope/team → (optional) clusters</li>
+<li>Sankey: Theme → scope/team pressure flows</li>
+</ul>
+<h3 id="52-drill-down-contract">5.2 Drill-down contract<a class="headerlink" href="#52-drill-down-contract" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Default: Theme-only (leadership readable)</li>
+<li>Drill: Theme → Subcategory → Evidence (WorkUnits)</li>
+<li>Never show WorkUnits as peers to themes/subcategories.</li>
+</ul>
+<h3 id="53-grafana-query-conventions-when-touching-dashboards">5.3 Grafana query conventions (when touching dashboards)<a class="headerlink" href="#53-grafana-query-conventions-when-touching-dashboards" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Prefer table format and stable time ordering where required.</li>
+<li>Handle legacy <code>team_id</code> null/empty normalization.</li>
+<li>Avoid ClickHouse <code>WITH name = expr</code> syntax; use <code>WITH ... AS</code> aliasing.</li>
+</ul>
+<p>(Only modify Grafana provisioning when needed; do not replatform dashboards incidentally.)</p>
+<hr />
+<h2 id="6-developer-workflow-cli">6) Developer workflow (CLI)<a class="headerlink" href="#6-developer-workflow-cli" title="Permanent link">&para;</a></h2>
+<h3 id="61-sync-data">6.1 Sync data<a class="headerlink" href="#61-sync-data" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p>Git data (local):</p>
+</li>
+<li>
+<p><code>python cli.py sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo</code></p>
+</li>
+<li>
+<p>Work items:</p>
+</li>
+<li>
+<p><code>python cli.py sync work-items --provider &lt;jira|github|gitlab|synthetic|all&gt; -s "org/*" --db "$DATABASE_URI"</code></p>
+</li>
+<li>
+<p>Teams:</p>
+</li>
+<li>
+<p><code>python cli.py sync teams --provider &lt;config|jira|synthetic&gt; --db "$DATABASE_URI"</code></p>
+</li>
+</ul>
+<h3 id="62-generate-synthetic-data">6.2 Generate synthetic data<a class="headerlink" href="#62-generate-synthetic-data" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>python cli.py fixtures generate --db "$DATABASE_URI" --days 30</code></li>
+</ul>
+<h3 id="63-compute-metrics">6.3 Compute metrics<a class="headerlink" href="#63-compute-metrics" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p>Daily rollups:</p>
+</li>
+<li>
+<p><code>python cli.py metrics daily --db "$DATABASE_URI"</code></p>
+</li>
+</ul>
+<hr />
+<h2 id="7-engineering-rules-for-agents">7) Engineering rules for agents<a class="headerlink" href="#7-engineering-rules-for-agents" title="Permanent link">&para;</a></h2>
+<h3 id="71-change-discipline">7.1 Change discipline<a class="headerlink" href="#71-change-discipline" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Prefer <strong>minimal, surgical</strong> changes.</li>
+<li>Keep surrounding style; use targeted edits.</li>
+<li>Add/adjust tests under <code>tests/</code> for behavior changes.</li>
+<li>If DB models change: include Alembic migrations (Postgres).</li>
+</ul>
+<h3 id="72-correct-boundaries">7.2 Correct boundaries<a class="headerlink" href="#72-correct-boundaries" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Connectors fetch. Processors normalize. Metrics compute. Sinks persist.</li>
+<li>Do not collapse responsibilities into one layer.</li>
+<li>Do not add “helpful” outputs like file dumps. Persistence goes through sinks only.</li>
+</ul>
+<h3 id="73-performance-and-reliability">7.3 Performance and reliability<a class="headerlink" href="#73-performance-and-reliability" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Async/batching for network I/O.</li>
+<li>Respect any existing rate limit/backoff mechanisms.</li>
+<li>Close SQLAlchemy engines in tests to avoid event-loop teardown warnings.</li>
+</ul>
+<hr />
+<h2 id="8-what-to-do-when-you-start-a-task">8) What to do when you start a task<a class="headerlink" href="#8-what-to-do-when-you-start-a-task" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Identify which layer you’re changing (connector, processor, metric, sink, viz).</li>
+<li>Re-state the relevant non-negotiables (WorkUnits are evidence; themes/subcats canonical; sinks only).</li>
+<li>Make the smallest possible change that achieves the outcome.</li>
+<li>Add a test (or update an existing one) for the new behavior.</li>
+<li>Ensure no new outputs bypass sinks.</li>
+</ol>
+<hr />
+<h2 id="9-quick-reference">9) Quick reference<a class="headerlink" href="#9-quick-reference" title="Permanent link">&para;</a></h2>
+<h3 id="hard-bans">Hard bans<a class="headerlink" href="#hard-bans" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Treating WorkUnits as categories</li>
+<li>User-configurable categories/subcategories</li>
+<li>“Unknown” categorization output</li>
+<li>LLM recomputation at UX-time</li>
+<li>Any persistence path outside <code>metrics/sinks/*</code></li>
+</ul>
+<h3 id="allowed-references-to-dev-health-web">Allowed references to dev-health-web<a class="headerlink" href="#allowed-references-to-dev-health-web" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Visualization implementation details only (charts, drill-down UX, rendering).</li>
+<li>Not allowed: redefining taxonomy, recomputing categories, or becoming data source.</li>
+</ul>
+<h2 id="landing-the-plane-session-completion">Landing the Plane (Session Completion)<a class="headerlink" href="#landing-the-plane-session-completion" title="Permanent link">&para;</a></h2>
+<p><strong>When ending a work session</strong>, you MUST complete ALL steps below. Work is NOT complete until <code>git push</code> succeeds.</p>
+<p><strong>MANDATORY WORKFLOW:</strong></p>
+<ol>
+<li><strong>File issues for remaining work</strong> - Create issues for anything that needs follow-up</li>
+<li><strong>Run quality gates</strong> (if code changed) - Tests, linters, builds</li>
+<li><strong>Update issue status</strong> - Close finished work, update in-progress items</li>
+<li><strong>PUSH TO REMOTE</strong> - This is MANDATORY:
+   <div class="highlight"><pre><span></span><code>git<span class="w"> </span>pull<span class="w"> </span>--rebase
+bd<span class="w"> </span>sync
+git<span class="w"> </span>push
+git<span class="w"> </span>status<span class="w">  </span><span class="c1"># MUST show &quot;up to date with origin&quot;</span>
+</code></pre></div></li>
+<li><strong>Clean up</strong> - Clear stashes, prune remote branches</li>
+<li><strong>Verify</strong> - All changes committed AND pushed</li>
+<li><strong>Hand off</strong> - Provide context for next session</li>
+</ol>
+<p><strong>CRITICAL RULES:</strong>
+- Work is NOT complete until <code>git push</code> succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

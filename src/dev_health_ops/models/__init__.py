@@ -1,4 +1,11 @@
 from .git import GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
+from .users import (
+    AuthProvider,
+    MemberRole,
+    Membership,
+    Organization,
+    User,
+)
 from .settings import (
     IdentityMapping,
     IntegrationCredential,
@@ -22,6 +29,7 @@ from .work_items import (
 )
 
 __all__ = [
+    "AuthProvider",
     "GitBlame",
     "GitBlameMixin",
     "GitCommit",
@@ -33,6 +41,9 @@ __all__ = [
     "JobRun",
     "JobRunStatus",
     "JobStatus",
+    "MemberRole",
+    "Membership",
+    "Organization",
     "Repo",
     "ScheduledJob",
     "Setting",
@@ -40,6 +51,7 @@ __all__ = [
     "Sprint",
     "SyncConfiguration",
     "TeamMapping",
+    "User",
     "WorkItem",
     "WorkItemDependency",
     "WorkItemInteractionEvent",

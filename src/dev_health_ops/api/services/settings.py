@@ -29,6 +29,19 @@ from dev_health_ops.models.settings import (
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_for_log(value: Any) -> Any:
+    """Sanitize potentially user-controlled values for safe logging.
+
+    Currently removes carriage return and newline characters from strings to
+    mitigate log injection via line breaks. Non-string values are returned
+    unchanged.
+    """
+    if isinstance(value, str):
+        # Remove CR/LF characters that could break log formatting.
+        return value.replace("\r", "").replace("\n", "")
+    return value
+
+
 def _derive_key(secret: str) -> bytes:
     """Derive a Fernet-compatible key from a secret string using SHA-256."""
     digest = hashlib.sha256(secret.encode()).digest()
@@ -221,7 +234,9 @@ class IntegrationCredentialsService:
             return json.loads(decrypted)
         except (ValueError, json.JSONDecodeError):
             logger.error(
-                "Failed to decrypt/parse credentials for %s/%s", provider, name
+                "Failed to decrypt/parse credentials for %s/%s",
+                _sanitize_for_log(provider),
+                _sanitize_for_log(name),
             )
             return None
 

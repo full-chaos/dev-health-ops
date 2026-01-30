@@ -336,7 +336,8 @@ async def test_connection(
             error = f"Unknown provider: {payload.provider}"
     except Exception as e:
         error = str(e)
-        logger.exception("Test connection failed for %s", payload.provider)
+        safe_provider = str(payload.provider).replace("\r", "").replace("\n", "")
+        logger.exception("Test connection failed for %s", safe_provider)
 
     await svc.update_test_result(payload.provider, success, error, payload.name)
     return TestConnectionResponse(success=success, error=error, details=details or None)

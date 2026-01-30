@@ -1,6 +1,6 @@
 # Connector Inventory and Implementation Status
 
-This document provides a comprehensive audit of all data connectors (GitHub, GitLab, Jira) including their current implementation status, missing features, sync capabilities, and recommendations.
+This document provides a comprehensive audit of all data connectors (GitHub, GitLab, Jira, Linear) including their current implementation status, missing features, sync capabilities, and recommendations.
 
 ---
 
@@ -11,6 +11,7 @@ This document provides a comprehensive audit of all data connectors (GitHub, Git
 | **GitHub** | Full | Full | Full | Full | Partial | Full (Milestones) | 90% |
 | **GitLab** | Full | Full | Full | Full | Partial | Full (Milestones) | 90% |
 | **Jira** | Full | N/A | N/A | N/A | N/A | Full | 95% |
+| **Linear** | Full | N/A | N/A | N/A | N/A | Full (Cycles) | 90% |
 
 ---
 
@@ -265,7 +266,94 @@ This document provides a comprehensive audit of all data connectors (GitHub, Git
 
 ---
 
-## 4. Cross-Connector Issues
+## 4. Linear Connector
+
+### 4.1 Architecture Overview
+
+**Location:** `src/dev_health_ops/`
+- Provider: `providers/linear/provider.py` (work items)
+- Client: `providers/linear/client.py` (GraphQL API)
+- Normalizer: `providers/linear/normalize.py`
+
+### 4.2 Implemented Data Types
+
+| Data Type | Status | API Used | Notes |
+|-----------|--------|----------|-------|
+| Issues | Implemented | GraphQL | Full issue support with pagination |
+| Issue history | Implemented | GraphQL | Status transitions |
+| Issue comments | Implemented | GraphQL | Interaction events |
+| Cycles | Implemented | GraphQL | Mapped to sprints |
+| Teams | Implemented | GraphQL | Team iteration |
+| Labels | Implemented | GraphQL | Label extraction |
+| Priority | Implemented | GraphQL | Full priority mapping |
+| Estimates | Implemented | GraphQL | Story points support |
+| Parent issues | Implemented | GraphQL | Hierarchy support |
+
+### 4.3 Authentication
+
+| Method | Support | Environment Variable |
+|--------|---------|---------------------|
+| API Key | Full | `LINEAR_API_KEY` |
+
+**Required:** Linear API key with read access to issues, teams, and cycles.
+
+### 4.4 Configuration Options
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `LINEAR_API_KEY` | API authentication | Required |
+| `LINEAR_FETCH_COMMENTS` | Include comments | `true` |
+| `LINEAR_FETCH_HISTORY` | Include status history | `true` |
+| `LINEAR_FETCH_CYCLES` | Include cycles as sprints | `true` |
+| `LINEAR_COMMENTS_LIMIT` | Max comments per issue | `100` |
+
+### 4.5 Data Mapping
+
+#### Priority Mapping
+
+| Linear Priority | priority_raw | service_class |
+|-----------------|--------------|---------------|
+| 0 (No priority) | none | intangible |
+| 1 (Urgent) | urgent | expedite |
+| 2 (High) | high | fixed_date |
+| 3 (Medium) | medium | standard |
+| 4 (Low) | low | intangible |
+
+#### State Type Mapping
+
+| Linear state.type | WorkItemStatusCategory |
+|-------------------|------------------------|
+| backlog | backlog |
+| unstarted | todo |
+| started | in_progress |
+| completed | done |
+| canceled | canceled |
+
+### 4.6 Missing Implementations
+
+| Feature | Priority | Effort | Notes |
+|---------|----------|--------|-------|
+| Blocking relationships | Medium | Low | Linear supports issue blocking |
+| Projects | Medium | Medium | Project-level grouping |
+| Initiatives | Low | Medium | High-level roadmap items |
+| Webhooks (real-time) | High | Medium | Would enable real-time sync |
+| SLA tracking | Low | Medium | Linear SLA fields |
+
+### 4.7 Known Issues
+
+1. **No blocking relationships**: Issue dependencies not yet extracted
+2. **Team filtering**: Currently fetches all teams; specific team filtering via `repo` parameter
+3. **Rate limiting**: Linear has aggressive rate limits; client handles backoff
+
+### 4.8 Recommendations
+
+1. **Add blocking relationship sync** for dependency tracking
+2. **Implement webhooks** for real-time data ingestion
+3. **Add project-level aggregation** for portfolio metrics
+
+---
+
+## 5. Cross-Connector Issues
 
 ### 4.1 Common Gaps
 
@@ -295,7 +383,7 @@ Shared `RateLimitGate` infrastructure ensures:
 
 ---
 
-## 5. Implementation Roadmap
+## 6. Implementation Roadmap
 
 ### Phase 1: High Priority (Recommended)
 
@@ -338,7 +426,7 @@ Shared `RateLimitGate` infrastructure ensures:
 
 ---
 
-## 6. Testing Recommendations
+## 7. Testing Recommendations
 
 ### Unit Tests Required
 

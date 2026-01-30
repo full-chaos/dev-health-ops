@@ -1,6 +1,6 @@
 # Task Trackers & Work Items
 
-This repo normalizes Jira issues, GitHub issues/Projects items, and GitLab issues into a unified `WorkItem` model (`models/work_items.py`) and computes daily aggregates + cycle times.
+This repo normalizes Jira issues, GitHub issues/Projects items, GitLab issues, and Linear issues into a unified `WorkItem` model (`models/work_items.py`) and computes daily aggregates + cycle times.
 
 Jira is used to track associated project work (planning/throughput/WIP). Pull request metrics are computed from PR/MR data synced via the CLI (`python cli.py sync ...`) and are independent of Jira.
 
@@ -33,6 +33,24 @@ Optional Projects v2 ingestion:
 - `GITLAB_URL` (optional, default: `https://gitlab.com`)
   - Optional CLI override: `python cli.py sync work-items --provider gitlab --auth "$GITLAB_TOKEN" ...`
 
+### Linear
+- `LINEAR_API_KEY` (required)
+
+Optional configuration:
+- `LINEAR_FETCH_COMMENTS` (default: `true`) - fetch issue comments
+- `LINEAR_FETCH_HISTORY` (default: `true`) - fetch status change history for transitions
+- `LINEAR_FETCH_CYCLES` (default: `true`) - fetch cycles as sprints
+- `LINEAR_COMMENTS_LIMIT` (default: `100`) - max comments per issue
+
+Usage:
+```bash
+# Sync all teams
+python cli.py sync work-items --provider linear --db "$DATABASE_URI"
+
+# Sync specific team by key (e.g., ENG, PROD)
+python cli.py sync work-items --provider linear --repo ENG --db "$DATABASE_URI"
+```
+
 ## Status & Type Normalization
 
 Status normalization is config-driven via `config/status_mapping.yaml`.
@@ -51,10 +69,12 @@ Normalized categories are:
 The mapping file supports:
 - Jira: `providers.jira.statuses` (maps Jira status names)
 - GitHub/GitLab: `providers.<provider>.status_labels` (maps label names to categories)
+- Linear: `providers.linear.state_types` (maps Linear state.type to categories)
 
 If no label/status match exists:
 - GitHub: `open → todo`, `closed → done`
 - GitLab: `opened → todo`, `closed → done`
+- Linear: Maps `state.type` directly (`backlog`, `unstarted → todo`, `started → in_progress`, `completed → done`, `canceled`)
 
 ## Identity Mapping (optional)
 

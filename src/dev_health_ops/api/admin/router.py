@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import logging
-import os
-from typing import Annotated
+from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Header
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.settings import (
     IdentityMappingService,
@@ -20,6 +18,7 @@ from dev_health_ops.api.services.users import (
     OrganizationService,
     UserService,
 )
+from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.settings import SettingCategory
 
 from .schemas import (
@@ -56,28 +55,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
-def _get_db_url() -> str:
-    dsn = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URI or DATABASE_URL must be set")
-
-    if dsn.startswith("postgresql://"):
-        dsn = dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return dsn
-
-
-async def get_session() -> AsyncSession:
-    engine = create_async_engine(_get_db_url(), pool_pre_ping=True)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await engine.dispose()
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    async with get_postgres_session() as session:
+        yield session
 
 
 def get_org_id(x_org_id: Annotated[str, Header(alias="X-Org-Id")] = "default") -> str:

@@ -99,9 +99,18 @@ python cli.py sync work-items --provider jira \
 python cli.py sync work-items --provider github \
   --db "$DATABASE_URI" \
   -s "org/*"
+
+# Linear (all teams)
+python cli.py sync work-items --provider linear \
+  --db "$DATABASE_URI"
+
+# Linear (specific team by key)
+python cli.py sync work-items --provider linear \
+  --db "$DATABASE_URI" \
+  --repo ENG
 ```
 
-**Providers:** `jira`, `github`, `gitlab`, `synthetic`, `all`
+**Providers:** `jira`, `github`, `gitlab`, `linear`, `synthetic`, `all`
 
 ### `sync cicd`
 
@@ -254,6 +263,16 @@ For GitHub/GitLab batch operations:
 | `JIRA_EMAIL` | Jira |
 | `JIRA_API_TOKEN` | Jira |
 | `JIRA_BASE_URL` | Jira |
+| `LINEAR_API_KEY` | Linear |
+
+### Linear Options
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LINEAR_FETCH_COMMENTS` | `true` | Fetch issue comments |
+| `LINEAR_FETCH_HISTORY` | `true` | Fetch status change history |
+| `LINEAR_FETCH_CYCLES` | `true` | Fetch cycles as sprints |
+| `LINEAR_COMMENTS_LIMIT` | `100` | Max comments per issue |
 
 ### Tuning
 

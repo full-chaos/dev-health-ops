@@ -173,3 +173,114 @@ class TeamMappingUpdate(BaseModel):
     repo_patterns: Optional[list[str]] = None
     project_keys: Optional[list[str]] = None
     extra_data: Optional[dict[str, Any]] = None
+
+
+# ---- User schemas ----
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    username: Optional[str]
+    full_name: Optional[str]
+    avatar_url: Optional[str]
+    auth_provider: str
+    is_active: bool
+    is_verified: bool
+    is_superuser: bool
+    last_login_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserCreate(BaseModel):
+    email: str = Field(..., min_length=1)
+    password: Optional[str] = Field(default=None, min_length=8)
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    auth_provider: str = "local"
+    auth_provider_id: Optional[str] = None
+    is_verified: bool = False
+    is_superuser: bool = False
+
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_verified: Optional[bool] = None
+
+
+class UserSetPassword(BaseModel):
+    password: str = Field(..., min_length=8)
+
+
+# ---- Organization schemas ----
+
+
+class OrganizationResponse(BaseModel):
+    id: str
+    slug: str
+    name: str
+    description: Optional[str]
+    tier: str
+    settings: dict[str, Any]
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class OrganizationCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    tier: str = "free"
+    settings: dict[str, Any] = Field(default_factory=dict)
+    owner_user_id: Optional[str] = None
+
+
+class OrganizationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tier: Optional[str] = None
+    settings: Optional[dict[str, Any]] = None
+    is_active: Optional[bool] = None
+
+
+# ---- Membership schemas ----
+
+
+class MembershipResponse(BaseModel):
+    id: str
+    org_id: str
+    user_id: str
+    role: str
+    invited_by_id: Optional[str]
+    joined_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MembershipCreate(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    role: str = "member"
+    invited_by_id: Optional[str] = None
+
+
+class MembershipUpdateRole(BaseModel):
+    role: str = Field(..., min_length=1)
+
+
+class OwnershipTransfer(BaseModel):
+    new_owner_user_id: str = Field(..., min_length=1)

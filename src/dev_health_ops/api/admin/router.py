@@ -15,6 +15,11 @@ from dev_health_ops.api.services.settings import (
     SyncConfigurationService,
     TeamMappingService,
 )
+from dev_health_ops.api.services.users import (
+    MembershipService,
+    OrganizationService,
+    UserService,
+)
 from dev_health_ops.models.settings import SettingCategory
 
 from .schemas import (
@@ -23,6 +28,13 @@ from .schemas import (
     IntegrationCredentialCreate,
     IntegrationCredentialResponse,
     IntegrationCredentialUpdate,
+    MembershipCreate,
+    MembershipResponse,
+    MembershipUpdateRole,
+    OrganizationCreate,
+    OrganizationResponse,
+    OrganizationUpdate,
+    OwnershipTransfer,
     SettingCreate,
     SettingResponse,
     SettingsListResponse,
@@ -33,6 +45,10 @@ from .schemas import (
     TeamMappingResponse,
     TestConnectionRequest,
     TestConnectionResponse,
+    UserCreate,
+    UserResponse,
+    UserSetPassword,
+    UserUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -611,3 +627,386 @@ async def delete_team(
     if not deleted:
         raise HTTPException(status_code=404, detail="Team not found")
     return {"deleted": True}
+
+
+@router.get("/users", response_model=list[UserResponse])
+async def list_users(
+    limit: int = 100,
+    offset: int = 0,
+    active_only: bool = True,
+    session: AsyncSession = Depends(get_session),
+) -> list[UserResponse]:
+    svc = UserService(session)
+    users = await svc.list_all(limit=limit, offset=offset, active_only=active_only)
+    return [
+        UserResponse(
+            id=str(u.id),
+            email=u.email,
+            username=u.username,
+            full_name=u.full_name,
+            avatar_url=u.avatar_url,
+            auth_provider=u.auth_provider,
+            is_active=u.is_active,
+            is_verified=u.is_verified,
+            is_superuser=u.is_superuser,
+            last_login_at=u.last_login_at,
+            created_at=u.created_at,
+            updated_at=u.updated_at,
+        )
+        for u in users
+    ]
+
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(
+    user_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> UserResponse:
+    svc = UserService(session)
+    user = await svc.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserResponse(
+        id=str(user.id),
+        email=user.email,
+        username=user.username,
+        full_name=user.full_name,
+        avatar_url=user.avatar_url,
+        auth_provider=user.auth_provider,
+        is_active=user.is_active,
+        is_verified=user.is_verified,
+        is_superuser=user.is_superuser,
+        last_login_at=user.last_login_at,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
+
+
+@router.post("/users", response_model=UserResponse, status_code=201)
+async def create_user(
+    payload: UserCreate,
+    session: AsyncSession = Depends(get_session),
+) -> UserResponse:
+    svc = UserService(session)
+    try:
+        user = await svc.create(
+            email=payload.email,
+            password=payload.password,
+            username=payload.username,
+            full_name=payload.full_name,
+            auth_provider=payload.auth_provider,
+            auth_provider_id=payload.auth_provider_id,
+            is_verified=payload.is_verified,
+            is_superuser=payload.is_superuser,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return UserResponse(
+        id=str(user.id),
+        email=user.email,
+        username=user.username,
+        full_name=user.full_name,
+        avatar_url=user.avatar_url,
+        auth_provider=user.auth_provider,
+        is_active=user.is_active,
+        is_verified=user.is_verified,
+        is_superuser=user.is_superuser,
+        last_login_at=user.last_login_at,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_id: str,
+    payload: UserUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> UserResponse:
+    svc = UserService(session)
+    try:
+        user = await svc.update(
+            user_id=user_id,
+            email=payload.email,
+            username=payload.username,
+            full_name=payload.full_name,
+            avatar_url=payload.avatar_url,
+            is_active=payload.is_active,
+            is_verified=payload.is_verified,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserResponse(
+        id=str(user.id),
+        email=user.email,
+        username=user.username,
+        full_name=user.full_name,
+        avatar_url=user.avatar_url,
+        auth_provider=user.auth_provider,
+        is_active=user.is_active,
+        is_verified=user.is_verified,
+        is_superuser=user.is_superuser,
+        last_login_at=user.last_login_at,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
+
+
+@router.post("/users/{user_id}/password")
+async def set_user_password(
+    user_id: str,
+    payload: UserSetPassword,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    svc = UserService(session)
+    try:
+        success = await svc.set_password(user_id, payload.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"success": True}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    svc = UserService(session)
+    deleted = await svc.delete(user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"deleted": True}
+
+
+@router.get("/orgs", response_model=list[OrganizationResponse])
+async def list_organizations(
+    limit: int = 100,
+    offset: int = 0,
+    active_only: bool = True,
+    session: AsyncSession = Depends(get_session),
+) -> list[OrganizationResponse]:
+    svc = OrganizationService(session)
+    orgs = await svc.list_all(limit=limit, offset=offset, active_only=active_only)
+    return [
+        OrganizationResponse(
+            id=str(o.id),
+            slug=o.slug,
+            name=o.name,
+            description=o.description,
+            tier=o.tier,
+            settings=o.settings or {},
+            is_active=o.is_active,
+            created_at=o.created_at,
+            updated_at=o.updated_at,
+        )
+        for o in orgs
+    ]
+
+
+@router.get("/orgs/{org_id}", response_model=OrganizationResponse)
+async def get_organization(
+    org_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> OrganizationResponse:
+    svc = OrganizationService(session)
+    org = await svc.get_by_id(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return OrganizationResponse(
+        id=str(org.id),
+        slug=org.slug,
+        name=org.name,
+        description=org.description,
+        tier=org.tier,
+        settings=org.settings or {},
+        is_active=org.is_active,
+        created_at=org.created_at,
+        updated_at=org.updated_at,
+    )
+
+
+@router.post("/orgs", response_model=OrganizationResponse, status_code=201)
+async def create_organization(
+    payload: OrganizationCreate,
+    session: AsyncSession = Depends(get_session),
+) -> OrganizationResponse:
+    svc = OrganizationService(session)
+    org = await svc.create(
+        name=payload.name,
+        slug=payload.slug,
+        description=payload.description,
+        settings=payload.settings,
+        tier=payload.tier,
+        owner_user_id=payload.owner_user_id,
+    )
+    return OrganizationResponse(
+        id=str(org.id),
+        slug=org.slug,
+        name=org.name,
+        description=org.description,
+        tier=org.tier,
+        settings=org.settings or {},
+        is_active=org.is_active,
+        created_at=org.created_at,
+        updated_at=org.updated_at,
+    )
+
+
+@router.patch("/orgs/{org_id}", response_model=OrganizationResponse)
+async def update_organization(
+    org_id: str,
+    payload: OrganizationUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> OrganizationResponse:
+    svc = OrganizationService(session)
+    org = await svc.update(
+        org_id=org_id,
+        name=payload.name,
+        description=payload.description,
+        settings=payload.settings,
+        tier=payload.tier,
+        is_active=payload.is_active,
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return OrganizationResponse(
+        id=str(org.id),
+        slug=org.slug,
+        name=org.name,
+        description=org.description,
+        tier=org.tier,
+        settings=org.settings or {},
+        is_active=org.is_active,
+        created_at=org.created_at,
+        updated_at=org.updated_at,
+    )
+
+
+@router.delete("/orgs/{org_id}")
+async def delete_organization(
+    org_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    svc = OrganizationService(session)
+    deleted = await svc.delete(org_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return {"deleted": True}
+
+
+@router.get("/orgs/{org_id}/members", response_model=list[MembershipResponse])
+async def list_members(
+    org_id: str,
+    role: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[MembershipResponse]:
+    svc = MembershipService(session)
+    members = await svc.list_members(org_id, role=role)
+    return [
+        MembershipResponse(
+            id=str(m.id),
+            org_id=str(m.org_id),
+            user_id=str(m.user_id),
+            role=m.role,
+            invited_by_id=str(m.invited_by_id) if m.invited_by_id else None,
+            joined_at=m.joined_at,
+            created_at=m.created_at,
+            updated_at=m.updated_at,
+        )
+        for m in members
+    ]
+
+
+@router.post(
+    "/orgs/{org_id}/members", response_model=MembershipResponse, status_code=201
+)
+async def add_member(
+    org_id: str,
+    payload: MembershipCreate,
+    session: AsyncSession = Depends(get_session),
+) -> MembershipResponse:
+    svc = MembershipService(session)
+    try:
+        membership = await svc.add_member(
+            org_id=org_id,
+            user_id=payload.user_id,
+            role=payload.role,
+            invited_by_id=payload.invited_by_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return MembershipResponse(
+        id=str(membership.id),
+        org_id=str(membership.org_id),
+        user_id=str(membership.user_id),
+        role=membership.role,
+        invited_by_id=str(membership.invited_by_id)
+        if membership.invited_by_id
+        else None,
+        joined_at=membership.joined_at,
+        created_at=membership.created_at,
+        updated_at=membership.updated_at,
+    )
+
+
+@router.patch("/orgs/{org_id}/members/{user_id}", response_model=MembershipResponse)
+async def update_member_role(
+    org_id: str,
+    user_id: str,
+    payload: MembershipUpdateRole,
+    session: AsyncSession = Depends(get_session),
+) -> MembershipResponse:
+    svc = MembershipService(session)
+    try:
+        membership = await svc.update_role(org_id, user_id, payload.role)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not membership:
+        raise HTTPException(status_code=404, detail="Membership not found")
+    return MembershipResponse(
+        id=str(membership.id),
+        org_id=str(membership.org_id),
+        user_id=str(membership.user_id),
+        role=membership.role,
+        invited_by_id=str(membership.invited_by_id)
+        if membership.invited_by_id
+        else None,
+        joined_at=membership.joined_at,
+        created_at=membership.created_at,
+        updated_at=membership.updated_at,
+    )
+
+
+@router.delete("/orgs/{org_id}/members/{user_id}")
+async def remove_member(
+    org_id: str,
+    user_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    svc = MembershipService(session)
+    try:
+        deleted = await svc.remove_member(org_id, user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Membership not found")
+    return {"deleted": True}
+
+
+@router.post("/orgs/{org_id}/transfer-ownership/{from_user_id}")
+async def transfer_ownership(
+    org_id: str,
+    from_user_id: str,
+    payload: OwnershipTransfer,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    svc = MembershipService(session)
+    try:
+        await svc.transfer_ownership(org_id, from_user_id, payload.new_owner_user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"success": True}

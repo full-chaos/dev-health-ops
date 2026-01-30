@@ -16,30 +16,79 @@ This ADR captures the key design decisions that need to be made before implement
 
 ---
 
-## Decision 1: Org ID vs Tenant ID
+## Decision 1: Data Isolation Model
+
+### Terminology
+
+| Term | Meaning | Isolation Level |
+|------|---------|-----------------|
+| **org_id** | Logical organization identifier | Row-level (shared database) |
+| **Tenant** | Physically isolated customer | Database-level (separate DB per customer) |
 
 ### Current State
-The codebase uses `org_id` throughout:
+The codebase uses `org_id` for **logical separation** within shared databases:
 - GraphQL context: `context.org_id`
 - Headers: `X-Org-Id`
 - Database scoping: `WHERE org_id = :org_id`
+- All orgs share the same ClickHouse and PostgreSQL instances
+
+### Question
+Should we support **tenant-level isolation** (separate databases per customer)?
 
 ### Options
 
-| Option | Pros | Cons |
-|--------|------|------|
-| **A: Keep org_id** | No migration needed, familiar to team | Less clear multi-tenancy semantics |
-| **B: Rename to tenant_id** | Clearer SaaS semantics, industry standard | Large refactor, breaking change |
-| **C: Support both (alias)** | Backward compatible, gradual migration | Complexity, confusion |
+| Option | Description | Isolation | Complexity |
+|--------|-------------|-----------|------------|
+| **A: org_id only** | All customers in shared DB, row-level isolation | Logical | Low |
+| **B: Tenant isolation (v1)** | Dedicated DB per enterprise customer | Physical | High |
+| **C: Tenant isolation (v2)** | Defer physical isolation to v2 | Logical for now | Medium |
+
+### Trade-offs
+
+**Logical isolation (org_id):**
+- ✅ Simpler operations (one DB to manage)
+- ✅ Efficient resource utilization
+- ✅ Faster queries across shared infrastructure
+- ❌ Noisy neighbor risk (one org's load affects others)
+- ❌ Some compliance requirements mandate physical isolation
+- ❌ Data breach affects all orgs in shared DB
+
+**Physical isolation (Tenant):**
+- ✅ Complete data isolation (compliance-friendly)
+- ✅ Per-tenant performance guarantees
+- ✅ Per-tenant backup/restore
+- ✅ Can support customer-provided databases
+- ❌ Operational complexity (many DBs to manage)
+- ❌ Higher infrastructure cost
+- ❌ Cross-tenant analytics harder
 
 ### Recommendation
-**Option A: Keep org_id**
+**Option C: Keep org_id for v1, design for tenant isolation in v2**
 
 Rationale:
-- `org_id` is already well-understood and used consistently
-- "Organization" is user-facing terminology (users belong to orgs)
-- "Tenant" is infrastructure terminology (less user-friendly)
-- GitLab, GitHub, and most DevOps tools use "organization"
+- v1 focuses on shipping core functionality
+- Current `org_id` pattern is working and well-tested
+- Tenant isolation is an Enterprise-tier feature (can wait)
+- Design data layer to be tenant-aware (connection routing) without implementing yet
+- Track enterprise requests for physical isolation as signal
+
+### Implementation Notes (for v2)
+```
+v2 Tenant Isolation Architecture:
+
+┌─────────────────────────────────────────────────────────────┐
+│                    Connection Router                         │
+│  tenant_id → connection_string mapping                       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+          ┌───────────────────┼───────────────────┐
+          ▼                   ▼                   ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│  Shared DB      │ │  Tenant A DB    │ │  Tenant B DB    │
+│  (Community/    │ │  (Enterprise)   │ │  (Enterprise)   │
+│   Team tiers)   │ │                 │ │                 │
+└─────────────────┘ └─────────────────┘ └─────────────────┘
+```
 
 ### Decision
 > **PENDING** - Awaiting team input
@@ -51,37 +100,50 @@ Rationale:
 ### Question
 Should self-hosted customers be able to bring their own ClickHouse/PostgreSQL in v1?
 
+This is related to but distinct from tenant isolation:
+- **Tenant isolation** = We provision separate DBs (managed by us)
+- **BYOD (Bring Your Own Database)** = Customer provides their own DB infrastructure
+
 ### Options
 
 | Option | Pros | Cons |
 |--------|------|------|
-| **A: Our infra only (v1)** | Simpler support, controlled environment | Less flexibility, vendor lock-in concerns |
-| **B: BYOD from v1** | Maximum flexibility, appeals to enterprise | Complex support matrix, compatibility issues |
-| **C: Defer to v2** | Ship faster, learn from v1 usage | May lose enterprise deals requiring BYOD |
+| **A: Bundled only (v1)** | Simpler support, controlled environment | Less flexibility |
+| **B: BYOD from v1** | Maximum flexibility, appeals to enterprise | Complex support matrix |
+| **C: Defer BYOD to v2** | Ship faster, learn from v1 usage | May lose some enterprise deals |
 
 ### Considerations
 
-**For Option A (Our infra only):**
+**Bundled (our infrastructure):**
 - SaaS: We manage ClickHouse and PostgreSQL
-- Self-hosted: Ships with embedded/bundled database
+- Self-hosted: Ships with bundled databases (Docker Compose)
 - Simpler to support, test, and maintain
+- Consistent experience across deployments
 
-**For Option B (BYOD):**
-- Enterprise customers often have existing data infrastructure
+**BYOD (customer infrastructure):**
+- Enterprise customers may have existing ClickHouse/PostgreSQL
 - Compliance requirements may mandate data stays in their environment
-- Requires extensive compatibility testing
-
-**For Option C (Defer):**
-- Get to market faster
-- Collect feedback on actual enterprise requirements
-- Risk: May need to retrofit BYOD later
+- Requires extensive compatibility testing (versions, configs)
+- Support burden increases significantly
 
 ### Recommendation
-**Option C: Defer to v2** with the following caveats:
-- v1 self-hosted includes bundled PostgreSQL + ClickHouse (Docker Compose)
+**Option C: Defer BYOD to v2** with the following approach:
+
+**v1 Self-Hosted:**
+- Bundled PostgreSQL + ClickHouse (Docker Compose)
+- Single supported configuration
 - Document that BYOD is on roadmap
-- Design data layer to be swappable (already using sinks pattern)
-- Track enterprise requests for BYOD as signal
+
+**v2 Self-Hosted (Enterprise):**
+- Support customer-provided ClickHouse (with version requirements)
+- Support customer-provided PostgreSQL (with version requirements)
+- Compatibility matrix documented
+- Premium support for BYOD configurations
+
+**Design Principle:**
+- Keep data layer swappable (already using sinks pattern)
+- Use connection strings from environment (already done)
+- Avoid hardcoding assumptions about DB location
 
 ### Decision
 > **PENDING** - Awaiting team input
@@ -194,8 +256,8 @@ Rationale:
 
 | Decision | Recommendation | Confidence |
 |----------|---------------|------------|
-| Org ID vs Tenant ID | Keep `org_id` | High |
-| Self-hosted Datastore | Defer BYOD to v2 | Medium |
+| Data Isolation Model | Keep `org_id` (logical) for v1, tenant isolation (physical) in v2 | High |
+| Self-hosted Datastore | Bundled for v1, BYOD in v2 | Medium |
 | Auth Approach | Hybrid (basic + SSO for EE) | High |
 | Licensing Model | BSL | Medium |
 | Public API | Internal for now, document later | High |
@@ -216,3 +278,4 @@ Rationale:
 | Date | Change |
 |------|--------|
 | 2026-01-30 | Initial draft with 5 decisions |
+| 2026-01-30 | Clarified Decision 1: org_id = logical isolation, tenant = physical DB isolation |

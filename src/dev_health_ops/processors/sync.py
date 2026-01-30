@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import os
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.storage import resolve_db_type, run_with_store
 from dev_health_ops.utils import _resolve_since, _resolve_max_commits
 from dev_health_ops.processors.local import process_local_blame, process_local_repo
@@ -44,7 +45,8 @@ async def sync_local_target(ns: argparse.Namespace, target: str) -> int:
     if target not in {"git", "prs", "blame"}:
         raise SystemExit("Local provider supports only git, prs, or blame targets.")
 
-    db_type = resolve_db_type(ns.db, ns.db_type)
+    db_uri = resolve_sink_uri(ns)
+    db_type = resolve_db_type(db_uri, ns.db_type)
     since = _resolve_since(ns)
 
     async def _handler(store):
@@ -65,7 +67,7 @@ async def sync_local_target(ns: argparse.Namespace, target: str) -> int:
             sync_blame=False,
         )
 
-    await run_with_store(ns.db, db_type, _handler)
+    await run_with_store(db_uri, db_type, _handler)
     return 0
 
 
@@ -74,7 +76,8 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
     if not token:
         raise SystemExit("Missing GitHub token (pass --auth or set GITHUB_TOKEN).")
 
-    db_type = resolve_db_type(ns.db, ns.db_type)
+    db_uri = resolve_sink_uri(ns)
+    db_type = resolve_db_type(db_uri, ns.db_type)
     since = _resolve_since(ns)
     max_commits = _resolve_max_commits(ns)
     flags = _sync_flags_for_target(target)
@@ -125,7 +128,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
             since=since,
         )
 
-    await run_with_store(ns.db, db_type, _handler)
+    await run_with_store(db_uri, db_type, _handler)
     return 0
 
 
@@ -134,7 +137,8 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
     if not token:
         raise SystemExit("Missing GitLab token (pass --auth or set GITLAB_TOKEN).")
 
-    db_type = resolve_db_type(ns.db, ns.db_type)
+    db_uri = resolve_sink_uri(ns)
+    db_type = resolve_db_type(db_uri, ns.db_type)
     since = _resolve_since(ns)
     max_commits = _resolve_max_commits(ns)
     flags = _sync_flags_for_target(target)
@@ -183,7 +187,7 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
             since=since,
         )
 
-    await run_with_store(ns.db, db_type, _handler)
+    await run_with_store(db_uri, db_type, _handler)
     return 0
 
 
@@ -191,7 +195,8 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
     from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
     repo_name = _resolve_synthetic_repo_name(ns)
-    db_type = resolve_db_type(ns.db, ns.db_type)
+    db_uri = resolve_sink_uri(ns)
+    db_type = resolve_db_type(db_uri, ns.db_type)
     days = max(1, int(ns.backfill))
 
     async def _handler(store):
@@ -227,7 +232,7 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
                 await store.insert_blame_data(blame_data)
             return
 
-    await run_with_store(ns.db, db_type, _handler)
+    await run_with_store(db_uri, db_type, _handler)
     return 0
 
 
@@ -252,7 +257,6 @@ def run_sync_target(ns: argparse.Namespace) -> int:
 
 
 def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--db", required=True, help="Database connection string.")
     parser.add_argument(
         "--db-type",
         choices=["postgres", "mongo", "sqlite", "clickhouse"],

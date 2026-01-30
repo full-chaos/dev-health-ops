@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import logging
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.storage import detect_db_type
 
 
@@ -536,14 +537,13 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
     audit_schema = audit_subparsers.add_parser(
         "schema", help="Verify DB schema is current."
     )
-    audit_schema.add_argument("--db", required=True, help="Database connection string.")
     audit_schema.set_defaults(func=_cmd_audit_schema)
 
 
 def _cmd_audit_schema(ns: argparse.Namespace) -> int:
     logger = logging.getLogger(__name__)
     try:
-        report = run_schema_audit(db_url=ns.db)
+        report = run_schema_audit(db_url=resolve_sink_uri(ns))
         print(format_schema_report(report))
         return 0 if report.get("status") == "ok" else 1
     except Exception as e:

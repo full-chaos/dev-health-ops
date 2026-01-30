@@ -4,6 +4,7 @@ import argparse
 import logging
 from typing import Any, Dict, List, Optional
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.storage import detect_db_type
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,6 @@ def register_commands(audit_subparsers: argparse._SubParsersAction) -> None:
     audit_perf = audit_subparsers.add_parser(
         "perf", help="Audit database query performance."
     )
-    audit_perf.add_argument("--db", required=True, help="Database connection string.")
     audit_perf.add_argument(
         "--threshold",
         type=int,
@@ -260,7 +260,7 @@ def _cmd_audit_perf(ns: argparse.Namespace) -> int:
     logger = logging.getLogger(__name__)
     try:
         report = run_perf_audit(
-            db_url=ns.db,
+            db_url=resolve_sink_uri(ns),
             threshold_ms=ns.threshold,
             lookback_minutes=ns.lookback,
             limit=ns.limit,

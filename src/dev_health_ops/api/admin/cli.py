@@ -3,33 +3,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import os
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from dev_health_ops.db import resolve_db_uri
+
 logger = logging.getLogger(__name__)
 
 
-def _get_postgres_url(ns: argparse.Namespace) -> str:
-    dsn = getattr(ns, "pg_db", None) or os.getenv("POSTGRES_URI")
-    if not dsn:
-        fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-        if fallback and "postgres" in fallback.lower():
-            dsn = fallback
-    if not dsn:
-        raise RuntimeError(
-            "PostgreSQL URI not configured.\n"
-            "Set POSTGRES_URI environment variable or pass --pg-db flag.\n"
-            "Example: postgresql+asyncpg://user:pass@localhost:5432/devhealth"
-        )
-    if dsn.startswith("postgresql://"):
-        dsn = dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return dsn
-
-
 async def _get_session(ns: argparse.Namespace) -> AsyncSession:
-    engine = create_async_engine(_get_postgres_url(ns), pool_pre_ping=True)
+    engine = create_async_engine(resolve_db_uri(ns), pool_pre_ping=True)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     return async_session()
 
@@ -165,9 +149,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
     create_user_parser = admin_sub.add_parser("create-user", help="Create a new user.")
     create_user_parser.add_argument(
-        "--pg-db", dest="pg_db", help="PostgreSQL URI (or set POSTGRES_URI)."
-    )
-    create_user_parser.add_argument(
         "--email", required=True, help="User email address."
     )
     create_user_parser.add_argument(
@@ -185,9 +166,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     create_org_parser = admin_sub.add_parser(
         "create-org", help="Create a new organization."
     )
-    create_org_parser.add_argument(
-        "--pg-db", dest="pg_db", help="PostgreSQL URI (or set POSTGRES_URI)."
-    )
     create_org_parser.add_argument("--name", required=True, help="Organization name.")
     create_org_parser.add_argument(
         "--slug", help="URL-safe slug (auto-generated if omitted)."
@@ -203,9 +181,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
     list_users_parser = admin_sub.add_parser("list-users", help="List all users.")
     list_users_parser.add_argument(
-        "--pg-db", dest="pg_db", help="PostgreSQL URI (or set POSTGRES_URI)."
-    )
-    list_users_parser.add_argument(
         "--limit", type=int, default=100, help="Max users to list."
     )
     list_users_parser.add_argument(
@@ -214,9 +189,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     list_users_parser.set_defaults(func=list_users)
 
     list_orgs_parser = admin_sub.add_parser("list-orgs", help="List all organizations.")
-    list_orgs_parser.add_argument(
-        "--pg-db", dest="pg_db", help="PostgreSQL URI (or set POSTGRES_URI)."
-    )
     list_orgs_parser.add_argument(
         "--limit", type=int, default=100, help="Max orgs to list."
     )

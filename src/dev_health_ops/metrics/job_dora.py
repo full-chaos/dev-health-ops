@@ -7,6 +7,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Optional
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.connectors import GitLabConnector
 from dev_health_ops.connectors.exceptions import ConnectorException
 from dev_health_ops.metrics.job_daily import (
@@ -200,7 +201,6 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "dora",
         help="Fetch and persist DORA metrics from GitLab (supplemental).",
     )
-    dora.add_argument("--db", help="Database connection string.")
     dora.add_argument(
         "--day",
         type=date.fromisoformat,
@@ -241,7 +241,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 def _cmd_metrics_dora(ns: argparse.Namespace) -> int:
     try:
         run_dora_metrics_job(
-            db_url=ns.db,
+            db_url=resolve_sink_uri(ns),
             day=ns.day,
             backfill_days=ns.backfill,
             repo_id=ns.repo_id,

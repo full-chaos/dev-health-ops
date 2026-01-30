@@ -144,7 +144,7 @@ def require_postgres_uri() -> str:
     if not uri:
         raise RuntimeError(
             "PostgreSQL URI not configured.\n"
-            "Set POSTGRES_URI environment variable or pass --pg-db flag.\n"
+            "Set POSTGRES_URI environment variable or pass --db flag.\n"
             "Example: postgresql+asyncpg://user:pass@localhost:5432/devhealth"
         )
     return uri
@@ -156,7 +156,21 @@ def require_clickhouse_uri() -> str:
     if not uri:
         raise RuntimeError(
             "ClickHouse URI not configured.\n"
-            "Set CLICKHOUSE_URI environment variable or pass --db flag.\n"
+            "Set CLICKHOUSE_URI environment variable or pass --analytics-db flag.\n"
             "Example: clickhouse://ch:ch@localhost:8123/default"
         )
     return uri
+
+
+def resolve_db_uri(ns) -> str:
+    uri = getattr(ns, "db", None)
+    if uri:
+        return _ensure_async_postgres(uri)
+    return require_postgres_uri()
+
+
+def resolve_sink_uri(ns) -> str:
+    uri = getattr(ns, "analytics_db", None)
+    if uri:
+        return uri
+    return require_clickhouse_uri()

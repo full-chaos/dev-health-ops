@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
@@ -425,7 +426,6 @@ async def run_daily_metrics_job(
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     daily = subparsers.add_parser("daily", help="Compute daily metrics.")
-    daily.add_argument("--db", help="Database connection string.")
     daily.add_argument(
         "--day", type=date.fromisoformat, default=date.today().isoformat()
     )
@@ -446,7 +446,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
     try:
         await run_daily_metrics_job(
-            db_url=ns.db,
+            db_url=resolve_sink_uri(ns),
             day=ns.day,
             backfill_days=ns.backfill,
             repo_id=ns.repo_id,

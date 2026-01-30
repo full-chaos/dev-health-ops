@@ -6,6 +6,7 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.analytics.investment import InvestmentClassifier
 from dev_health_ops.analytics.issue_types import IssueTypeNormalizer
 from dev_health_ops.metrics.compute_work_item_state_durations import (
@@ -528,7 +529,6 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
         "work-items",
         help="Sync work tracking facts and compute derived work item tables.",
     )
-    wi.add_argument("--db", help="Database connection string.")
     wi.add_argument(
         "--day",
         type=date.fromisoformat,
@@ -561,7 +561,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
 def _cmd_sync_work_items(ns: argparse.Namespace) -> int:
     try:
         run_work_items_sync_job(
-            db_url=ns.db,
+            db_url=resolve_sink_uri(ns),
             day=ns.day,
             backfill_days=ns.backfill,
             provider=ns.provider,

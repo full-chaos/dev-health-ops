@@ -18,17 +18,27 @@ The CLI is implemented in `cli.py` and orchestrates:
 
 | Argument | Environment Variable | Description |
 |----------|---------------------|-------------|
-| `--db` | `DATABASE_URI` | Database connection string |
+| `--db` | `CLICKHOUSE_URI` | ClickHouse connection (analytics) |
+| `--pg-db` | `POSTGRES_URI` | PostgreSQL connection (semantic) |
 | `--sink` | — | Output target: `primary`, `secondary`, `both` |
+
+### Dual-Database Architecture
+
+Dev Health Ops uses two databases:
+
+| Layer | Database | Env Var | Purpose |
+|-------|----------|---------|---------|
+| **Semantic** | PostgreSQL | `POSTGRES_URI` | Users, orgs, settings, credentials |
+| **Analytics** | ClickHouse | `CLICKHOUSE_URI` | Commits, PRs, work items, metrics |
+
+See [Database Architecture](../architecture/database-architecture.md) for details.
 
 ### Database Connection Strings
 
 | Backend | Format | Example |
 |---------|--------|---------|
-| PostgreSQL | `postgresql+asyncpg://` | `postgresql+asyncpg://localhost:5432/db` |
+| PostgreSQL | `postgresql+asyncpg://` | `postgresql+asyncpg://localhost:5555/postgres` |
 | ClickHouse | `clickhouse://` | `clickhouse://localhost:8123/default` |
-| MongoDB | `mongodb://` | `mongodb://localhost:27017/db` |
-| SQLite | `sqlite+aiosqlite://` | `sqlite+aiosqlite:///./data.db` |
 
 ---
 
@@ -228,6 +238,71 @@ python cli.py fixtures generate \
 
 ---
 
+## Admin Commands
+
+User and organization management commands. These use PostgreSQL (`POSTGRES_URI`).
+
+### `admin create-user`
+
+Create a new user.
+
+```bash
+python cli.py admin create-user \
+  --email admin@example.com \
+  --password secretpass123 \
+  --full-name "Admin User" \
+  --superuser
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--pg-db` | PostgreSQL URI (or set `POSTGRES_URI`) |
+| `--email` | User email (required) |
+| `--password` | Password, min 8 chars (required) |
+| `--username` | Optional username |
+| `--full-name` | User's full name |
+| `--superuser` | Grant superuser privileges |
+
+### `admin create-org`
+
+Create a new organization.
+
+```bash
+python cli.py admin create-org \
+  --name "My Organization" \
+  --owner-email admin@example.com \
+  --tier free
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--pg-db` | PostgreSQL URI (or set `POSTGRES_URI`) |
+| `--name` | Organization name (required) |
+| `--slug` | URL-safe slug (auto-generated if omitted) |
+| `--description` | Organization description |
+| `--tier` | Subscription tier (default: `free`) |
+| `--owner-email` | Email of initial owner |
+
+### `admin list-users`
+
+List all users.
+
+```bash
+python cli.py admin list-users --limit 50
+```
+
+### `admin list-orgs`
+
+List all organizations.
+
+```bash
+python cli.py admin list-orgs --include-inactive
+```
+
+---
+
 ## Batch Processing Options
 
 For GitHub/GitLab batch operations:
@@ -250,8 +325,9 @@ For GitHub/GitLab batch operations:
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URI` | Primary database connection |
-| `SECONDARY_DATABASE_URI` | Secondary sink (with `--sink both`) |
+| `POSTGRES_URI` | PostgreSQL connection (semantic layer: users, settings) |
+| `CLICKHOUSE_URI` | ClickHouse connection (analytics layer: metrics, data) |
+| `DATABASE_URI` | Legacy fallback (deprecated) |
 | `DB_ECHO` | Enable SQL logging |
 
 ### Provider Auth

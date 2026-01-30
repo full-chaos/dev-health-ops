@@ -83,6 +83,7 @@ from .services.work_unit_explain import explain_work_unit
 from .graphql.app import create_graphql_app
 from .webhooks import router as webhooks_router
 from .admin import router as admin_router
+from .auth import router as auth_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
@@ -277,6 +278,7 @@ graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
 app.include_router(webhooks_router)
 app.include_router(admin_router)
+app.include_router(auth_router)
 
 
 @app.get("/health", response_model=HealthResponse)

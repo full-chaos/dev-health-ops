@@ -95,13 +95,13 @@ def run_work_items_sync_job(
     provider_set: Set[str]
     if provider in {"none", "off", "skip"}:
         raise ValueError(
-            "work item sync requires --provider (jira|github|gitlab|synthetic|all)"
+            "work item sync requires --provider (jira|github|gitlab|linear|synthetic|all)"
         )
     if provider in {"all", "*"}:
-        provider_set = {"jira", "github", "gitlab", "synthetic"}
+        provider_set = {"jira", "github", "gitlab", "linear", "synthetic"}
     else:
         provider_set = {provider}
-    unknown = provider_set - {"jira", "github", "gitlab", "synthetic"}
+    unknown = provider_set - {"jira", "github", "gitlab", "linear", "synthetic"}
     if unknown:
         raise ValueError(f"Unknown provider(s): {sorted(unknown)}")
 
@@ -257,6 +257,31 @@ def run_work_items_sync_job(
             )
             work_items.extend(items)
             transitions.extend(tr)
+
+        if "linear" in provider_set:
+            from dev_health_ops.providers.base import IngestionContext, IngestionWindow
+            from dev_health_ops.providers.linear.provider import LinearProvider
+
+            linear_provider = LinearProvider(
+                status_mapping=status_mapping,
+                identity=identity,
+            )
+            ctx = IngestionContext(
+                window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
+                repo=None,
+            )
+            batch = linear_provider.ingest(ctx)
+            work_items.extend(batch.work_items)
+            transitions.extend(batch.status_transitions)
+            reopen_events.extend(batch.reopen_events)
+            interactions.extend(batch.interactions)
+            sprints.extend(batch.sprints)
+            logger.info(
+                "Linear: fetched %d work items, %d transitions, %d sprints",
+                len(batch.work_items),
+                len(batch.status_transitions),
+                len(batch.sprints),
+            )
 
         logger.info(
             "Work item sync: fetched %d items and %d transitions (providers=%s)",
@@ -518,7 +543,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     )
     wi.add_argument(
         "--provider",
-        choices=["all", "jira", "github", "gitlab", "synthetic", "none"],
+        choices=["all", "jira", "github", "gitlab", "linear", "synthetic", "none"],
         default="all",
         help="Provider to sync from (default: all).",
     )

@@ -5,7 +5,6 @@ Unit tests for Linear provider and normalize functions.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 

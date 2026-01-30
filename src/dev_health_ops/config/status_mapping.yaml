@@ -116,4 +116,26 @@ providers:
       chore:
         - chore
         - maintenance
+  linear:
+    # Linear uses state.type for status (backlog, unstarted, started, completed, canceled).
+    # These label-based overrides take precedence when present.
+    status_labels:
+      blocked:
+        - blocked
+        - on hold
+    # Label-based type mapping for Linear issues.
+    type_labels:
+      bug:
+        - bug
+        - type:bug
+      incident:
+        - incident
+      story:
+        - story
+        - feature
+      epic:
+        - epic
+      chore:
+        - chore
+        - maintenance
 

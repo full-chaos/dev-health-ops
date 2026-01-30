@@ -101,5 +101,12 @@ def _register_builtins() -> None:
 
     register_provider("github", _github_factory)
 
+    def _linear_factory() -> Provider:
+        from dev_health_ops.providers.linear.provider import LinearProvider
+
+        return LinearProvider()
+
+    register_provider("linear", _linear_factory)
+
 
 _register_builtins()

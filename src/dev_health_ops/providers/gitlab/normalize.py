@@ -643,3 +643,153 @@ def enrich_work_item_with_priority(
         priority_raw=priority_raw,
         service_class=service_class,
     )
+
+
+def gitlab_epic_to_work_item(
+    *,
+    epic: Any,
+    group_full_path: str,
+    status_mapping: StatusMapping,
+    identity: IdentityResolver,
+    state_events: Optional[Sequence[Any]] = None,
+) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    """Convert a GitLab Epic to a normalized WorkItem. Epics are group-level."""
+    iid = int(_get(epic, "iid") or 0)
+    work_item_id = f"gitlab:{group_full_path}:epic:{iid}"
+
+    title = _get(epic, "title") or ""
+    description = _get(epic, "description")
+    state = _get(epic, "state") or None
+    created_at = _to_utc(_parse_iso(_get(epic, "created_at"))) or datetime.now(
+        timezone.utc
+    )
+    updated_at = _to_utc(_parse_iso(_get(epic, "updated_at"))) or created_at
+    closed_at = _to_utc(_parse_iso(_get(epic, "closed_at")))
+    start_date = _to_utc(_parse_iso(_get(epic, "start_date")))
+    due_date = _to_utc(_parse_iso(_get(epic, "due_date")))
+
+    labels = list(_get(epic, "labels") or [])
+    labels = [str(lbl) for lbl in labels if lbl]
+
+    normalized_status = status_mapping.normalize_status(
+        provider="gitlab",
+        status_raw=None,
+        labels=labels,
+        state=str(state) if state else None,
+    )
+
+    author_obj = _get(epic, "author")
+    reporter = None
+    if author_obj is not None:
+        reporter = identity.resolve(
+            provider="gitlab",
+            email=_get(author_obj, "email"),
+            username=_get(author_obj, "username"),
+            display_name=_get(author_obj, "name"),
+        )
+
+    url = _get(epic, "web_url") or _get(epic, "url")
+
+    transitions: List[WorkItemStatusTransition] = []
+    started_at = start_date
+    completed_at = closed_at
+
+    if state_events:
+        prev_status = "unknown"
+        for ev in sorted(
+            state_events,
+            key=lambda e: (
+                _to_utc(_parse_iso(_get(e, "created_at")))
+                or datetime.min.replace(tzinfo=timezone.utc)
+            ),
+        ):
+            ev_state = str(_get(ev, "state") or "").lower()
+            occurred_at = _to_utc(_parse_iso(_get(ev, "created_at"))) or created_at
+
+            if ev_state == "closed":
+                to_status = "done"
+            elif ev_state == "opened":
+                to_status = "todo"
+            elif ev_state == "reopened":
+                to_status = "todo"
+            else:
+                continue
+
+            user_obj = _get(ev, "user")
+            actor = None
+            if user_obj:
+                actor = identity.resolve(
+                    provider="gitlab",
+                    email=_get(user_obj, "email"),
+                    username=_get(user_obj, "username"),
+                    display_name=_get(user_obj, "name"),
+                )
+
+            transitions.append(
+                WorkItemStatusTransition(
+                    work_item_id=work_item_id,
+                    provider="gitlab",
+                    occurred_at=occurred_at,
+                    from_status_raw=None,
+                    to_status_raw=ev_state,
+                    from_status=prev_status,
+                    to_status=to_status,
+                    actor=actor,
+                )
+            )
+            prev_status = to_status
+
+    priority_raw, service_class = _priority_from_labels(labels)
+
+    parent_epic_id = _get(epic, "parent_id") or _get(epic, "parent_iid")
+    parent_id = None
+    if parent_epic_id:
+        parent_id = f"gitlab:{group_full_path}:epic:{parent_epic_id}"
+
+    work_item = WorkItem(
+        work_item_id=work_item_id,
+        provider="gitlab",
+        repo_id=None,
+        project_key=None,
+        project_id=str(group_full_path),
+        title=str(title),
+        description=str(description) if description else None,
+        type="epic",
+        status=normalized_status,
+        status_raw=str(state) if state else None,
+        assignees=[],
+        reporter=reporter if reporter and reporter != "unknown" else None,
+        created_at=created_at,
+        updated_at=updated_at,
+        started_at=started_at,
+        completed_at=completed_at,
+        closed_at=closed_at,
+        due_at=due_date,
+        labels=labels,
+        story_points=None,
+        sprint_id=None,
+        sprint_name=None,
+        url=url,
+        priority_raw=priority_raw,
+        service_class=service_class,
+        epic_id=parent_id,
+    )
+    return work_item, transitions
+
+
+def build_epic_id_for_issue(
+    *,
+    issue: Any,
+    group_full_path: str,
+) -> Optional[str]:
+    """Build epic_id for an issue that belongs to an epic."""
+    epic = _get(issue, "epic")
+    if epic is None:
+        return None
+
+    epic_iid = _get(epic, "iid")
+    if epic_iid is None:
+        return None
+
+    epic_group = _get(epic, "group_id") or group_full_path
+    return f"gitlab:{epic_group}:epic:{epic_iid}"

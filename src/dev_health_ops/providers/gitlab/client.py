@@ -239,3 +239,125 @@ class GitLabWorkClient:
             logger.debug("Failed to fetch group milestones: %s", exc)
             self.gate.penalize(None)
             return
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Epic methods (group-level)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_group(self, group_id_or_path: str) -> Any:
+        """Get a GitLab group by ID or path."""
+        self.gate.wait_sync()
+        try:
+            group = self.gl.groups.get(group_id_or_path)
+            self.gate.reset()
+            return group
+        except Exception:
+            self.gate.penalize(None)
+            raise
+
+    def iter_group_epics(
+        self,
+        *,
+        group_id_or_path: str,
+        state: str = "all",
+        updated_after: Optional[datetime] = None,
+        limit: Optional[int] = None,
+    ) -> Iterable[Any]:
+        """
+        Iterate epics for a group.
+
+        GitLab Epics are group-level resources (not project-level).
+        Requires GitLab Premium or Ultimate.
+
+        Args:
+            group_id_or_path: Group ID or URL-encoded path
+            state: Filter by state ("opened", "closed", "all")
+            updated_after: Only return epics updated after this datetime
+            limit: Maximum number of epics to return
+
+        Yields:
+            GitLab Epic objects
+        """
+        try:
+            group = self.get_group(group_id_or_path)
+            params: Dict[str, Any] = {"state": state}
+            if updated_after is not None:
+                params["updated_after"] = updated_after.isoformat()
+
+            self.gate.wait_sync()
+            epics = group.epics.list(iterator=True, **params)
+            self.gate.reset()
+
+            count = 0
+            for epic in epics:
+                yield epic
+                count += 1
+                if limit is not None and count >= int(limit):
+                    return
+        except Exception as exc:
+            # Epics require GitLab Premium/Ultimate - gracefully handle
+            if "403" in str(exc) or "404" in str(exc):
+                logger.debug(
+                    "Epics not available for group %s (requires Premium/Ultimate): %s",
+                    group_id_or_path,
+                    exc,
+                )
+            else:
+                logger.warning("Failed to fetch group epics: %s", exc)
+            self.gate.penalize(None)
+            return
+
+    def get_epic_notes(
+        self,
+        epic: Any,
+        *,
+        limit: int = 500,
+    ) -> List[Any]:
+        """Get notes/comments for an epic."""
+        try:
+            self.gate.wait_sync()
+            notes = list(epic.notes.list(per_page=100, iterator=True))[:limit]
+            self.gate.reset()
+            return notes
+        except Exception as exc:
+            logger.debug("Failed to fetch epic notes: %s", exc)
+            self.gate.penalize(None)
+            return []
+
+    def get_epic_issues(
+        self,
+        epic: Any,
+    ) -> List[Any]:
+        """
+        Get issues linked to an epic.
+
+        Returns list of issue objects that are children of this epic.
+        """
+        try:
+            self.gate.wait_sync()
+            issues = list(epic.issues.list(per_page=100, iterator=True))
+            self.gate.reset()
+            return issues
+        except Exception as exc:
+            logger.debug("Failed to fetch epic issues: %s", exc)
+            self.gate.penalize(None)
+            return []
+
+    def get_epic_resource_state_events(
+        self,
+        epic: Any,
+        *,
+        limit: int = 100,
+    ) -> List[Any]:
+        """Get resource state events for an epic (open/close/reopen)."""
+        try:
+            self.gate.wait_sync()
+            events = list(epic.resource_state_events.list(per_page=100, iterator=True))[
+                :limit
+            ]
+            self.gate.reset()
+            return events
+        except Exception as exc:
+            logger.debug("Failed to fetch epic state events: %s", exc)
+            self.gate.penalize(None)
+            return []

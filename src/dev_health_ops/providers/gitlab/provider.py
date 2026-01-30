@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -117,12 +118,15 @@ class GitLabProvider(Provider):
         - GITLAB_NOTES_LIMIT: max notes per item (default: 500)
         - GITLAB_FETCH_LINKS: whether to fetch issue links (default: true)
         - GITLAB_FETCH_MILESTONES: whether to fetch milestones (default: true)
+        - GITLAB_FETCH_EPICS: whether to fetch epics (requires Premium/Ultimate, default: true)
         """
         from dev_health_ops.providers.gitlab.client import GitLabWorkClient
         from dev_health_ops.providers.gitlab.normalize import (
+            build_epic_id_for_issue,
             detect_gitlab_reopen_events,
             enrich_work_item_with_priority,
             extract_gitlab_dependencies,
+            gitlab_epic_to_work_item,
             gitlab_issue_to_work_item,
             gitlab_milestone_to_sprint,
             gitlab_mr_to_work_item,
@@ -146,6 +150,7 @@ class GitLabProvider(Provider):
         fetch_notes = _env_flag("GITLAB_FETCH_NOTES", True)
         fetch_links = _env_flag("GITLAB_FETCH_LINKS", True)
         fetch_milestones = _env_flag("GITLAB_FETCH_MILESTONES", True)
+        fetch_epics = _env_flag("GITLAB_FETCH_EPICS", True)
 
         raw_notes_limit = os.getenv("GITLAB_NOTES_LIMIT")
         notes_limit = 500
@@ -159,6 +164,7 @@ class GitLabProvider(Provider):
                 )
 
         sprint_cache: Dict[str, Sprint] = {}
+        epic_count = 0
 
         # Determine time window
         updated_after: Optional[datetime] = None
@@ -189,6 +195,84 @@ class GitLabProvider(Provider):
                     "GitLab: failed to fetch milestones for %s: %s", project_path, exc
                 )
 
+        # Fetch epics (group-level, requires Premium/Ultimate)
+        if fetch_epics:
+            # Extract group path from project path (e.g., "group/subgroup/project" -> "group/subgroup")
+            path_parts = project_path.split("/")
+            if len(path_parts) >= 2:
+                group_full_path = "/".join(path_parts[:-1])
+                try:
+                    group = client.get_group(group_full_path)
+                    if group:
+                        for epic in client.iter_group_epics(
+                            group_id_or_path=group_full_path,
+                            state="all",
+                            updated_after=updated_after,
+                        ):
+                            # Get state events for transitions and reopen detection
+                            state_events = client.get_epic_resource_state_events(epic)
+
+                            wi, wi_transitions = gitlab_epic_to_work_item(
+                                epic=epic,
+                                group_full_path=group_full_path,
+                                status_mapping=self.status_mapping,
+                                identity=self.identity,
+                                state_events=state_events,
+                            )
+
+                            # Enrich with priority from labels
+                            wi = enrich_work_item_with_priority(wi, wi.labels)
+
+                            work_items.append(wi)
+                            transitions.extend(wi_transitions)
+
+                            # Reopen detection for epics
+                            reopen_events.extend(
+                                detect_gitlab_reopen_events(
+                                    work_item_id=wi.work_item_id,
+                                    state_events=state_events,
+                                    identity=self.identity,
+                                )
+                            )
+
+                            # Get notes for interactions
+                            if fetch_notes:
+                                try:
+                                    notes = client.get_epic_notes(
+                                        epic, limit=notes_limit
+                                    )
+                                    for note in notes:
+                                        event = gitlab_note_to_interaction_event(
+                                            note=note,
+                                            work_item_id=wi.work_item_id,
+                                            identity=self.identity,
+                                        )
+                                        if event:
+                                            interactions.append(event)
+                                except Exception as exc:
+                                    logger.debug(
+                                        "GitLab: failed to fetch notes for epic %s: %s",
+                                        wi.work_item_id,
+                                        exc,
+                                    )
+
+                            epic_count += 1
+
+                except Exception as exc:
+                    # Epics require Premium/Ultimate - 403/404 is expected on free tier
+                    if "403" in str(exc) or "404" in str(exc):
+                        logger.debug(
+                            "GitLab: epics not available for group %s (requires Premium/Ultimate): %s",
+                            group_full_path,
+                            exc,
+                        )
+                    else:
+                        logger.warning(
+                            "GitLab: failed to fetch epics from group %s: %s",
+                            group_full_path,
+                            exc,
+                        )
+
         # Fetch issues
         try:
             for issue in client.iter_project_issues(
@@ -214,6 +298,18 @@ class GitLabProvider(Provider):
 
                 # Enrich with priority from labels
                 wi = enrich_work_item_with_priority(wi, wi.labels)
+
+                # Link to parent epic if present
+                if fetch_epics:
+                    path_parts = project_path.split("/")
+                    if len(path_parts) >= 2:
+                        group_path = "/".join(path_parts[:-1])
+                        epic_id = build_epic_id_for_issue(
+                            issue=issue,
+                            group_full_path=group_path,
+                        )
+                        if epic_id:
+                            wi = replace(wi, epic_id=epic_id)
 
                 work_items.append(wi)
                 transitions.extend(wi_transitions)

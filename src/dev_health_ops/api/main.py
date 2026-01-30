@@ -16,6 +16,7 @@ import json
 
 from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
 
+from .utils.logging import sanitize_for_log
 
 from .models.filters import (
     DrilldownRequest,
@@ -87,23 +88,6 @@ from .auth import router as auth_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
-
-
-def _sanitize_for_log(value: Any) -> str:
-    """
-    Remove characters that could be used to forge or split log entries.
-
-    This is intentionally minimal to avoid changing functional behavior:
-    it strips carriage returns, newlines, and other non-printable
-    control characters.
-    """
-    if value is None:
-        return ""
-    text = str(value)
-    # Remove CR/LF explicitly, then strip remaining control chars
-    text = text.replace("\r", "").replace("\n", "")
-    return "".join(ch for ch in text if ch >= " " and ch != "\x7f")
-
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +171,7 @@ async def _check_database_service(dsn: str) -> tuple[str, str]:
     except Exception as exc:
         logger.warning(
             "Unable to detect database backend for health check: %s",
-            _sanitize_for_log(exc),
+            sanitize_for_log(exc),
         )
         return "database", "down"
 
@@ -289,7 +273,7 @@ async def health() -> HealthResponse | JSONResponse:
     except Exception as exc:
         logger.warning(
             "Database configuration missing for health check: %s",
-            _sanitize_for_log(exc),
+            sanitize_for_log(exc),
         )
         services["database"] = "down"
     else:
@@ -634,7 +618,7 @@ async def work_unit_explain_endpoint(
         target_investment = investments[0]
         logger.info(
             "Generating streaming explanation for work_unit_id=%s",
-            _sanitize_for_log(work_unit_id),
+            sanitize_for_log(work_unit_id),
         )
 
         # Return streaming response with keep-alive pings
@@ -1186,7 +1170,7 @@ async def sankey_get(
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
         return result
     except Exception as exc:
-        logger.exception("Sankey GET failed for mode=%s", _sanitize_for_log(mode))
+        logger.exception("Sankey GET failed for mode=%s", sanitize_for_log(mode))
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
@@ -1203,7 +1187,7 @@ async def sankey_post(payload: SankeyRequest) -> SankeyResponse:
         )
     except Exception as exc:
         logger.exception(
-            "Sankey POST failed for mode=%s", _sanitize_for_log(payload.mode)
+            "Sankey POST failed for mode=%s", sanitize_for_log(payload.mode)
         )
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 

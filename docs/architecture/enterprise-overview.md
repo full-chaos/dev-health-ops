@@ -243,14 +243,24 @@ async def resolve_investment(context, filters):
 
 ## Implementation Roadmap
 
-| Phase | Scope | Issues |
-|-------|-------|--------|
-| P1 | User + Org models | [#300](https://github.com/full-chaos/dev-health-ops/issues/300) |
-| P2 | Authentication | [#301](https://github.com/full-chaos/dev-health-ops/issues/301) |
-| P3 | RBAC | [#302](https://github.com/full-chaos/dev-health-ops/issues/302) |
-| P4 | Admin UI | [#110](https://github.com/full-chaos/dev-health-web/issues/110) |
-| P5 | Licensing | [#303](https://github.com/full-chaos/dev-health-ops/issues/303) |
-| P6 | Enterprise Features | [#304](https://github.com/full-chaos/dev-health-ops/issues/304) |
+| Phase | Scope | Issues | Notes |
+|-------|-------|--------|-------|
+| **P0** | **Settings Infrastructure** | [#306](https://github.com/full-chaos/dev-health-ops/issues/306) | **Start here** - enables integration setup |
+| P1 | User + Org models | [#300](https://github.com/full-chaos/dev-health-ops/issues/300) | Foundation for auth |
+| P2 | Authentication | [#301](https://github.com/full-chaos/dev-health-ops/issues/301) | Login/JWT |
+| P3 | RBAC | [#302](https://github.com/full-chaos/dev-health-ops/issues/302) | Permissions |
+| P4 | Admin UI | [#110](https://github.com/full-chaos/dev-health-web/issues/110) | Settings + user mgmt pages |
+| P5 | Licensing | [#303](https://github.com/full-chaos/dev-health-ops/issues/303) | Feature gating |
+| P6 | Enterprise Features | [#304](https://github.com/full-chaos/dev-health-ops/issues/304) | SSO, audit, retention |
+
+### Why P0 First?
+
+Settings infrastructure comes before authentication because:
+1. **Integration setup** (GitHub/GitLab/Jira tokens) is needed for any useful deployment
+2. **Worker configuration** is required for background jobs
+3. Current **135+ env vars** make self-hosting painful
+4. Settings service provides foundation for **per-org configuration**
+5. Can be developed **independently** without auth dependency
 
 ## Related Documents
 

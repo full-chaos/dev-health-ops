@@ -325,7 +325,11 @@ class LinearClient:
                 limit=limit, remaining=remaining, reset_ms=reset_ms
             )
         except (ValueError, TypeError):
-            pass
+            logger.warning(
+                "Failed to parse Linear rate limit headers; continuing without rate limit info. "
+                "Headers: %s",
+                dict(headers),
+            )
 
     def _get_retry_after(self, response: httpx.Response) -> int:
         try:

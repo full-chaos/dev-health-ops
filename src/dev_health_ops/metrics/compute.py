@@ -16,6 +16,7 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.providers.teams import TeamResolver
 from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.utils.datetime import to_utc
 
 
 def commit_size_bucket(total_loc: int) -> str:
@@ -68,12 +69,6 @@ def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _median(values: Sequence[float]) -> float:
@@ -206,7 +201,7 @@ def compute_daily_metrics(
     - When no PRs are merged, avg/median PR cycle times are 0.0.
     """
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     # 1) Build per-commit aggregates from commit_stat_rows.
     commit_aggs: Dict[Tuple[uuid.UUID, str], _CommitAgg] = {}
@@ -222,7 +217,7 @@ def compute_daily_metrics(
                     row.get("author_name"),
                     identity_resolver,
                 ),
-                committer_when=_to_utc(row["committer_when"]),
+                committer_when=to_utc(row["committer_when"]),
             )
             commit_aggs[key] = agg
 
@@ -286,14 +281,14 @@ def compute_daily_metrics(
             )
             user_aggs[user_key] = ua
 
-        created_at = _to_utc(pr["created_at"])
+        created_at = to_utc(pr["created_at"])
         merged_at = pr.get("merged_at")
         if start <= created_at < end:
             ua.prs_authored += 1
             ua.activity_timestamps.append(created_at)
 
         if merged_at is not None:
-            merged_at_utc = _to_utc(merged_at)
+            merged_at_utc = to_utc(merged_at)
             if start <= merged_at_utc < end:
                 ua.prs_merged += 1
                 cycle_hours = (merged_at_utc - created_at).total_seconds() / 3600.0
@@ -337,7 +332,7 @@ def compute_daily_metrics(
                 # Optional collaboration facts (first review/comment timestamps).
                 first_review_at = pr.get("first_review_at")
                 if isinstance(first_review_at, datetime):
-                    first_review_at_utc = _to_utc(first_review_at)
+                    first_review_at_utc = to_utc(first_review_at)
                     ua.prs_with_first_review += 1
                     repo_prs_with_first_review[pr["repo_id"]] = (
                         int(repo_prs_with_first_review.get(pr["repo_id"], 0)) + 1
@@ -362,9 +357,9 @@ def compute_daily_metrics(
                 first_comment_at = pr.get("first_comment_at")
                 interaction_dt = None
                 if isinstance(first_comment_at, datetime):
-                    interaction_dt = _to_utc(first_comment_at)
+                    interaction_dt = to_utc(first_comment_at)
                 if isinstance(first_review_at, datetime):
-                    fr_dt = _to_utc(first_review_at)
+                    fr_dt = to_utc(first_review_at)
                     interaction_dt = (
                         fr_dt if interaction_dt is None else min(interaction_dt, fr_dt)
                     )
@@ -380,7 +375,7 @@ def compute_daily_metrics(
     # 3b) Review participation (reviews submitted in day window).
     if pull_request_review_rows:
         for review in pull_request_review_rows:
-            submitted_at = _to_utc(review["submitted_at"])
+            submitted_at = to_utc(review["submitted_at"])
             if not (start <= submitted_at < end):
                 continue
 

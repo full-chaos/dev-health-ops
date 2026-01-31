@@ -10,6 +10,7 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
 from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.utils.datetime import to_utc
 import logging
 
 
@@ -17,12 +18,6 @@ def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _percentile(values: Sequence[float], percentile: float) -> float:
@@ -66,8 +61,8 @@ def _calculate_flow_breakdown(
     if not item.started_at or not item.completed_at:
         return 0.0, 0.0
 
-    start_utc = _to_utc(item.started_at)
-    end_utc = _to_utc(item.completed_at)
+    start_utc = to_utc(item.started_at)
+    end_utc = to_utc(item.completed_at)
 
     if start_utc >= end_utc:
         return 0.0, 0.0
@@ -87,7 +82,7 @@ def _calculate_flow_breakdown(
     # Assuming 'in_progress' is the start state if started_at is present.
     # But let's look at transitions before started_at.
     for t in sorted_trans:
-        t_utc = _to_utc(t.occurred_at)
+        t_utc = to_utc(t.occurred_at)
         if t_utc <= start_utc:
             current_status = t.to_status
         else:
@@ -105,7 +100,7 @@ def _calculate_flow_breakdown(
 
     # Iterate transitions that happen *within* the window
     for t in sorted_trans:
-        t_utc = _to_utc(t.occurred_at)
+        t_utc = to_utc(t.occurred_at)
         if t_utc <= start_utc:
             continue
         if t_utc >= end_utc:
@@ -184,7 +179,7 @@ def compute_work_item_metrics_daily(
     - WIP metrics ignore items missing started_at
     """
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     # Aggregations keyed by (provider, work_scope_id, team_id).
     by_group: Dict[Tuple[str, str, Optional[str]], GroupBucket] = {}
@@ -199,9 +194,9 @@ def compute_work_item_metrics_daily(
 
     for item in work_items:
         work_scope_id = item.work_scope_id or ""
-        created_at = _to_utc(item.created_at)
-        started_at = _to_utc(item.started_at) if item.started_at else None
-        completed_at = _to_utc(item.completed_at) if item.completed_at else None
+        created_at = to_utc(item.created_at)
+        started_at = to_utc(item.started_at) if item.started_at else None
+        completed_at = to_utc(item.completed_at) if item.completed_at else None
 
         # Ignore items that don't exist yet on this day.
         if created_at >= end:

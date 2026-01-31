@@ -5,18 +5,13 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Sequence, Tuple
 
 from dev_health_ops.metrics.schemas import CICDMetricsDailyRecord, PipelineRunRow
+from dev_health_ops.utils.datetime import to_utc
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _percentile(values: Sequence[float], percentile: float) -> float:
@@ -46,11 +41,11 @@ def compute_cicd_metrics_daily(
     Compute per-repo CI/CD metrics for pipeline runs started on the given day.
     """
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     by_repo: Dict[str, Dict[str, object]] = {}
     for row in pipeline_runs:
-        started_at = _to_utc(row["started_at"])
+        started_at = to_utc(row["started_at"])
         if not (start <= started_at < end):
             continue
         repo_id = str(row["repo_id"])
@@ -71,13 +66,13 @@ def compute_cicd_metrics_daily(
 
         finished_at = row.get("finished_at")
         if isinstance(finished_at, datetime):
-            duration_min = (_to_utc(finished_at) - started_at).total_seconds() / 60.0
+            duration_min = (to_utc(finished_at) - started_at).total_seconds() / 60.0
             if duration_min >= 0:
                 bucket["durations"].append(float(duration_min))
 
         queued_at = row.get("queued_at")
         if isinstance(queued_at, datetime):
-            queue_min = (started_at - _to_utc(queued_at)).total_seconds() / 60.0
+            queue_min = (started_at - to_utc(queued_at)).total_seconds() / 60.0
             if queue_min >= 0:
                 bucket["queues"].append(float(queue_min))
 

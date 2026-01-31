@@ -11,18 +11,13 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.utils.datetime import to_utc
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _resolve_team(
@@ -50,12 +45,12 @@ def _segment_statuses(
     - else updated_at
     - else computed_at (fallback)
     """
-    created_at = _to_utc(item.created_at)
-    completed_at = _to_utc(item.completed_at) if item.completed_at else None
+    created_at = to_utc(item.created_at)
+    completed_at = to_utc(item.completed_at) if item.completed_at else None
     # For open items, assume the last known status persists through `computed_at`.
-    end_of_item = completed_at or _to_utc(computed_at)
+    end_of_item = completed_at or to_utc(computed_at)
 
-    ordered = sorted(list(transitions), key=lambda t: _to_utc(t.occurred_at))
+    ordered = sorted(list(transitions), key=lambda t: to_utc(t.occurred_at))
     if not ordered:
         # No history; cannot infer per-status durations.
         return []
@@ -67,7 +62,7 @@ def _segment_statuses(
     current_start = created_at
 
     for tr in ordered:
-        tr_at = _to_utc(tr.occurred_at)
+        tr_at = to_utc(tr.occurred_at)
         if tr_at <= current_start:
             current_status = tr.to_status
             current_start = tr_at
@@ -102,7 +97,7 @@ def compute_work_item_state_durations_daily(
     - if an item has no status transitions, it contributes no time-in-state rows.
     """
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     transitions_by_id: Dict[str, List[WorkItemStatusTransition]] = defaultdict(list)
     for tr in transitions:

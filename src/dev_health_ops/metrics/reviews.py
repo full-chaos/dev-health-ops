@@ -9,18 +9,13 @@ from dev_health_ops.metrics.schemas import (
     PullRequestRow,
     ReviewEdgeDailyRecord,
 )
+from dev_health_ops.utils.datetime import to_utc
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _normalize_identity(author_email: Optional[str], author_name: Optional[str]) -> str:
@@ -45,7 +40,7 @@ def compute_review_edges_daily(
         return []
 
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     pr_author_map: Dict[Tuple[uuid.UUID, int], str] = {}
     for pr in pull_request_rows:
@@ -56,7 +51,7 @@ def compute_review_edges_daily(
 
     edge_counts: Dict[Tuple[uuid.UUID, str, str], int] = {}
     for review in pull_request_review_rows:
-        submitted_at = _to_utc(review["submitted_at"])
+        submitted_at = to_utc(review["submitted_at"])
         if not (start <= submitted_at < end):
             continue
         reviewer = _normalize_identity(None, review["reviewer"])

@@ -52,10 +52,10 @@ class RetentionService:
         await self.session.flush()
 
         logger.info(
-            "Retention policy created: %s for org=%s, retention_days=%d",
+            "Retention policy created: %s for org=%s, retention_days=%s",
             sanitize_for_log(resource_type),
             org_id,
-            retention_days,
+            sanitize_for_log(retention_days),
         )
         return policy
 

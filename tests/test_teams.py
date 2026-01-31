@@ -78,7 +78,7 @@ async def test_sqlalchemy_store_teams():
 @pytest.mark.asyncio
 async def test_mongo_store_teams():
     """Test Team storage in Mongo (mocked)."""
-    with patch("dev_health_ops.storage_impl.AsyncIOMotorClient") as mock_client:
+    with patch("dev_health_ops.storage.mongo.AsyncIOMotorClient") as mock_client:
         store = MongoStore("mongodb://localhost:27017", db_name="testdb")
         store.db = mock_client.return_value["testdb"]
 

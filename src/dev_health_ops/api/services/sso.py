@@ -18,6 +18,7 @@ from dev_health_ops.models.sso import (
     SSOProvider,
     SSOProviderStatus,
 )
+from dev_health_ops.api.utils.logging import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +118,8 @@ class SSOService:
 
         logger.info(
             "SSO provider created: %s (%s) for org=%s",
-            name,
-            protocol_str,
+            sanitize_for_log(name),
+            sanitize_for_log(protocol_str),
             org_id,
         )
 

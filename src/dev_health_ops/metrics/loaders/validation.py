@@ -120,8 +120,6 @@ def _check_type(value: Any, expected: Any) -> bool:
 
     if _is_optional(expected):
         expected = _unwrap_optional(expected)
-        if value is None:
-            return True
 
     origin = get_origin(expected)
 

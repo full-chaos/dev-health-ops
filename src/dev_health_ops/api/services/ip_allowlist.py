@@ -10,6 +10,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.ip_allowlist import OrgIPAllowlist, is_valid_ip_or_cidr
+from dev_health_ops.api.utils.logging import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,11 @@ class IPAllowlistService:
         self.session.add(entry)
         await self.session.flush()
 
-        logger.info("IP allowlist entry created: %s for org=%s", ip_range, org_id)
+        logger.info(
+            "IP allowlist entry created: %s for org=%s",
+            sanitize_for_log(ip_range),
+            org_id,
+        )
         return entry
 
     async def get_entry(

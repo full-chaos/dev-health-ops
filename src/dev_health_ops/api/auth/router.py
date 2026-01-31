@@ -12,6 +12,7 @@ from dev_health_ops.api.services.auth import (
     get_auth_service,
     extract_token_from_header,
 )
+from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.api.auth.schemas import (
     OIDCAuthRequest,
     OIDCAuthResponse,
@@ -177,7 +178,10 @@ async def login(payload: LoginRequest) -> LoginResponse:
         user = result.scalar_one_or_none()
 
         if not user:
-            logger.warning("Login attempt for non-existent user: %s", payload.email)
+            logger.warning(
+                "Login attempt for non-existent user: %s",
+                sanitize_for_log(payload.email),
+            )
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         if not user.is_active:
@@ -193,7 +197,9 @@ async def login(payload: LoginRequest) -> LoginResponse:
         if not bcrypt.checkpw(
             payload.password.encode("utf-8"), user.password_hash.encode("utf-8")
         ):
-            logger.warning("Invalid password for user: %s", payload.email)
+            logger.warning(
+                "Invalid password for user: %s", sanitize_for_log(payload.email)
+            )
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         # Get user's membership/org

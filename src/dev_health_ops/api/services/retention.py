@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.retention import OrgRetentionPolicy, RetentionResourceType
 from dev_health_ops.models.audit import AuditLog
+from dev_health_ops.api.utils.logging import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class RetentionService:
 
         logger.info(
             "Retention policy created: %s for org=%s, retention_days=%d",
-            resource_type,
+            sanitize_for_log(resource_type),
             org_id,
             retention_days,
         )

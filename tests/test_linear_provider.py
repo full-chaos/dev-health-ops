@@ -10,18 +10,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.models.work_items import (
-    Sprint,
-    WorkItem,
-    WorkItemInteractionEvent,
-    WorkItemReopenEvent,
-    WorkItemStatusTransition,
-)
 from dev_health_ops.providers.base import (
     IngestionContext,
     IngestionWindow,
     ProviderBatch,
-    ProviderCapabilities,
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.linear.normalize import (

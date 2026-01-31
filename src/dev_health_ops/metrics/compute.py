@@ -15,7 +15,7 @@ from dev_health_ops.metrics.schemas import (
     UserMetricsDailyRecord,
 )
 from dev_health_ops.providers.teams import TeamResolver
-from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
 from dev_health_ops.utils.datetime import to_utc
 
 
@@ -32,37 +32,6 @@ def commit_size_bucket(total_loc: int) -> str:
     if total_loc <= 300:
         return "medium"
     return "large"
-
-
-def _normalize_identity(
-    author_email: Optional[str],
-    author_name: Optional[str],
-    identity_resolver: Optional[IdentityResolver] = None,
-) -> str:
-    """
-    Prefer email when present; fall back to author_name; otherwise 'unknown'.
-    If identity_resolver is provided, it is used to resolve the canonical identity.
-
-    The returned value is used as `author_email` in stored metrics for stability.
-    """
-    if identity_resolver:
-        # Use the shared identity resolver logic for Git authors.
-        # We use 'git' as the provider.
-        return identity_resolver.resolve(
-            provider="git",  # type: ignore
-            email=author_email,
-            display_name=author_name,
-        )
-
-    if author_email:
-        normalized = author_email.strip()
-        if normalized:
-            return normalized
-    if author_name:
-        normalized = author_name.strip()
-        if normalized:
-            return normalized
-    return "unknown"
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
@@ -212,7 +181,7 @@ def compute_daily_metrics(
             agg = _CommitAgg(
                 repo_id=row["repo_id"],
                 commit_hash=row["commit_hash"],
-                author_identity=_normalize_identity(
+                author_identity=normalize_git_identity(
                     row.get("author_email"),
                     row.get("author_name"),
                     identity_resolver,
@@ -267,7 +236,7 @@ def compute_daily_metrics(
 
     pr_author_map: Dict[Tuple[uuid.UUID, int], str] = {}
     for pr in pull_request_rows:
-        author_identity = _normalize_identity(
+        author_identity = normalize_git_identity(
             pr.get("author_email"),
             pr.get("author_name"),
             identity_resolver,
@@ -379,7 +348,7 @@ def compute_daily_metrics(
             if not (start <= submitted_at < end):
                 continue
 
-            reviewer_identity = _normalize_identity(
+            reviewer_identity = normalize_git_identity(
                 None,
                 review["reviewer"],
                 identity_resolver,

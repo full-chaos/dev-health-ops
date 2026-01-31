@@ -14,15 +14,8 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.status_mapping import StatusMapping
-
-
-def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _labels_from_nodes(nodes: Any) -> List[str]:

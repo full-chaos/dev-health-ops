@@ -11,18 +11,12 @@ from typing import Any, List, Sequence, TypeVar
 
 from sqlalchemy import inspect
 
+from dev_health_ops.metrics.db_utils import normalize_postgres_url
 from dev_health_ops.metrics.sinks.sqlalchemy_base import SQLAlchemyMetricsSink
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-
-def _normalize_postgres_url(db_url: str) -> str:
-    """Normalize PostgreSQL URL to sync driver."""
-    if "postgresql+asyncpg://" in db_url:
-        return db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    return db_url
 
 
 def _serialize_value(value: Any) -> str:
@@ -52,8 +46,7 @@ class PostgresMetricsSink(SQLAlchemyMetricsSink):
         return "postgres"
 
     def __init__(self, db_url: str) -> None:
-        """Initialize Postgres sink with normalized URL."""
-        super().__init__(_normalize_postgres_url(db_url))
+        super().__init__(normalize_postgres_url(db_url))
 
     @staticmethod
     def _table_has_column(conn, table: str, column: str) -> bool:

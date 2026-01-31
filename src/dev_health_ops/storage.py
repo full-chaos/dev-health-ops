@@ -81,7 +81,7 @@ def _parse_date_value(value: Any) -> Optional[date]:
             return value.date()
         try:
             return date.fromisoformat(str(value))
-        except Exception:
+        except ValueError:
             pass
     return None
 
@@ -94,7 +94,7 @@ def _parse_datetime_value(value: Any) -> Optional[datetime]:
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except Exception:
+    except ValueError:
         return None
 
 

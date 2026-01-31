@@ -17,7 +17,6 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.models.git import Base, Repo
-from dev_health_ops.models import teams as _teams_module
 
 from .mixins import (
     AtlassianOpsMixin,
@@ -31,9 +30,6 @@ from .mixins import (
 
 if TYPE_CHECKING:
     pass
-
-# Side-effect import: register teams models with Base.metadata for create_all()
-assert _teams_module is not None
 
 
 class SQLAlchemyStore(

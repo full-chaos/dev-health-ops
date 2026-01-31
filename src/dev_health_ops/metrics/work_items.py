@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -65,9 +66,6 @@ def fetch_synthetic_work_items(
         if repo.source != "synthetic":
             continue
         logger.info("Generating synthetic work items for repo: %s", repo.full_name)
-        # Use repo_id as random seed for stability
-        import random
-
         seed = int(repo.repo_id.hex, 16) % (2**32)
         random.seed(seed)
 

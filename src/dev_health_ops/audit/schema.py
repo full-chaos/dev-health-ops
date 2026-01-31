@@ -6,12 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import logging
 
+from dev_health_ops.models import Base
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.models.git import Base
-from dev_health_ops.models import teams as _teams_module
-
-# Side-effect import: register teams models with Base.metadata for sorted_tables iteration
-assert _teams_module is not None
 
 _STOP_KEYWORDS = {
     "DEFAULT",

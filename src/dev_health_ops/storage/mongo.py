@@ -45,6 +45,9 @@ if TYPE_CHECKING:
     )
     from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
 
+    _WorkItem = WorkItem
+    _WorkItemStatusTransition = WorkItemStatusTransition
+
 
 class MongoStore:
     """Async storage implementation backed by MongoDB (via Motor)."""

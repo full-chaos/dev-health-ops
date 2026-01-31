@@ -5,7 +5,7 @@ import json
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from dev_health_ops.models.git import (
     CiPipelineRun,
@@ -25,14 +25,12 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 
-from .utils import (
-    _parse_date_value,
-    _parse_datetime_value,
-    model_to_dict,
-)
+from dev_health_ops.metrics.schemas import FileComplexitySnapshot
+from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
+
+from .utils import _parse_date_value, _parse_datetime_value
 
 if TYPE_CHECKING:
-    from dev_health_ops.metrics.schemas import FileComplexitySnapshot
     from dev_health_ops.models.atlassian_ops import (
         AtlassianOpsAlert,
         AtlassianOpsIncident,
@@ -92,7 +90,9 @@ class ClickHouseStore:
         assert self.client is not None
 
         # Locate migrations directory
-        migrations_dir = Path(__file__).resolve().parent / "migrations" / "clickhouse"
+        migrations_dir = (
+            Path(__file__).resolve().parents[1] / "migrations" / "clickhouse"
+        )
         if not migrations_dir.exists():
             return
 
@@ -370,10 +370,14 @@ class ClickHouseStore:
                     items_started=int(row_dict.get("items_started") or 0),
                     items_completed=int(row_dict.get("items_completed") or 0),
                     wip_count_end_of_day=int(row_dict.get("wip_count_end_of_day") or 0),
-                    cycle_time_p50_hours=float(row_dict.get("cycle_time_p50_hours"))
+                    cycle_time_p50_hours=float(
+                        cast(float, row_dict.get("cycle_time_p50_hours"))
+                    )
                     if row_dict.get("cycle_time_p50_hours") is not None
                     else None,
-                    cycle_time_p90_hours=float(row_dict.get("cycle_time_p90_hours"))
+                    cycle_time_p90_hours=float(
+                        cast(float, row_dict.get("cycle_time_p90_hours"))
+                    )
                     if row_dict.get("cycle_time_p90_hours") is not None
                     else None,
                     computed_at=computed_at_val,
@@ -1241,7 +1245,7 @@ class ClickHouseStore:
                     "completed_at": self._normalize_datetime(get("completed_at")),
                     "closed_at": self._normalize_datetime(get("closed_at")),
                     "labels": get("labels") or [],
-                    "story_points": float(get("story_points"))
+                    "story_points": float(get("story_points"))  # type: ignore[arg-type]
                     if get("story_points") is not None
                     else None,
                     "sprint_id": str(get("sprint_id") or ""),

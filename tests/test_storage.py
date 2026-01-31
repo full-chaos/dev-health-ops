@@ -816,7 +816,7 @@ async def test_clickhouse_store_context_manager_initializes_and_creates_tables()
 
         MockPath.return_value = mock_file_path
         mock_file_path.resolve.return_value = mock_resolved_path
-        mock_resolved_path.parent = mock_package_root_path
+        mock_resolved_path.parents = {1: mock_package_root_path}
         mock_package_root_path.__truediv__.return_value = mock_migrations_path
         mock_migrations_path.__truediv__.return_value = mock_clickhouse_path
 
@@ -1437,7 +1437,9 @@ class TestMongoStoreMultipleRepos:
 
             return collection
 
-        with patch("dev_health_ops.storage.mongo.AsyncIOMotorClient") as mock_client_class:
+        with patch(
+            "dev_health_ops.storage.mongo.AsyncIOMotorClient"
+        ) as mock_client_class:
             mock_client = MagicMock()
             mock_db = MagicMock()
             mock_db.name = "test_db"

@@ -50,6 +50,9 @@ dependencies = [
   # Shared Atlassian client library (Jira REST/GraphQL)
   "atlassian-gen-client>=0.1.0b3",
   "pytest-xdist (>=3.8.0,<4.0.0)",
+  # Authentication
+  "PyJWT>=2.8.0",
+  "bcrypt>=4.0.0",
 ]
 
 [project.optional-dependencies]

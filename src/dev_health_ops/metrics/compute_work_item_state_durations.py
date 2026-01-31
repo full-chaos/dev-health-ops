@@ -10,7 +10,11 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusCategory,
     WorkItemStatusTransition,
 )
-from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.providers.teams import (
+    TeamResolver,
+    normalize_team_id,
+    normalize_team_name,
+)
 from dev_health_ops.utils.datetime import to_utc
 
 
@@ -24,9 +28,9 @@ def _resolve_team(
     team_resolver: Optional[TeamResolver], identity: Optional[str]
 ) -> Tuple[str, str]:
     if team_resolver is None:
-        return "unassigned", "Unassigned"
+        return normalize_team_id(None), normalize_team_name(None)
     team_id, team_name = team_resolver.resolve(identity)
-    return team_id or "unassigned", team_name or "Unassigned"
+    return normalize_team_id(team_id), normalize_team_name(team_name)
 
 
 def _segment_statuses(

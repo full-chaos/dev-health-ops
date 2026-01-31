@@ -48,6 +48,7 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.loaders.base import to_dataclass
+from dev_health_ops.providers.teams import normalize_team_id, normalize_team_name
 
 
 def _dt_to_iso(value: datetime) -> str:
@@ -1341,7 +1342,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                     "repo_id": str(data["repo_id"]),
                     "as_of_day": data["as_of_day"].isoformat(),
                     "identity_id": str(data["identity_id"]),
-                    "team_id": str(data["team_id"] or ""),
+                    "team_id": normalize_team_id(data["team_id"]),
                     "map_name": str(data["map_name"]),
                     "x_raw": float(data["x_raw"]),
                     "y_raw": float(data["y_raw"]),
@@ -1564,8 +1565,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             base = {
                 **data,
                 "day": data["day"].isoformat(),
-                "team_id": str(data.get("team_id") or ""),
-                "team_name": str(data.get("team_name") or ""),
+                "team_id": normalize_team_id(data.get("team_id")),
+                "team_name": normalize_team_name(data.get("team_name")),
                 "computed_at": _dt_to_iso(data["computed_at"]),
             }
             if self._wi_metrics_has_work_scope:
@@ -1609,8 +1610,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                     **data,
                     "day": data["day"].isoformat(),
                     "work_scope_id": str(data.get("work_scope_id") or ""),
-                    "team_id": str(data.get("team_id") or ""),
-                    "team_name": str(data.get("team_name") or ""),
+                    "team_id": normalize_team_id(data.get("team_id")),
+                    "team_name": normalize_team_name(data.get("team_name")),
                     "computed_at": _dt_to_iso(data["computed_at"]),
                 }
             )
@@ -1714,8 +1715,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                     **data,
                     "day": data["day"].isoformat(),
                     "work_scope_id": str(data.get("work_scope_id") or ""),
-                    "team_id": str(data.get("team_id") or ""),
-                    "team_name": str(data.get("team_name") or ""),
+                    "team_id": normalize_team_id(data.get("team_id")),
+                    "team_name": normalize_team_name(data.get("team_name")),
                     "computed_at": _dt_to_iso(data["computed_at"]),
                 }
             )

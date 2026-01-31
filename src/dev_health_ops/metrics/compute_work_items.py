@@ -9,7 +9,11 @@ from dev_health_ops.metrics.schemas import (
     WorkItemUserMetricsDailyRecord,
 )
 from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
-from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.providers.teams import (
+    TeamResolver,
+    normalize_team_id,
+    normalize_team_name,
+)
 from dev_health_ops.utils.datetime import to_utc
 import logging
 
@@ -204,8 +208,8 @@ def compute_work_item_metrics_daily(
 
         assignee = item.assignees[0] if item.assignees else None
         team_id, team_name = _resolve_team(team_resolver, assignee)
-        team_id_norm = team_id or "unassigned"
-        team_name_norm = team_name or "Unassigned"
+        team_id_norm = normalize_team_id(team_id)
+        team_name_norm = normalize_team_name(team_name)
 
         started_today = started_at is not None and start <= started_at < end
         completed_today = completed_at is not None and start <= completed_at < end
@@ -352,7 +356,7 @@ def compute_work_item_metrics_daily(
                     provider=item.provider,
                     day=completed_at.date(),  # type: ignore
                     work_scope_id=work_scope_id,
-                    team_id=team_id or "unassigned",
+                    team_id=normalize_team_id(team_id),
                     team_name=team_name_norm,
                     assignee=assignee,
                     type=item.type,
@@ -423,7 +427,7 @@ def compute_work_item_metrics_daily(
                 day=day,
                 provider=provider,
                 work_scope_id=work_scope_id,
-                team_id=team_id or "unassigned",
+                team_id=normalize_team_id(team_id),
                 team_name=bucket["team_name"],
                 items_started=bucket["items_started"],
                 items_completed=items_completed,
@@ -473,7 +477,7 @@ def compute_work_item_metrics_daily(
                 provider=provider,
                 work_scope_id=work_scope_id,
                 user_identity=user_identity,
-                team_id=team_id or "unassigned",
+                team_id=normalize_team_id(team_id),
                 team_name=bucket["team_name"],
                 items_started=bucket["items_started"],
                 items_completed=bucket["items_completed"],

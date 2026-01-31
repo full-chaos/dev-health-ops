@@ -17,6 +17,25 @@ def _norm_key(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
+# Canonical sentinel for "no team" - used in PKs and aggregation keys
+UNASSIGNED_TEAM_ID = "unassigned"
+UNASSIGNED_TEAM_NAME = "Unassigned"
+
+
+def normalize_team_id(team_id: Optional[str]) -> str:
+    """Normalize team_id: None/empty -> 'unassigned'. Single source of truth for PK safety."""
+    if not team_id or not team_id.strip():
+        return UNASSIGNED_TEAM_ID
+    return team_id.strip()
+
+
+def normalize_team_name(team_name: Optional[str]) -> str:
+    """Normalize team_name: None/empty -> 'Unassigned'."""
+    if not team_name or not team_name.strip():
+        return UNASSIGNED_TEAM_NAME
+    return team_name.strip()
+
+
 def _parse_project_types(value: Optional[str]) -> List[str]:
     raw = value or ""
     items = [item.strip().upper() for item in raw.split(",") if item.strip()]

@@ -29,6 +29,7 @@ from dev_health_ops.metrics.schemas import (
     FileMetricsRecord,
     WorkItemUserMetricsDailyRecord,
 )
+from dev_health_ops.providers.teams import normalize_team_id, normalize_team_name
 
 
 class SyntheticDataGenerator:
@@ -872,8 +873,8 @@ class SyntheticDataGenerator:
                     changes_requested_given=random.randint(0, 1),
                     reviews_received=random.randint(0, 5),
                     review_reciprocity=0.8,
-                    team_id=team_id or "unassigned",
-                    team_name=team_name or "Unassigned",
+                    team_id=normalize_team_id(team_id),
+                    team_name=normalize_team_name(team_name),
                     active_hours=6.0,
                     weekend_days=0,
                     loc_touched=loc_added + loc_deleted,
@@ -907,8 +908,8 @@ class SyntheticDataGenerator:
                     provider=self.provider,
                     work_scope_id=self.repo_name,
                     user_identity=user_identity,
-                    team_id=team_id or "unassigned",
-                    team_name=team_name or "Unassigned",
+                    team_id=normalize_team_id(team_id),
+                    team_name=normalize_team_name(team_name),
                     items_started=random.randint(0, 1),
                     items_completed=random.randint(0, 1),
                     wip_count_end_of_day=random.randint(0, 3),

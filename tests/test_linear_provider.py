@@ -93,7 +93,9 @@ def _mock_linear_issue(
             "name": state_name,
             "type": state_type,
         },
-        "labels": {"nodes": [{"id": f"label-{l}", "name": l} for l in (labels or [])]},
+        "labels": {
+            "nodes": [{"id": f"label-{lbl}", "name": lbl} for lbl in (labels or [])]
+        },
         "team": {
             "id": "team-1",
             "key": team_key,

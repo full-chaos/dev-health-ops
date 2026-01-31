@@ -44,8 +44,6 @@ from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
 
 from .utils import _parse_date_value, _parse_datetime_value
 
-ColumnGetter = Callable[[Any, str], Any]
-
 if TYPE_CHECKING:
     from dev_health_ops.models.atlassian_ops import (
         AtlassianOpsAlert,
@@ -181,11 +179,9 @@ class SQLAlchemyStore:
                 return obj.c[name]
             return getattr(obj, name)
 
-        column_getter: ColumnGetter = _column
-
         stmt = self._insert_for_dialect(model)
         stmt = stmt.on_conflict_do_update(
-            index_elements=[column_getter(model, col) for col in conflict_columns],
+            index_elements=[_column(model, col) for col in conflict_columns],
             set_={col: getattr(stmt.excluded, col) for col in update_columns},
         )
         await self.session.execute(stmt, rows)

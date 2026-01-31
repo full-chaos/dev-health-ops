@@ -25,7 +25,7 @@ from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemDependency,
     WorkItemStatusTransition,
-)
+)  # noqa: F401
 
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot
 from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
@@ -44,9 +44,6 @@ if TYPE_CHECKING:
         AtlassianOpsSchedule,
     )
     from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
-
-    _WorkItem = WorkItem
-    _WorkItemStatusTransition = WorkItemStatusTransition
 
 
 class MongoStore:

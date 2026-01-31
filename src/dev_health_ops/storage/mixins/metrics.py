@@ -16,6 +16,10 @@ from sqlalchemy import (
     select,
 )
 
+from dev_health_ops.metrics.schemas import (
+    FileComplexitySnapshot,
+    WorkItemUserMetricsDailyRecord,
+)
 from dev_health_ops.models.git import Repo
 from dev_health_ops.storage.utils import _parse_date_value, _parse_datetime_value
 
@@ -29,8 +33,6 @@ class MetricsMixin:
         repo_name: Optional[str] = None,
     ) -> List[Any]:
         assert self.session is not None
-        from dev_health_ops.metrics.schemas import FileComplexitySnapshot
-
         resolved_repo_id = repo_id
         if resolved_repo_id is None and repo_name:
             repo_res = await self.session.execute(
@@ -137,8 +139,6 @@ class MetricsMixin:
         provider: Optional[str] = None,
     ) -> List[Any]:
         assert self.session is not None
-        from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
-
         table = Table(
             "work_item_user_metrics_daily",
             MetaData(),

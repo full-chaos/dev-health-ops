@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from dev_health_ops.models.atlassian_ops import (
+    AtlassianOpsAlertModel,
+    AtlassianOpsIncidentModel,
+    AtlassianOpsScheduleModel,
+)
+
 
 class AtlassianOpsMixin:
     async def insert_atlassian_ops_incidents(self, incidents: List[Any]) -> None:
-        from dev_health_ops.models.atlassian_ops import AtlassianOpsIncidentModel
-
         if not incidents:
             return
 
@@ -43,8 +47,6 @@ class AtlassianOpsMixin:
         )
 
     async def insert_atlassian_ops_alerts(self, alerts: List[Any]) -> None:
-        from dev_health_ops.models.atlassian_ops import AtlassianOpsAlertModel
-
         if not alerts:
             return
 
@@ -79,8 +81,6 @@ class AtlassianOpsMixin:
         )
 
     async def insert_atlassian_ops_schedules(self, schedules: List[Any]) -> None:
-        from dev_health_ops.models.atlassian_ops import AtlassianOpsScheduleModel
-
         if not schedules:
             return
 

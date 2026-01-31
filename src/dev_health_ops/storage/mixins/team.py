@@ -4,11 +4,11 @@ from typing import Any, Dict, List
 
 from sqlalchemy import select
 
+from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
+
 
 class TeamMixin:
     async def insert_teams(self, teams: List[Any]) -> None:
-        from dev_health_ops.models.teams import Team
-
         if not teams:
             return
 
@@ -42,8 +42,6 @@ class TeamMixin:
         )
 
     async def insert_jira_project_ops_team_links(self, links: List[Any]) -> None:
-        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
-
         if not links:
             return
 
@@ -74,15 +72,11 @@ class TeamMixin:
         )
 
     async def get_all_teams(self) -> List[Any]:
-        from dev_health_ops.models.teams import Team
-
         assert self.session is not None
         result = await self.session.execute(select(Team))
         return list(result.scalars().all())
 
     async def get_jira_project_ops_team_links(self) -> List[Any]:
-        from dev_health_ops.models.teams import JiraProjectOpsTeamLink
-
         assert self.session is not None
         result = await self.session.execute(select(JiraProjectOpsTeamLink))
         return list(result.scalars().all())

@@ -299,3 +299,396 @@ async def validate_token(payload: TokenValidateRequest) -> TokenValidateResponse
 @router.post("/logout")
 async def logout() -> dict:
     return {"message": "Logout successful"}
+
+
+# --- SSO Provider Management Endpoints ---
+
+
+from dev_health_ops.api.auth.schemas import (
+    OIDCAuthRequest,
+    OIDCAuthResponse,
+    SAMLAuthRequest,
+    SAMLAuthResponse,
+    SAMLMetadataResponse,
+    SSOProviderCreate,
+    SSOProviderListResponse,
+    SSOProviderResponse,
+    SSOProviderUpdate,
+)
+from dev_health_ops.api.services.sso import SSOService
+
+
+def _provider_to_response(provider) -> SSOProviderResponse:
+    config = dict(provider.config) if provider.config else {}
+    if "client_secret" in config:
+        config["client_secret"] = "********"
+    if "certificate" in config:
+        config["certificate"] = (
+            f"{config['certificate'][:50]}..."
+            if len(config.get("certificate", "")) > 50
+            else config.get("certificate", "")
+        )
+
+    return SSOProviderResponse(
+        id=str(provider.id),
+        org_id=str(provider.org_id),
+        name=str(provider.name),
+        protocol=str(provider.protocol),
+        status=str(provider.status),
+        is_default=bool(provider.is_default),
+        allow_idp_initiated=bool(provider.allow_idp_initiated),
+        auto_provision_users=bool(provider.auto_provision_users),
+        default_role=str(provider.default_role),
+        config=config,
+        allowed_domains=list(provider.allowed_domains)
+        if provider.allowed_domains
+        else [],
+        last_metadata_sync_at=provider.last_metadata_sync_at,
+        last_login_at=provider.last_login_at,
+        last_error=str(provider.last_error) if provider.last_error else None,
+        last_error_at=provider.last_error_at,
+        created_at=provider.created_at,
+        updated_at=provider.updated_at,
+    )
+
+
+@router.get("/sso/providers", response_model=SSOProviderListResponse)
+async def list_sso_providers(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    protocol: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> SSOProviderListResponse:
+    import uuid as uuid_mod
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        providers, total = await sso_service.list_providers(
+            org_id=uuid_mod.UUID(user.org_id),
+            protocol=protocol,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+        return SSOProviderListResponse(
+            items=[_provider_to_response(p) for p in providers],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+
+@router.post("/sso/providers", response_model=SSOProviderResponse, status_code=201)
+async def create_sso_provider(
+    payload: SSOProviderCreate,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> SSOProviderResponse:
+    import uuid as uuid_mod
+
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if payload.protocol == "saml" and not payload.saml_config:
+        raise HTTPException(
+            status_code=400, detail="SAML config required for SAML providers"
+        )
+    if payload.protocol == "oidc" and not payload.oidc_config:
+        raise HTTPException(
+            status_code=400, detail="OIDC config required for OIDC providers"
+        )
+
+    config: dict = {}
+    encrypted_secrets: dict = {}
+
+    if payload.saml_config:
+        config = payload.saml_config.model_dump()
+    elif payload.oidc_config:
+        oidc_data = payload.oidc_config.model_dump()
+        encrypted_secrets["client_secret"] = oidc_data.pop("client_secret", None)
+        config = oidc_data
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        provider = await sso_service.create_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            name=payload.name,
+            protocol=payload.protocol,
+            config=config,
+            encrypted_secrets=encrypted_secrets if encrypted_secrets else None,
+            is_default=payload.is_default,
+            allow_idp_initiated=payload.allow_idp_initiated,
+            auto_provision_users=payload.auto_provision_users,
+            default_role=payload.default_role,
+            allowed_domains=payload.allowed_domains,
+        )
+        await db.commit()
+
+        return _provider_to_response(provider)
+
+
+@router.get("/sso/providers/{provider_id}", response_model=SSOProviderResponse)
+async def get_sso_provider(
+    provider_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> SSOProviderResponse:
+    import uuid as uuid_mod
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        provider = await sso_service.get_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+        )
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        return _provider_to_response(provider)
+
+
+@router.patch("/sso/providers/{provider_id}", response_model=SSOProviderResponse)
+async def update_sso_provider(
+    provider_id: str,
+    payload: SSOProviderUpdate,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> SSOProviderResponse:
+    import uuid as uuid_mod
+
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        provider = await sso_service.get_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+        )
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        config = None
+        encrypted_secrets = None
+
+        if payload.saml_config:
+            config = payload.saml_config.model_dump()
+        elif payload.oidc_config:
+            oidc_data = payload.oidc_config.model_dump()
+            encrypted_secrets = {"client_secret": oidc_data.pop("client_secret", None)}
+            config = oidc_data
+
+        provider = await sso_service.update_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+            name=payload.name,
+            config=config,
+            encrypted_secrets=encrypted_secrets,
+            is_default=payload.is_default,
+            allow_idp_initiated=payload.allow_idp_initiated,
+            auto_provision_users=payload.auto_provision_users,
+            default_role=payload.default_role,
+            allowed_domains=payload.allowed_domains,
+        )
+        await db.commit()
+
+        return _provider_to_response(provider)
+
+
+@router.delete("/sso/providers/{provider_id}", status_code=204)
+async def delete_sso_provider(
+    provider_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> None:
+    import uuid as uuid_mod
+
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        deleted = await sso_service.delete_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+        )
+
+        if not deleted:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        await db.commit()
+
+
+@router.post(
+    "/sso/providers/{provider_id}/activate", response_model=SSOProviderResponse
+)
+async def activate_sso_provider(
+    provider_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> SSOProviderResponse:
+    import uuid as uuid_mod
+
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        provider = await sso_service.activate_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+        )
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        await db.commit()
+        return _provider_to_response(provider)
+
+
+@router.post(
+    "/sso/providers/{provider_id}/deactivate", response_model=SSOProviderResponse
+)
+async def deactivate_sso_provider(
+    provider_id: str,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> SSOProviderResponse:
+    import uuid as uuid_mod
+
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        provider = await sso_service.deactivate_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+        )
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        await db.commit()
+        return _provider_to_response(provider)
+
+
+# --- SAML Flow Endpoints ---
+
+
+@router.get("/saml/{provider_id}/metadata", response_model=SAMLMetadataResponse)
+async def get_saml_metadata(provider_id: str) -> SAMLMetadataResponse:
+    import uuid as uuid_mod
+    import os
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db, base_url=base_url)
+
+        stmt = select(User).limit(1)
+        await db.execute(stmt)
+
+        from dev_health_ops.models.sso import SSOProvider
+
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.id == uuid_mod.UUID(provider_id)
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        if not provider.is_saml:
+            raise HTTPException(status_code=400, detail="Provider is not SAML")
+
+        metadata_xml = sso_service.generate_saml_sp_metadata(provider)
+        config = provider.get_saml_config()
+
+        return SAMLMetadataResponse(
+            metadata_xml=metadata_xml,
+            entity_id=config.get("sp_entity_id")
+            or f"{base_url}/saml/{provider_id}/metadata",
+            acs_url=config.get("sp_acs_url") or f"{base_url}/saml/{provider_id}/acs",
+        )
+
+
+@router.post("/saml/{provider_id}/initiate", response_model=SAMLAuthResponse)
+async def initiate_saml_auth(
+    provider_id: str,
+    payload: SAMLAuthRequest,
+) -> SAMLAuthResponse:
+    import uuid as uuid_mod
+    import os
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db, base_url=base_url)
+
+        from dev_health_ops.models.sso import SSOProvider
+
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.id == uuid_mod.UUID(provider_id)
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        if not provider.is_saml:
+            raise HTTPException(status_code=400, detail="Provider is not SAML")
+
+        if provider.status != "active":
+            raise HTTPException(status_code=400, detail="SSO provider is not active")
+
+        redirect_url = sso_service.generate_saml_auth_request_url(
+            provider, relay_state=payload.relay_state
+        )
+
+        return SAMLAuthResponse(redirect_url=redirect_url)
+
+
+# --- OIDC Flow Endpoints ---
+
+
+@router.post("/oidc/{provider_id}/authorize", response_model=OIDCAuthResponse)
+async def initiate_oidc_auth(
+    provider_id: str,
+    payload: OIDCAuthRequest,
+) -> OIDCAuthResponse:
+    import uuid as uuid_mod
+    import os
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db, base_url=base_url)
+
+        from dev_health_ops.models.sso import SSOProvider
+
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.id == uuid_mod.UUID(provider_id)
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+
+        if not provider.is_oidc:
+            raise HTTPException(status_code=400, detail="Provider is not OIDC")
+
+        if provider.status != "active":
+            raise HTTPException(status_code=400, detail="SSO provider is not active")
+
+        auth_request = sso_service.generate_oidc_authorization_request(
+            provider,
+            redirect_uri=payload.redirect_uri,
+            use_pkce=payload.use_pkce,
+        )
+
+        return OIDCAuthResponse(
+            authorization_url=auth_request.authorization_url,
+            state=auth_request.state,
+        )

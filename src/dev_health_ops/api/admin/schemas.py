@@ -284,3 +284,133 @@ class MembershipUpdateRole(BaseModel):
 
 class OwnershipTransfer(BaseModel):
     new_owner_user_id: str = Field(..., min_length=1)
+
+
+class AuditLogResponse(BaseModel):
+    id: str
+    org_id: str
+    user_id: Optional[str]
+    action: str
+    resource_type: str
+    resource_id: str
+    description: Optional[str]
+    changes: Optional[dict[str, Any]]
+    request_metadata: Optional[dict[str, Any]]
+    status: str
+    error_message: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AuditLogListResponse(BaseModel):
+    items: list[AuditLogResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class AuditLogFilter(BaseModel):
+    user_id: Optional[str] = None
+    action: Optional[str] = None
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    status: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+
+# ---- IP Allowlist schemas (Enterprise feature: ip_allowlist) ----
+
+
+class IPAllowlistResponse(BaseModel):
+    id: str
+    org_id: str
+    ip_range: str
+    description: Optional[str]
+    is_active: bool
+    created_by_id: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    expires_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class IPAllowlistCreate(BaseModel):
+    ip_range: str = Field(
+        ..., description="IP address or CIDR range (e.g., '192.168.1.0/24')"
+    )
+    description: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+
+class IPAllowlistUpdate(BaseModel):
+    ip_range: Optional[str] = Field(None, description="IP address or CIDR range")
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    expires_at: Optional[datetime] = None
+
+
+class IPAllowlistListResponse(BaseModel):
+    items: list[IPAllowlistResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class IPCheckRequest(BaseModel):
+    ip_address: str = Field(..., description="IP address to check against allowlist")
+
+
+class IPCheckResponse(BaseModel):
+    allowed: bool
+    ip_address: str
+
+
+class RetentionPolicyResponse(BaseModel):
+    id: str
+    org_id: str
+    resource_type: str
+    retention_days: int
+    description: Optional[str]
+    is_active: bool
+    last_run_at: Optional[datetime]
+    last_run_deleted_count: Optional[int]
+    next_run_at: Optional[datetime]
+    created_by_id: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RetentionPolicyCreate(BaseModel):
+    resource_type: str = Field(
+        ..., description="Type of resource to apply retention to"
+    )
+    retention_days: int = Field(90, ge=1, description="Number of days to retain data")
+    description: Optional[str] = None
+
+
+class RetentionPolicyUpdate(BaseModel):
+    retention_days: Optional[int] = Field(
+        None, ge=1, description="Number of days to retain data"
+    )
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class RetentionPolicyListResponse(BaseModel):
+    items: list[RetentionPolicyResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class RetentionExecuteResponse(BaseModel):
+    deleted_count: int
+    error: Optional[str] = None

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated, AsyncGenerator
+import uuid
+from datetime import datetime
+from typing import Annotated, AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.audit import (
+    AuditService,
+    AuditLogFilter as ServiceAuditLogFilter,
+)
+from dev_health_ops.api.services.ip_allowlist import IPAllowlistService
+from dev_health_ops.api.services.retention import RetentionService
 from dev_health_ops.api.services.settings import (
     IdentityMappingService,
     IntegrationCredentialsService,
@@ -22,11 +30,20 @@ from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.settings import SettingCategory
 
 from .schemas import (
+    AuditLogFilter,
+    AuditLogListResponse,
+    AuditLogResponse,
     IdentityMappingCreate,
     IdentityMappingResponse,
     IntegrationCredentialCreate,
     IntegrationCredentialResponse,
     IntegrationCredentialUpdate,
+    IPAllowlistCreate,
+    IPAllowlistListResponse,
+    IPAllowlistResponse,
+    IPAllowlistUpdate,
+    IPCheckRequest,
+    IPCheckResponse,
     MembershipCreate,
     MembershipResponse,
     MembershipUpdateRole,
@@ -34,6 +51,11 @@ from .schemas import (
     OrganizationResponse,
     OrganizationUpdate,
     OwnershipTransfer,
+    RetentionExecuteResponse,
+    RetentionPolicyCreate,
+    RetentionPolicyListResponse,
+    RetentionPolicyResponse,
+    RetentionPolicyUpdate,
     SettingCreate,
     SettingResponse,
     SettingsListResponse,
@@ -62,6 +84,12 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 def get_org_id(x_org_id: Annotated[str, Header(alias="X-Org-Id")] = "default") -> str:
     return x_org_id
+
+
+def get_user_id(
+    x_user_id: Annotated[Optional[str], Header(alias="X-User-Id")] = None,
+) -> Optional[str]:
+    return x_user_id
 
 
 @router.get("/settings/categories")
@@ -990,3 +1018,534 @@ async def transfer_ownership(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"success": True}
+
+
+# ---- Audit Log endpoints (Enterprise feature: audit_log) ----
+
+
+@router.get("/audit-logs", response_model=AuditLogListResponse)
+async def list_audit_logs(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+    user_id: Optional[str] = Query(None, description="Filter by user ID"),
+    action: Optional[str] = Query(None, description="Filter by action type"),
+    resource_type: Optional[str] = Query(None, description="Filter by resource type"),
+    resource_id: Optional[str] = Query(None, description="Filter by resource ID"),
+    status: Optional[str] = Query(
+        None, description="Filter by status (success/failure)"
+    ),
+    start_date: Optional[datetime] = Query(
+        None, description="Filter logs after this date"
+    ),
+    end_date: Optional[datetime] = Query(
+        None, description="Filter logs before this date"
+    ),
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+) -> AuditLogListResponse:
+    """List audit logs for the organization with optional filters.
+
+    Requires Enterprise tier (audit_log feature).
+    """
+    # TODO: Add feature flag check for audit_log
+    svc = AuditService(session)
+
+    filters = ServiceAuditLogFilter(
+        user_id=user_id,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    logs, total = await svc.get_logs(
+        org_id=uuid.UUID(org_id),
+        filters=filters,
+        limit=limit,
+        offset=offset,
+    )
+
+    return AuditLogListResponse(
+        items=[
+            AuditLogResponse(
+                id=str(log.id),
+                org_id=str(log.org_id),
+                user_id=str(log.user_id) if log.user_id else None,
+                action=str(log.action),
+                resource_type=str(log.resource_type),
+                resource_id=str(log.resource_id),
+                description=log.description,
+                changes=log.changes,
+                request_metadata=log.request_metadata,
+                status=str(log.status),
+                error_message=log.error_message,
+                created_at=log.created_at,
+            )
+            for log in logs
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/audit-logs/{log_id}", response_model=AuditLogResponse)
+async def get_audit_log(
+    log_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> AuditLogResponse:
+    """Get a specific audit log entry by ID.
+
+    Requires Enterprise tier (audit_log feature).
+    """
+    # TODO: Add feature flag check for audit_log
+    svc = AuditService(session)
+
+    log = await svc.get_log_by_id(
+        org_id=uuid.UUID(org_id),
+        log_id=uuid.UUID(log_id),
+    )
+
+    if not log:
+        raise HTTPException(status_code=404, detail="Audit log not found")
+
+    return AuditLogResponse(
+        id=str(log.id),
+        org_id=str(log.org_id),
+        user_id=str(log.user_id) if log.user_id else None,
+        action=str(log.action),
+        resource_type=str(log.resource_type),
+        resource_id=str(log.resource_id),
+        description=log.description,
+        changes=log.changes,
+        request_metadata=log.request_metadata,
+        status=str(log.status),
+        error_message=log.error_message,
+        created_at=log.created_at,
+    )
+
+
+@router.get(
+    "/audit-logs/resource/{resource_type}/{resource_id}",
+    response_model=list[AuditLogResponse],
+)
+async def get_resource_audit_history(
+    resource_type: str,
+    resource_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of results"),
+) -> list[AuditLogResponse]:
+    """Get audit history for a specific resource.
+
+    Requires Enterprise tier (audit_log feature).
+    """
+    # TODO: Add feature flag check for audit_log
+    svc = AuditService(session)
+
+    logs = await svc.get_resource_history(
+        org_id=uuid.UUID(org_id),
+        resource_type=resource_type,
+        resource_id=resource_id,
+        limit=limit,
+    )
+
+    return [
+        AuditLogResponse(
+            id=str(log.id),
+            org_id=str(log.org_id),
+            user_id=str(log.user_id) if log.user_id else None,
+            action=str(log.action),
+            resource_type=str(log.resource_type),
+            resource_id=str(log.resource_id),
+            description=log.description,
+            changes=log.changes,
+            request_metadata=log.request_metadata,
+            status=str(log.status),
+            error_message=log.error_message,
+            created_at=log.created_at,
+        )
+        for log in logs
+    ]
+
+
+@router.get("/audit-logs/user/{user_id}", response_model=list[AuditLogResponse])
+async def get_user_audit_activity(
+    user_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of results"),
+) -> list[AuditLogResponse]:
+    """Get audit log activity for a specific user.
+
+    Requires Enterprise tier (audit_log feature).
+    """
+    # TODO: Add feature flag check for audit_log
+    svc = AuditService(session)
+
+    logs = await svc.get_user_activity(
+        org_id=uuid.UUID(org_id),
+        user_id=uuid.UUID(user_id),
+        limit=limit,
+    )
+
+    return [
+        AuditLogResponse(
+            id=str(log.id),
+            org_id=str(log.org_id),
+            user_id=str(log.user_id) if log.user_id else None,
+            action=str(log.action),
+            resource_type=str(log.resource_type),
+            resource_id=str(log.resource_id),
+            description=log.description,
+            changes=log.changes,
+            request_metadata=log.request_metadata,
+            status=str(log.status),
+            error_message=log.error_message,
+            created_at=log.created_at,
+        )
+        for log in logs
+    ]
+
+
+@router.get("/ip-allowlist", response_model=IPAllowlistListResponse)
+async def list_ip_allowlist_entries(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+    active_only: bool = Query(False, description="Filter to active entries only"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+) -> IPAllowlistListResponse:
+    svc = IPAllowlistService(session)
+    entries, total = await svc.list_entries(
+        org_id=uuid.UUID(org_id),
+        active_only=active_only,
+        limit=limit,
+        offset=offset,
+    )
+    return IPAllowlistListResponse(
+        items=[
+            IPAllowlistResponse(
+                id=str(e.id),
+                org_id=str(e.org_id),
+                ip_range=str(e.ip_range),
+                description=e.description,
+                is_active=bool(e.is_active),
+                created_by_id=str(e.created_by_id) if e.created_by_id else None,
+                created_at=e.created_at,
+                updated_at=e.updated_at,
+                expires_at=e.expires_at,
+            )
+            for e in entries
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/ip-allowlist", response_model=IPAllowlistResponse, status_code=201)
+async def create_ip_allowlist_entry(
+    payload: IPAllowlistCreate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+    user_id: Optional[str] = Depends(get_user_id),
+) -> IPAllowlistResponse:
+    svc = IPAllowlistService(session)
+    try:
+        entry = await svc.create_entry(
+            org_id=uuid.UUID(org_id),
+            ip_range=payload.ip_range,
+            description=payload.description,
+            created_by_id=uuid.UUID(user_id) if user_id else None,
+            expires_at=payload.expires_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return IPAllowlistResponse(
+        id=str(entry.id),
+        org_id=str(entry.org_id),
+        ip_range=str(entry.ip_range),
+        description=entry.description,
+        is_active=bool(entry.is_active),
+        created_by_id=str(entry.created_by_id) if entry.created_by_id else None,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+        expires_at=entry.expires_at,
+    )
+
+
+@router.get("/ip-allowlist/{entry_id}", response_model=IPAllowlistResponse)
+async def get_ip_allowlist_entry(
+    entry_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> IPAllowlistResponse:
+    svc = IPAllowlistService(session)
+    entry = await svc.get_entry(
+        org_id=uuid.UUID(org_id),
+        entry_id=uuid.UUID(entry_id),
+    )
+    if not entry:
+        raise HTTPException(status_code=404, detail="IP allowlist entry not found")
+    return IPAllowlistResponse(
+        id=str(entry.id),
+        org_id=str(entry.org_id),
+        ip_range=str(entry.ip_range),
+        description=entry.description,
+        is_active=bool(entry.is_active),
+        created_by_id=str(entry.created_by_id) if entry.created_by_id else None,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+        expires_at=entry.expires_at,
+    )
+
+
+@router.patch("/ip-allowlist/{entry_id}", response_model=IPAllowlistResponse)
+async def update_ip_allowlist_entry(
+    entry_id: str,
+    payload: IPAllowlistUpdate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> IPAllowlistResponse:
+    svc = IPAllowlistService(session)
+    try:
+        entry = await svc.update_entry(
+            org_id=uuid.UUID(org_id),
+            entry_id=uuid.UUID(entry_id),
+            ip_range=payload.ip_range,
+            description=payload.description,
+            is_active=payload.is_active,
+            expires_at=payload.expires_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not entry:
+        raise HTTPException(status_code=404, detail="IP allowlist entry not found")
+    return IPAllowlistResponse(
+        id=str(entry.id),
+        org_id=str(entry.org_id),
+        ip_range=str(entry.ip_range),
+        description=entry.description,
+        is_active=bool(entry.is_active),
+        created_by_id=str(entry.created_by_id) if entry.created_by_id else None,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+        expires_at=entry.expires_at,
+    )
+
+
+@router.delete("/ip-allowlist/{entry_id}")
+async def delete_ip_allowlist_entry(
+    entry_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> dict:
+    svc = IPAllowlistService(session)
+    deleted = await svc.delete_entry(
+        org_id=uuid.UUID(org_id),
+        entry_id=uuid.UUID(entry_id),
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="IP allowlist entry not found")
+    return {"deleted": True}
+
+
+@router.post("/ip-allowlist/check", response_model=IPCheckResponse)
+async def check_ip_allowed(
+    payload: IPCheckRequest,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> IPCheckResponse:
+    svc = IPAllowlistService(session)
+    allowed = await svc.check_ip_allowed(
+        org_id=uuid.UUID(org_id),
+        ip_address=payload.ip_address,
+    )
+    return IPCheckResponse(
+        allowed=allowed,
+        ip_address=payload.ip_address,
+    )
+
+
+@router.get("/retention-policies", response_model=RetentionPolicyListResponse)
+async def list_retention_policies(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+    active_only: bool = Query(False, description="Filter to active policies only"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+) -> RetentionPolicyListResponse:
+    svc = RetentionService(session)
+    policies, total = await svc.list_policies(
+        org_id=uuid.UUID(org_id),
+        active_only=active_only,
+        limit=limit,
+        offset=offset,
+    )
+    return RetentionPolicyListResponse(
+        items=[
+            RetentionPolicyResponse(
+                id=str(p.id),
+                org_id=str(p.org_id),
+                resource_type=str(p.resource_type),
+                retention_days=int(p.retention_days),
+                description=p.description,
+                is_active=bool(p.is_active),
+                last_run_at=p.last_run_at,
+                last_run_deleted_count=p.last_run_deleted_count,
+                next_run_at=p.next_run_at,
+                created_by_id=str(p.created_by_id) if p.created_by_id else None,
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+            )
+            for p in policies
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/retention-policies/resource-types")
+async def list_retention_resource_types() -> list[str]:
+    return RetentionService.get_available_resource_types()
+
+
+@router.post(
+    "/retention-policies", response_model=RetentionPolicyResponse, status_code=201
+)
+async def create_retention_policy(
+    payload: RetentionPolicyCreate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+    user_id: Optional[str] = Depends(get_user_id),
+) -> RetentionPolicyResponse:
+    svc = RetentionService(session)
+    try:
+        policy = await svc.create_policy(
+            org_id=uuid.UUID(org_id),
+            resource_type=payload.resource_type,
+            retention_days=payload.retention_days,
+            description=payload.description,
+            created_by_id=uuid.UUID(user_id) if user_id else None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RetentionPolicyResponse(
+        id=str(policy.id),
+        org_id=str(policy.org_id),
+        resource_type=str(policy.resource_type),
+        retention_days=int(policy.retention_days),
+        description=policy.description,
+        is_active=bool(policy.is_active),
+        last_run_at=policy.last_run_at,
+        last_run_deleted_count=policy.last_run_deleted_count,
+        next_run_at=policy.next_run_at,
+        created_by_id=str(policy.created_by_id) if policy.created_by_id else None,
+        created_at=policy.created_at,
+        updated_at=policy.updated_at,
+    )
+
+
+@router.get("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
+async def get_retention_policy(
+    policy_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> RetentionPolicyResponse:
+    svc = RetentionService(session)
+    policy = await svc.get_policy(
+        org_id=uuid.UUID(org_id),
+        policy_id=uuid.UUID(policy_id),
+    )
+    if not policy:
+        raise HTTPException(status_code=404, detail="Retention policy not found")
+    return RetentionPolicyResponse(
+        id=str(policy.id),
+        org_id=str(policy.org_id),
+        resource_type=str(policy.resource_type),
+        retention_days=int(policy.retention_days),
+        description=policy.description,
+        is_active=bool(policy.is_active),
+        last_run_at=policy.last_run_at,
+        last_run_deleted_count=policy.last_run_deleted_count,
+        next_run_at=policy.next_run_at,
+        created_by_id=str(policy.created_by_id) if policy.created_by_id else None,
+        created_at=policy.created_at,
+        updated_at=policy.updated_at,
+    )
+
+
+@router.patch("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
+async def update_retention_policy(
+    policy_id: str,
+    payload: RetentionPolicyUpdate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> RetentionPolicyResponse:
+    svc = RetentionService(session)
+    try:
+        policy = await svc.update_policy(
+            org_id=uuid.UUID(org_id),
+            policy_id=uuid.UUID(policy_id),
+            retention_days=payload.retention_days,
+            description=payload.description,
+            is_active=payload.is_active,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not policy:
+        raise HTTPException(status_code=404, detail="Retention policy not found")
+    return RetentionPolicyResponse(
+        id=str(policy.id),
+        org_id=str(policy.org_id),
+        resource_type=str(policy.resource_type),
+        retention_days=int(policy.retention_days),
+        description=policy.description,
+        is_active=bool(policy.is_active),
+        last_run_at=policy.last_run_at,
+        last_run_deleted_count=policy.last_run_deleted_count,
+        next_run_at=policy.next_run_at,
+        created_by_id=str(policy.created_by_id) if policy.created_by_id else None,
+        created_at=policy.created_at,
+        updated_at=policy.updated_at,
+    )
+
+
+@router.delete("/retention-policies/{policy_id}")
+async def delete_retention_policy(
+    policy_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> dict:
+    svc = RetentionService(session)
+    deleted = await svc.delete_policy(
+        org_id=uuid.UUID(org_id),
+        policy_id=uuid.UUID(policy_id),
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Retention policy not found")
+    return {"deleted": True}
+
+
+@router.post(
+    "/retention-policies/{policy_id}/execute", response_model=RetentionExecuteResponse
+)
+async def execute_retention_policy(
+    policy_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> RetentionExecuteResponse:
+    svc = RetentionService(session)
+    deleted_count, error = await svc.execute_policy(
+        org_id=uuid.UUID(org_id),
+        policy_id=uuid.UUID(policy_id),
+    )
+    return RetentionExecuteResponse(
+        deleted_count=deleted_count,
+        error=error,
+    )

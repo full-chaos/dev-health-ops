@@ -146,6 +146,11 @@ class Organization(Base):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
+    retention_policies = relationship(
+        "OrgRetentionPolicy",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return f"<Organization {self.slug}>"

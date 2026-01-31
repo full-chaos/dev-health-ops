@@ -36,8 +36,29 @@ from .licensing import (
     TIER_LIMITS,
     STANDARD_FEATURES,
 )
+from .audit import (
+    AuditAction,
+    AuditLog,
+    AuditResourceType,
+)
+from .sso import (
+    SSOProtocol,
+    SSOProvider,
+    SSOProviderStatus,
+)
+from .ip_allowlist import (
+    OrgIPAllowlist,
+    is_valid_ip_or_cidr,
+)
+from .retention import (
+    OrgRetentionPolicy,
+    RetentionResourceType,
+)
 
 __all__ = [
+    "AuditAction",
+    "AuditLog",
+    "AuditResourceType",
     "AuthProvider",
     "FeatureCategory",
     "FeatureFlag",
@@ -56,12 +77,18 @@ __all__ = [
     "Membership",
     "Organization",
     "OrgFeatureOverride",
+    "OrgIPAllowlist",
     "OrgLicense",
+    "OrgRetentionPolicy",
     "Repo",
+    "RetentionResourceType",
     "ScheduledJob",
     "Setting",
     "SettingCategory",
     "Sprint",
+    "SSOProtocol",
+    "SSOProvider",
+    "SSOProviderStatus",
     "STANDARD_FEATURES",
     "SyncConfiguration",
     "TeamMapping",

@@ -6,6 +6,7 @@ particularly for GitLab's REST API.
 """
 
 import logging
+import urllib.parse
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -278,9 +279,6 @@ class GitLabRESTClient(RESTClient):
         :param ref: Git reference (branch, tag, or commit SHA).
         :return: List of blame ranges.
         """
-        # URL-encode the file path
-        import urllib.parse
-
         encoded_path = urllib.parse.quote(file_path, safe="")
 
         endpoint = f"projects/{project_id}/repository/files/{encoded_path}/blame"

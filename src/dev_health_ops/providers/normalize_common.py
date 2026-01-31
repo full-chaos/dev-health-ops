@@ -3,11 +3,13 @@ from typing import Optional, overload
 
 
 @overload
-def to_utc(dt: None) -> None: ...
+def to_utc(dt: None) -> None:
+    pass
 
 
 @overload
-def to_utc(dt: datetime) -> datetime: ...
+def to_utc(dt: datetime) -> datetime:
+    pass
 
 
 def to_utc(dt: Optional[datetime]) -> Optional[datetime]:

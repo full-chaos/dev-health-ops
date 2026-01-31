@@ -10,18 +10,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.models.work_items import (
-    Sprint,
-    WorkItem,
-    WorkItemInteractionEvent,
-    WorkItemReopenEvent,
-    WorkItemStatusTransition,
-)
 from dev_health_ops.providers.base import (
     IngestionContext,
     IngestionWindow,
     ProviderBatch,
-    ProviderCapabilities,
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.linear.normalize import (
@@ -101,7 +93,9 @@ def _mock_linear_issue(
             "name": state_name,
             "type": state_type,
         },
-        "labels": {"nodes": [{"id": f"label-{l}", "name": l} for l in (labels or [])]},
+        "labels": {
+            "nodes": [{"id": f"label-{lbl}", "name": lbl} for lbl in (labels or [])]
+        },
         "team": {
             "id": "team-1",
             "key": team_key,

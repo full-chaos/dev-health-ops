@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Tuple, List, Optional
 
@@ -433,8 +434,6 @@ def _sync_github_prs_to_store(
                     reset = headers_ci.get("x-ratelimit-reset")
                     if reset:
                         try:
-                            import time
-
                             retry_after = max(0.0, float(reset) - time.time())
                         except ValueError:
                             retry_after = None

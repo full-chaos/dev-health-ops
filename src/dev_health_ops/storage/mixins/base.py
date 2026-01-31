@@ -17,6 +17,7 @@ class SQLAlchemyStoreMixinProtocol(Protocol):
         model: Any,
         rows: List[Dict[str, Any]],
         conflict_columns: List[str],
-        update_columns: List[str],
+    ) -> None:
+        pass
     ) -> None:
         ...

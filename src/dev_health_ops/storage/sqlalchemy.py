@@ -16,7 +16,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from dev_health_ops.models.git import Repo
+from dev_health_ops.models.git import Base, Repo
+from dev_health_ops.models import teams as _teams_module
 
 from .mixins import (
     AtlassianOpsMixin,
@@ -30,6 +31,9 @@ from .mixins import (
 
 if TYPE_CHECKING:
     pass
+
+# Side-effect import: register teams models with Base.metadata for create_all()
+assert _teams_module is not None
 
 
 class SQLAlchemyStore(
@@ -176,8 +180,6 @@ class SQLAlchemyStore(
         self.session = self.session_factory()
 
         if "sqlite" in str(self.engine.url):
-            from dev_health_ops.models.git import Base
-
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
                 await conn.run_sync(self._work_item_metadata.create_all)
@@ -191,9 +193,6 @@ class SQLAlchemyStore(
         await self.engine.dispose()
 
     async def ensure_tables(self) -> None:
-        from dev_health_ops.models.git import Base
-        import dev_health_ops.models.teams  # noqa: F401
-
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(self._work_item_metadata.create_all)

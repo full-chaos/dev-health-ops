@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import uuid
 from typing import Any, Callable, Dict, TypeVar
 
 from .context import GraphQLContext
@@ -200,3 +201,127 @@ def validate_org_access(context: GraphQLContext, requested_org_id: str) -> None:
         raise AuthorizationError(
             f"Access denied: cannot query data for org '{requested_org_id}'"
         )
+
+
+def require_feature(*features: str, require_all: bool = False) -> Callable[[F], F]:
+    """Decorator to require feature access for GraphQL resolvers.
+
+    Args:
+        *features: Feature keys required (e.g., "capacity_forecast", "sso_saml")
+        require_all: If True, org must have ALL features. If False, ANY suffices.
+
+    Usage:
+        @strawberry.field
+        @require_feature("capacity_forecast")
+        async def capacity_forecast(self, info: Info) -> CapacityForecast:
+            ...
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+            if info is None:
+                raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+            context: GraphQLContext = info.context
+
+            if context.user is None:
+                raise AuthorizationError("Authentication required")
+
+            org_id_str = context.org_id
+            if not org_id_str:
+                raise AuthorizationError("org_id is required for feature checks")
+
+            try:
+                org_uuid = uuid.UUID(org_id_str)
+            except ValueError:
+                raise AuthorizationError(f"Invalid org_id format: {org_id_str}")
+
+            from dev_health_ops.db import get_postgres_session_sync
+            from dev_health_ops.api.services.licensing import FeatureService
+
+            with get_postgres_session_sync() as session:
+                feature_svc = FeatureService(session)
+
+                if require_all:
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if not access.allowed:
+                            raise AuthorizationError(
+                                f"Feature '{feature_key}' not available: {access.reason}"
+                            )
+                else:
+                    any_allowed = False
+                    last_reason = None
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if access.allowed:
+                            any_allowed = True
+                            break
+                        last_reason = access.reason
+
+                    if not any_allowed:
+                        raise AuthorizationError(
+                            f"Requires one of: {', '.join(features)}. {last_reason or ''}"
+                        )
+
+            return await func(*args, **kwargs)
+
+        @functools.wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+            if info is None:
+                raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+            context: GraphQLContext = info.context
+
+            if context.user is None:
+                raise AuthorizationError("Authentication required")
+
+            org_id_str = context.org_id
+            if not org_id_str:
+                raise AuthorizationError("org_id is required for feature checks")
+
+            try:
+                org_uuid = uuid.UUID(org_id_str)
+            except ValueError:
+                raise AuthorizationError(f"Invalid org_id format: {org_id_str}")
+
+            from dev_health_ops.db import get_postgres_session_sync
+            from dev_health_ops.api.services.licensing import FeatureService
+
+            with get_postgres_session_sync() as session:
+                feature_svc = FeatureService(session)
+
+                if require_all:
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if not access.allowed:
+                            raise AuthorizationError(
+                                f"Feature '{feature_key}' not available: {access.reason}"
+                            )
+                else:
+                    any_allowed = False
+                    last_reason = None
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if access.allowed:
+                            any_allowed = True
+                            break
+                        last_reason = access.reason
+
+                    if not any_allowed:
+                        raise AuthorizationError(
+                            f"Requires one of: {', '.join(features)}. {last_reason or ''}"
+                        )
+
+            return func(*args, **kwargs)
+
+        import asyncio
+
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper  # type: ignore
+        return sync_wrapper  # type: ignore
+
+    return decorator

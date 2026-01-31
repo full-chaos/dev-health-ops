@@ -12,11 +12,13 @@ Environment Variables:
 from __future__ import annotations
 
 import os
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from contextlib import asynccontextmanager, contextmanager
+from typing import AsyncGenerator, Generator
 
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, AsyncEngine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 
 
 _postgres_engine: AsyncEngine | None = None
@@ -174,3 +176,54 @@ def resolve_sink_uri(ns) -> str:
     if uri:
         return uri
     return require_clickhouse_uri()
+
+
+_postgres_sync_engine: Engine | None = None
+
+
+def _get_sync_postgres_uri() -> str | None:
+    uri = os.getenv("POSTGRES_URI")
+    if uri:
+        if uri.startswith("postgresql+asyncpg://"):
+            return uri.replace("postgresql+asyncpg://", "postgresql://", 1)
+        return uri
+
+    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+    if fallback and "postgres" in fallback.lower():
+        if "asyncpg" in fallback:
+            return fallback.replace("+asyncpg", "", 1)
+        return fallback
+
+    return None
+
+
+def get_postgres_sync_engine() -> Engine:
+    global _postgres_sync_engine
+    if _postgres_sync_engine is None:
+        uri = _get_sync_postgres_uri()
+        if not uri:
+            raise RuntimeError(
+                "PostgreSQL URI not configured. Set POSTGRES_URI environment variable."
+            )
+        _postgres_sync_engine = create_engine(
+            uri,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+        )
+    return _postgres_sync_engine
+
+
+@contextmanager
+def get_postgres_session_sync() -> Generator[Session, None, None]:
+    engine = get_postgres_sync_engine()
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

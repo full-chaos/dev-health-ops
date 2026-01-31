@@ -14,6 +14,7 @@ from dev_health_ops.models.work_items import (
     WorkItemType,
 )
 from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 logger = logging.getLogger(__name__)
@@ -41,16 +42,8 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         return None
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception:
+    except ValueError:
         return None
-
-
-def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _get(obj: Any, *keys: str) -> Any:

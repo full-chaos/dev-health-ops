@@ -243,7 +243,7 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
         if isinstance(value, str):
             try:
                 return datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except Exception:
+            except ValueError:
                 return None
         return None
 

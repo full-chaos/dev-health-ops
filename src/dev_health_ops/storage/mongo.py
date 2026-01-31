@@ -21,11 +21,7 @@ from dev_health_ops.models.git import (
     Incident,
     Repo,
 )
-from dev_health_ops.models.work_items import (
-    WorkItem,
-    WorkItemDependency,
-    WorkItemStatusTransition,
-)  # noqa: F401
+from dev_health_ops.models.work_items import WorkItemDependency
 
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot
 from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord

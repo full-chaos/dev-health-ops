@@ -142,44 +142,6 @@ async def test_synthetic_data_performance(tmp_path):
         for r in reviews
     ]
 
-    _pipeline_rows = [  # noqa: F841
-        {
-            "repo_id": r.repo_id,
-            "run_id": r.run_id,
-            "status": r.status,
-            "queued_at": r.queued_at,
-            "started_at": r.started_at,
-            "finished_at": r.finished_at,
-        }
-        for r in pipeline_runs
-    ]
-
-    _deployment_rows = [  # noqa: F841
-        {
-            "repo_id": d.repo_id,
-            "deployment_id": d.deployment_id,
-            "status": d.status,
-            "environment": d.environment,
-            "started_at": d.started_at,
-            "finished_at": d.finished_at,
-            "deployed_at": d.deployed_at,
-            "merged_at": d.merged_at,
-            "pull_request_number": d.pull_request_number,
-        }
-        for d in deployments
-    ]
-
-    _incident_rows = [  # noqa: F841
-        {
-            "repo_id": i.repo_id,
-            "incident_id": i.incident_id,
-            "status": i.status,
-            "started_at": i.started_at,
-            "resolved_at": i.resolved_at,
-        }
-        for i in incidents
-    ]
-
     # Setup Team Resolver
     member_to_team = {}
     for idx, (name, email) in enumerate(generator.authors):

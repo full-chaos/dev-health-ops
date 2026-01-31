@@ -7,10 +7,12 @@ if TYPE_CHECKING:
 
 
 class SQLAlchemyStoreMixinProtocol(Protocol):
+    """Protocol for SQLAlchemy store mixins."""
+
     session: "AsyncSession | None"
 
     def _insert_for_dialect(self, model: Any) -> Any:
-        ...
+        """Return dialect-specific insert statement."""
 
     async def _upsert_many(
         self,
@@ -19,4 +21,4 @@ class SQLAlchemyStoreMixinProtocol(Protocol):
         conflict_columns: List[str],
         update_columns: List[str],
     ) -> None:
-        ...
+        """Upsert multiple rows."""

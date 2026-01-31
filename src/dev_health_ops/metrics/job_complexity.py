@@ -11,22 +11,18 @@ from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.metrics.db_utils import (
+    normalize_sqlite_url as _normalize_sqlite_url,
+)
+from dev_health_ops.metrics.db_utils import (
+    normalize_postgres_url as _normalize_postgres_url,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMPLEXITY_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
-
-
-def _normalize_sqlite_url(db_url: str) -> str:
-    if "sqlite+aiosqlite://" in db_url:
-        return db_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    return db_url
-
-
-def _normalize_postgres_url(db_url: str) -> str:
-    if "postgresql+asyncpg://" in db_url:
-        return db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    return db_url
+DEFAULT_COMPLEXITY_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
+)
 
 
 def run_complexity_scan_job(

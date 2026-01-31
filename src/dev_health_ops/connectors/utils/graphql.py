@@ -6,6 +6,7 @@ particularly for operations not well-supported by PyGithub such as blame.
 """
 
 import logging
+import time
 from typing import Any, Dict, Optional
 
 import requests
@@ -30,8 +31,6 @@ def _github_reset_delay_seconds(
         reset_epoch = float(reset)
     except ValueError:
         return None
-
-    import time
 
     return max(0.0, reset_epoch - time.time())
 

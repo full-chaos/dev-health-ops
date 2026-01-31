@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence
 
 from dev_health_ops.models.work_items import (
@@ -28,15 +27,10 @@ from dev_health_ops.providers.base import (
 )
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
 from dev_health_ops.providers.jira.atlassian_compat import atlassian_client_enabled
+from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
 
 logger = logging.getLogger(__name__)
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _env_flag(name: str, default: bool) -> bool:

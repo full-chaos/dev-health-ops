@@ -279,7 +279,7 @@ def _sync_gitlab_mrs_to_store(
                     return None
                 try:
                     return datetime.fromisoformat(value.replace("Z", "+00:00"))
-                except Exception:
+                except ValueError:
                     return None
 
             created_at = _parse_dt(mr.get("created_at"))
@@ -362,7 +362,7 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
         if isinstance(value, str):
             try:
                 return datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except Exception:
+            except ValueError:
                 return None
         return None
 

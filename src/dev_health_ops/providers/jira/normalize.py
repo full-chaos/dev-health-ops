@@ -36,7 +36,7 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
             raw = raw[:-2] + ":" + raw[-2:]
         try:
             dt = datetime.fromisoformat(raw)
-        except Exception:
+        except ValueError:
             return None
 
     if dt.tzinfo is None:

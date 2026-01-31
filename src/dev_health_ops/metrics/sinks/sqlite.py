@@ -4,14 +4,8 @@ from __future__ import annotations
 
 from sqlalchemy import text
 
+from dev_health_ops.metrics.db_utils import normalize_sqlite_url
 from dev_health_ops.metrics.sinks.sqlalchemy_base import SQLAlchemyMetricsSink
-
-
-def _normalize_sqlite_url(db_url: str) -> str:
-    """Normalize SQLite URL to sync driver."""
-    if "sqlite+aiosqlite://" in db_url:
-        return db_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    return db_url
 
 
 class SQLiteMetricsSink(SQLAlchemyMetricsSink):
@@ -22,8 +16,7 @@ class SQLiteMetricsSink(SQLAlchemyMetricsSink):
         return "sqlite"
 
     def __init__(self, db_url: str) -> None:
-        """Initialize SQLite sink with normalized URL."""
-        super().__init__(_normalize_sqlite_url(db_url))
+        super().__init__(normalize_sqlite_url(db_url))
 
     @staticmethod
     def _table_has_column(conn, table: str, column: str) -> bool:

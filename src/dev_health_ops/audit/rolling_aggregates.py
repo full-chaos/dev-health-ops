@@ -7,6 +7,9 @@ from typing import Any, Dict, Iterable, List, Sequence
 
 from sqlalchemy import text
 
+from dev_health_ops.metrics.db_utils import (
+    normalize_sqlite_url as _normalize_sqlite_url,
+)
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.storage import detect_db_type
@@ -38,12 +41,6 @@ ROLLING_TABLE_SPECS = [
         "p50_metrics": ("cycle_time_p50_hours",),
     },
 ]
-
-
-def _normalize_sqlite_url(db_url: str) -> str:
-    if "sqlite+aiosqlite://" in db_url:
-        return db_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    return db_url
 
 
 def _window_start(as_of: date, window_days: int) -> date:

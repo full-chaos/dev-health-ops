@@ -14,6 +14,7 @@ from dev_health_ops.models.work_items import (
     WorkItemType,
 )
 from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 logger = logging.getLogger(__name__)
@@ -41,16 +42,8 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         return None
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception:
+    except ValueError:
         return None
-
-
-def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _get(obj: Any, *keys: str) -> Any:
@@ -79,7 +72,7 @@ def _status_from_state_type(state_type: Optional[str]) -> WorkItemStatusCategory
 
 
 def _type_from_labels(labels: List[str]) -> WorkItemType:
-    label_lower = [l.lower() for l in labels]
+    label_lower = [lbl.lower() for lbl in labels]
     if "bug" in label_lower or "type:bug" in label_lower:
         return "bug"
     if "incident" in label_lower:
@@ -124,7 +117,7 @@ def linear_issue_to_work_item(
     state_type = _get(state, "type")
 
     label_nodes = _get(issue, "labels", "nodes") or []
-    labels = [_get(l, "name") for l in label_nodes if _get(l, "name")]
+    labels = [_get(node, "name") for node in label_nodes if _get(node, "name")]
 
     normalized_status = status_mapping.normalize_status(
         provider="linear",

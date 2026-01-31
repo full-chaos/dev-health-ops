@@ -48,6 +48,9 @@ from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.metrics.db_utils import (
+    normalize_sqlite_url as _normalize_sqlite_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +58,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 # Public aliases for backward compatibility
 _to_utc = to_utc
-
-
-def _normalize_sqlite_url(url: str) -> str:
-    if url.startswith("sqlite+aiosqlite:///"):
-        return url.replace("sqlite+aiosqlite://", "sqlite://", 1)
-    return url
 
 
 def discover_repos(

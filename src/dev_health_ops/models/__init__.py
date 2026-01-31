@@ -1,4 +1,4 @@
-from .git import GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
+from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
 from .users import (
     AuthProvider,
     MemberRole,
@@ -19,6 +19,7 @@ from .settings import (
     SyncConfiguration,
     TeamMapping,
 )
+from .teams import JiraProjectOpsTeamLink, Team
 from .work_items import (
     Sprint,
     WorkItem,
@@ -62,6 +63,7 @@ __all__ = [
     "AuthProvider",
     "FeatureCategory",
     "FeatureFlag",
+    "Base",
     "GitBlame",
     "GitBlameMixin",
     "GitCommit",
@@ -95,6 +97,10 @@ __all__ = [
     "Tier",
     "TIER_LIMITS",
     "User",
+    "JiraProjectOpsTeamLink",
+    "Repo",
+    "Sprint",
+    "Team",
     "WorkItem",
     "WorkItemDependency",
     "WorkItemInteractionEvent",

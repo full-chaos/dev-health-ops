@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.analytics.investment import InvestmentClassifier
-from dev_health_ops.analytics.issue_types import IssueTypeNormalizer
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
@@ -112,9 +111,6 @@ def run_work_items_sync_job(
 
     investment_classifier = InvestmentClassifier(
         REPO_ROOT / "src/dev_health_ops/config/investment_areas.yaml"
-    )
-    issue_type_normalizer = IssueTypeNormalizer(
-        REPO_ROOT / "src/dev_health_ops/config/issue_type_mapping.yaml"
     )
 
     computed_at = datetime.now(timezone.utc)
@@ -361,8 +357,10 @@ def run_work_items_sync_job(
                 r_id = getattr(item, "repo_id", None) or uuid.UUID(int=0)
                 prov = item.provider
                 team_id = _get_team(item)
-                norm_type = issue_type_normalizer.normalize(
-                    prov, item.type, getattr(item, "labels", [])
+                norm_type = status_mapping.normalize_type(
+                    provider=prov,
+                    type_raw=item.type,
+                    labels=getattr(item, "labels", []),
                 )
 
                 key = (r_id, prov, team_id, norm_type)

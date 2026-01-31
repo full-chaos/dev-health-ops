@@ -288,7 +288,6 @@ class RolePermission(Base):
 
     __table_args__ = (
         UniqueConstraint("role", "permission_id", name="uq_role_permission"),
-        Index("ix_role_permissions_role", "role"),
     )
 
     def __repr__(self) -> str:

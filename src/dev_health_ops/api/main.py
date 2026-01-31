@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 import logging
 import os
-from typing import Any, List, Literal, cast
+from typing import List, Literal, cast
 from urllib.parse import urlparse
 
 

@@ -197,12 +197,12 @@ class TestBatchProcessingCLIArguments:
         """Test that --search argument is parsed correctly."""
         parser = build_parser()
         test_args = [
+            "--db",
+            "sqlite+aiosqlite:///:memory:",
             "sync",
             "git",
             "--provider",
             "github",
-            "--db",
-            "sqlite+aiosqlite:///:memory:",
             "--search",
             "chrisgeo/m*",
         ]
@@ -222,12 +222,12 @@ class TestBatchProcessingCLIArguments:
         """Test that batch processing arguments accept custom values."""
         parser = build_parser()
         test_args = [
+            "--db",
+            "sqlite+aiosqlite:///:memory:",
             "sync",
             "git",
             "--provider",
             "github",
-            "--db",
-            "sqlite+aiosqlite:///:memory:",
             "--search",
             "org/*",
             "--batch-size",
@@ -258,12 +258,12 @@ class TestBatchProcessingCLIArguments:
         parser = build_parser()
         args = parser.parse_args(
             [
+                "--db",
+                "sqlite+aiosqlite:///:memory:",
                 "sync",
                 "git",
                 "--provider",
                 "github",
-                "--db",
-                "sqlite+aiosqlite:///:memory:",
                 "--search",
                 "org/*",
             ]
@@ -276,10 +276,10 @@ class TestBatchProcessingCLIArguments:
         parser = build_parser()
         args = parser.parse_args(
             [
-                "metrics",
-                "daily",
                 "--db",
                 "sqlite+aiosqlite:///:memory:",
+                "metrics",
+                "daily",
             ]
         )
         assert args.provider == "auto"
@@ -289,12 +289,12 @@ class TestBatchProcessingCLIArguments:
         parser = build_parser()
         args = parser.parse_args(
             [
+                "--db",
+                "sqlite+aiosqlite:///:memory:",
                 "sync",
                 "git",
                 "--provider",
                 "github",
-                "--db",
-                "sqlite+aiosqlite:///:memory:",
                 "--search",
                 "org/*",
                 "--use-async",
@@ -307,12 +307,12 @@ class TestBatchProcessingCLIArguments:
         """Test that --search argument is parsed correctly for GitLab."""
         parser = build_parser()
         test_args = [
+            "--db",
+            "sqlite+aiosqlite:///:memory:",
             "sync",
             "git",
             "--provider",
             "gitlab",
-            "--db",
-            "sqlite+aiosqlite:///:memory:",
             "--search",
             "group/p*",
         ]
@@ -338,12 +338,12 @@ class TestBatchProcessingCLIArguments:
         """Test that GitLab batch processing arguments accept custom values."""
         parser = build_parser()
         test_args = [
+            "--db",
+            "sqlite+aiosqlite:///:memory:",
             "sync",
             "git",
             "--provider",
             "gitlab",
-            "--db",
-            "sqlite+aiosqlite:///:memory:",
             "--search",
             "mygroup/*",
             "--group",
@@ -378,12 +378,12 @@ class TestSyncTimeWindowCLIArguments:
         parser = build_parser()
         args = parser.parse_args(
             [
+                "--db",
+                "sqlite+aiosqlite:///:memory:",
                 "sync",
                 "git",
                 "--provider",
                 "local",
-                "--db",
-                "sqlite+aiosqlite:///:memory:",
                 "--date",
                 "2025-01-02",
                 "--backfill",
@@ -398,12 +398,12 @@ class TestSyncTimeWindowCLIArguments:
         with pytest.raises(SystemExit):
             parser.parse_args(
                 [
+                    "--db",
+                    "sqlite+aiosqlite:///:memory:",
                     "sync",
                     "git",
                     "--provider",
                     "local",
-                    "--db",
-                    "sqlite+aiosqlite:///:memory:",
                     "--since",
                     "2025-01-01T00:00:00+00:00",
                     "--date",

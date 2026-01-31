@@ -30,7 +30,6 @@ from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.settings import SettingCategory
 
 from .schemas import (
-    AuditLogFilter,
     AuditLogListResponse,
     AuditLogResponse,
     IdentityMappingCreate,

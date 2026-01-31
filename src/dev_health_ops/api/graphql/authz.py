@@ -47,7 +47,6 @@ def require_permission(
                 raise AuthorizationError("Authentication required")
 
             from dev_health_ops.api.services.permissions import (
-                has_permission,
                 has_all_permissions,
                 has_any_permission,
             )
@@ -78,7 +77,6 @@ def require_permission(
                 raise AuthorizationError("Authentication required")
 
             from dev_health_ops.api.services.permissions import (
-                has_permission,
                 has_all_permissions,
                 has_any_permission,
             )

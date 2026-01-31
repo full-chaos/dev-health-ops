@@ -47,10 +47,7 @@ from .sso import (
     SSOProvider,
     SSOProviderStatus,
 )
-from .ip_allowlist import (
-    OrgIPAllowlist,
-    is_valid_ip_or_cidr,
-)
+from .ip_allowlist import OrgIPAllowlist
 from .retention import (
     OrgRetentionPolicy,
     RetentionResourceType,

@@ -12,6 +12,18 @@ from dev_health_ops.api.services.auth import (
     get_auth_service,
     extract_token_from_header,
 )
+from dev_health_ops.api.auth.schemas import (
+    OIDCAuthRequest,
+    OIDCAuthResponse,
+    SAMLAuthRequest,
+    SAMLAuthResponse,
+    SAMLMetadataResponse,
+    SSOProviderCreate,
+    SSOProviderListResponse,
+    SSOProviderResponse,
+    SSOProviderUpdate,
+)
+from dev_health_ops.api.services.sso import SSOService
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.users import User, Membership
 
@@ -302,20 +314,6 @@ async def logout() -> dict:
 
 
 # --- SSO Provider Management Endpoints ---
-
-
-from dev_health_ops.api.auth.schemas import (
-    OIDCAuthRequest,
-    OIDCAuthResponse,
-    SAMLAuthRequest,
-    SAMLAuthResponse,
-    SAMLMetadataResponse,
-    SSOProviderCreate,
-    SSOProviderListResponse,
-    SSOProviderResponse,
-    SSOProviderUpdate,
-)
-from dev_health_ops.api.services.sso import SSOService
 
 
 def _provider_to_response(provider) -> SSOProviderResponse:

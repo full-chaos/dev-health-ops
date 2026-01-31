@@ -11,7 +11,7 @@ def _make_ns(**overrides):
         "date": date(2025, 1, 1),
         "backfill": 1,
         "ref": "HEAD",
-        "db": "clickhouse://localhost:8123/default",
+        "analytics_db": "clickhouse://localhost:8123/default",
         "max_files": None,
         "include_glob": None,
         "exclude_glob": None,

@@ -1,5 +1,3 @@
-import pytest
-
 from dev_health_ops.metrics.db_utils import (
     normalize_db_url,
     normalize_postgres_url,

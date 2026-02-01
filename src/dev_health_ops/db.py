@@ -39,16 +39,8 @@ def get_postgres_uri() -> str | None:
 
 
 def get_clickhouse_uri() -> str | None:
-    """Get ClickHouse connection URI with fallback chain."""
-    uri = os.getenv("CLICKHOUSE_URI")
-    if uri:
-        return uri
-
-    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if fallback and "clickhouse" in fallback.lower():
-        return fallback
-
-    return None
+    """Get ClickHouse connection URI."""
+    return os.getenv("CLICKHOUSE_URI")
 
 
 def _ensure_async_postgres(uri: str) -> str:

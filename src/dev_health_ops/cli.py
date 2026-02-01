@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--analytics-db",
         dest="analytics_db",
-        default=os.getenv("CLICKHOUSE_URI") or os.getenv("DATABASE_URI"),
+        default=os.getenv("CLICKHOUSE_URI"),
         help="ClickHouse URI for analytics data (metrics, work items). Env: CLICKHOUSE_URI",
     )
     from dev_health_ops.llm.cli import add_llm_arguments

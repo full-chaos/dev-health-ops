@@ -53,7 +53,7 @@ async def get_context(request: Request) -> GraphQLContext:
     if not org_id:
         org_id = request.query_params.get("org_id", "")
 
-    db_url = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL", "")
+    db_url = os.getenv("CLICKHOUSE_URI", "")
     persisted_query_id = request.headers.get("X-Persisted-Query-Id")
 
     user = None

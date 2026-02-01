@@ -325,6 +325,7 @@ class TestTeamsConnectorFromEnv:
                 "AZURE_CLIENT_ID": "test-client",
                 "AZURE_CLIENT_SECRET": "test-secret",
             },
+            clear=True,
         ):
             connector = TeamsConnector.from_env()
             assert connector.client.tenant_id == "test-tenant"

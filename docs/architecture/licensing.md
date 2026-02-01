@@ -315,29 +315,31 @@ During grace period:
 - Warning banner shown in UI
 - Email notifications sent (if configured)
 
-## License Generation CLI
+## License Generation (Private Service)
 
-```bash
-# Generate a license key
-python cli.py admin licenses create \
-  --org-id org_abc123 \
-  --tier team \
-  --features sso,audit,api_access \
-  --users 50 \
-  --repos -1 \
-  --expires 2027-01-01 \
-  --grace-days 14
+> **IMPORTANT**: License generation is NOT in this repository.
 
-# Output:
-# License Key: eyJ0aWVyIjoidGVhbSIsIm9yZ19pZ...
-# Tier: team
-# Expires: 2027-01-01
-# Features: sso, audit, api_access
+License generation requires the Ed25519 **private key** and must be in a separate, private service. Putting it in the public repo would allow anyone to mint valid licenses.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│           License Service (PRIVATE - Hosted)                 │
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐                       │
+│  │  License     │───▶│  Billing     │                       │
+│  │  Generator   │    │  Integration │                       │
+│  │              │    │              │                       │
+│  │  • PRIVATE   │    │  • Stripe    │                       │
+│  │    key       │    │  • Portal    │                       │
+│  └──────────────┘    └──────────────┘                       │
+│                                                              │
+│  Private key NEVER in public repos                          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Private key for generation is stored securely (not in repo):
-- SaaS: Environment variable / secrets manager
-- License generation: Offline signing machine
+**What lives where:**
+- **This repo (public)**: Validation with PUBLIC key, feature gating
+- **Private service**: Generation with PRIVATE key, billing integration
 
 ## Research References
 

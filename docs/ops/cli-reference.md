@@ -230,12 +230,14 @@ python cli.py fixtures generate --days 30
 
 User and organization management commands. These use PostgreSQL (`POSTGRES_URI`).
 
-### `admin create-user`
+> **Important:** Users must belong to an organization to log in. Always create an organization after creating a user.
+
+### `admin users create`
 
 Create a new user.
 
 ```bash
-python cli.py admin create-user \
+python -m dev_health_ops.cli admin users create \
   --email admin@example.com \
   --password secretpass123 \
   --full-name "Admin User" \
@@ -252,12 +254,12 @@ python cli.py admin create-user \
 | `--full-name` | User's full name |
 | `--superuser` | Grant superuser privileges |
 
-### `admin create-org`
+### `admin orgs create`
 
 Create a new organization. Uses `POSTGRES_URI`.
 
 ```bash
-python cli.py admin create-org \
+python -m dev_health_ops.cli admin orgs create \
   --name "My Organization" \
   --owner-email admin@example.com \
   --tier free
@@ -273,20 +275,20 @@ python cli.py admin create-org \
 | `--tier` | Subscription tier (default: `free`) |
 | `--owner-email` | Email of initial owner |
 
-### `admin list-users`
+### `admin users list`
 
 List all users.
 
 ```bash
-python cli.py admin list-users --limit 50
+python -m dev_health_ops.cli admin users list --limit 50
 ```
 
-### `admin list-orgs`
+### `admin orgs list`
 
 List all organizations.
 
 ```bash
-python cli.py admin list-orgs --include-inactive
+python -m dev_health_ops.cli admin orgs list --include-inactive
 ```
 
 ---

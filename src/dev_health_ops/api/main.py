@@ -107,12 +107,22 @@ def _db_url() -> str:
     if dsn:
         return dsn
 
-    # Fail fast if no database configuration is provided to avoid
-    # accidentally connecting to an unintended default in production.
     raise RuntimeError(
         "Database configuration is missing: set DATABASE_URI or DATABASE_URL "
         "(e.g. 'clickhouse://localhost:8123/default')."
     )
+
+
+def _postgres_url() -> str | None:
+    from dev_health_ops.db import get_postgres_uri
+
+    return get_postgres_uri()
+
+
+def _clickhouse_url() -> str | None:
+    from dev_health_ops.db import get_clickhouse_uri
+
+    return get_clickhouse_uri()
 
 
 def _check_sqlalchemy_health(dsn: str) -> bool:
@@ -197,6 +207,29 @@ async def _check_database_service(dsn: str) -> tuple[str, str]:
     return backend.value, "down"
 
 
+async def _check_postgres_health() -> tuple[str, str]:
+    uri = _postgres_url()
+    if not uri:
+        return "postgres", "not_configured"
+    if _dsn_uses_async_driver(uri):
+        ok = await _check_sqlalchemy_health_async(uri)
+    else:
+        ok = await asyncio.to_thread(_check_sqlalchemy_health, uri)
+    return "postgres", "ok" if ok else "down"
+
+
+async def _check_clickhouse_health() -> tuple[str, str]:
+    uri = _clickhouse_url()
+    if not uri:
+        return "clickhouse", "not_configured"
+    try:
+        async with clickhouse_client(uri) as sink:
+            rows = await query_dicts(sink, "SELECT 1 AS ok", {})
+        return "clickhouse", "ok" if rows else "down"
+    except Exception:
+        return "clickhouse", "down"
+
+
 def _filters_from_query(
     scope_type: str,
     scope_id: str,
@@ -268,24 +301,23 @@ app.include_router(auth_router)
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:
     services = {}
-    try:
-        db_url = _db_url()
-    except Exception as exc:
-        logger.warning(
-            "Database configuration missing for health check: %s",
-            sanitize_for_log(exc),
-        )
-        services["database"] = "down"
-    else:
-        db_key, db_status = await _check_database_service(db_url)
-        services[db_key] = db_status
+    required_services = []
+
+    pg_key, pg_status = await _check_postgres_health()
+    services[pg_key] = pg_status
+    required_services.append(pg_status)
+
+    ch_key, ch_status = await _check_clickhouse_health()
+    services[ch_key] = ch_status
+    required_services.append(ch_status)
 
     try:
         services["redis"] = HOME_CACHE.status()
     except Exception:
         services["redis"] = "down"
 
-    status = "ok" if all(state == "ok" for state in services.values()) else "down"
+    required_ok = all(state == "ok" for state in required_services)
+    status = "ok" if required_ok else "down"
     response = HealthResponse(status=status, services=services)
     if status != "ok":
         content = (

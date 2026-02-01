@@ -1545,3 +1545,95 @@ class SyntheticDataGenerator:
                 )
             )
         return records
+
+    def generate_users(
+        self,
+        *,
+        default_password: str = "devhealth123",
+        include_admin: bool = True,
+    ) -> Dict[str, Any]:
+        import bcrypt
+        from dev_health_ops.models.users import User, Organization, Membership
+
+        users = []
+        orgs = []
+        memberships = []
+
+        password_hash = bcrypt.hashpw(
+            default_password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+
+        if include_admin:
+            admin_user = User(
+                id=uuid.uuid5(
+                    uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"),
+                    "admin@devhealth.local",
+                ),
+                email="admin@devhealth.local",
+                username="admin",
+                password_hash=password_hash,
+                full_name="Admin User",
+                auth_provider="local",
+                is_active=True,
+                is_verified=True,
+                is_superuser=True,
+            )
+            users.append(admin_user)
+
+            admin_org = Organization(
+                id=uuid.uuid5(
+                    uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "default-org"
+                ),
+                slug="default-org",
+                name="Default Organization",
+                tier="enterprise",
+                is_active=True,
+            )
+            orgs.append(admin_org)
+
+            memberships.append(
+                Membership(
+                    user_id=admin_user.id,
+                    org_id=admin_org.id,
+                    role="owner",
+                    joined_at=datetime.now(timezone.utc),
+                )
+            )
+
+        default_org_id = None
+        if orgs:
+            default_org_id = orgs[0].id
+
+        for name, email in self.authors[:5]:
+            user_id = uuid.uuid5(
+                uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), email
+            )
+            user = User(
+                id=user_id,
+                email=email,
+                username=email.split("@")[0],
+                password_hash=password_hash,
+                full_name=name,
+                auth_provider="local",
+                is_active=True,
+                is_verified=True,
+                is_superuser=False,
+            )
+            users.append(user)
+
+            if default_org_id:
+                memberships.append(
+                    Membership(
+                        user_id=user_id,
+                        org_id=default_org_id,
+                        role="member",
+                        joined_at=datetime.now(timezone.utc),
+                    )
+                )
+
+        return {
+            "users": users,
+            "organizations": orgs,
+            "memberships": memberships,
+            "default_password": default_password,
+        }

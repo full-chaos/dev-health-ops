@@ -36,6 +36,23 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 # --- Request/Response Models ---
 
 
+class RegisterRequest(BaseModel):
+    """Register a new user with email and password."""
+
+    email: EmailStr
+    password: str
+    full_name: str | None = None
+    org_name: str | None = None  # Optional: name for new org, defaults to "My Org"
+
+
+class RegisterResponse(BaseModel):
+    """Registration response."""
+
+    message: str
+    user_id: str
+    org_id: str
+
+
 class LoginRequest(BaseModel):
     """Login with email and password."""
 
@@ -159,6 +176,67 @@ async def get_current_user_optional(
 
 
 # --- Endpoints ---
+
+
+@router.post("/register", response_model=RegisterResponse, status_code=201)
+async def register(payload: RegisterRequest) -> RegisterResponse:
+    import bcrypt
+    from datetime import datetime, timezone
+
+    async with get_postgres_session() as db:
+        stmt = select(User).where(User.email == payload.email)
+        result = await db.execute(stmt)
+        existing_user = result.scalar_one_or_none()
+
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+        password_hash = bcrypt.hashpw(
+            payload.password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+
+        user = User(
+            email=payload.email,
+            password_hash=password_hash,
+            full_name=payload.full_name,
+            auth_provider="local",
+            is_active=True,
+            is_verified=False,
+        )
+        db.add(user)
+        await db.flush()
+
+        org_name = payload.org_name or "My Organization"
+        org_slug = org_name.lower().replace(" ", "-")[:50]
+        org_slug = f"{org_slug}-{str(user.id)[:8]}"
+
+        from dev_health_ops.models.users import Organization, Membership
+
+        org = Organization(
+            slug=org_slug,
+            name=org_name,
+            tier="free",
+            is_active=True,
+        )
+        db.add(org)
+        await db.flush()
+
+        membership = Membership(
+            user_id=user.id,
+            org_id=org.id,
+            role="owner",
+            joined_at=datetime.now(timezone.utc),
+        )
+        db.add(membership)
+        await db.commit()
+
+        logger.info("User registered: %s", sanitize_for_log(payload.email))
+
+        return RegisterResponse(
+            message="Registration successful",
+            user_id=str(user.id),
+            org_id=str(org.id),
+        )
 
 
 @router.post("/login", response_model=LoginResponse)

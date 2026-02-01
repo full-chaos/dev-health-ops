@@ -124,13 +124,7 @@ def _postgres_url() -> str | None:
 
 
 def _clickhouse_url() -> str | None:
-    uri = os.getenv("CLICKHOUSE_URI")
-    if uri:
-        return uri
-    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if fallback and "clickhouse" in fallback.lower():
-        return fallback
-    return None
+    return os.getenv("CLICKHOUSE_URI")
 
 
 def _check_sqlalchemy_health(dsn: str) -> bool:

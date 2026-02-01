@@ -816,8 +816,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     fix_gen = fix_sub.add_parser("generate", help="Generate synthetic data.")
     fix_gen.add_argument(
         "--sink",
-        default=os.getenv("CLICKHOUSE_URI") or os.getenv("DATABASE_URI"),
-        help="Analytics sink URI (ClickHouse, etc). Env: CLICKHOUSE_URI",
+        default=os.getenv("CLICKHOUSE_URI"),
+        help="Analytics sink URI (ClickHouse). Env: CLICKHOUSE_URI",
     )
     fix_gen.add_argument(
         "--db-type", help="Explicit DB type (postgres, clickhouse, etc)."

@@ -114,15 +114,23 @@ def _db_url() -> str:
 
 
 def _postgres_url() -> str | None:
-    from dev_health_ops.db import get_postgres_uri
-
-    return get_postgres_uri()
+    uri = os.getenv("POSTGRES_URI")
+    if uri:
+        return uri
+    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+    if fallback and "postgres" in fallback.lower():
+        return fallback
+    return None
 
 
 def _clickhouse_url() -> str | None:
-    from dev_health_ops.db import get_clickhouse_uri
-
-    return get_clickhouse_uri()
+    uri = os.getenv("CLICKHOUSE_URI")
+    if uri:
+        return uri
+    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+    if fallback and "clickhouse" in fallback.lower():
+        return fallback
+    return None
 
 
 def _check_sqlalchemy_health(dsn: str) -> bool:

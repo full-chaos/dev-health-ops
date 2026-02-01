@@ -70,8 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--db",
-        default=os.getenv("POSTGRES_URI"),
-        help="PostgreSQL URI for semantic data (users, settings). Env: POSTGRES_URI",
+        default=os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URI"),
+        help="PostgreSQL URI for semantic data. Env: POSTGRES_URI or DATABASE_URI",
     )
     parser.add_argument(
         "--analytics-db",

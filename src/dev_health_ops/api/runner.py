@@ -9,11 +9,8 @@ def run_api_server(ns: argparse.Namespace) -> int:
     if ns.db:
         os.environ["DATABASE_URI"] = ns.db
 
-    # Propagate LLM settings to the API process
-    if hasattr(ns, "llm_provider"):
-        os.environ["LLM_PROVIDER"] = ns.llm_provider
-    if hasattr(ns, "model"):
-        os.environ["LLM_MODEL"] = ns.model or ""
+    if getattr(ns, "analytics_db", None):
+        os.environ["CLICKHOUSE_URI"] = ns.analytics_db
 
     log_level = str(getattr(ns, "log_level", "") or "INFO").upper()
 
@@ -38,11 +35,6 @@ def run_api_server(ns: argparse.Namespace) -> int:
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     api = subparsers.add_parser("api", help="Run the Dev Health Ops API server.")
-    api.add_argument(
-        "--db",
-        default=os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL"),
-        help="Database URI.",
-    )
     api.add_argument("--host", default="127.0.0.1", help="Bind host.")
     api.add_argument("--port", type=int, default=8000, help="Bind port.")
     api.add_argument(

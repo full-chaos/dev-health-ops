@@ -211,14 +211,23 @@ class OAuthProvider(ABC):
 
     def _parse_token_response(self, response: httpx.Response) -> OAuthTokenResponse:
         """Parse token response. Override in subclasses if needed."""
-        data = response.json()
-        return OAuthTokenResponse(
-            access_token=data["access_token"],
-            token_type=data.get("token_type", "bearer"),
-            scope=data.get("scope"),
-            refresh_token=data.get("refresh_token"),
-            expires_in=data.get("expires_in"),
-        )
+        try:
+            data = response.json()
+            return OAuthTokenResponse(
+                access_token=data["access_token"],
+                token_type=data.get("token_type", "bearer"),
+                scope=data.get("scope"),
+                refresh_token=data.get("refresh_token"),
+                expires_in=data.get("expires_in"),
+            )
+        except (KeyError, TypeError) as e:
+            logger.error(
+                "Token response missing required fields or malformed. Status: %s",
+                response.status_code,
+            )
+            raise OAuthTokenError(
+                "Token response missing required field 'access_token'"
+            ) from e
 
     @abstractmethod
     async def fetch_user_info(self, access_token: str) -> OAuthUserInfo:
@@ -381,15 +390,24 @@ class GitLabOAuthProvider(OAuthProvider):
                 logger.error("GitLab user info request failed: %s", str(e))
                 raise OAuthUserInfoError(f"User info request failed: {e}") from e
 
-        return OAuthUserInfo(
-            provider=self.provider_type.value,
-            provider_user_id=str(user_data["id"]),
-            email=user_data["email"],
-            username=user_data.get("username"),
-            full_name=user_data.get("name"),
-            avatar_url=user_data.get("avatar_url"),
-            raw_data=user_data,
-        )
+        try:
+            return OAuthUserInfo(
+                provider=self.provider_type.value,
+                provider_user_id=str(user_data["id"]),
+                email=user_data["email"],
+                username=user_data.get("username"),
+                full_name=user_data.get("name"),
+                avatar_url=user_data.get("avatar_url"),
+                raw_data=user_data,
+            )
+        except (KeyError, TypeError) as e:
+            logger.error(
+                "GitLab user info response missing required fields or malformed: %s",
+                user_data,
+            )
+            raise OAuthUserInfoError(
+                "User info response missing required fields: 'id' and/or 'email'"
+            ) from e
 
 
 class GoogleOAuthProvider(OAuthProvider):
@@ -454,15 +472,24 @@ class GoogleOAuthProvider(OAuthProvider):
                 logger.error("Google user info request failed: %s", str(e))
                 raise OAuthUserInfoError(f"User info request failed: {e}") from e
 
-        return OAuthUserInfo(
-            provider=self.provider_type.value,
-            provider_user_id=user_data["id"],
-            email=user_data["email"],
-            username=None,  # Google doesn't have usernames
-            full_name=user_data.get("name"),
-            avatar_url=user_data.get("picture"),
-            raw_data=user_data,
-        )
+        try:
+            return OAuthUserInfo(
+                provider=self.provider_type.value,
+                provider_user_id=user_data["id"],
+                email=user_data["email"],
+                username=None,  # Google doesn't have usernames
+                full_name=user_data.get("name"),
+                avatar_url=user_data.get("picture"),
+                raw_data=user_data,
+            )
+        except (KeyError, TypeError) as e:
+            logger.error(
+                "Google user info response missing required fields or malformed: %s",
+                user_data,
+            )
+            raise OAuthUserInfoError(
+                "User info response missing required fields: 'id' and/or 'email'"
+            ) from e
 
 
 def create_oauth_provider(
@@ -544,7 +571,9 @@ def validate_oauth_config(
 
     if provider_type == OAuthProviderType.GITHUB:
         if client_id and not client_id.startswith(("Iv1.", "Iv2.", "Ov")):
-            pass
+            errors.append(
+                "GitHub client_id should start with 'Iv1.', 'Iv2.', or 'Ov'"
+            )
 
     if provider_type == OAuthProviderType.GITLAB:
         if base_url:

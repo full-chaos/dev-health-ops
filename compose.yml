@@ -1,34 +1,95 @@
-networks:
-  dev-health:
-    external: true
-    name: dev-health-network
-
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+  clickhouse_data:
+    driver: local
+#    driver_opts:
+#      type: none
+#      device: ./data/clickhouse
+#      o: bind
 services:
+  mongo:
+    image: mongo:latest
+    container_name: mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      PG_DATA: /var/lib/postgresql/
+    ports:
+      - "5555:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    restart: on-failure
+    environment:
+      CLICKHOUSE_LISTEN_HOST: 0.0.0.0
+      CLICKHOUSE_USER: ch
+      CLICKHOUSE_PASSWORD: ch
+      CLICKHOUSE_DB: default
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
   api:
     build:
       context: .
       dockerfile: ./docker/Dockerfile
       target: api
       args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: ${VERSION:-0.0.0}
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: dev-health-api
-    restart: unless-stopped
-    networks:
-      - dev-health
-    command: >
-      --db "${DATABASE_URI:-clickhouse://ch:ch@dev-health-clickhouse:8123/default}"
-      --host 0.0.0.0
-      --port 8000
-      --reload
+    command: |
+      --db "$DATABASE_URI" --reload --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URI: ${DATABASE_URI:-clickhouse://ch:ch@dev-health-clickhouse:8123/default}
-      POSTGRES_URI: ${POSTGRES_URI:-postgresql+asyncpg://postgres:postgres@dev-health-postgres:5432/devhealth}
-      REDIS_URL: ${REDIS_URL:-redis://dev-health-redis:6379/1}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://dev-health-redis:6379/0}
-      GRAPHQL_QUERY_TIMEOUT: ${GRAPHQL_QUERY_TIMEOUT:-30}
-      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: ${VERSION:-0.0.0}
+      DATABASE_URI: "${DATABASE_URI}"
+      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
+      # GraphQL analytics endpoint available at /graphql
+      GRAPHQL_QUERY_TIMEOUT: "30"
+      REDIS_URL: "redis://redis:6379/1"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "8000:8000"
     volumes:
       - ./:/app
     working_dir: /app
@@ -38,27 +99,37 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
   worker:
     build:
       context: .
       dockerfile: ./docker/Dockerfile
       target: api
       args:
-        SETUPTOOLS_SCM_PRETEND_VERSION: ${VERSION:-0.0.0}
-    container_name: dev-health-worker
-    restart: unless-stopped
-    networks:
-      - dev-health
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    container_name: worker
     command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync
     environment:
-      DATABASE_URI: ${DATABASE_URI:-clickhouse://ch:ch@dev-health-clickhouse:8123/default}
-      POSTGRES_URI: ${POSTGRES_URI:-postgresql+asyncpg://postgres:postgres@dev-health-postgres:5432/devhealth}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://dev-health-redis:6379/0}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://dev-health-redis:6379/0}
-      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: ${VERSION:-0.0.0}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
+    depends_on:
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     volumes:
       - ./:/app
     working_dir: /app
-    profiles:
-      - worker

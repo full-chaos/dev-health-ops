@@ -147,3 +147,56 @@ class SSOLoginResponse(BaseModel):
     email: str
     org_id: str
     role: str
+
+
+class OAuthConfigInput(BaseModel):
+    client_id: str = Field(..., description="OAuth Client ID")
+    client_secret: str = Field(..., description="OAuth Client Secret")
+    scopes: list[str] = Field(
+        default_factory=list,
+        description="OAuth scopes (uses provider defaults if empty)",
+    )
+    base_url: Optional[str] = Field(
+        default=None,
+        description="Base URL for self-hosted instances (GitLab only)",
+    )
+
+
+class OAuthProviderCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    provider_type: str = Field(
+        ...,
+        pattern="^(github|gitlab|google)$",
+        description="OAuth provider type",
+    )
+    oauth_config: OAuthConfigInput
+    is_default: bool = False
+    auto_provision_users: bool = True
+    default_role: str = "member"
+    allowed_domains: list[str] = Field(default_factory=list)
+
+
+class OAuthProviderUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=255)
+    oauth_config: Optional[OAuthConfigInput] = None
+    is_default: Optional[bool] = None
+    auto_provision_users: Optional[bool] = None
+    default_role: Optional[str] = None
+    allowed_domains: Optional[list[str]] = None
+
+
+class OAuthAuthRequest(BaseModel):
+    redirect_uri: Optional[str] = Field(
+        default=None,
+        description="Custom redirect URI (uses default if not provided)",
+    )
+
+
+class OAuthAuthResponse(BaseModel):
+    authorization_url: str
+    state: str
+
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: str

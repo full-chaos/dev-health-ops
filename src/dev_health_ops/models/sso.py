@@ -23,6 +23,9 @@ from dev_health_ops.models.git import Base, GUID
 class SSOProtocol(str, Enum):
     SAML = "saml"
     OIDC = "oidc"
+    OAUTH_GITHUB = "oauth_github"
+    OAUTH_GITLAB = "oauth_gitlab"
+    OAUTH_GOOGLE = "oauth_google"
 
 
 class SSOProviderStatus(str, Enum):
@@ -207,4 +210,32 @@ class SSOProvider(Base):
             "jwks_uri": self.config.get("jwks_uri"),
             "scopes": self.config.get("scopes", ["openid", "profile", "email"]),
             "claim_mapping": self.config.get("claim_mapping", {}),
+        }
+
+    @property
+    def is_oauth(self) -> bool:
+        return self.protocol in (
+            SSOProtocol.OAUTH_GITHUB.value,
+            SSOProtocol.OAUTH_GITLAB.value,
+            SSOProtocol.OAUTH_GOOGLE.value,
+        )
+
+    @property
+    def oauth_provider_type(self) -> Optional[str]:
+        if self.protocol == SSOProtocol.OAUTH_GITHUB.value:
+            return "github"
+        elif self.protocol == SSOProtocol.OAUTH_GITLAB.value:
+            return "gitlab"
+        elif self.protocol == SSOProtocol.OAUTH_GOOGLE.value:
+            return "google"
+        return None
+
+    def get_oauth_config(self) -> dict[str, Any]:
+        if not self.is_oauth:
+            raise ValueError("Provider is not OAuth")
+        return {
+            "client_id": self.config.get("client_id"),
+            "redirect_uri": self.config.get("redirect_uri"),
+            "scopes": self.config.get("scopes", []),
+            "base_url": self.config.get("base_url"),
         }

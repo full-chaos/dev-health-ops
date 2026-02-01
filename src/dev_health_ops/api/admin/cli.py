@@ -147,54 +147,50 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     admin_sub = admin_parser.add_subparsers(dest="admin_command", required=True)
 
-    create_user_parser = admin_sub.add_parser("create-user", help="Create a new user.")
-    create_user_parser.add_argument(
-        "--email", required=True, help="User email address."
-    )
-    create_user_parser.add_argument(
+    users_parser = admin_sub.add_parser("users", help="User management.")
+    users_sub = users_parser.add_subparsers(dest="users_command", required=True)
+
+    users_create = users_sub.add_parser("create", help="Create a new user.")
+    users_create.add_argument("--email", required=True, help="User email address.")
+    users_create.add_argument(
         "--password", required=True, help="User password (min 8 chars)."
     )
-    create_user_parser.add_argument("--username", help="Optional username.")
-    create_user_parser.add_argument(
-        "--full-name", dest="full_name", help="User's full name."
-    )
-    create_user_parser.add_argument(
+    users_create.add_argument("--username", help="Optional username.")
+    users_create.add_argument("--full-name", dest="full_name", help="User's full name.")
+    users_create.add_argument(
         "--superuser", action="store_true", help="Grant superuser privileges."
     )
-    create_user_parser.set_defaults(func=create_user)
+    users_create.set_defaults(func=create_user)
 
-    create_org_parser = admin_sub.add_parser(
-        "create-org", help="Create a new organization."
-    )
-    create_org_parser.add_argument("--name", required=True, help="Organization name.")
-    create_org_parser.add_argument(
-        "--slug", help="URL-safe slug (auto-generated if omitted)."
-    )
-    create_org_parser.add_argument("--description", help="Organization description.")
-    create_org_parser.add_argument(
-        "--tier", default="free", help="Subscription tier (default: free)."
-    )
-    create_org_parser.add_argument(
-        "--owner-email", dest="owner_email", help="Email of the initial owner."
-    )
-    create_org_parser.set_defaults(func=create_org)
-
-    list_users_parser = admin_sub.add_parser("list-users", help="List all users.")
-    list_users_parser.add_argument(
-        "--limit", type=int, default=100, help="Max users to list."
-    )
-    list_users_parser.add_argument(
+    users_list = users_sub.add_parser("list", help="List all users.")
+    users_list.add_argument("--limit", type=int, default=100, help="Max users to list.")
+    users_list.add_argument(
         "--include-inactive", action="store_true", help="Include inactive users."
     )
-    list_users_parser.set_defaults(func=list_users)
+    users_list.set_defaults(func=list_users)
 
-    list_orgs_parser = admin_sub.add_parser("list-orgs", help="List all organizations.")
-    list_orgs_parser.add_argument(
-        "--limit", type=int, default=100, help="Max orgs to list."
+    orgs_parser = admin_sub.add_parser("orgs", help="Organization management.")
+    orgs_sub = orgs_parser.add_subparsers(dest="orgs_command", required=True)
+
+    orgs_create = orgs_sub.add_parser("create", help="Create a new organization.")
+    orgs_create.add_argument("--name", required=True, help="Organization name.")
+    orgs_create.add_argument(
+        "--slug", help="URL-safe slug (auto-generated if omitted)."
     )
-    list_orgs_parser.add_argument(
+    orgs_create.add_argument("--description", help="Organization description.")
+    orgs_create.add_argument(
+        "--tier", default="free", help="Subscription tier (default: free)."
+    )
+    orgs_create.add_argument(
+        "--owner-email", dest="owner_email", help="Email of the initial owner."
+    )
+    orgs_create.set_defaults(func=create_org)
+
+    orgs_list = orgs_sub.add_parser("list", help="List all organizations.")
+    orgs_list.add_argument("--limit", type=int, default=100, help="Max orgs to list.")
+    orgs_list.add_argument(
         "--include-inactive",
         action="store_true",
         help="Include inactive organizations.",
     )
-    list_orgs_parser.set_defaults(func=list_orgs)
+    orgs_list.set_defaults(func=list_orgs)

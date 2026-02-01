@@ -209,7 +209,9 @@ class MicrosoftGraphClient:
             expires_in = int(data.get("expires_in", 3600))
             from datetime import timedelta
 
-            self._token_expires_at = now + timedelta(seconds=expires_in - 300)
+            buffer_seconds = 300
+            effective_lifetime = max(0, expires_in - buffer_seconds)
+            self._token_expires_at = now + timedelta(seconds=effective_lifetime)
 
             logger.debug("Obtained new access token, expires in %d seconds", expires_in)
             token = self._access_token
@@ -332,16 +334,31 @@ class MicrosoftGraphClient:
             if next_link.startswith(self.base_url):
                 next_endpoint = next_link[len(self.base_url) :]
             else:
-                # Use full URL directly
                 client = await self._get_client()
                 token = await self._ensure_token()
                 response = await client.get(
                     next_link,
                     headers={"Authorization": f"Bearer {token}"},
                 )
-                if response.status_code != 200:
-                    break
-                data = response.json()
+                status_code = response.status_code
+                if status_code >= 400:
+                    if status_code in (401, 403):
+                        raise AuthenticationException(
+                            f"Authentication failed ({status_code}) following nextLink"
+                        )
+                    if status_code == 429:
+                        raise RateLimitException(
+                            f"Rate limit exceeded (429) following nextLink"
+                        )
+                    raise APIException(
+                        f"Request to nextLink failed ({status_code}): {response.text}"
+                    )
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise APIException(
+                        f"Failed to decode JSON from nextLink response: {exc}"
+                    ) from exc
                 items.extend(data.get("value", []))
                 next_link = data.get("@odata.nextLink")
                 continue

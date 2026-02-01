@@ -804,7 +804,7 @@ async def create_oauth_provider(
     import uuid as uuid_mod
     import os
 
-    from dev_health_ops.api.services.oauth import get_default_scopes, OAuthProviderType
+    from dev_health_ops.api.services.oauth import get_default_scopes, validate_oauth_config
 
     if user.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -821,9 +821,23 @@ async def create_oauth_provider(
     base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
     scopes = payload.oauth_config.scopes or get_default_scopes(payload.provider_type)
 
+    # Validate OAuth config before persisting
+    validation_result = validate_oauth_config(
+        provider_type=payload.provider_type,
+        client_id=payload.oauth_config.client_id,
+        client_secret=payload.oauth_config.client_secret,
+        scopes=scopes,
+        base_url=payload.oauth_config.base_url,
+    )
+    if not validation_result.valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid OAuth configuration: {'; '.join(validation_result.errors)}",
+        )
+
     config = {
         "client_id": payload.oauth_config.client_id,
-        "redirect_uri": f"{base_url}/api/v1/auth/oauth/{payload.provider_type}/callback",
+        "redirect_uri": None,  # Will be set after provider.id is available
         "scopes": scopes,
         "base_url": payload.oauth_config.base_url,
     }
@@ -843,6 +857,15 @@ async def create_oauth_provider(
             default_role=payload.default_role,
             allowed_domains=payload.allowed_domains,
         )
+
+        # Update config with correct redirect_uri now that we have provider.id
+        config["redirect_uri"] = f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
+        provider = await sso_service.update_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=provider.id,
+            config=config,
+        )
+
         await db.commit()
 
         return _provider_to_response(provider)
@@ -856,6 +879,8 @@ async def update_oauth_provider(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> SSOProviderResponse:
     import uuid as uuid_mod
+
+    from dev_health_ops.api.services.oauth import validate_oauth_config
 
     if user.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -885,6 +910,20 @@ async def update_oauth_provider(
                 config["base_url"] = payload.oauth_config.base_url
             encrypted_secrets = {"client_secret": payload.oauth_config.client_secret}
 
+            # Validate the updated OAuth config
+            validation_result = validate_oauth_config(
+                provider_type=provider.oauth_provider_type,
+                client_id=payload.oauth_config.client_id,
+                client_secret=payload.oauth_config.client_secret,
+                scopes=config.get("scopes"),
+                base_url=config.get("base_url"),
+            )
+            if not validation_result.valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid OAuth configuration: {'; '.join(validation_result.errors)}",
+                )
+
         provider = await sso_service.update_provider(
             org_id=uuid_mod.UUID(user.org_id),
             provider_id=uuid_mod.UUID(provider_id),
@@ -911,7 +950,7 @@ async def initiate_oauth_auth(
     import os
 
     from dev_health_ops.api.services.oauth import (
-        create_oauth_provider,
+        create_oauth_provider as create_oauth_provider_instance,
         OAuthConfig,
     )
     from dev_health_ops.models.sso import SSOProvider
@@ -937,10 +976,11 @@ async def initiate_oauth_auth(
         oauth_config = provider.get_oauth_config()
         secrets = provider.encrypted_secrets or {}
 
-        redirect_uri = payload.redirect_uri or oauth_config.get("redirect_uri")
+        # Use stored redirect_uri if available, otherwise generate from provider.id
+        redirect_uri = oauth_config.get("redirect_uri")
         if not redirect_uri:
             redirect_uri = (
-                f"{base_url}/api/v1/auth/oauth/{provider.oauth_provider_type}/callback"
+                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
             )
 
         config = OAuthConfig(
@@ -950,7 +990,7 @@ async def initiate_oauth_auth(
             scopes=oauth_config.get("scopes", []),
         )
 
-        oauth_provider_instance = create_oauth_provider(
+        oauth_provider_instance = create_oauth_provider_instance(
             provider_type=provider.oauth_provider_type,
             config=config,
             base_url=oauth_config.get("base_url"),
@@ -975,12 +1015,12 @@ async def oauth_callback(
     from datetime import datetime, timezone
 
     from dev_health_ops.api.services.oauth import (
-        create_oauth_provider,
+        create_oauth_provider as create_oauth_provider_instance,
         OAuthConfig,
         OAuthProviderError,
     )
     from dev_health_ops.models.sso import SSOProvider
-    from dev_health_ops.models.users import Organization, AuthProvider
+    from dev_health_ops.models.users import AuthProvider
 
     base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
@@ -1006,7 +1046,7 @@ async def oauth_callback(
         redirect_uri = oauth_config.get("redirect_uri")
         if not redirect_uri:
             redirect_uri = (
-                f"{base_url}/api/v1/auth/oauth/{provider.oauth_provider_type}/callback"
+                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
             )
 
         config = OAuthConfig(
@@ -1016,7 +1056,7 @@ async def oauth_callback(
             scopes=oauth_config.get("scopes", []),
         )
 
-        oauth_provider_instance = create_oauth_provider(
+        oauth_provider_instance = create_oauth_provider_instance(
             provider_type=provider.oauth_provider_type,
             config=config,
             base_url=oauth_config.get("base_url"),
@@ -1166,7 +1206,7 @@ async def oauth_callback(
         )
 
 
-@router.get("/oauth/{provider_type}/authorize")
+@router.get("/oauth/{provider_type}/authorize", response_model=OAuthAuthResponse)
 @require_feature("sso", required_tier="enterprise")
 async def initiate_oauth_by_type(
     provider_type: str,
@@ -1177,9 +1217,8 @@ async def initiate_oauth_by_type(
     import os
 
     from dev_health_ops.api.services.oauth import (
-        create_oauth_provider,
+        create_oauth_provider as create_oauth_provider_instance,
         OAuthConfig,
-        OAuthProviderType,
     )
     from dev_health_ops.models.sso import SSOProvider, SSOProtocol
 
@@ -1223,10 +1262,11 @@ async def initiate_oauth_by_type(
         oauth_config = provider.get_oauth_config()
         secrets = provider.encrypted_secrets or {}
 
-        final_redirect_uri = redirect_uri or oauth_config.get("redirect_uri")
+        # Use stored redirect_uri if available, otherwise generate from provider.id
+        final_redirect_uri = oauth_config.get("redirect_uri")
         if not final_redirect_uri:
             final_redirect_uri = (
-                f"{base_url}/api/v1/auth/oauth/{provider_type}/callback"
+                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
             )
 
         config = OAuthConfig(
@@ -1236,7 +1276,7 @@ async def initiate_oauth_by_type(
             scopes=oauth_config.get("scopes", []),
         )
 
-        oauth_provider_instance = create_oauth_provider(
+        oauth_provider_instance = create_oauth_provider_instance(
             provider_type=provider_type,
             config=config,
             base_url=oauth_config.get("base_url"),

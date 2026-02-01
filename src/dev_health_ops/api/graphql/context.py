@@ -10,6 +10,7 @@ import uuid
 from strawberry.fastapi import BaseContext
 
 if TYPE_CHECKING:
+    from dev_health_ops.api.services.auth import AuthenticatedUser
     from .loaders import (
         DataLoaders,
         TeamLoader,
@@ -36,6 +37,7 @@ class GraphQLContext(BaseContext):
         repo_loader: DataLoader for repository entities.
         repo_by_name_loader: DataLoader for repos by name.
         cache: Optional cache backend for cross-request caching.
+        user: Authenticated user from JWT (None if unauthenticated).
     """
 
     org_id: str
@@ -43,14 +45,13 @@ class GraphQLContext(BaseContext):
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     persisted_query_id: str | None = None
     client: Any = None
-    # DataLoaders - initialized per request for proper batching
     loaders: Optional["DataLoaders"] = None
     team_loader: Optional["TeamLoader"] = None
     team_by_name_loader: Optional["TeamByNameLoader"] = None
     repo_loader: Optional["RepoLoader"] = None
     repo_by_name_loader: Optional["RepoByNameLoader"] = None
-    # Optional cache backend for cross-request caching
     cache: Any = None
+    user: Optional["AuthenticatedUser"] = None
 
     def __post_init__(self) -> None:
         if not self.org_id:
@@ -65,6 +66,7 @@ def build_context(
     persisted_query_id: str | None = None,
     client: Any = None,
     cache: Any = None,
+    user: Optional["AuthenticatedUser"] = None,
 ) -> GraphQLContext:
     """
     Factory function to build a GraphQL context with DataLoaders.
@@ -75,6 +77,7 @@ def build_context(
         persisted_query_id: Optional persisted query ID.
         client: Optional pre-initialized DB client.
         cache: Optional cache backend for cross-request caching.
+        user: Optional authenticated user from JWT.
 
     Returns:
         GraphQLContext instance with initialized DataLoaders.
@@ -88,6 +91,7 @@ def build_context(
         persisted_query_id=persisted_query_id,
         client=client,
         cache=cache,
+        user=user,
     )
 
     # Initialize DataLoaders if client is available

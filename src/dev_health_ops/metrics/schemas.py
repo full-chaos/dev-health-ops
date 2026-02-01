@@ -20,13 +20,14 @@ class CommitStatRow(TypedDict):
 
 
 class PullRequestRow(TypedDict):
+    """PR data from loaders. NotRequired fields: always populated by all loaders, default to 0 or None when DB null."""
+
     repo_id: uuid.UUID
     number: int
     author_email: Optional[str]
     author_name: Optional[str]
     created_at: datetime
     merged_at: Optional[datetime]
-    # Optional PR facts when available from the synced store or derived joins.
     first_review_at: NotRequired[Optional[datetime]]
     first_comment_at: NotRequired[Optional[datetime]]
     reviews_count: NotRequired[int]
@@ -62,6 +63,8 @@ class PipelineRunRow(TypedDict):
 
 
 class DeploymentRow(TypedDict):
+    """Deployment data from loaders. NotRequired fields: populated when PR linkage exists in git_pull_requests."""
+
     repo_id: uuid.UUID
     deployment_id: str
     status: Optional[str]

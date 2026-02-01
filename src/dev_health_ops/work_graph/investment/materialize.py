@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from dev_health_ops.llm import get_provider
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
@@ -59,6 +60,7 @@ class MaterializeConfig:
     llm_model: Optional[str]
     force: bool = False
     team_ids: Optional[List[str]] = None
+    llm_concurrency: int = 5
 
 
 def _build_components(
@@ -352,9 +354,13 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
             len(components),
             run_id,
         )
+
+        # Pre-process all components: build bundles and separate into LLM vs fallback
+        pending_llm: List[Tuple[int, Any]] = []  # (index, preprocessed_data)
+        fallback_results: List[Tuple[int, Any]] = []
+        preprocessed: Dict[int, Dict[str, Any]] = {}
+
         for idx, (nodes, component_edges) in enumerate(components):
-            if idx % 10 == 0:
-                logger.info("Processing component %d/%d", idx, len(components))
             unit_nodes = list(dict.fromkeys(nodes))
             issue_node_ids = [
                 node_id for node_type, node_id in unit_nodes if node_type == "issue"
@@ -385,19 +391,82 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
                 work_unit_id=unit_id,
             )
 
+            data = {
+                "unit_id": unit_id,
+                "unit_nodes": unit_nodes,
+                "issue_node_ids": issue_node_ids,
+                "pr_node_ids": pr_node_ids,
+                "commit_node_ids": commit_node_ids,
+                "bounds": bounds,
+                "bundle": bundle,
+                "component_edges": component_edges,
+            }
+            preprocessed[idx] = data
+
             if bundle.text_char_count < MIN_EVIDENCE_CHARS:
-                outcome = fallback_outcome("insufficient_evidence")
+                fallback_results.append(
+                    (idx, fallback_outcome("insufficient_evidence"))
+                )
             elif bundle.text_source_count == 0:
-                outcome = fallback_outcome("no_text_sources")
+                fallback_results.append((idx, fallback_outcome("no_text_sources")))
             else:
-                logger.info("Calling categorize_text_bundle for unit %s", unit_id)
+                pending_llm.append((idx, bundle))
+
+        logger.info(
+            "Pre-processed %d components: %d need LLM, %d use fallback",
+            len(preprocessed),
+            len(pending_llm),
+            len(fallback_results),
+        )
+
+        # Parallel LLM categorization with concurrency limit
+        semaphore = asyncio.Semaphore(config.llm_concurrency)
+        llm_results: Dict[int, Any] = {}
+
+        async def categorize_with_limit(idx: int, bundle: Any) -> Tuple[int, Any]:
+            async with semaphore:
                 outcome = await categorize_text_bundle(
                     bundle,
                     llm_provider=config.llm_provider,
                     llm_model=config.llm_model,
                     provider=provider_instance,
                 )
-                logger.info("categorize_text_bundle returned status=%s", outcome.status)
+                return (idx, outcome)
+
+        if pending_llm:
+            logger.info(
+                "Starting parallel LLM categorization (%d tasks, concurrency=%d)",
+                len(pending_llm),
+                config.llm_concurrency,
+            )
+            tasks = [categorize_with_limit(idx, bundle) for idx, bundle in pending_llm]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("LLM task failed: %s", result)
+                    continue
+                idx, outcome = result
+                llm_results[idx] = outcome
+            logger.info("Completed %d LLM categorizations", len(llm_results))
+
+        # Merge fallback results
+        for idx, outcome in fallback_results:
+            llm_results[idx] = outcome
+
+        # Post-process: create records from outcomes
+        for idx, data in preprocessed.items():
+            outcome = llm_results.get(idx)
+            if outcome is None:
+                outcome = fallback_outcome("llm_task_failed")
+
+            unit_id = data["unit_id"]
+            unit_nodes = data["unit_nodes"]
+            issue_node_ids = data["issue_node_ids"]
+            pr_node_ids = data["pr_node_ids"]
+            commit_node_ids = data["commit_node_ids"]
+            bounds = data["bounds"]
+            bundle = data["bundle"]
+            component_edges = data["component_edges"]
 
             theme_distribution = rollup_subcategories_to_themes(outcome.subcategories)
             evidence_quality_value = compute_evidence_quality(

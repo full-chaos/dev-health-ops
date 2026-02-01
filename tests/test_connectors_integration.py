@@ -158,6 +158,7 @@ class TestGitLabIntegration:
                 projects = connector.list_projects(max_projects=10)
             except ConnectorException as exc:
                 pytest.skip(f"GitLab API unavailable: {exc}")
+                return  # Unreachable but satisfies static analysis
 
             # Assertions
             assert len(projects) > 0, "Should fetch at least one project"
@@ -191,6 +192,7 @@ class TestGitLabIntegration:
                 )
             except ConnectorException as exc:
                 pytest.skip(f"GitLab API unavailable: {exc}")
+                return  # Unreachable but satisfies static analysis
 
             # Assertions
             assert len(projects) > 0, "Should fetch at least one project"

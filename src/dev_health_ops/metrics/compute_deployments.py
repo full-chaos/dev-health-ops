@@ -5,18 +5,13 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Sequence, Tuple
 
 from dev_health_ops.metrics.schemas import DeployMetricsDailyRecord, DeploymentRow
+from dev_health_ops.utils.datetime import to_utc
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _percentile(values: Sequence[float], percentile: float) -> float:
@@ -46,14 +41,14 @@ def compute_deploy_metrics_daily(
     Compute per-repo deployment metrics for deployments occurring on the given day.
     """
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     by_repo: Dict[str, Dict[str, object]] = {}
     for row in deployments:
         deployed_at = row.get("deployed_at") or row.get("started_at")
         if not isinstance(deployed_at, datetime):
             continue
-        deployed_at = _to_utc(deployed_at)
+        deployed_at = to_utc(deployed_at)
         if not (start <= deployed_at < end):
             continue
 
@@ -77,14 +72,14 @@ def compute_deploy_metrics_daily(
         finished_at = row.get("finished_at")
         if isinstance(started_at, datetime) and isinstance(finished_at, datetime):
             duration = (
-                _to_utc(finished_at) - _to_utc(started_at)
+                to_utc(finished_at) - to_utc(started_at)
             ).total_seconds() / 3600.0
             if duration >= 0:
                 bucket["durations"].append(float(duration))
 
         merged_at = row.get("merged_at")
         if isinstance(merged_at, datetime):
-            lead_time = (deployed_at - _to_utc(merged_at)).total_seconds() / 3600.0
+            lead_time = (deployed_at - to_utc(merged_at)).total_seconds() / 3600.0
             if lead_time >= 0:
                 bucket["lead_times"].append(float(lead_time))
 

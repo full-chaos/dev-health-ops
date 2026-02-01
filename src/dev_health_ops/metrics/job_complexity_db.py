@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.analytics.complexity import ComplexityScanner, FileComplexity
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -16,7 +17,9 @@ from dev_health_ops.storage import detect_db_type
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMPLEXITY_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
+DEFAULT_COMPLEXITY_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
+)
 
 
 def _date_range(end_day: date, backfill_days: int) -> List[date]:
@@ -358,7 +361,6 @@ def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
         "complexity",
         help="Compute file complexity metrics from DB (git_files/git_blame).",
     )
-    complexity.add_argument("--db", help="Database connection string.")
     complexity.add_argument(
         "--date",
         type=date.fromisoformat,
@@ -390,7 +392,7 @@ def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
 def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
     return run_complexity_db_job(
         repo_id=ns.repo_id,
-        db_url=ns.db,
+        db_url=resolve_sink_uri(ns),
         date=ns.date,
         backfill_days=ns.backfill,
         language_globs=ns.lang,

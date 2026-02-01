@@ -19,6 +19,7 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.status_mapping import StatusMapping
+from dev_health_ops.utils.datetime import to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,6 @@ class DiscoveredRepo:
     full_name: str
     source: str  # github|gitlab|local|...
     settings: Dict[str, object]
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -179,8 +174,8 @@ def fetch_jira_work_items_with_extras(
     sprint_cache: Dict[str, Sprint] = {}
     sprint_ids: set[str] = set()
 
-    updated_since = _to_utc(since).date().isoformat()
-    active_until = _to_utc(until).date().isoformat() if until is not None else None
+    updated_since = to_utc(since).date().isoformat()
+    active_until = to_utc(until).date().isoformat() if until is not None else None
     logger.info("Jira: fetching work items updated since %s", updated_since)
     jqls: List[str] = []
     if jql_override:
@@ -333,7 +328,7 @@ def fetch_github_work_items(
     work_items: Dict[str, WorkItem] = {}
     transitions: List[WorkItemStatusTransition] = []
 
-    since_utc = _to_utc(since)
+    since_utc = to_utc(since)
     github_repos = [r for r in repos if r.source == "github"]
     logger.info(
         "GitHub: fetching work items from %d repos (since %s)",
@@ -459,7 +454,7 @@ def fetch_gitlab_work_items(
     work_items: Dict[str, WorkItem] = {}
     transitions: List[WorkItemStatusTransition] = []
 
-    since_utc = _to_utc(since)
+    since_utc = to_utc(since)
     gitlab_repos = [r for r in repos if r.source == "gitlab"]
     logger.info(
         "GitLab: fetching work items from %d projects (since %s)",

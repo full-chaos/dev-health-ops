@@ -423,8 +423,6 @@ def _process_github_event(
             )
 
     # Execute sync
-    import asyncio
-
     try:
         asyncio.run(run_with_store(db_url, db_type, _sync_handler))
         return {"processed": True, "repo": f"{owner}/{repo}", "event": event_type}
@@ -502,8 +500,6 @@ def _process_gitlab_event(
                 sync_prs=False,
                 sync_cicd=True,
             )
-
-    import asyncio
 
     try:
         asyncio.run(run_with_store(db_url, db_type, _sync_handler))

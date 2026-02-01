@@ -3,12 +3,23 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Dict
+from typing import Any, Iterator, List, Optional, Sequence, Dict, TypeVar
 import uuid
 
 import clickhouse_connect
 import logging
 import asyncio
+
+DEFAULT_BATCH_SIZE = 10000
+
+T = TypeVar("T")
+
+
+def _chunked(seq: Sequence[T], size: int) -> Iterator[Sequence[T]]:
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
 from dev_health_ops.metrics.schemas import (
     CapacityForecastRecord,
     CommitMetricsRecord,
@@ -882,72 +893,109 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def write_work_graph_edges(self, rows: Sequence[WorkGraphEdgeRecord]) -> None:
         if not rows:
             return
-        data = []
-        for r in rows:
-            data.append(
-                {
-                    "edge_id": r.edge_id,
-                    "source_type": r.source_type,
-                    "source_id": r.source_id,
-                    "target_type": r.target_type,
-                    "target_id": r.target_id,
-                    "edge_type": r.edge_type,
-                    "repo_id": str(r.repo_id) if r.repo_id else None,
-                    "provider": r.provider,
-                    "provenance": r.provenance,
-                    "confidence": r.confidence,
-                    "evidence": r.evidence,
-                    "discovered_at": _dt_to_clickhouse_datetime(r.discovered_at),
-                    "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-                    "event_ts": _dt_to_clickhouse_datetime(r.event_ts),
-                    "day": r.day,
-                }
-            )
-        column_names = list(data[0].keys())
-        matrix = [[row[col] for col in column_names] for row in data]
-        self.client.insert("work_graph_edges", matrix, column_names=column_names)
+        column_names = [
+            "edge_id",
+            "source_type",
+            "source_id",
+            "target_type",
+            "target_id",
+            "edge_type",
+            "repo_id",
+            "provider",
+            "provenance",
+            "confidence",
+            "evidence",
+            "discovered_at",
+            "last_synced",
+            "event_ts",
+            "day",
+        ]
+        for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
+            data = []
+            for r in chunk:
+                data.append(
+                    {
+                        "edge_id": r.edge_id,
+                        "source_type": r.source_type,
+                        "source_id": r.source_id,
+                        "target_type": r.target_type,
+                        "target_id": r.target_id,
+                        "edge_type": r.edge_type,
+                        "repo_id": str(r.repo_id) if r.repo_id else None,
+                        "provider": r.provider,
+                        "provenance": r.provenance,
+                        "confidence": r.confidence,
+                        "evidence": r.evidence,
+                        "discovered_at": _dt_to_clickhouse_datetime(r.discovered_at),
+                        "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                        "event_ts": _dt_to_clickhouse_datetime(r.event_ts),
+                        "day": r.day,
+                    }
+                )
+            matrix = [[row[col] for col in column_names] for row in data]
+            self.client.insert("work_graph_edges", matrix, column_names=column_names)
 
     def write_work_graph_issue_pr(self, rows: Sequence[WorkGraphIssuePRRecord]) -> None:
         if not rows:
             return
-        data = []
-        for r in rows:
-            data.append(
-                {
-                    "repo_id": str(r.repo_id),
-                    "work_item_id": r.work_item_id,
-                    "pr_number": r.pr_number,
-                    "confidence": r.confidence,
-                    "provenance": r.provenance,
-                    "evidence": r.evidence,
-                    "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-                }
-            )
-        column_names = list(data[0].keys())
-        matrix = [[row[col] for col in column_names] for row in data]
-        self.client.insert("work_graph_issue_pr", matrix, column_names=column_names)
+        column_names = [
+            "repo_id",
+            "work_item_id",
+            "pr_number",
+            "confidence",
+            "provenance",
+            "evidence",
+            "last_synced",
+        ]
+        for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
+            data = []
+            for r in chunk:
+                data.append(
+                    {
+                        "repo_id": str(r.repo_id),
+                        "work_item_id": r.work_item_id,
+                        "pr_number": r.pr_number,
+                        "confidence": r.confidence,
+                        "provenance": r.provenance,
+                        "evidence": r.evidence,
+                        "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                    }
+                )
+            matrix = [[row[col] for col in column_names] for row in data]
+            self.client.insert("work_graph_issue_pr", matrix, column_names=column_names)
 
     def write_work_graph_pr_commit(
         self, rows: Sequence[WorkGraphPRCommitRecord]
     ) -> None:
         if not rows:
             return
-        data = []
-        for r in rows:
-            data.append(
-                {
-                    "repo_id": str(r.repo_id),
-                    "pr_number": r.pr_number,
-                    "commit_hash": r.commit_hash,
-                    "confidence": r.confidence,
-                    "provenance": r.provenance,
-                    "evidence": r.evidence,
-                    "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-                }
+        column_names = [
+            "repo_id",
+            "pr_number",
+            "commit_hash",
+            "confidence",
+            "provenance",
+            "evidence",
+            "last_synced",
+        ]
+        for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
+            data = []
+            for r in chunk:
+                data.append(
+                    {
+                        "repo_id": str(r.repo_id),
+                        "pr_number": r.pr_number,
+                        "commit_hash": r.commit_hash,
+                        "confidence": r.confidence,
+                        "provenance": r.provenance,
+                        "evidence": r.evidence,
+                        "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                    }
+                )
+            matrix = [[row[col] for col in column_names] for row in data]
+            self.client.insert(
+                "work_graph_pr_commit", matrix, column_names=column_names
             )
-        column_names = list(data[0].keys())
-        matrix = [[row[col] for col in column_names] for row in data]
-        self.client.insert("work_graph_pr_commit", matrix, column_names=column_names)
 
     def write_work_items(self, work_items: Sequence[Any]) -> None:
         """Write raw work items to the work_items table."""
@@ -1006,7 +1054,6 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 }
             )
 
-        # Convert dict rows to matrix format for ClickHouse
         column_names = [
             "repo_id",
             "work_item_id",
@@ -1033,9 +1080,9 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "url",
             "last_synced",
         ]
-        matrix = [[row[col] for col in column_names] for row in rows]
-
-        self.client.insert("work_items", matrix, column_names=column_names)
+        for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
+            matrix = [[row[col] for col in column_names] for row in chunk]
+            self.client.insert("work_items", matrix, column_names=column_names)
 
     def write_work_item_transitions(self, transitions: Sequence[Any]) -> None:
         """Write raw work item transitions to the work_item_transitions table."""
@@ -1078,7 +1125,6 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 }
             )
 
-        # Convert dict rows to matrix format for ClickHouse
         column_names = [
             "repo_id",
             "work_item_id",
@@ -1091,22 +1137,33 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "actor",
             "last_synced",
         ]
-        matrix = [[row[col] for col in column_names] for row in rows]
+        for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
+            matrix = [[row[col] for col in column_names] for row in chunk]
+            self.client.insert(
+                "work_item_transitions", matrix, column_names=column_names
+            )
 
-        self.client.insert("work_item_transitions", matrix, column_names=column_names)
-
-    def _insert_rows(self, table: str, columns: List[str], rows: Sequence[Any]) -> None:
-        matrix = []
-        for row in rows:
-            data = asdict(row)
-            values = []
-            for col in columns:
-                value = data.get(col)
-                if isinstance(value, datetime):
-                    value = _dt_to_clickhouse_datetime(value)
-                values.append(value)
-            matrix.append(values)
-        self.client.insert(table, matrix, column_names=columns)
+    def _insert_rows(
+        self,
+        table: str,
+        columns: List[str],
+        rows: Sequence[Any],
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> None:
+        if not rows:
+            return
+        for chunk in _chunked(rows, batch_size):
+            matrix = []
+            for row in chunk:
+                data = asdict(row)
+                values = []
+                for col in columns:
+                    value = data.get(col)
+                    if isinstance(value, datetime):
+                        value = _dt_to_clickhouse_datetime(value)
+                    values.append(value)
+                matrix.append(values)
+            self.client.insert(table, matrix, column_names=columns)
 
     # Query helpers (useful for Grafana and validation)
     def get_rolling_30d_user_stats(
@@ -1223,34 +1280,58 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def write_capacity_forecasts(self, rows: Sequence[CapacityForecastRecord]) -> None:
         if not rows:
             return
-        data = []
-        for r in rows:
-            data.append(
-                {
-                    "forecast_id": r.forecast_id,
-                    "computed_at": _dt_to_clickhouse_datetime(r.computed_at),
-                    "team_id": r.team_id,
-                    "work_scope_id": r.work_scope_id,
-                    "backlog_size": r.backlog_size,
-                    "target_items": r.target_items,
-                    "target_date": r.target_date,
-                    "history_days": r.history_days,
-                    "simulation_count": r.simulation_count,
-                    "p50_days": r.p50_days,
-                    "p85_days": r.p85_days,
-                    "p95_days": r.p95_days,
-                    "p50_date": r.p50_date,
-                    "p85_date": r.p85_date,
-                    "p95_date": r.p95_date,
-                    "p50_items": r.p50_items,
-                    "p85_items": r.p85_items,
-                    "p95_items": r.p95_items,
-                    "throughput_mean": r.throughput_mean,
-                    "throughput_stddev": r.throughput_stddev,
-                    "insufficient_history": 1 if r.insufficient_history else 0,
-                    "high_variance": 1 if r.high_variance else 0,
-                }
-            )
-        column_names = list(data[0].keys())
-        matrix = [[row[col] for col in column_names] for row in data]
-        self.client.insert("capacity_forecasts", matrix, column_names=column_names)
+        column_names = [
+            "forecast_id",
+            "computed_at",
+            "team_id",
+            "work_scope_id",
+            "backlog_size",
+            "target_items",
+            "target_date",
+            "history_days",
+            "simulation_count",
+            "p50_days",
+            "p85_days",
+            "p95_days",
+            "p50_date",
+            "p85_date",
+            "p95_date",
+            "p50_items",
+            "p85_items",
+            "p95_items",
+            "throughput_mean",
+            "throughput_stddev",
+            "insufficient_history",
+            "high_variance",
+        ]
+        for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
+            data = []
+            for r in chunk:
+                data.append(
+                    {
+                        "forecast_id": r.forecast_id,
+                        "computed_at": _dt_to_clickhouse_datetime(r.computed_at),
+                        "team_id": r.team_id,
+                        "work_scope_id": r.work_scope_id,
+                        "backlog_size": r.backlog_size,
+                        "target_items": r.target_items,
+                        "target_date": r.target_date,
+                        "history_days": r.history_days,
+                        "simulation_count": r.simulation_count,
+                        "p50_days": r.p50_days,
+                        "p85_days": r.p85_days,
+                        "p95_days": r.p95_days,
+                        "p50_date": r.p50_date,
+                        "p85_date": r.p85_date,
+                        "p95_date": r.p95_date,
+                        "p50_items": r.p50_items,
+                        "p85_items": r.p85_items,
+                        "p95_items": r.p95_items,
+                        "throughput_mean": r.throughput_mean,
+                        "throughput_stddev": r.throughput_stddev,
+                        "insufficient_history": 1 if r.insufficient_history else 0,
+                        "high_variance": 1 if r.high_variance else 0,
+                    }
+                )
+            matrix = [[row[col] for col in column_names] for row in data]
+            self.client.insert("capacity_forecasts", matrix, column_names=column_names)

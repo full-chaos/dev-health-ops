@@ -43,18 +43,30 @@ async def get_context(request: Request) -> GraphQLContext:
     and initializes DataLoaders for the request.
     """
     logger.debug("Entering get_context")
-    # Get org_id from header or query param
+
+    from dev_health_ops.api.services.auth import (
+        extract_token_from_header,
+        get_auth_service,
+    )
+
     org_id = request.headers.get("X-Org-Id", "")
     if not org_id:
         org_id = request.query_params.get("org_id", "")
 
-    # Get DB URL from environment
     db_url = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL", "")
-
-    # Check for persisted query
     persisted_query_id = request.headers.get("X-Persisted-Query-Id")
 
-    # Get ClickHouse client
+    user = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header:
+        token = extract_token_from_header(auth_header)
+        if token:
+            auth_service = get_auth_service()
+            user = auth_service.get_authenticated_user(token)
+            if user and user.org_id and not org_id:
+                org_id = user.org_id
+            logger.debug("Authenticated user: %s", user.email if user else None)
+
     client = None
     try:
         from dev_health_ops.api.queries.client import get_global_client
@@ -65,17 +77,15 @@ async def get_context(request: Request) -> GraphQLContext:
     except Exception as e:
         logger.warning("Failed to get ClickHouse client: %s", e)
 
-    # Get cache for cross-request caching
     cache = _get_cache()
 
-    # Build context with DataLoaders
-    # We allow placeholder org_id here since resolvers require it as an argument
     context = build_context(
-        org_id=org_id or "placeholder",  # Will be overridden by resolver
+        org_id=org_id or "placeholder",
         db_url=db_url,
         persisted_query_id=persisted_query_id,
         client=client,
         cache=cache,
+        user=user,
     )
 
     return context

@@ -5,6 +5,10 @@ from datetime import datetime, time, timezone
 from typing import Dict, List, Optional, Tuple
 
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
+from dev_health_ops.utils.normalization import (
+    evidence_quality_band as _evidence_quality_band,
+    normalize_scores as _normalize_scores,
+)
 
 from ..models.filters import MetricFilter
 from ..models.schemas import (
@@ -21,24 +25,6 @@ from ..queries.work_unit_investments import (
     fetch_work_unit_investments,
 )
 from .filtering import resolve_repo_filter_ids, time_window
-
-
-def _normalize_scores(scores: Dict[str, float], keys: List[str]) -> Dict[str, float]:
-    total = sum(float(scores.get(key, 0.0) or 0.0) for key in keys)
-    if total <= 0.0:
-        uniform = 1.0 / len(keys) if keys else 0.0
-        return {key: uniform for key in keys}
-    return {key: float(scores.get(key, 0.0) or 0.0) / total for key in keys}
-
-
-def _evidence_quality_band(value: float) -> str:
-    if value >= 0.8:
-        return "high"
-    if value >= 0.6:
-        return "moderate"
-    if value >= 0.4:
-        return "low"
-    return "very_low"
 
 
 def _parse_distribution(value: object) -> Dict[str, float]:

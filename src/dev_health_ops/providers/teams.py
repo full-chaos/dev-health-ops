@@ -8,11 +8,32 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
+from dev_health_ops.db import resolve_sink_uri
+
 DEFAULT_TEAM_MAPPING_PATH = Path("src/dev_health_ops/config/team_mapping.yaml")
 
 
 def _norm_key(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+# Canonical sentinel for "no team" - used in PKs and aggregation keys
+UNASSIGNED_TEAM_ID = "unassigned"
+UNASSIGNED_TEAM_NAME = "Unassigned"
+
+
+def normalize_team_id(team_id: Optional[str]) -> str:
+    """Normalize team_id: None/empty -> 'unassigned'. Single source of truth for PK safety."""
+    if not team_id or not team_id.strip():
+        return UNASSIGNED_TEAM_ID
+    return team_id.strip()
+
+
+def normalize_team_name(team_name: Optional[str]) -> str:
+    """Normalize team_name: None/empty -> 'Unassigned'."""
+    if not team_name or not team_name.strip():
+        return UNASSIGNED_TEAM_NAME
+    return team_name.strip()
 
 
 def _parse_project_types(value: Optional[str]) -> List[str]:
@@ -255,7 +276,8 @@ def sync_teams(ns: argparse.Namespace) -> int:
         logging.warning("No teams found/generated.")
         return 0
 
-    db_type = resolve_db_type(ns.db, ns.db_type)
+    db_uri = resolve_sink_uri(ns)
+    db_type = resolve_db_type(db_uri, ns.db_type)
 
     async def _handler(store):
         # Ensure table exists (for SQL stores)
@@ -270,7 +292,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
             )
         logging.info(f"Synced {len(teams_data)} teams to DB.")
 
-    asyncio.run(run_with_store(ns.db, db_type, _handler))
+    asyncio.run(run_with_store(db_uri, db_type, _handler))
     return 0
 
 
@@ -279,7 +301,6 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
         "teams",
         help="Sync teams from dev_health_ops.config/teams.yaml, Jira, or Synthetic.",
     )
-    teams.add_argument("--db", required=True, help="Database connection string.")
     teams.add_argument(
         "--db-type",
         choices=["postgres", "mongo", "sqlite", "clickhouse"],

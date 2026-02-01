@@ -48,6 +48,7 @@ from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.loaders.base import (
     to_dataclass,
 )
+from dev_health_ops.providers.teams import normalize_team_id
 import logging
 
 
@@ -425,7 +426,7 @@ class MongoMetricsSink(BaseMetricsSink):
         ops: List[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
-            team_key = row.team_id or ""
+            team_key = normalize_team_id(row.team_id)
             scope_key = row.work_scope_id or ""
             doc["_id"] = f"{row.day.isoformat()}:{row.provider}:{scope_key}:{team_key}"
             doc["day"] = _day_to_mongo_datetime(row.day)
@@ -478,7 +479,7 @@ class MongoMetricsSink(BaseMetricsSink):
         for row in rows:
             doc = asdict(row)
             scope_key = row.work_scope_id or ""
-            team_key = row.team_id or ""
+            team_key = normalize_team_id(row.team_id)
             doc["_id"] = (
                 f"{row.day.isoformat()}:{row.provider}:{scope_key}:{team_key}:{row.status}"
             )

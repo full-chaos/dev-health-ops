@@ -26,16 +26,9 @@ from ..models.schemas import (
 from .investment import build_investment_response
 from dev_health_ops.llm import get_provider
 from .work_units import build_work_unit_investments
+from dev_health_ops.api.utils.logging import sanitize_for_log
 
 logger = logging.getLogger(__name__)
-
-
-def _sanitize_for_log(value: Optional[str]) -> str:
-    """Sanitize user-controlled strings before logging to prevent log injection."""
-    if value is None:
-        return ""
-    # Remove CR/LF characters to avoid forging additional log lines.
-    return value.replace("\r", "").replace("\n", "")
 
 
 def _top_items(distribution: Dict[str, float], limit: int) -> List[Tuple[str, float]]:
@@ -109,9 +102,9 @@ async def explain_investment_mix(
     if subcategory and subcategory not in SUBCATEGORIES:
         raise ValueError("Unknown subcategory")
     if theme and subcategory and theme_of(subcategory) != theme:
-        safe_theme = _sanitize_for_log(theme)
-        safe_subcategory = _sanitize_for_log(subcategory)
-        safe_resolved_theme = _sanitize_for_log(theme_of(subcategory))
+        safe_theme = sanitize_for_log(theme)
+        safe_subcategory = sanitize_for_log(subcategory)
+        safe_resolved_theme = sanitize_for_log(theme_of(subcategory))
         logger.warning(
             "Theme/subcategory mismatch: theme=%s, subcategory=%s. Using theme '%s' from subcategory.",
             safe_theme,

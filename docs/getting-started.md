@@ -47,12 +47,36 @@ python cli.py metrics daily --db "<DB_CONN>"
 docker compose -f compose.yml up -d
 ```
 
+## Database Architecture
+
+Dev Health Ops uses a **dual-database architecture**:
+
+| Database | Purpose | Env Var |
+|----------|---------|---------|
+| **PostgreSQL** | Users, orgs, settings, credentials | `POSTGRES_URI` |
+| **ClickHouse** | Commits, PRs, work items, metrics | `CLICKHOUSE_URI` |
+
+```bash
+# Start databases
+docker compose up -d postgres clickhouse redis
+
+# Set environment
+export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
+export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
+
+# Run PostgreSQL migrations (for user management)
+cd src/dev_health_ops && alembic upgrade head
+```
+
+See [Database Architecture](architecture/database-architecture.md) for details.
+
 ## Environment notes
 
 CLI flags override environment variables. Common env vars:
 
-- `DATABASE_URI`
-- `SECONDARY_DATABASE_URI`
+- `POSTGRES_URI` - PostgreSQL for semantic data (users, settings)
+- `CLICKHOUSE_URI` - ClickHouse for analytics data
+- `DATABASE_URI` - Legacy fallback (deprecated)
 - `GITHUB_TOKEN`
 - `GITLAB_TOKEN`
 - `REPO_PATH`

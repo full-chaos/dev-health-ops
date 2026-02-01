@@ -16,14 +16,23 @@ from dev_health_ops.metrics.loaders.base import (
     chunked,
     clickhouse_query_dicts,
 )
+from dev_health_ops.metrics.loaders.validation import (
+    ValidationError,
+    validate_rows,
+    validate_or_raise,
+    validate_typed_dict,
+)
 
 __all__ = [
     "DataLoader",
-    # Base utilities
     "naive_utc",
     "to_utc",
     "parse_uuid",
     "safe_json_loads",
     "chunked",
     "clickhouse_query_dicts",
+    "ValidationError",
+    "validate_rows",
+    "validate_or_raise",
+    "validate_typed_dict",
 ]

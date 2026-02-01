@@ -5,18 +5,13 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List, Sequence, Tuple
 
 from dev_health_ops.metrics.schemas import IncidentMetricsDailyRecord, IncidentRow
+from dev_health_ops.utils.datetime import to_utc
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _percentile(values: Sequence[float], percentile: float) -> float:
@@ -46,14 +41,14 @@ def compute_incident_metrics_daily(
     Compute MTTR distributions for incidents resolved on the given day.
     """
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     by_repo: Dict[str, Dict[str, object]] = {}
     for row in incidents:
         resolved_at = row.get("resolved_at")
         if not isinstance(resolved_at, datetime):
             continue
-        resolved_at = _to_utc(resolved_at)
+        resolved_at = to_utc(resolved_at)
         if not (start <= resolved_at < end):
             continue
 
@@ -64,7 +59,7 @@ def compute_incident_metrics_daily(
             by_repo[repo_id] = bucket
 
         bucket["incidents"] = int(bucket["incidents"]) + 1
-        started_at = _to_utc(row["started_at"])
+        started_at = to_utc(row["started_at"])
         mttr = (resolved_at - started_at).total_seconds() / 3600.0
         if mttr >= 0:
             bucket["mttr_hours"].append(float(mttr))

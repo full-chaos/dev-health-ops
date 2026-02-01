@@ -195,19 +195,16 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def write_deploy_metrics(self, rows: Sequence[DeployMetricsDailyRecord]) -> None:
         """Write daily deployment metrics."""
-        ...
 
     @abstractmethod
     def write_incident_metrics(
         self, rows: Sequence[IncidentMetricsDailyRecord]
     ) -> None:
         """Write daily incident metrics."""
-        ...
 
     @abstractmethod
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         """Write pre-computed DORA metrics from providers."""
-        ...
 
     # -------------------------------------------------------------------------
     # Complexity / hotspot metrics
@@ -218,17 +215,14 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[FileComplexitySnapshot]
     ) -> None:
         """Write file-level complexity snapshots."""
-        ...
 
     @abstractmethod
     def write_repo_complexity_daily(self, rows: Sequence[RepoComplexityDaily]) -> None:
         """Write daily repo-level complexity aggregates."""
-        ...
 
     @abstractmethod
     def write_file_hotspot_daily(self, rows: Sequence[FileHotspotDaily]) -> None:
         """Write daily file hotspot records."""
-        ...
 
     # -------------------------------------------------------------------------
     # Investment / issue type metrics

@@ -1,17 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Sequence
+from typing import Dict, Optional, Sequence
 
 from dev_health_ops.metrics.schemas import CommitStatRow
-
-
-def _normalize_identity(author_email: str | None, author_name: str | None) -> str:
-    if author_email and author_email.strip():
-        return author_email.strip()
-    if author_name and author_name.strip():
-        return author_name.strip()
-    return "unknown"
+from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
 
 
 def compute_rework_churn_ratio(
@@ -57,6 +50,7 @@ def compute_single_owner_file_ratio(
     repo_id: str,
     window_stats: Sequence[CommitStatRow],
     owner_threshold: float = 0.75,
+    identity_resolver: Optional[IdentityResolver] = None,
 ) -> float:
     """
     Compute ratio of files dominated by a single owner in the window.
@@ -69,7 +63,9 @@ def compute_single_owner_file_ratio(
         path = row.get("file_path")
         if not path:
             continue
-        author = _normalize_identity(row.get("author_email"), row.get("author_name"))
+        author = normalize_git_identity(
+            row.get("author_email"), row.get("author_name"), identity_resolver
+        )
         file_authors[str(path)][author].add(str(row.get("commit_hash")))
 
     if not file_authors:

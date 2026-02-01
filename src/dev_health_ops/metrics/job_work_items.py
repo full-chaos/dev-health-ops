@@ -6,8 +6,8 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.analytics.investment import InvestmentClassifier
-from dev_health_ops.analytics.issue_types import IssueTypeNormalizer
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
@@ -111,9 +111,6 @@ def run_work_items_sync_job(
 
     investment_classifier = InvestmentClassifier(
         REPO_ROOT / "src/dev_health_ops/config/investment_areas.yaml"
-    )
-    issue_type_normalizer = IssueTypeNormalizer(
-        REPO_ROOT / "src/dev_health_ops/config/issue_type_mapping.yaml"
     )
 
     computed_at = datetime.now(timezone.utc)
@@ -360,8 +357,10 @@ def run_work_items_sync_job(
                 r_id = getattr(item, "repo_id", None) or uuid.UUID(int=0)
                 prov = item.provider
                 team_id = _get_team(item)
-                norm_type = issue_type_normalizer.normalize(
-                    prov, item.type, getattr(item, "labels", [])
+                norm_type = status_mapping.normalize_type(
+                    provider=prov,
+                    type_raw=item.type,
+                    labels=getattr(item, "labels", []),
                 )
 
                 key = (r_id, prov, team_id, norm_type)
@@ -528,7 +527,6 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
         "work-items",
         help="Sync work tracking facts and compute derived work item tables.",
     )
-    wi.add_argument("--db", help="Database connection string.")
     wi.add_argument(
         "--day",
         type=date.fromisoformat,
@@ -561,7 +559,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
 def _cmd_sync_work_items(ns: argparse.Namespace) -> int:
     try:
         run_work_items_sync_job(
-            db_url=ns.db,
+            db_url=resolve_sink_uri(ns),
             day=ns.day,
             backfill_days=ns.backfill,
             provider=ns.provider,

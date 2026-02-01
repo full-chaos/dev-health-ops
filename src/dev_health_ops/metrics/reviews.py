@@ -9,6 +9,8 @@ from dev_health_ops.metrics.schemas import (
     PullRequestRow,
     ReviewEdgeDailyRecord,
 )
+from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
+from dev_health_ops.utils.datetime import to_utc
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
@@ -17,26 +19,13 @@ def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     return start, end
 
 
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def _normalize_identity(author_email: Optional[str], author_name: Optional[str]) -> str:
-    if author_email and author_email.strip():
-        return author_email.strip()
-    if author_name and author_name.strip():
-        return author_name.strip()
-    return "unknown"
-
-
 def compute_review_edges_daily(
     *,
     day: date,
     pull_request_rows: Sequence[PullRequestRow],
     pull_request_review_rows: Optional[Sequence[PullRequestReviewRow]],
     computed_at: datetime,
+    identity_resolver: Optional[IdentityResolver] = None,
 ) -> List[ReviewEdgeDailyRecord]:
     """
     Build reviewer -> author edge counts for reviews submitted in the day window.
@@ -45,21 +34,21 @@ def compute_review_edges_daily(
         return []
 
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     pr_author_map: Dict[Tuple[uuid.UUID, int], str] = {}
     for pr in pull_request_rows:
-        author_identity = _normalize_identity(
-            pr.get("author_email"), pr.get("author_name")
+        author_identity = normalize_git_identity(
+            pr.get("author_email"), pr.get("author_name"), identity_resolver
         )
         pr_author_map[(pr["repo_id"], pr["number"])] = author_identity
 
     edge_counts: Dict[Tuple[uuid.UUID, str, str], int] = {}
     for review in pull_request_review_rows:
-        submitted_at = _to_utc(review["submitted_at"])
+        submitted_at = to_utc(review["submitted_at"])
         if not (start <= submitted_at < end):
             continue
-        reviewer = _normalize_identity(None, review["reviewer"])
+        reviewer = normalize_git_identity(None, review["reviewer"], identity_resolver)
         author = pr_author_map.get((review["repo_id"], review["number"]))
         if not author:
             continue

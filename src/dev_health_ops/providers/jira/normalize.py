@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from __future__ import annotations
+
 import os
 import re
 from datetime import datetime, timezone
@@ -548,7 +550,7 @@ def jira_issue_to_work_item(
 
 def canonical_jira_issue_to_work_item(
     *,
-    issue: "JiraIssue",
+    issue: JiraIssue,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
     repo_id: Optional[Any] = None,
@@ -628,7 +630,7 @@ def canonical_jira_issue_to_work_item(
 def canonical_changelog_to_transitions(
     *,
     issue_key: str,
-    changelog_events: List["JiraChangelogEvent"],
+    changelog_events: List[JiraChangelogEvent],
     status_mapping: StatusMapping,
     identity: IdentityResolver,
     labels: List[str],
@@ -707,7 +709,7 @@ def derive_started_completed_from_transitions(
 def canonical_worklog_to_model(
     *,
     issue_key: str,
-    worklog: "JiraWorklog",
+    worklog: JiraWorklog,
     identity: IdentityResolver,
 ) -> Worklog:
     author = None
@@ -739,7 +741,7 @@ def canonical_worklog_to_model(
 
 def canonical_sprint_to_model(
     *,
-    sprint: "JiraSprint",
+    sprint: JiraSprint,
 ) -> Sprint:
     started_at = _parse_datetime(sprint.start_at)
     ended_at = _parse_datetime(sprint.end_at)

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 import logging
 import os
-from typing import Any, List, Literal, cast
+from typing import List, Literal, cast
 from urllib.parse import urlparse
 
 
@@ -16,6 +16,7 @@ import json
 
 from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
 
+from .utils.logging import sanitize_for_log
 
 from .models.filters import (
     DrilldownRequest,
@@ -82,26 +83,11 @@ from .services.work_units import build_work_unit_investments
 from .services.work_unit_explain import explain_work_unit
 from .graphql.app import create_graphql_app
 from .webhooks import router as webhooks_router
+from .admin import router as admin_router
+from .auth import router as auth_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
-
-
-def _sanitize_for_log(value: Any) -> str:
-    """
-    Remove characters that could be used to forge or split log entries.
-
-    This is intentionally minimal to avoid changing functional behavior:
-    it strips carriage returns, newlines, and other non-printable
-    control characters.
-    """
-    if value is None:
-        return ""
-    text = str(value)
-    # Remove CR/LF explicitly, then strip remaining control chars
-    text = text.replace("\r", "").replace("\n", "")
-    return "".join(ch for ch in text if ch >= " " and ch != "\x7f")
-
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +107,30 @@ def _db_url() -> str:
     if dsn:
         return dsn
 
-    # Fail fast if no database configuration is provided to avoid
-    # accidentally connecting to an unintended default in production.
     raise RuntimeError(
         "Database configuration is missing: set DATABASE_URI or DATABASE_URL "
         "(e.g. 'clickhouse://localhost:8123/default')."
     )
+
+
+def _postgres_url() -> str | None:
+    uri = os.getenv("POSTGRES_URI")
+    if uri:
+        return uri
+    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+    if fallback and "postgres" in fallback.lower():
+        return fallback
+    return None
+
+
+def _clickhouse_url() -> str | None:
+    uri = os.getenv("CLICKHOUSE_URI")
+    if uri:
+        return uri
+    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+    if fallback and "clickhouse" in fallback.lower():
+        return fallback
+    return None
 
 
 def _check_sqlalchemy_health(dsn: str) -> bool:
@@ -185,7 +189,7 @@ async def _check_database_service(dsn: str) -> tuple[str, str]:
     except Exception as exc:
         logger.warning(
             "Unable to detect database backend for health check: %s",
-            _sanitize_for_log(exc),
+            sanitize_for_log(exc),
         )
         return "database", "down"
 
@@ -209,6 +213,29 @@ async def _check_database_service(dsn: str) -> tuple[str, str]:
         return backend.value, "ok" if ok else "down"
 
     return backend.value, "down"
+
+
+async def _check_postgres_health() -> tuple[str, str]:
+    uri = _postgres_url()
+    if not uri:
+        return "postgres", "not_configured"
+    if _dsn_uses_async_driver(uri):
+        ok = await _check_sqlalchemy_health_async(uri)
+    else:
+        ok = await asyncio.to_thread(_check_sqlalchemy_health, uri)
+    return "postgres", "ok" if ok else "down"
+
+
+async def _check_clickhouse_health() -> tuple[str, str]:
+    uri = _clickhouse_url()
+    if not uri:
+        return "clickhouse", "not_configured"
+    try:
+        async with clickhouse_client(uri) as sink:
+            rows = await query_dicts(sink, "SELECT 1 AS ok", {})
+        return "clickhouse", "ok" if rows else "down"
+    except Exception:
+        return "clickhouse", "down"
 
 
 def _filters_from_query(
@@ -275,29 +302,30 @@ app.add_middleware(
 graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
 app.include_router(webhooks_router)
+app.include_router(admin_router)
+app.include_router(auth_router)
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:
     services = {}
-    try:
-        db_url = _db_url()
-    except Exception as exc:
-        logger.warning(
-            "Database configuration missing for health check: %s",
-            _sanitize_for_log(exc),
-        )
-        services["database"] = "down"
-    else:
-        db_key, db_status = await _check_database_service(db_url)
-        services[db_key] = db_status
+    required_services = []
+
+    pg_key, pg_status = await _check_postgres_health()
+    services[pg_key] = pg_status
+    required_services.append(pg_status)
+
+    ch_key, ch_status = await _check_clickhouse_health()
+    services[ch_key] = ch_status
+    required_services.append(ch_status)
 
     try:
         services["redis"] = HOME_CACHE.status()
     except Exception:
         services["redis"] = "down"
 
-    status = "ok" if all(state == "ok" for state in services.values()) else "down"
+    required_ok = all(state == "ok" for state in required_services)
+    status = "ok" if required_ok else "down"
     response = HealthResponse(status=status, services=services)
     if status != "ok":
         content = (
@@ -630,7 +658,7 @@ async def work_unit_explain_endpoint(
         target_investment = investments[0]
         logger.info(
             "Generating streaming explanation for work_unit_id=%s",
-            _sanitize_for_log(work_unit_id),
+            sanitize_for_log(work_unit_id),
         )
 
         # Return streaming response with keep-alive pings
@@ -1182,7 +1210,7 @@ async def sankey_get(
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
         return result
     except Exception as exc:
-        logger.exception("Sankey GET failed for mode=%s", _sanitize_for_log(mode))
+        logger.exception("Sankey GET failed for mode=%s", sanitize_for_log(mode))
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 
 
@@ -1199,7 +1227,7 @@ async def sankey_post(payload: SankeyRequest) -> SankeyResponse:
         )
     except Exception as exc:
         logger.exception(
-            "Sankey POST failed for mode=%s", _sanitize_for_log(payload.mode)
+            "Sankey POST failed for mode=%s", sanitize_for_log(payload.mode)
         )
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
 

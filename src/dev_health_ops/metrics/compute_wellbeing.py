@@ -7,27 +7,15 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 from dev_health_ops.metrics.schemas import CommitStatRow, TeamMetricsDailyRecord
+from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
 from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.utils.datetime import to_utc
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def _normalize_identity(author_email: Optional[str], author_name: Optional[str]) -> str:
-    if author_email and author_email.strip():
-        return author_email.strip()
-    if author_name and author_name.strip():
-        return author_name.strip()
-    return "unknown"
 
 
 def _is_weekend(local_dt: datetime) -> bool:
@@ -52,6 +40,7 @@ def compute_team_wellbeing_metrics_daily(
     business_hours_end: int = 17,
     unknown_team_id: str = "unassigned",
     unknown_team_name: str = "Unassigned",
+    identity_resolver: Optional[IdentityResolver] = None,
 ) -> List[TeamMetricsDailyRecord]:
     """
     Compute team-level (non-individual) after-hours + weekend activity ratios.
@@ -61,7 +50,7 @@ def compute_team_wellbeing_metrics_daily(
     """
     tz = ZoneInfo(business_timezone)
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     # Deduplicate commits.
     commits: Dict[Tuple[uuid.UUID, str], Tuple[str, datetime]] = {}
@@ -70,8 +59,10 @@ def compute_team_wellbeing_metrics_daily(
         if key in commits:
             continue
         commits[key] = (
-            _normalize_identity(row.get("author_email"), row.get("author_name")),
-            _to_utc(row["committer_when"]),
+            normalize_git_identity(
+                row.get("author_email"), row.get("author_name"), identity_resolver
+            ),
+            to_utc(row["committer_when"]),
         )
 
     # Aggregate by team.

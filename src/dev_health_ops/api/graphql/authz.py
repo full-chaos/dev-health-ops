@@ -2,10 +2,139 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import functools
+import uuid
+from typing import Any, Callable, Dict, TypeVar
 
 from .context import GraphQLContext
 from .errors import AuthorizationError
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def require_permission(
+    *permissions: str, require_all: bool = False
+) -> Callable[[F], F]:
+    """Decorator to require permissions for GraphQL resolvers.
+
+    Args:
+        *permissions: Permission names required (e.g., "metrics:read")
+        require_all: If True, user must have ALL permissions. If False, ANY suffices.
+
+    Usage:
+        @strawberry.field
+        @require_permission("metrics:read")
+        async def metrics(self, info: Info) -> list[Metric]:
+            ...
+
+        @strawberry.field
+        @require_permission("settings:read", "settings:write", require_all=True)
+        async def update_setting(self, info: Info) -> Setting:
+            ...
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+            if info is None:
+                raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+            context: GraphQLContext = info.context
+            user = context.user
+
+            if user is None:
+                raise AuthorizationError("Authentication required")
+
+            from dev_health_ops.api.services.permissions import (
+                has_all_permissions,
+                has_any_permission,
+            )
+
+            if require_all:
+                if not has_all_permissions(user, *permissions):
+                    raise AuthorizationError(
+                        f"Missing required permissions: {', '.join(permissions)}"
+                    )
+            else:
+                if not has_any_permission(user, *permissions):
+                    raise AuthorizationError(
+                        f"Requires one of: {', '.join(permissions)}"
+                    )
+
+            return await func(*args, **kwargs)
+
+        @functools.wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+            if info is None:
+                raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+            context: GraphQLContext = info.context
+            user = context.user
+
+            if user is None:
+                raise AuthorizationError("Authentication required")
+
+            from dev_health_ops.api.services.permissions import (
+                has_all_permissions,
+                has_any_permission,
+            )
+
+            if require_all:
+                if not has_all_permissions(user, *permissions):
+                    raise AuthorizationError(
+                        f"Missing required permissions: {', '.join(permissions)}"
+                    )
+            else:
+                if not has_any_permission(user, *permissions):
+                    raise AuthorizationError(
+                        f"Requires one of: {', '.join(permissions)}"
+                    )
+
+            return func(*args, **kwargs)
+
+        import asyncio
+
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper  # type: ignore
+        return sync_wrapper  # type: ignore
+
+    return decorator
+
+
+def require_auth(func: F) -> F:
+    """Decorator to require authentication without specific permissions."""
+
+    @functools.wraps(func)
+    async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+        info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+        if info is None:
+            raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+        context: GraphQLContext = info.context
+        if context.user is None:
+            raise AuthorizationError("Authentication required")
+
+        return await func(*args, **kwargs)
+
+    @functools.wraps(func)
+    def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+        info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+        if info is None:
+            raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+        context: GraphQLContext = info.context
+        if context.user is None:
+            raise AuthorizationError("Authentication required")
+
+        return func(*args, **kwargs)
+
+    import asyncio
+
+    if asyncio.iscoroutinefunction(func):
+        return async_wrapper  # type: ignore
+    return sync_wrapper  # type: ignore
 
 
 def require_org_id(context: GraphQLContext) -> str:
@@ -70,3 +199,127 @@ def validate_org_access(context: GraphQLContext, requested_org_id: str) -> None:
         raise AuthorizationError(
             f"Access denied: cannot query data for org '{requested_org_id}'"
         )
+
+
+def require_feature(*features: str, require_all: bool = False) -> Callable[[F], F]:
+    """Decorator to require feature access for GraphQL resolvers.
+
+    Args:
+        *features: Feature keys required (e.g., "capacity_forecast", "sso_saml")
+        require_all: If True, org must have ALL features. If False, ANY suffices.
+
+    Usage:
+        @strawberry.field
+        @require_feature("capacity_forecast")
+        async def capacity_forecast(self, info: Info) -> CapacityForecast:
+            ...
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+            if info is None:
+                raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+            context: GraphQLContext = info.context
+
+            if context.user is None:
+                raise AuthorizationError("Authentication required")
+
+            org_id_str = context.org_id
+            if not org_id_str:
+                raise AuthorizationError("org_id is required for feature checks")
+
+            try:
+                org_uuid = uuid.UUID(org_id_str)
+            except ValueError:
+                raise AuthorizationError(f"Invalid org_id format: {org_id_str}")
+
+            from dev_health_ops.db import get_postgres_session_sync
+            from dev_health_ops.api.services.licensing import FeatureService
+
+            with get_postgres_session_sync() as session:
+                feature_svc = FeatureService(session)
+
+                if require_all:
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if not access.allowed:
+                            raise AuthorizationError(
+                                f"Feature '{feature_key}' not available: {access.reason}"
+                            )
+                else:
+                    any_allowed = False
+                    last_reason = None
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if access.allowed:
+                            any_allowed = True
+                            break
+                        last_reason = access.reason
+
+                    if not any_allowed:
+                        raise AuthorizationError(
+                            f"Requires one of: {', '.join(features)}. {last_reason or ''}"
+                        )
+
+            return await func(*args, **kwargs)
+
+        @functools.wraps(func)
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+            info = kwargs.get("info") or (args[1] if len(args) > 1 else None)
+            if info is None:
+                raise AuthorizationError("Could not extract GraphQL info from resolver")
+
+            context: GraphQLContext = info.context
+
+            if context.user is None:
+                raise AuthorizationError("Authentication required")
+
+            org_id_str = context.org_id
+            if not org_id_str:
+                raise AuthorizationError("org_id is required for feature checks")
+
+            try:
+                org_uuid = uuid.UUID(org_id_str)
+            except ValueError:
+                raise AuthorizationError(f"Invalid org_id format: {org_id_str}")
+
+            from dev_health_ops.db import get_postgres_session_sync
+            from dev_health_ops.api.services.licensing import FeatureService
+
+            with get_postgres_session_sync() as session:
+                feature_svc = FeatureService(session)
+
+                if require_all:
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if not access.allowed:
+                            raise AuthorizationError(
+                                f"Feature '{feature_key}' not available: {access.reason}"
+                            )
+                else:
+                    any_allowed = False
+                    last_reason = None
+                    for feature_key in features:
+                        access = feature_svc.check_feature_access(org_uuid, feature_key)
+                        if access.allowed:
+                            any_allowed = True
+                            break
+                        last_reason = access.reason
+
+                    if not any_allowed:
+                        raise AuthorizationError(
+                            f"Requires one of: {', '.join(features)}. {last_reason or ''}"
+                        )
+
+            return func(*args, **kwargs)
+
+        import asyncio
+
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper  # type: ignore
+        return sync_wrapper  # type: ignore
+
+    return decorator

@@ -19,7 +19,7 @@ async def test_fixtures_generation_smoke_sqlite(tmp_path):
 
     # Mock argparse.Namespace
     ns = argparse.Namespace(
-        db=db_uri,
+        sink=db_uri,
         db_type="sqlite",
         repo_name="test/repo",
         repo_count=1,
@@ -50,7 +50,7 @@ async def test_fixtures_generation_minimal_no_metrics(tmp_path):
     db_uri = f"sqlite:///{db_file}"
 
     ns = argparse.Namespace(
-        db=db_uri,
+        sink=db_uri,
         db_type="sqlite",
         repo_name="test/minimal",
         repo_count=1,
@@ -84,7 +84,7 @@ async def test_fixtures_generation_ensures_tables(tmp_path, monkeypatch):
     monkeypatch.setattr(SQLAlchemyStore, "ensure_tables", _wrapped)
 
     ns = argparse.Namespace(
-        db=db_uri,
+        sink=db_uri,
         db_type="sqlite",
         repo_name="test/ensure",
         repo_count=1,

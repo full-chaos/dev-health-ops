@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 
 revision = "a1b2c3d4e5f6"
-down_revision = "1a2b3c4d5e6f"
+down_revision = None  # Root migration - analytics tables are in ClickHouse only
 branch_labels = None
 depends_on = None
 

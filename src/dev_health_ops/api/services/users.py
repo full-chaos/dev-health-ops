@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import secrets
+
+import bcrypt
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -27,17 +28,14 @@ PASSWORD_MIN_LENGTH = 8
 
 
 def _hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    hashed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000)
-    return f"{salt}${hashed.hex()}"
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _verify_password(password: str, password_hash: str) -> bool:
-    if "$" not in password_hash:
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except ValueError:
         return False
-    salt, stored_hash = password_hash.split("$", 1)
-    computed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000)
-    return secrets.compare_digest(computed.hex(), stored_hash)
 
 
 def _slugify(name: str) -> str:

@@ -224,14 +224,25 @@ BACKEND_URL="http://localhost:8000" npm start
 
 ## Initial Setup
 
-### 1. Create admin user
+### 1. Create admin user and organization
+
+Users must belong to an organization to log in. Create both in sequence:
 
 ```bash
-dev-hops admin create-user \
+# Create admin user
+python -m dev_health_ops.cli admin users create \
   --email admin@your-company.com \
   --password "secure-password" \
-  --role admin
+  --superuser
+
+# Create organization with admin as owner (REQUIRED for login)
+python -m dev_health_ops.cli admin orgs create \
+  --name "Your Company" \
+  --owner-email admin@your-company.com \
+  --tier free
 ```
+
+> **Note:** The `--owner-email` flag automatically adds the user as an organization owner, which is required for authentication.
 
 ### 2. Sync your first repository
 

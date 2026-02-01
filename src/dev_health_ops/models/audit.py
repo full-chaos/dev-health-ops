@@ -67,6 +67,11 @@ class AuditAction(str, Enum):
     FEATURE_ENABLED = "feature_enabled"
     FEATURE_DISABLED = "feature_disabled"
     LICENSE_UPDATED = "license_updated"
+    LICENSE_VALIDATED = "license_validated"
+    LICENSE_VALIDATION_FAILED = "license_validation_failed"
+    LICENSE_GRACE_PERIOD_ENTERED = "license_grace_period_entered"
+    FEATURE_ACCESS_DENIED = "feature_access_denied"
+    LIMIT_EXCEEDED = "limit_exceeded"
 
     # Data events
     EXPORT = "export"

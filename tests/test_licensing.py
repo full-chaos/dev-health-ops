@@ -555,3 +555,251 @@ class TestRequireLimitDecorator:
 
         with pytest.raises(LimitExceededError):
             await async_add_user()
+
+
+class TestLicenseAuditLogger:
+    @pytest.fixture(autouse=True)
+    def reset_all(self):
+        from dev_health_ops.licensing import LicenseManager
+        from dev_health_ops.licensing.gating import LicenseAuditLogger
+
+        LicenseManager.reset()
+        LicenseAuditLogger.reset()
+        yield
+        LicenseManager.reset()
+        LicenseAuditLogger.reset()
+
+    @pytest.fixture
+    def keypair(self) -> tuple[str, str]:
+        return create_test_keypair()
+
+    @pytest.fixture
+    def audit_logger(self):
+        from dev_health_ops.licensing.gating import get_license_audit_logger
+
+        return get_license_audit_logger()
+
+    def test_singleton_pattern(self):
+        from dev_health_ops.licensing.gating import (
+            LicenseAuditLogger,
+            get_license_audit_logger,
+        )
+
+        logger1 = get_license_audit_logger()
+        logger2 = get_license_audit_logger()
+        assert logger1 is logger2
+
+    def test_log_validation_success(self, audit_logger):
+        entry = audit_logger.log_validation_success(
+            license_id="test-license-123",
+            tier="team",
+            org_id="test-org",
+            in_grace_period=False,
+        )
+
+        assert entry["action"] == "license_validated"
+        assert entry["resource_type"] == "license"
+        assert entry["resource_id"] == "test-license-123"
+        assert entry["status"] == "success"
+        assert entry["changes"]["tier"] == "team"
+        assert entry["changes"]["org_id"] == "test-org"
+        assert entry["changes"]["in_grace_period"] is False
+
+    def test_log_validation_failure(self, audit_logger):
+        entry = audit_logger.log_validation_failure(
+            license_id="bad-license",
+            error="Invalid signature",
+        )
+
+        assert entry["action"] == "license_validation_failed"
+        assert entry["resource_type"] == "license"
+        assert entry["resource_id"] == "bad-license"
+        assert entry["status"] == "failure"
+        assert entry["error_message"] == "Invalid signature"
+
+    def test_log_grace_period_entered(self, audit_logger):
+        entry = audit_logger.log_grace_period_entered(
+            license_id="expiring-license",
+            tier="enterprise",
+            days_remaining=7,
+        )
+
+        assert entry["action"] == "license_grace_period_entered"
+        assert entry["resource_type"] == "license"
+        assert entry["status"] == "warning"
+        assert entry["changes"]["tier"] == "enterprise"
+        assert entry["changes"]["days_remaining"] == 7
+
+    def test_log_feature_access_denied(self, audit_logger):
+        entry = audit_logger.log_feature_access_denied(
+            feature="sso",
+            current_tier="team",
+            required_tier="enterprise",
+        )
+
+        assert entry["action"] == "feature_access_denied"
+        assert entry["resource_type"] == "license"
+        assert entry["resource_id"] == "sso"
+        assert entry["status"] == "failure"
+        assert entry["changes"]["feature"] == "sso"
+        assert entry["changes"]["current_tier"] == "team"
+        assert entry["changes"]["required_tier"] == "enterprise"
+
+    def test_log_limit_exceeded(self, audit_logger):
+        entry = audit_logger.log_limit_exceeded(
+            limit_name="users",
+            current_value=30,
+            maximum=25,
+            current_tier="team",
+        )
+
+        assert entry["action"] == "limit_exceeded"
+        assert entry["resource_type"] == "license"
+        assert entry["resource_id"] == "users"
+        assert entry["status"] == "failure"
+        assert entry["changes"]["current_value"] == 30
+        assert entry["changes"]["maximum"] == 25
+
+    def test_set_org_id(self):
+        import uuid
+
+        from dev_health_ops.licensing.gating import LicenseAuditLogger
+
+        test_uuid = uuid.uuid4()
+        LicenseAuditLogger.set_org_id(test_uuid)
+        assert LicenseAuditLogger._org_id == test_uuid
+
+        LicenseAuditLogger.set_org_id(str(test_uuid))
+        assert LicenseAuditLogger._org_id == test_uuid
+
+        LicenseAuditLogger.set_org_id(None)
+        assert LicenseAuditLogger._org_id is None
+
+
+class TestLicenseAuditIntegration:
+    @pytest.fixture(autouse=True)
+    def reset_all(self):
+        from dev_health_ops.licensing import LicenseManager
+        from dev_health_ops.licensing.gating import LicenseAuditLogger
+
+        LicenseManager.reset()
+        LicenseAuditLogger.reset()
+        yield
+        LicenseManager.reset()
+        LicenseAuditLogger.reset()
+
+    @pytest.fixture
+    def keypair(self) -> tuple[str, str]:
+        return create_test_keypair()
+
+    def test_validation_success_logs_audit(self, keypair, caplog):
+        import logging
+
+        from dev_health_ops.licensing import LicenseManager
+
+        public_key, private_key = keypair
+        license_str = generate_test_license(private_key, tier="team")
+
+        with caplog.at_level(logging.INFO, logger="dev_health_ops.licensing.gating"):
+            LicenseManager.initialize(public_key, license_str)
+
+        assert any("license_validated" in record.message for record in caplog.records)
+        assert any("team" in record.message for record in caplog.records)
+
+    def test_validation_failure_logs_audit(self, keypair, caplog):
+        import logging
+
+        from dev_health_ops.licensing import LicenseManager
+
+        public_key, _ = keypair
+
+        with caplog.at_level(logging.WARNING, logger="dev_health_ops.licensing.gating"):
+            LicenseManager.initialize(public_key, "invalid.license")
+
+        assert any(
+            "license_validation_failed" in record.message for record in caplog.records
+        )
+
+    def test_grace_period_logs_audit(self, keypair, caplog):
+        import logging
+
+        from dev_health_ops.licensing import LicenseManager
+
+        public_key, private_key = keypair
+        license_str = generate_test_license(
+            private_key, exp_offset=-5 * 24 * 60 * 60, grace_days=14
+        )
+
+        with caplog.at_level(logging.INFO, logger="dev_health_ops.licensing.gating"):
+            LicenseManager.initialize(public_key, license_str)
+
+        assert any(
+            "license_grace_period_entered" in record.message
+            for record in caplog.records
+        )
+
+    def test_feature_denial_logs_audit(self, keypair, caplog):
+        import logging
+
+        from dev_health_ops.licensing import LicenseManager, has_feature
+
+        public_key, private_key = keypair
+        license_str = generate_test_license(private_key, tier="team")
+        LicenseManager.initialize(public_key, license_str)
+
+        with caplog.at_level(logging.WARNING, logger="dev_health_ops.licensing.gating"):
+            result = has_feature("sso")
+
+        assert result is False
+        assert any(
+            "feature_access_denied" in record.message for record in caplog.records
+        )
+
+    def test_feature_denial_can_skip_logging(self, keypair, caplog):
+        import logging
+
+        from dev_health_ops.licensing import LicenseManager, has_feature
+
+        public_key, private_key = keypair
+        license_str = generate_test_license(private_key, tier="team")
+        LicenseManager.initialize(public_key, license_str)
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="dev_health_ops.licensing.gating"):
+            result = has_feature("sso", log_denial=False)
+
+        assert result is False
+        assert not any(
+            "feature_access_denied" in record.message for record in caplog.records
+        )
+
+    def test_limit_exceeded_logs_audit(self, keypair, caplog):
+        import logging
+
+        from dev_health_ops.licensing import LicenseManager, check_limit
+
+        public_key, private_key = keypair
+        license_str = generate_test_license(private_key, tier="team")
+        LicenseManager.initialize(public_key, license_str)
+
+        with caplog.at_level(logging.WARNING, logger="dev_health_ops.licensing.gating"):
+            result = check_limit("users", 30)
+
+        assert result is False
+        assert any("limit_exceeded" in record.message for record in caplog.records)
+
+    def test_limit_exceeded_can_skip_logging(self, keypair, caplog):
+        import logging
+
+        from dev_health_ops.licensing import LicenseManager, check_limit
+
+        public_key, private_key = keypair
+        license_str = generate_test_license(private_key, tier="team")
+        LicenseManager.initialize(public_key, license_str)
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="dev_health_ops.licensing.gating"):
+            result = check_limit("users", 30, log_exceeded=False)
+
+        assert result is False
+        assert not any("limit_exceeded" in record.message for record in caplog.records)

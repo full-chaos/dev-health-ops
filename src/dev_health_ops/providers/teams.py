@@ -276,14 +276,17 @@ def sync_teams(ns: argparse.Namespace) -> int:
             logging.error(f"Microsoft Teams configuration error: {e}")
             return 1
 
+        async def fetch_teams():
+            teams = await connector.list_teams_with_details(
+                include_channels=True,
+                include_members=True,
+            )
+            await connector.close()
+            return teams
+
         try:
             logging.info("Fetching teams from Microsoft Teams...")
-            ms_teams = asyncio.get_event_loop().run_until_complete(
-                connector.list_teams_with_details(
-                    include_channels=True,
-                    include_members=True,
-                )
-            )
+            ms_teams = asyncio.run(fetch_teams())
             for t in ms_teams:
                 member_ids = [m.id for m in t.members]
                 teams_data.append(
@@ -299,8 +302,6 @@ def sync_teams(ns: argparse.Namespace) -> int:
         except Exception as e:
             logging.error(f"Failed to fetch Microsoft Teams: {e}")
             return 1
-        finally:
-            asyncio.get_event_loop().run_until_complete(connector.close())
 
     else:
         logging.error(f"Unknown provider: {provider}")

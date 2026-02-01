@@ -264,9 +264,43 @@ def sync_teams(ns: argparse.Namespace) -> int:
         from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
         generator = SyntheticDataGenerator()
-        # Use 8 teams as requested for better visualization
         teams_data = generator.generate_teams(count=8)
         logging.info(f"Generated {len(teams_data)} synthetic teams.")
+
+    elif provider == "ms-teams":
+        from dev_health_ops.connectors.teams import TeamsConnector
+
+        try:
+            connector = TeamsConnector.from_env()
+        except ValueError as e:
+            logging.error(f"Microsoft Teams configuration error: {e}")
+            return 1
+
+        try:
+            logging.info("Fetching teams from Microsoft Teams...")
+            ms_teams = asyncio.get_event_loop().run_until_complete(
+                connector.list_teams_with_details(
+                    include_channels=True,
+                    include_members=True,
+                )
+            )
+            for t in ms_teams:
+                member_ids = [m.id for m in t.members]
+                teams_data.append(
+                    Team(
+                        id=f"ms-teams:{t.id}",
+                        name=t.display_name,
+                        description=t.description
+                        or f"Microsoft Teams team: {t.display_name}",
+                        members=member_ids,
+                    )
+                )
+            logging.info(f"Fetched {len(teams_data)} teams from Microsoft Teams.")
+        except Exception as e:
+            logging.error(f"Failed to fetch Microsoft Teams: {e}")
+            return 1
+        finally:
+            asyncio.get_event_loop().run_until_complete(connector.close())
 
     else:
         logging.error(f"Unknown provider: {provider}")
@@ -308,9 +342,9 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     )
     teams.add_argument(
         "--provider",
-        choices=["config", "jira", "jira-ops", "synthetic"],
+        choices=["config", "jira", "jira-ops", "synthetic", "ms-teams"],
         default="config",
-        help="Source of team data (default: config).",
+        help="Source of team data (default: config). Use 'ms-teams' for Microsoft Teams.",
     )
     teams.add_argument(
         "--path", help="Path to teams.yaml config (used if provider=config)."

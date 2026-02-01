@@ -16,6 +16,15 @@ from .exceptions import (
 )
 from .github import GitHubConnector, match_repo_pattern
 from .gitlab import GitLabConnector, match_project_pattern
+from .teams import (
+    MicrosoftGraphClient,
+    TeamsChannel,
+    TeamsConnector,
+    TeamsMeeting,
+    TeamsMessage,
+    TeamsTeam,
+    TeamsUser,
+)
 from .models import (
     Author,
     BlameRange,
@@ -33,6 +42,8 @@ __all__ = [
     # Connectors
     "GitHubConnector",
     "GitLabConnector",
+    "TeamsConnector",
+    "MicrosoftGraphClient",
     # Batch processing
     "BatchResult",
     "match_repo_pattern",
@@ -46,6 +57,12 @@ __all__ = [
     "PullRequest",
     "BlameRange",
     "FileBlame",
+    # Teams models
+    "TeamsTeam",
+    "TeamsChannel",
+    "TeamsMessage",
+    "TeamsUser",
+    "TeamsMeeting",
     # Exceptions
     "ConnectorException",
     "RateLimitException",

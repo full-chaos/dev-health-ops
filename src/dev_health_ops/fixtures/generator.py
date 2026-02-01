@@ -29,6 +29,7 @@ from dev_health_ops.metrics.schemas import (
     FileMetricsRecord,
     WorkItemUserMetricsDailyRecord,
 )
+from dev_health_ops.providers.teams import normalize_team_id, normalize_team_name
 
 
 class SyntheticDataGenerator:
@@ -872,8 +873,8 @@ class SyntheticDataGenerator:
                     changes_requested_given=random.randint(0, 1),
                     reviews_received=random.randint(0, 5),
                     review_reciprocity=0.8,
-                    team_id=team_id or "unassigned",
-                    team_name=team_name or "Unassigned",
+                    team_id=normalize_team_id(team_id),
+                    team_name=normalize_team_name(team_name),
                     active_hours=6.0,
                     weekend_days=0,
                     loc_touched=loc_added + loc_deleted,
@@ -907,8 +908,8 @@ class SyntheticDataGenerator:
                     provider=self.provider,
                     work_scope_id=self.repo_name,
                     user_identity=user_identity,
-                    team_id=team_id or "unassigned",
-                    team_name=team_name or "Unassigned",
+                    team_id=normalize_team_id(team_id),
+                    team_name=normalize_team_name(team_name),
                     items_started=random.randint(0, 1),
                     items_completed=random.randint(0, 1),
                     wip_count_end_of_day=random.randint(0, 3),
@@ -1544,3 +1545,95 @@ class SyntheticDataGenerator:
                 )
             )
         return records
+
+    def generate_users(
+        self,
+        *,
+        default_password: str = "devhealth123",
+        include_admin: bool = True,
+    ) -> Dict[str, Any]:
+        import bcrypt
+        from dev_health_ops.models.users import User, Organization, Membership
+
+        users = []
+        orgs = []
+        memberships = []
+
+        password_hash = bcrypt.hashpw(
+            default_password.encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+
+        if include_admin:
+            admin_user = User(
+                id=uuid.uuid5(
+                    uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"),
+                    "admin@devhealth.example",
+                ),
+                email="admin@devhealth.example",
+                username="admin",
+                password_hash=password_hash,
+                full_name="Admin User",
+                auth_provider="local",
+                is_active=True,
+                is_verified=True,
+                is_superuser=True,
+            )
+            users.append(admin_user)
+
+            admin_org = Organization(
+                id=uuid.uuid5(
+                    uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "default-org"
+                ),
+                slug="default-org",
+                name="Default Organization",
+                tier="enterprise",
+                is_active=True,
+            )
+            orgs.append(admin_org)
+
+            memberships.append(
+                Membership(
+                    user_id=admin_user.id,
+                    org_id=admin_org.id,
+                    role="owner",
+                    joined_at=datetime.now(timezone.utc),
+                )
+            )
+
+        default_org_id = None
+        if orgs:
+            default_org_id = orgs[0].id
+
+        for name, email in self.authors[:5]:
+            user_id = uuid.uuid5(
+                uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), email
+            )
+            user = User(
+                id=user_id,
+                email=email,
+                username=email.split("@")[0],
+                password_hash=password_hash,
+                full_name=name,
+                auth_provider="local",
+                is_active=True,
+                is_verified=True,
+                is_superuser=False,
+            )
+            users.append(user)
+
+            if default_org_id:
+                memberships.append(
+                    Membership(
+                        user_id=user_id,
+                        org_id=default_org_id,
+                        role="member",
+                        joined_at=datetime.now(timezone.utc),
+                    )
+                )
+
+        return {
+            "users": users,
+            "organizations": orgs,
+            "memberships": memberships,
+            "default_password": default_password,
+        }

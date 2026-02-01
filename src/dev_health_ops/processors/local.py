@@ -22,6 +22,7 @@ from dev_health_ops.utils import (
     iter_commits_since,
     _normalize_datetime,
 )
+from dev_health_ops.providers.pr_state import PRState
 
 
 _GITHUB_MERGE_PR_RE = re.compile(
@@ -89,7 +90,7 @@ def infer_merged_pull_requests_from_commits(
                 repo_id=repo_id,
                 number=number,
                 title=title,
-                state="merged",
+                state=PRState.MERGED.value,
                 author_name=author_name,
                 author_email=author_email,
                 created_at=created_at,
@@ -141,7 +142,7 @@ def infer_open_pull_requests_from_refs(
                 repo_id=repo_id,
                 number=number,
                 title=None,
-                state="open",
+                state=PRState.OPEN.value,
                 author_name=None,
                 author_email=None,
                 created_at=commit_dt or datetime.now(timezone.utc),

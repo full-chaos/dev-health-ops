@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
@@ -244,23 +245,32 @@ async def run_daily_metrics_job(
 
     loader = await _get_loader(db_url, backend)
 
-    work_items: List[Any] = []
-    work_item_transitions: List[Any] = []
-    load_from_db = provider == "auto"
-
-    if provider != "none":
-        since_dt = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
-        until_dt = datetime.combine(max(days), time.max, tzinfo=timezone.utc)
-        if load_from_db:
-            wi, trans = await loader.load_work_items(
-                since_dt, until_dt, repo_id, repo_name
-            )
-            work_items.extend(wi)
-            work_item_transitions.extend(trans)
+    load_work_items_from_db = provider == "auto"
+    load_work_items_enabled = provider != "none"
 
     business_tz = os.getenv("BUSINESS_TIMEZONE", "UTC")
     business_start = int(os.getenv("BUSINESS_HOURS_START", "9"))
     business_end = int(os.getenv("BUSINESS_HOURS_END", "17"))
+
+    daily_commit_cache: Dict[date, List[Any]] = {}
+
+    async def _get_cached_commits_for_window(
+        window_start: date, window_end: date
+    ) -> List[Any]:
+        """Load commits for date range using per-day cache to avoid redundant fetches."""
+        result = []
+        current = window_start
+        while current <= window_end:
+            if current not in daily_commit_cache:
+                d_start = datetime.combine(current, time.min, tzinfo=timezone.utc)
+                d_end = d_start + timedelta(days=1)
+                rows, _, _ = await loader.load_git_rows(
+                    d_start, d_end, repo_id=repo_id, repo_name=repo_name
+                )
+                daily_commit_cache[current] = rows
+            result.extend(daily_commit_cache[current])
+            current += timedelta(days=1)
+        return result
 
     for d in days:
         logger.info("Computing metrics for day=%s", d.isoformat())
@@ -269,6 +279,8 @@ async def run_daily_metrics_job(
         commit_rows, pr_rows, review_rows = await loader.load_git_rows(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
+        daily_commit_cache[d] = commit_rows
+
         pipeline_rows, deployment_rows = await loader.load_cicd_data(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
@@ -276,14 +288,16 @@ async def run_daily_metrics_job(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
 
-        h_start = datetime.combine(
-            d - timedelta(days=29), time.min, tzinfo=timezone.utc
-        )
-        h_commit_rows, _, _ = await loader.load_git_rows(
-            h_start, end, repo_id=repo_id, repo_name=repo_name
-        )
+        h_start_date = d - timedelta(days=29)
+        h_commit_rows = await _get_cached_commits_for_window(h_start_date, d)
 
-        # --- MTTR ---
+        work_items: List[Any] = []
+        work_item_transitions: List[Any] = []
+        if load_work_items_enabled and load_work_items_from_db:
+            work_items, work_item_transitions = await loader.load_work_items(
+                start, end, repo_id, repo_name
+            )
+
         mttr_by_repo: Dict[uuid.UUID, float] = {}
         bug_times: Dict[uuid.UUID, List[float]] = {}
         for item in work_items:
@@ -422,7 +436,6 @@ async def run_daily_metrics_job(
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     daily = subparsers.add_parser("daily", help="Compute daily metrics.")
-    daily.add_argument("--db", help="Database connection string.")
     daily.add_argument(
         "--day", type=date.fromisoformat, default=date.today().isoformat()
     )
@@ -443,7 +456,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
     try:
         await run_daily_metrics_job(
-            db_url=ns.db,
+            db_url=resolve_sink_uri(ns),
             day=ns.day,
             backfill_days=ns.backfill,
             repo_id=ns.repo_id,

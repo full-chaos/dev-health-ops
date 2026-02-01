@@ -18,17 +18,28 @@ The CLI is implemented in `cli.py` and orchestrates:
 
 | Argument | Environment Variable | Description |
 |----------|---------------------|-------------|
-| `--db` | `DATABASE_URI` | Database connection string |
-| `--sink` | — | Output target: `primary`, `secondary`, `both` |
+| `--db` | `POSTGRES_URI` | PostgreSQL connection (semantic: users, settings) |
+| `--analytics-db` | `CLICKHOUSE_URI` | ClickHouse connection (analytics: metrics, data) |
+
+Subcommands like `metrics daily` also accept `--sink` for output format (`clickhouse`, `mongo`, `sqlite`, `postgres`, `both`, `auto`).
+
+### Dual-Database Architecture
+
+Dev Health Ops uses two databases:
+
+| Layer | Database | Env Var | Purpose |
+|-------|----------|---------|---------|
+| **Semantic** | PostgreSQL | `POSTGRES_URI` | Users, orgs, settings, credentials |
+| **Analytics** | ClickHouse | `CLICKHOUSE_URI` | Commits, PRs, work items, metrics |
+
+See [Database Architecture](../architecture/database-architecture.md) for details.
 
 ### Database Connection Strings
 
 | Backend | Format | Example |
 |---------|--------|---------|
-| PostgreSQL | `postgresql+asyncpg://` | `postgresql+asyncpg://localhost:5432/db` |
+| PostgreSQL | `postgresql+asyncpg://` | `postgresql+asyncpg://localhost:5555/postgres` |
 | ClickHouse | `clickhouse://` | `clickhouse://localhost:8123/default` |
-| MongoDB | `mongodb://` | `mongodb://localhost:27017/db` |
-| SQLite | `sqlite+aiosqlite://` | `sqlite+aiosqlite:///./data.db` |
 
 ---
 
@@ -36,24 +47,21 @@ The CLI is implemented in `cli.py` and orchestrates:
 
 ### `sync git`
 
-Sync git repository data.
+Sync git repository data. Uses `CLICKHOUSE_URI` (analytics layer).
 
 ```bash
 # Local repository
 python cli.py sync git --provider local \
-  --db "$DATABASE_URI" \
   --repo-path /path/to/repo
 
 # GitHub
 python cli.py sync git --provider github \
-  --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
   --repo linux
 
 # GitLab
 python cli.py sync git --provider gitlab \
-  --db "$DATABASE_URI" \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
 ```
@@ -70,11 +78,10 @@ python cli.py sync git --provider gitlab \
 
 ### `sync prs`
 
-Sync pull request data.
+Sync pull request data. Uses `CLICKHOUSE_URI`.
 
 ```bash
 python cli.py sync prs --provider github \
-  --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -82,31 +89,26 @@ python cli.py sync prs --provider github \
 
 ### `sync work-items`
 
-Sync work items from issue trackers.
+Sync work items from issue trackers. Uses `CLICKHOUSE_URI`.
 
 ```bash
 # All providers
 python cli.py sync work-items --provider all \
-  --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 30
 
 # Jira only
-python cli.py sync work-items --provider jira \
-  --db "$DATABASE_URI"
+python cli.py sync work-items --provider jira
 
 # GitHub with pattern
 python cli.py sync work-items --provider github \
-  --db "$DATABASE_URI" \
   -s "org/*"
 
 # Linear (all teams)
-python cli.py sync work-items --provider linear \
-  --db "$DATABASE_URI"
+python cli.py sync work-items --provider linear
 
 # Linear (specific team by key)
 python cli.py sync work-items --provider linear \
-  --db "$DATABASE_URI" \
   --repo ENG
 ```
 
@@ -114,19 +116,17 @@ python cli.py sync work-items --provider linear \
 
 ### `sync cicd`
 
-Sync CI/CD pipeline data.
+Sync CI/CD pipeline data. Uses `CLICKHOUSE_URI`.
 
 ```bash
 # GitHub
 python cli.py sync cicd --provider github \
-  --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
 
 # GitLab
 python cli.py sync cicd --provider gitlab \
-  --db "$DATABASE_URI" \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
   --project-id 123
@@ -134,11 +134,10 @@ python cli.py sync cicd --provider gitlab \
 
 ### `sync deployments`
 
-Sync deployment events.
+Sync deployment events. Uses `CLICKHOUSE_URI`.
 
 ```bash
 python cli.py sync deployments --provider github \
-  --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -146,11 +145,10 @@ python cli.py sync deployments --provider github \
 
 ### `sync incidents`
 
-Sync incident data.
+Sync incident data. Uses `CLICKHOUSE_URI`.
 
 ```bash
 python cli.py sync incidents --provider github \
-  --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -177,25 +175,27 @@ python cli.py sync teams --provider synthetic
 
 ### `metrics daily`
 
-Compute daily metrics.
+Compute daily metrics. Uses `CLICKHOUSE_URI`.
 
 ```bash
 # Single day
 python cli.py metrics daily \
-  --db "$DATABASE_URI" \
   --date 2025-02-01
 
 # With backfill
 python cli.py metrics daily \
-  --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 7
 
 # Filter to one repo
 python cli.py metrics daily \
-  --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --repo-id <uuid>
+
+# Specify output format
+python cli.py metrics daily \
+  --date 2025-02-01 \
+  --sink clickhouse
 ```
 
 **Options:**
@@ -211,12 +211,10 @@ python cli.py metrics daily \
 
 ### `fixtures generate`
 
-Generate synthetic test data.
+Generate synthetic test data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-python cli.py fixtures generate \
-  --db "$DATABASE_URI" \
-  --days 30
+python cli.py fixtures generate --days 30
 ```
 
 **Options:**
@@ -225,6 +223,71 @@ python cli.py fixtures generate \
 | `--days N` | Number of days to generate |
 | `--teams N` | Number of teams |
 | `--repos-per-team N` | Repos per team |
+
+---
+
+## Admin Commands
+
+User and organization management commands. These use PostgreSQL (`POSTGRES_URI`).
+
+### `admin create-user`
+
+Create a new user.
+
+```bash
+python cli.py admin create-user \
+  --email admin@example.com \
+  --password secretpass123 \
+  --full-name "Admin User" \
+  --superuser
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--db` | PostgreSQL URI override (or set `POSTGRES_URI`) |
+| `--email` | User email (required) |
+| `--password` | Password, min 8 chars (required) |
+| `--username` | Optional username |
+| `--full-name` | User's full name |
+| `--superuser` | Grant superuser privileges |
+
+### `admin create-org`
+
+Create a new organization. Uses `POSTGRES_URI`.
+
+```bash
+python cli.py admin create-org \
+  --name "My Organization" \
+  --owner-email admin@example.com \
+  --tier free
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--db` | PostgreSQL URI override (or set `POSTGRES_URI`) |
+| `--name` | Organization name (required) |
+| `--slug` | URL-safe slug (auto-generated if omitted) |
+| `--description` | Organization description |
+| `--tier` | Subscription tier (default: `free`) |
+| `--owner-email` | Email of initial owner |
+
+### `admin list-users`
+
+List all users.
+
+```bash
+python cli.py admin list-users --limit 50
+```
+
+### `admin list-orgs`
+
+List all organizations.
+
+```bash
+python cli.py admin list-orgs --include-inactive
+```
 
 ---
 
@@ -250,8 +313,9 @@ For GitHub/GitLab batch operations:
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URI` | Primary database connection |
-| `SECONDARY_DATABASE_URI` | Secondary sink (with `--sink both`) |
+| `POSTGRES_URI` | PostgreSQL connection (semantic layer: users, settings) |
+| `CLICKHOUSE_URI` | ClickHouse connection (analytics layer: metrics, data) |
+| `DATABASE_URI` | Legacy fallback (deprecated) |
 | `DB_ECHO` | Enable SQL logging |
 
 ### Provider Auth
@@ -288,22 +352,23 @@ For GitHub/GitLab batch operations:
 ### Full Sync Pipeline
 
 ```bash
+# Set environment variables
+export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
+export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
+
 # 1. Sync git data
 python cli.py sync git --provider github \
-  --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner myorg \
   --repo myrepo
 
 # 2. Sync work items
 python cli.py sync work-items --provider jira \
-  --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 30
 
 # 3. Compute metrics
 python cli.py metrics daily \
-  --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 30
 ```
@@ -311,15 +376,14 @@ python cli.py metrics daily \
 ### Local Development
 
 ```bash
+# Use SQLite for local dev (analytics layer)
+export CLICKHOUSE_URI="sqlite+aiosqlite:///./dev.db"
+
 # Generate synthetic data
-python cli.py fixtures generate \
-  --db "sqlite+aiosqlite:///./dev.db" \
-  --days 30
+python cli.py fixtures generate --days 30
 
 # Compute metrics
-python cli.py metrics daily \
-  --db "sqlite+aiosqlite:///./dev.db" \
-  --backfill 30
+python cli.py metrics daily --backfill 30
 ```
 
 ### Batch Organization Sync
@@ -327,7 +391,6 @@ python cli.py metrics daily \
 ```bash
 # Sync all repos in org
 python cli.py sync git --provider github \
-  --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   -s "myorg/*" \
   --group myorg \

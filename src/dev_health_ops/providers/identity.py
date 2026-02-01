@@ -102,3 +102,30 @@ def load_identity_resolver(path: Optional[Path] = None) -> IdentityResolver:
             alias_to_canonical[alias_norm] = canonical_norm
 
     return IdentityResolver(alias_to_canonical=alias_to_canonical)
+
+
+def normalize_git_identity(
+    email: Optional[str],
+    display_name: Optional[str],
+    resolver: Optional[IdentityResolver] = None,
+) -> str:
+    """Normalize a Git author identity to a canonical string.
+
+    Uses IdentityResolver if provided, otherwise falls back to email > name > "unknown".
+    """
+    if resolver is not None:
+        return resolver.resolve(
+            provider="git",  # type: ignore[arg-type]
+            email=email,
+            display_name=display_name,
+        )
+
+    if email:
+        normalized = email.strip()
+        if normalized:
+            return normalized
+    if display_name:
+        normalized = display_name.strip()
+        if normalized:
+            return normalized
+    return "unknown"

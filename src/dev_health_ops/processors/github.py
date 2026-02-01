@@ -22,6 +22,7 @@ from dev_health_ops.utils import (
     CONNECTORS_AVAILABLE,
     is_skippable,
 )
+from dev_health_ops.providers.pr_state import normalize_pr_state
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
@@ -535,7 +536,7 @@ def _sync_github_prs_to_store(
                 number=int(getattr(gh_pr, "number", 0) or 0),
                 title=getattr(gh_pr, "title", None),
                 body=getattr(gh_pr, "body", None),
-                state=getattr(gh_pr, "state", None),
+                state=normalize_pr_state(getattr(gh_pr, "state", None), merged_at),
                 author_name=author_name,
                 author_email=author_email,
                 created_at=created_at,

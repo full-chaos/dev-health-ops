@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
+from dev_health_ops.utils.normalization import clamp as _clamp, normalize_scores
 
 logger = logging.getLogger(__name__)
 
@@ -76,20 +77,6 @@ def _config() -> WorkUnitConfig:
 
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
-    return max(low, min(high, value))
-
-
-def normalize_scores(
-    scores: Dict[str, float], categories: Sequence[str]
-) -> Dict[str, float]:
-    total = sum(scores.get(cat, 0.0) for cat in categories)
-    if total <= 0:
-        uniform = 1.0 / len(categories) if categories else 0.0
-        return {cat: uniform for cat in categories}
-    return {cat: scores.get(cat, 0.0) / total for cat in categories}
 
 
 def _normalize_work_item_type(value: Optional[str]) -> str:

@@ -1,4 +1,5 @@
 import logging
+import warnings
 from pathlib import Path
 from typing import Dict
 
@@ -8,7 +9,19 @@ logger = logging.getLogger(__name__)
 
 
 class IssueTypeNormalizer:
+    """
+    Deprecated: Use providers.status_mapping.StatusMapping.normalize_type() instead.
+
+    This class is retained for backward compatibility but will be removed in a future version.
+    """
+
     def __init__(self, config_path: Path):
+        warnings.warn(
+            "IssueTypeNormalizer is deprecated. "
+            "Use providers.status_mapping.StatusMapping.normalize_type() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.mapping = self._load_config(config_path)
 
     def _load_config(self, path: Path) -> Dict:

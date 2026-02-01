@@ -20,6 +20,7 @@ from dev_health_ops.utils import (
     CONNECTORS_AVAILABLE,
     BATCH_SIZE,
 )
+from dev_health_ops.providers.pr_state import normalize_pr_state
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
@@ -185,7 +186,7 @@ def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
             number=mr.number,
             title=mr.title,
             body=mr.body,
-            state=mr.state,
+            state=normalize_pr_state(mr.state, mr.merged_at),
             author_name=mr.author.username if mr.author else "Unknown",
             author_email=None,
             created_at=created_at,
@@ -306,7 +307,7 @@ def _sync_gitlab_mrs_to_store(
                     number=int(mr.get("iid") or 0),
                     title=mr.get("title") or None,
                     body=mr.get("description"),
-                    state=mr.get("state") or None,
+                    state=normalize_pr_state(mr.get("state"), merged_at),
                     author_name=author_name,
                     author_email=author_email,
                     created_at=created_at,

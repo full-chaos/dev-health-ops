@@ -24,6 +24,7 @@ from dev_health_ops.metrics.schemas import (
     PullRequestReviewRow,
     PullRequestRow,
 )
+from dev_health_ops.utils.datetime import naive_utc, to_utc
 
 if TYPE_CHECKING:
     from dev_health_ops.models.atlassian_ops import (
@@ -125,18 +126,16 @@ class DataLoader(Protocol):
         raise NotImplementedError()
 
 
-def naive_utc(dt: datetime) -> datetime:
-    """Convert a datetime to naive UTC (BSON/ClickHouse friendly)."""
-    if dt.tzinfo is None:
-        return dt
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
-
-
-def to_utc(dt: datetime) -> datetime:
-    """Ensure datetime has UTC tzinfo."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+__all__ = [
+    "naive_utc",
+    "to_utc",
+    "parse_uuid",
+    "safe_json_loads",
+    "chunked",
+    "to_dataclass",
+    "clickhouse_query_dicts",
+    "DataLoader",
+]
 
 
 def parse_uuid(value: Any) -> Optional[uuid.UUID]:

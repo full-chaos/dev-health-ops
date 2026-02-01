@@ -9,7 +9,12 @@ from dev_health_ops.metrics.schemas import (
     WorkItemUserMetricsDailyRecord,
 )
 from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
-from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.providers.teams import (
+    TeamResolver,
+    normalize_team_id,
+    normalize_team_name,
+)
+from dev_health_ops.utils.datetime import to_utc
 import logging
 
 
@@ -17,12 +22,6 @@ def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
-
-
-def _to_utc(dt: datetime) -> datetime:
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _percentile(values: Sequence[float], percentile: float) -> float:
@@ -66,8 +65,8 @@ def _calculate_flow_breakdown(
     if not item.started_at or not item.completed_at:
         return 0.0, 0.0
 
-    start_utc = _to_utc(item.started_at)
-    end_utc = _to_utc(item.completed_at)
+    start_utc = to_utc(item.started_at)
+    end_utc = to_utc(item.completed_at)
 
     if start_utc >= end_utc:
         return 0.0, 0.0
@@ -87,7 +86,7 @@ def _calculate_flow_breakdown(
     # Assuming 'in_progress' is the start state if started_at is present.
     # But let's look at transitions before started_at.
     for t in sorted_trans:
-        t_utc = _to_utc(t.occurred_at)
+        t_utc = to_utc(t.occurred_at)
         if t_utc <= start_utc:
             current_status = t.to_status
         else:
@@ -105,7 +104,7 @@ def _calculate_flow_breakdown(
 
     # Iterate transitions that happen *within* the window
     for t in sorted_trans:
-        t_utc = _to_utc(t.occurred_at)
+        t_utc = to_utc(t.occurred_at)
         if t_utc <= start_utc:
             continue
         if t_utc >= end_utc:
@@ -184,7 +183,7 @@ def compute_work_item_metrics_daily(
     - WIP metrics ignore items missing started_at
     """
     start, end = _utc_day_window(day)
-    computed_at_utc = _to_utc(computed_at)
+    computed_at_utc = to_utc(computed_at)
 
     # Aggregations keyed by (provider, work_scope_id, team_id).
     by_group: Dict[Tuple[str, str, Optional[str]], GroupBucket] = {}
@@ -199,9 +198,9 @@ def compute_work_item_metrics_daily(
 
     for item in work_items:
         work_scope_id = item.work_scope_id or ""
-        created_at = _to_utc(item.created_at)
-        started_at = _to_utc(item.started_at) if item.started_at else None
-        completed_at = _to_utc(item.completed_at) if item.completed_at else None
+        created_at = to_utc(item.created_at)
+        started_at = to_utc(item.started_at) if item.started_at else None
+        completed_at = to_utc(item.completed_at) if item.completed_at else None
 
         # Ignore items that don't exist yet on this day.
         if created_at >= end:
@@ -209,8 +208,8 @@ def compute_work_item_metrics_daily(
 
         assignee = item.assignees[0] if item.assignees else None
         team_id, team_name = _resolve_team(team_resolver, assignee)
-        team_id_norm = team_id or "unassigned"
-        team_name_norm = team_name or "Unassigned"
+        team_id_norm = normalize_team_id(team_id)
+        team_name_norm = normalize_team_name(team_name)
 
         started_today = started_at is not None and start <= started_at < end
         completed_today = completed_at is not None and start <= completed_at < end
@@ -357,7 +356,7 @@ def compute_work_item_metrics_daily(
                     provider=item.provider,
                     day=completed_at.date(),  # type: ignore
                     work_scope_id=work_scope_id,
-                    team_id=team_id or "unassigned",
+                    team_id=normalize_team_id(team_id),
                     team_name=team_name_norm,
                     assignee=assignee,
                     type=item.type,
@@ -428,7 +427,7 @@ def compute_work_item_metrics_daily(
                 day=day,
                 provider=provider,
                 work_scope_id=work_scope_id,
-                team_id=team_id or "unassigned",
+                team_id=normalize_team_id(team_id),
                 team_name=bucket["team_name"],
                 items_started=bucket["items_started"],
                 items_completed=items_completed,
@@ -478,7 +477,7 @@ def compute_work_item_metrics_daily(
                 provider=provider,
                 work_scope_id=work_scope_id,
                 user_identity=user_identity,
-                team_id=team_id or "unassigned",
+                team_id=normalize_team_id(team_id),
                 team_name=bucket["team_name"],
                 items_started=bucket["items_started"],
                 items_completed=bucket["items_completed"],

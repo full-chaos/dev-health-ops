@@ -87,7 +87,7 @@ def _build_repo_team_assignments(all_teams, repo_count: int, seed: int | None):
 
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
-    db_type = resolve_db_type(ns.db, ns.db_type)
+    db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data = {"work_items": [], "transitions": []}
 
     async def _handler(store):
@@ -109,6 +109,26 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             await store.insert_teams(all_teams)
             logging.info("Inserted %d synthetic teams.", len(all_teams))
 
+        if isinstance(store, SQLAlchemyStore) and db_type == "postgres":
+            user_generator = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+            user_data = user_generator.generate_users()
+            async with store.session_factory() as session:
+                for org in user_data["organizations"]:
+                    await session.merge(org)
+                await session.commit()
+                for user in user_data["users"]:
+                    await session.merge(user)
+                await session.commit()
+                for membership in user_data["memberships"]:
+                    await session.merge(membership)
+                await session.commit()
+            logging.info(
+                "Inserted %d users, %d orgs, %d memberships.",
+                len(user_data["users"]),
+                len(user_data["organizations"]),
+                len(user_data["memberships"]),
+            )
+
         allow_parallel_inserts = not isinstance(store, SQLAlchemyStore)
 
         sink = None
@@ -122,13 +142,13 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             )
 
             if db_type == "clickhouse":
-                sink = ClickHouseMetricsSink(ns.db)
+                sink = ClickHouseMetricsSink(ns.sink)
             elif db_type == "sqlite":
-                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.db))
+                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.sink))
             elif db_type == "mongo":
-                sink = MongoMetricsSink(ns.db)
+                sink = MongoMetricsSink(ns.sink)
             elif db_type == "postgres":
-                sink = PostgresMetricsSink(ns.db)
+                sink = PostgresMetricsSink(ns.sink)
 
             if sink:
                 if isinstance(sink, MongoMetricsSink):
@@ -296,11 +316,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     if comp_data["dailies"]:
                         sink.write_repo_complexity_daily(comp_data["dailies"])
 
-    await run_with_store(ns.db, db_type, _handler)
+    await run_with_store(ns.sink, db_type, _handler)
 
     if ns.with_metrics:
         await run_daily_metrics_job(
-            db_url=ns.db,
+            db_url=ns.sink,
             day=now.date(),
             backfill_days=ns.days,
             provider="auto",
@@ -316,13 +336,13 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             )
 
             if db_type == "clickhouse":
-                sink = ClickHouseMetricsSink(ns.db)
+                sink = ClickHouseMetricsSink(ns.sink)
             elif db_type == "sqlite":
-                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.db))
+                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.sink))
             elif db_type == "mongo":
-                sink = MongoMetricsSink(ns.db)
+                sink = MongoMetricsSink(ns.sink)
             elif db_type == "postgres":
-                sink = PostgresMetricsSink(ns.db)
+                sink = PostgresMetricsSink(ns.sink)
             else:
                 sink = None
 
@@ -351,7 +371,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
 
         config = BuildConfig(
-            dsn=ns.db,
+            dsn=ns.sink,
             from_date=(now - timedelta(days=ns.days)),
             to_date=now,
         )
@@ -360,7 +380,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             builder.build()
             if config.from_date and config.to_date:
                 await materialize_fixture_investments(
-                    db_url=ns.db,
+                    db_url=ns.sink,
                     from_ts=config.from_date,
                     to_ts=config.to_date,
                 )
@@ -384,7 +404,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         fetch_work_items,
     )
 
-    db_url = ns.db
+    db_url = ns.sink
     if not db_url.startswith("clickhouse://"):
         logging.error("Validation only supported for ClickHouse currently.")
         return 1
@@ -795,9 +815,9 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
     fix_gen = fix_sub.add_parser("generate", help="Generate synthetic data.")
     fix_gen.add_argument(
-        "--db",
-        default=os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL"),
-        help="Target DB URI.",
+        "--sink",
+        default=os.getenv("CLICKHOUSE_URI") or os.getenv("DATABASE_URI"),
+        help="Analytics sink URI (ClickHouse, etc). Env: CLICKHOUSE_URI",
     )
     fix_gen.add_argument(
         "--db-type", help="Explicit DB type (postgres, clickhouse, etc)."
@@ -838,8 +858,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
     fix_val = fix_sub.add_parser("validate", help="Validate fixture data quality.")
     fix_val.add_argument(
-        "--db",
+        "--sink",
         required=True,
-        help="Database URI.",
+        help="Analytics sink URI (ClickHouse). Env: CLICKHOUSE_URI",
     )
     fix_val.set_defaults(func=run_fixtures_validation)

@@ -8,6 +8,7 @@ from raw data sources (work items, PRs, commits).
 from __future__ import annotations
 
 import argparse
+import bisect
 import logging
 import sys
 import uuid
@@ -905,8 +906,9 @@ class WorkGraphBuilder:
         if not pr_rows:
             return 0
 
-        # Group PRs by repo
-        prs_by_repo: Dict[str, List[Tuple[int, datetime]]] = {}
+        # Group PRs by repo with sorted timestamps for O(log n) binary search
+        # Data structure: {repo_key: (sorted_timestamps, [(pr_number, created_at), ...])}
+        prs_by_repo: Dict[str, Tuple[List[float], List[Tuple[int, datetime]]]] = {}
         for row in pr_rows:
             repo_id = row.get("repo_id")
             pr_number = row.get("number")
@@ -916,13 +918,22 @@ class WorkGraphBuilder:
                 continue
 
             repo_key = str(repo_id)
-            # Ensure created_at is datetime
             if isinstance(created_at, str):
                 created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
 
-            prs_by_repo.setdefault(repo_key, []).append((int(pr_number), created_at))
+            if repo_key not in prs_by_repo:
+                prs_by_repo[repo_key] = ([], [])
+            prs_by_repo[repo_key][1].append((int(pr_number), created_at))
 
-        window = timedelta(days=self.config.heuristic_days_window)
+        # Sort PRs by created_at and build timestamp index for binary search
+        for repo_key, (timestamps, prs_list) in prs_by_repo.items():
+            prs_list.sort(key=lambda x: x[1].timestamp() if x[1] else 0)
+            timestamps.clear()
+            timestamps.extend(pr[1].timestamp() if pr[1] else 0 for pr in prs_list)
+
+        window_seconds = timedelta(
+            days=self.config.heuristic_days_window
+        ).total_seconds()
         edges: List[WorkGraphEdge] = []
         fast_path_links: List[WorkGraphIssuePR] = []
 
@@ -943,15 +954,23 @@ class WorkGraphBuilder:
             if isinstance(updated_at, str):
                 updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
 
+            if not updated_at:
+                continue
+
+            # Binary search to find PRs within time window: O(log n) instead of O(n)
+            timestamps, prs_list = prs_by_repo[repo_key]
+            updated_ts = updated_at.timestamp()
+            left_idx = bisect.bisect_left(timestamps, updated_ts - window_seconds)
+            right_idx = bisect.bisect_right(timestamps, updated_ts + window_seconds)
+
             best: Optional[Tuple[int, datetime, float]] = None
-            for pr_number, pr_created_at in prs_by_repo[repo_key]:
+            for idx in range(left_idx, right_idx):
+                pr_number, pr_created_at = prs_list[idx]
                 if (work_item_id, pr_number) in explicit_links:
                     continue
-                if not updated_at or not pr_created_at:
+                if not pr_created_at:
                     continue
                 time_diff = abs((pr_created_at - updated_at).total_seconds())
-                if time_diff > window.total_seconds():
-                    continue
                 if best is None or time_diff < best[2]:
                     best = (pr_number, pr_created_at, time_diff)
 
@@ -961,11 +980,7 @@ class WorkGraphBuilder:
             pr_number = best[0]
             pr_created_at = best[1]
 
-            # Use max(updated_at, pr_created_at) as event time
-            event_ts = pr_created_at
-            if updated_at and updated_at > event_ts:
-                event_ts = updated_at
-            # Ensure timezone
+            event_ts = max(updated_at, pr_created_at) if updated_at else pr_created_at
             if event_ts and event_ts.tzinfo is None:
                 event_ts = event_ts.replace(tzinfo=timezone.utc)
 

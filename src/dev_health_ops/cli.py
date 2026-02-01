@@ -17,6 +17,7 @@ from dev_health_ops.fixtures import runner as fixtures_runner
 from dev_health_ops.work_graph import runner as work_graph_runner
 from dev_health_ops.workers import runner as workers_runner
 from dev_health_ops.api import runner as api_runner
+from dev_health_ops.api.admin import cli as admin_cli
 from dev_health_ops.metrics import (
     job_work_items,
     job_daily,
@@ -67,6 +68,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("LOG_LEVEL", "INFO"),
         help="Logging level (DEBUG, INFO, WARNING). Defaults to env LOG_LEVEL or INFO.",
     )
+    parser.add_argument(
+        "--db",
+        default=os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URI"),
+        help="PostgreSQL URI for semantic data. Env: POSTGRES_URI or DATABASE_URI",
+    )
+    parser.add_argument(
+        "--analytics-db",
+        dest="analytics_db",
+        default=os.getenv("CLICKHOUSE_URI") or os.getenv("DATABASE_URI"),
+        help="ClickHouse URI for analytics data (metrics, work items). Env: CLICKHOUSE_URI",
+    )
     from dev_health_ops.llm.cli import add_llm_arguments
 
     add_llm_arguments(parser)
@@ -108,6 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- api ----
     api_runner.register_commands(sub)
+
+    # ---- admin (user/org management) ----
+    admin_cli.register_commands(sub)
 
     # ---- work-graph & investment ----
     work_graph_runner.register_commands(sub)

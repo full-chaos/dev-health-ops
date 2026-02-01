@@ -1,8 +1,8 @@
 # ADR-001: Enterprise Edition Design Decisions
 
-**Status**: PROPOSED  
+**Status**: PARTIALLY DECIDED  
 **Created**: 2026-01-30  
-**Updated**: 2026-01-30  
+**Updated**: 2026-02-01  
 **Parent Issue**: [#299](https://github.com/full-chaos/dev-health-ops/issues/299)
 
 ## Context
@@ -221,7 +221,13 @@ Rationale:
 - Enterprises are increasingly comfortable with BSL
 
 ### Decision
-> **PENDING** - Awaiting team input
+> **DECIDED**: BSL (Business Source License)
+
+Rationale:
+- Protects against hyperscaler competition
+- Allows self-hosting for production use
+- Converts to Apache 2.0 after 4 years
+- Validated by HashiCorp, Sentry, MariaDB
 
 ---
 
@@ -252,15 +258,61 @@ Rationale:
 
 ---
 
-## Summary of Recommendations
+## Decision 6: Repository Strategy (Single vs Separate)
 
-| Decision | Recommendation | Confidence |
-|----------|---------------|------------|
-| Data Isolation Model | Keep `org_id` (logical) for v1, tenant isolation (physical) in v2 | High |
-| Self-hosted Datastore | Bundled for v1, BYOD in v2 | Medium |
-| Auth Approach | Hybrid (basic + SSO for EE) | High |
-| Licensing Model | BSL | Medium |
-| Public API | Internal for now, document later | High |
+### Question
+Should enterprise features live in a separate private repository, or in the same repository with runtime gating?
+
+### Options
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| **A: Separate repos** | `dev-health-ops` (public) + `dev-health-enterprise` (private) | Code hidden | Two codebases, sync overhead, trust issues |
+| **B: Single repo** | All code in one repo, features gated at runtime | Transparency, simpler ops | Code visible (mitigated by BSL) |
+
+### Research Findings
+
+Analyzed license patterns from:
+- **GitLab**: Single repo, RSA-signed JWT licenses, public key in binary
+- **Coder**: Single repo, Ed25519-signed JWT, deployment ID binding
+- **tldraw**: Single repo, ECDSA P-256 JWT, domain binding
+- **Formbricks**: Hybrid phone-home with grace periods
+
+**Key insight**: Transparency builds trust. Determined pirates can circumvent any protection; revenue comes from trust and support contracts.
+
+### Recommendation
+**Option B: Single repo with runtime feature gating**
+
+Rationale:
+- Users see exactly what they're paying for
+- Community can contribute to premium features
+- One repo = one CI = one deployment
+- Trust > obscurity
+- BSL provides sufficient protection against hyperscaler competition
+
+### Implementation
+- Ed25519-signed JWT license keys
+- Public key hardcoded in binary (offline validation)
+- Feature flags in license payload
+- Grace periods for renewal (14-30 days by tier)
+
+See [Licensing Architecture](../licensing.md) for full technical specification.
+
+### Decision
+> **DECIDED**: Single repo with runtime feature gating (GitLab model)
+
+---
+
+## Summary of Decisions
+
+| Decision | Status | Choice |
+|----------|--------|--------|
+| Data Isolation Model | Recommended | Keep `org_id` (logical) for v1, tenant isolation in v2 |
+| Self-hosted Datastore | Recommended | Bundled for v1, BYOD in v2 |
+| Auth Approach | Recommended | Hybrid (basic + SSO for EE) |
+| Licensing Model | **DECIDED** | BSL (Business Source License) |
+| Public API | Recommended | Internal for now, document later |
+| Repository Strategy | **DECIDED** | Single repo with runtime feature gating |
 
 ---
 
@@ -279,3 +331,6 @@ Rationale:
 |------|--------|
 | 2026-01-30 | Initial draft with 5 decisions |
 | 2026-01-30 | Clarified Decision 1: org_id = logical isolation, tenant = physical DB isolation |
+| 2026-02-01 | Added Decision 6: Repository Strategy - DECIDED single repo (GitLab model) |
+| 2026-02-01 | Marked Decision 4: Licensing Model as DECIDED (BSL) |
+| 2026-02-01 | Created docs/architecture/licensing.md with Ed25519 JWT specification |

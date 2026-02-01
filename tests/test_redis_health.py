@@ -43,22 +43,23 @@ class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
         cache = TTLCache(ttl_seconds=60, backend=mock_backend)
         self.assertEqual(cache.status(), "ok")
 
-    @patch("dev_health_ops.api.main._db_url", return_value="sqlite:///:memory:")
-    @patch("dev_health_ops.api.main._check_database_service", new_callable=AsyncMock)
+    @patch("dev_health_ops.api.main._check_postgres_health", new_callable=AsyncMock)
+    @patch("dev_health_ops.api.main._check_clickhouse_health", new_callable=AsyncMock)
     @patch("dev_health_ops.api.main.HOME_CACHE")
     async def test_health_endpoint_integration(
-        self, mock_cache, mock_db_check, mock_db_url
+        self, mock_cache, mock_ch_check, mock_pg_check
     ):
         # Setup mocks
-        mock_db_check.return_value = ("sqlite", "ok")
+        mock_pg_check.return_value = ("postgres", "ok")
+        mock_ch_check.return_value = ("clickhouse", "ok")
         mock_cache.status.return_value = "ok"
 
         # Call health endpoint
-
         response = await health()
 
-        # Verify redis is in the services list
-        self.assertEqual(response.services["sqlite"], "ok")
+        # Verify services are in the response
+        self.assertEqual(response.services["postgres"], "ok")
+        self.assertEqual(response.services["clickhouse"], "ok")
         self.assertEqual(response.services["redis"], "ok")
         self.assertEqual(response.status, "ok")
 
@@ -69,16 +70,20 @@ class TestDatabaseHealthCheck(unittest.IsolatedAsyncioTestCase):
         async def _fake_clickhouse_client(_dsn):
             yield MagicMock()
 
-        with patch(
-            "dev_health_ops.api.main.detect_backend",
-            return_value=SinkBackend.CLICKHOUSE,
-        ), patch(
-            "dev_health_ops.api.main.clickhouse_client",
-            _fake_clickhouse_client,
-        ), patch(
-            "dev_health_ops.api.main.query_dicts",
-            new_callable=AsyncMock,
-        ) as mock_query:
+        with (
+            patch(
+                "dev_health_ops.api.main.detect_backend",
+                return_value=SinkBackend.CLICKHOUSE,
+            ),
+            patch(
+                "dev_health_ops.api.main.clickhouse_client",
+                _fake_clickhouse_client,
+            ),
+            patch(
+                "dev_health_ops.api.main.query_dicts",
+                new_callable=AsyncMock,
+            ) as mock_query,
+        ):
             mock_query.return_value = [{"ok": 1}]
             backend, status = await _check_database_service(
                 "clickhouse://localhost:8123/default"
@@ -88,13 +93,16 @@ class TestDatabaseHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "ok")
 
     async def test_check_database_service_sqlite_ok(self):
-        with patch(
-            "dev_health_ops.api.main.detect_backend",
-            return_value=SinkBackend.SQLITE,
-        ), patch(
-            "dev_health_ops.api.main.asyncio.to_thread",
-            new_callable=AsyncMock,
-        ) as mock_to_thread:
+        with (
+            patch(
+                "dev_health_ops.api.main.detect_backend",
+                return_value=SinkBackend.SQLITE,
+            ),
+            patch(
+                "dev_health_ops.api.main.asyncio.to_thread",
+                new_callable=AsyncMock,
+            ) as mock_to_thread,
+        ):
             mock_to_thread.return_value = True
             backend, status = await _check_database_service("sqlite:///:memory:")
 
@@ -102,13 +110,16 @@ class TestDatabaseHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "ok")
 
     async def test_check_database_service_postgres_ok(self):
-        with patch(
-            "dev_health_ops.api.main.detect_backend",
-            return_value=SinkBackend.POSTGRES,
-        ), patch(
-            "dev_health_ops.api.main.asyncio.to_thread",
-            new_callable=AsyncMock,
-        ) as mock_to_thread:
+        with (
+            patch(
+                "dev_health_ops.api.main.detect_backend",
+                return_value=SinkBackend.POSTGRES,
+            ),
+            patch(
+                "dev_health_ops.api.main.asyncio.to_thread",
+                new_callable=AsyncMock,
+            ) as mock_to_thread,
+        ):
             mock_to_thread.return_value = True
             backend, status = await _check_database_service(
                 "postgresql://localhost:5432/dev_health"
@@ -118,16 +129,20 @@ class TestDatabaseHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "ok")
 
     async def test_check_database_service_postgres_asyncpg_ok(self):
-        with patch(
-            "dev_health_ops.api.main.detect_backend",
-            return_value=SinkBackend.POSTGRES,
-        ), patch(
-            "dev_health_ops.api.main._check_sqlalchemy_health_async",
-            new_callable=AsyncMock,
-        ) as mock_async_check, patch(
-            "dev_health_ops.api.main.asyncio.to_thread",
-            new_callable=AsyncMock,
-        ) as mock_to_thread:
+        with (
+            patch(
+                "dev_health_ops.api.main.detect_backend",
+                return_value=SinkBackend.POSTGRES,
+            ),
+            patch(
+                "dev_health_ops.api.main._check_sqlalchemy_health_async",
+                new_callable=AsyncMock,
+            ) as mock_async_check,
+            patch(
+                "dev_health_ops.api.main.asyncio.to_thread",
+                new_callable=AsyncMock,
+            ) as mock_to_thread,
+        ):
             mock_async_check.return_value = True
             backend, status = await _check_database_service(
                 "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
@@ -139,13 +154,16 @@ class TestDatabaseHealthCheck(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, "ok")
 
     async def test_check_database_service_mongo_ok(self):
-        with patch(
-            "dev_health_ops.api.main.detect_backend",
-            return_value=SinkBackend.MONGO,
-        ), patch(
-            "dev_health_ops.api.main.asyncio.to_thread",
-            new_callable=AsyncMock,
-        ) as mock_to_thread:
+        with (
+            patch(
+                "dev_health_ops.api.main.detect_backend",
+                return_value=SinkBackend.MONGO,
+            ),
+            patch(
+                "dev_health_ops.api.main.asyncio.to_thread",
+                new_callable=AsyncMock,
+            ) as mock_to_thread,
+        ):
             mock_to_thread.return_value = True
             backend, status = await _check_database_service(
                 "mongo://localhost:27017/dev_health"

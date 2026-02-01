@@ -479,7 +479,7 @@ class TestValidateOAuthConfig:
             client_secret="secret",
         )
         assert result.valid is False
-        assert any("apps.googleusercontent.com" in e for e in result.errors)
+        assert any("client_id should end with" in e for e in result.errors)
 
     def test_github_missing_required_scope(self):
         result = validate_oauth_config(

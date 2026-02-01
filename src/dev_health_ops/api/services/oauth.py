@@ -558,7 +558,6 @@ def validate_oauth_config(
             )
 
     if scopes:
-        default_scopes = get_default_scopes(provider_type)
         if provider_type == OAuthProviderType.GITHUB:
             if "user:email" not in scopes and "read:user" not in scopes:
                 errors.append(

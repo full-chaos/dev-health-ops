@@ -244,6 +244,10 @@ Explanation format:
 
 ### 7.1 Change discipline
 
+* **NEVER commit directly to main** — Always create a feature branch first:
+  ```bash
+  git checkout -b <type>/<descriptive-name>  # e.g., fix/password-hashing, feat/oauth-sso
+  ```
 * Prefer **minimal, surgical** changes.
 * Keep surrounding style; use targeted edits.
 * Add/adjust tests under `tests/` for behavior changes.

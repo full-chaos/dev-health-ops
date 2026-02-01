@@ -222,8 +222,8 @@ class OAuthProvider(ABC):
             )
         except (KeyError, TypeError) as e:
             logger.error(
-                "Token response missing required fields or malformed: %s",
-                response.text,
+                "Token response missing required fields or malformed. Status: %s",
+                response.status_code,
             )
             raise OAuthTokenError(
                 "Token response missing required field 'access_token'"

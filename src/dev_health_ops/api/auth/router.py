@@ -14,11 +14,18 @@ from dev_health_ops.api.services.auth import (
 )
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.api.auth.schemas import (
+    OAuthAuthRequest,
+    OAuthAuthResponse,
+    OAuthCallbackRequest,
+    OAuthConfigInput,
+    OAuthProviderCreate,
+    OAuthProviderUpdate,
     OIDCAuthRequest,
     OIDCAuthResponse,
     SAMLAuthRequest,
     SAMLAuthResponse,
     SAMLMetadataResponse,
+    SSOLoginResponse,
     SSOProviderCreate,
     SSOProviderListResponse,
     SSOProviderResponse,
@@ -780,6 +787,504 @@ async def initiate_oidc_auth(
         )
 
         return OIDCAuthResponse(
+            authorization_url=auth_request.authorization_url,
+            state=auth_request.state,
+        )
+
+
+# --- OAuth Flow Endpoints ---
+
+
+@router.post("/oauth/providers", response_model=SSOProviderResponse, status_code=201)
+@require_feature("sso", required_tier="enterprise")
+async def create_oauth_provider(
+    payload: OAuthProviderCreate,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> SSOProviderResponse:
+    import uuid as uuid_mod
+    import os
+
+    from dev_health_ops.api.services.oauth import get_default_scopes, validate_oauth_config
+
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    provider_type_map = {
+        "github": "oauth_github",
+        "gitlab": "oauth_gitlab",
+        "google": "oauth_google",
+    }
+    protocol = provider_type_map.get(payload.provider_type)
+    if not protocol:
+        raise HTTPException(status_code=400, detail="Invalid OAuth provider type")
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+    scopes = payload.oauth_config.scopes or get_default_scopes(payload.provider_type)
+
+    # Validate OAuth config before persisting
+    validation_result = validate_oauth_config(
+        provider_type=payload.provider_type,
+        client_id=payload.oauth_config.client_id,
+        client_secret=payload.oauth_config.client_secret,
+        scopes=scopes,
+        base_url=payload.oauth_config.base_url,
+    )
+    if not validation_result.valid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid OAuth configuration: {'; '.join(validation_result.errors)}",
+        )
+
+    config = {
+        "client_id": payload.oauth_config.client_id,
+        "redirect_uri": None,  # Will be set after provider.id is available
+        "scopes": scopes,
+        "base_url": payload.oauth_config.base_url,
+    }
+    encrypted_secrets = {"client_secret": payload.oauth_config.client_secret}
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        provider = await sso_service.create_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            name=payload.name,
+            protocol=protocol,
+            config=config,
+            encrypted_secrets=encrypted_secrets,
+            is_default=payload.is_default,
+            allow_idp_initiated=False,
+            auto_provision_users=payload.auto_provision_users,
+            default_role=payload.default_role,
+            allowed_domains=payload.allowed_domains,
+        )
+
+        # Update config with correct redirect_uri now that we have provider.id
+        config["redirect_uri"] = f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
+        provider = await sso_service.update_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=provider.id,
+            config=config,
+        )
+
+        await db.commit()
+
+        return _provider_to_response(provider)
+
+
+@router.patch("/oauth/providers/{provider_id}", response_model=SSOProviderResponse)
+@require_feature("sso", required_tier="enterprise")
+async def update_oauth_provider(
+    provider_id: str,
+    payload: OAuthProviderUpdate,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> SSOProviderResponse:
+    import uuid as uuid_mod
+
+    from dev_health_ops.api.services.oauth import validate_oauth_config
+
+    if user.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db)
+        provider = await sso_service.get_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+        )
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="OAuth provider not found")
+
+        if not provider.is_oauth:
+            raise HTTPException(status_code=400, detail="Provider is not OAuth")
+
+        config = None
+        encrypted_secrets = None
+
+        if payload.oauth_config:
+            config = dict(provider.config) if provider.config else {}
+            config["client_id"] = payload.oauth_config.client_id
+            if payload.oauth_config.scopes:
+                config["scopes"] = payload.oauth_config.scopes
+            if payload.oauth_config.base_url:
+                config["base_url"] = payload.oauth_config.base_url
+            encrypted_secrets = {"client_secret": payload.oauth_config.client_secret}
+
+            # Validate the updated OAuth config
+            validation_result = validate_oauth_config(
+                provider_type=provider.oauth_provider_type,
+                client_id=payload.oauth_config.client_id,
+                client_secret=payload.oauth_config.client_secret,
+                scopes=config.get("scopes"),
+                base_url=config.get("base_url"),
+            )
+            if not validation_result.valid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid OAuth configuration: {'; '.join(validation_result.errors)}",
+                )
+
+        provider = await sso_service.update_provider(
+            org_id=uuid_mod.UUID(user.org_id),
+            provider_id=uuid_mod.UUID(provider_id),
+            name=payload.name,
+            config=config,
+            encrypted_secrets=encrypted_secrets,
+            is_default=payload.is_default,
+            auto_provision_users=payload.auto_provision_users,
+            default_role=payload.default_role,
+            allowed_domains=payload.allowed_domains,
+        )
+        await db.commit()
+
+        return _provider_to_response(provider)
+
+
+@router.post("/oauth/{provider_id}/authorize", response_model=OAuthAuthResponse)
+@require_feature("sso", required_tier="enterprise")
+async def initiate_oauth_auth(
+    provider_id: str,
+    payload: OAuthAuthRequest,
+) -> OAuthAuthResponse:
+    import uuid as uuid_mod
+    import os
+
+    from dev_health_ops.api.services.oauth import (
+        create_oauth_provider as create_oauth_provider_instance,
+        OAuthConfig,
+    )
+    from dev_health_ops.models.sso import SSOProvider
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.id == uuid_mod.UUID(provider_id)
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="OAuth provider not found")
+
+        if not provider.is_oauth:
+            raise HTTPException(status_code=400, detail="Provider is not OAuth")
+
+        if provider.status != "active":
+            raise HTTPException(status_code=400, detail="OAuth provider is not active")
+
+        oauth_config = provider.get_oauth_config()
+        secrets = provider.encrypted_secrets or {}
+
+        # Use stored redirect_uri if available, otherwise generate from provider.id
+        redirect_uri = oauth_config.get("redirect_uri")
+        if not redirect_uri:
+            redirect_uri = (
+                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
+            )
+
+        config = OAuthConfig(
+            client_id=oauth_config["client_id"],
+            client_secret=secrets.get("client_secret", ""),
+            redirect_uri=redirect_uri,
+            scopes=oauth_config.get("scopes", []),
+        )
+
+        oauth_provider_instance = create_oauth_provider_instance(
+            provider_type=provider.oauth_provider_type,
+            config=config,
+            base_url=oauth_config.get("base_url"),
+        )
+
+        auth_request = oauth_provider_instance.generate_authorization_request()
+
+        return OAuthAuthResponse(
+            authorization_url=auth_request.authorization_url,
+            state=auth_request.state,
+        )
+
+
+@router.post("/oauth/{provider_id}/callback", response_model=SSOLoginResponse)
+@require_feature("sso", required_tier="enterprise")
+async def oauth_callback(
+    provider_id: str,
+    payload: OAuthCallbackRequest,
+) -> SSOLoginResponse:
+    import uuid as uuid_mod
+    import os
+    from datetime import datetime, timezone
+
+    from dev_health_ops.api.services.oauth import (
+        create_oauth_provider as create_oauth_provider_instance,
+        OAuthConfig,
+        OAuthProviderError,
+    )
+    from dev_health_ops.models.sso import SSOProvider
+    from dev_health_ops.models.users import AuthProvider
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.id == uuid_mod.UUID(provider_id)
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="OAuth provider not found")
+
+        if not provider.is_oauth:
+            raise HTTPException(status_code=400, detail="Provider is not OAuth")
+
+        if provider.status != "active":
+            raise HTTPException(status_code=400, detail="OAuth provider is not active")
+
+        oauth_config = provider.get_oauth_config()
+        secrets = provider.encrypted_secrets or {}
+
+        redirect_uri = oauth_config.get("redirect_uri")
+        if not redirect_uri:
+            redirect_uri = (
+                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
+            )
+
+        config = OAuthConfig(
+            client_id=oauth_config["client_id"],
+            client_secret=secrets.get("client_secret", ""),
+            redirect_uri=redirect_uri,
+            scopes=oauth_config.get("scopes", []),
+        )
+
+        oauth_provider_instance = create_oauth_provider_instance(
+            provider_type=provider.oauth_provider_type,
+            config=config,
+            base_url=oauth_config.get("base_url"),
+        )
+
+        try:
+            token_response = await oauth_provider_instance.exchange_code_for_token(
+                code=payload.code,
+                state=payload.state,
+            )
+            user_info = await oauth_provider_instance.fetch_user_info(
+                access_token=token_response.access_token
+            )
+        except OAuthProviderError as e:
+            logger.error("OAuth callback failed: %s", str(e))
+            sso_service = SSOService(db)
+            await sso_service.record_error(
+                org_id=provider.org_id,
+                provider_id=provider.id,
+                error=str(e),
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=400, detail=f"OAuth authentication failed: {e}"
+            )
+
+        if provider.allowed_domains:
+            email_domain = (
+                user_info.email.split("@")[-1] if "@" in user_info.email else ""
+            )
+            if email_domain not in provider.allowed_domains:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Email domain '{email_domain}' is not allowed for this provider",
+                )
+
+        auth_provider_map = {
+            "github": AuthProvider.GITHUB.value,
+            "gitlab": AuthProvider.GITLAB.value,
+            "google": AuthProvider.GOOGLE.value,
+        }
+        auth_provider_value = auth_provider_map.get(
+            provider.oauth_provider_type, "oauth"
+        )
+
+        user_stmt = select(User).where(User.email == user_info.email)
+        user_result = await db.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+
+        if not user:
+            if not provider.auto_provision_users:
+                raise HTTPException(
+                    status_code=403,
+                    detail="User not found and auto-provisioning is disabled",
+                )
+
+            user = User(
+                email=user_info.email,
+                username=user_info.username,
+                full_name=user_info.full_name,
+                avatar_url=user_info.avatar_url,
+                auth_provider=auth_provider_value,
+                auth_provider_id=user_info.provider_user_id,
+                is_active=True,
+                is_verified=True,
+            )
+            db.add(user)
+            await db.flush()
+
+            membership = Membership(
+                user_id=user.id,
+                org_id=provider.org_id,
+                role=provider.default_role,
+                joined_at=datetime.now(timezone.utc),
+            )
+            db.add(membership)
+            await db.flush()
+
+            logger.info(
+                "Auto-provisioned user %s via OAuth provider %s",
+                sanitize_for_log(user_info.email),
+                provider.name,
+            )
+        else:
+            if user.auth_provider != auth_provider_value:
+                user.auth_provider = auth_provider_value
+                user.auth_provider_id = user_info.provider_user_id
+
+            if user_info.avatar_url and not user.avatar_url:
+                user.avatar_url = user_info.avatar_url
+            if user_info.full_name and not user.full_name:
+                user.full_name = user_info.full_name
+
+        user.last_login_at = datetime.now(timezone.utc)
+
+        membership_stmt = select(Membership).where(
+            Membership.user_id == user.id,
+            Membership.org_id == provider.org_id,
+        )
+        membership_result = await db.execute(membership_stmt)
+        membership = membership_result.scalar_one_or_none()
+
+        if not membership:
+            if not provider.auto_provision_users:
+                raise HTTPException(
+                    status_code=403,
+                    detail="User is not a member of this organization",
+                )
+
+            membership = Membership(
+                user_id=user.id,
+                org_id=provider.org_id,
+                role=provider.default_role,
+                joined_at=datetime.now(timezone.utc),
+            )
+            db.add(membership)
+            await db.flush()
+
+        sso_service = SSOService(db)
+        await sso_service.record_login(
+            org_id=provider.org_id,
+            provider_id=provider.id,
+        )
+
+        await db.commit()
+
+        auth_service = get_auth_service()
+        token_pair = auth_service.create_token_pair(
+            user_id=str(user.id),
+            email=str(user.email),
+            org_id=str(membership.org_id),
+            role=str(membership.role),
+            is_superuser=bool(user.is_superuser),
+            username=str(user.username) if user.username else None,
+            full_name=str(user.full_name) if user.full_name else None,
+        )
+
+        return SSOLoginResponse(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+            token_type=token_pair.token_type,
+            expires_in=token_pair.expires_in,
+            user_id=str(user.id),
+            email=str(user.email),
+            org_id=str(membership.org_id),
+            role=str(membership.role),
+        )
+
+
+@router.get("/oauth/{provider_type}/authorize", response_model=OAuthAuthResponse)
+@require_feature("sso", required_tier="enterprise")
+async def initiate_oauth_by_type(
+    provider_type: str,
+    org_id: str,
+    redirect_uri: str | None = None,
+) -> OAuthAuthResponse:
+    import uuid as uuid_mod
+    import os
+
+    from dev_health_ops.api.services.oauth import (
+        create_oauth_provider as create_oauth_provider_instance,
+        OAuthConfig,
+    )
+    from dev_health_ops.models.sso import SSOProvider, SSOProtocol
+
+    if provider_type not in ("github", "gitlab", "google"):
+        raise HTTPException(status_code=400, detail="Invalid OAuth provider type")
+
+    protocol_map = {
+        "github": SSOProtocol.OAUTH_GITHUB.value,
+        "gitlab": SSOProtocol.OAUTH_GITLAB.value,
+        "google": SSOProtocol.OAUTH_GOOGLE.value,
+    }
+    protocol = protocol_map[provider_type]
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.org_id == uuid_mod.UUID(org_id),
+            SSOProvider.protocol == protocol,
+            SSOProvider.status == "active",
+            SSOProvider.is_default == True,
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            provider_stmt = select(SSOProvider).where(
+                SSOProvider.org_id == uuid_mod.UUID(org_id),
+                SSOProvider.protocol == protocol,
+                SSOProvider.status == "active",
+            )
+            result = await db.execute(provider_stmt)
+            provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No active {provider_type} OAuth provider found for this organization",
+            )
+
+        oauth_config = provider.get_oauth_config()
+        secrets = provider.encrypted_secrets or {}
+
+        # Use stored redirect_uri if available, otherwise generate from provider.id
+        final_redirect_uri = oauth_config.get("redirect_uri")
+        if not final_redirect_uri:
+            final_redirect_uri = (
+                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
+            )
+
+        config = OAuthConfig(
+            client_id=oauth_config["client_id"],
+            client_secret=secrets.get("client_secret", ""),
+            redirect_uri=final_redirect_uri,
+            scopes=oauth_config.get("scopes", []),
+        )
+
+        oauth_provider_instance = create_oauth_provider_instance(
+            provider_type=provider_type,
+            config=config,
+            base_url=oauth_config.get("base_url"),
+        )
+
+        auth_request = oauth_provider_instance.generate_authorization_request()
+
+        return OAuthAuthResponse(
             authorization_url=auth_request.authorization_url,
             state=auth_request.state,
         )

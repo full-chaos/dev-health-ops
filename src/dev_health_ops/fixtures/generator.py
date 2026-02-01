@@ -1567,9 +1567,9 @@ class SyntheticDataGenerator:
             admin_user = User(
                 id=uuid.uuid5(
                     uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"),
-                    "admin@devhealth.local",
+                    "admin@devhealth.example",
                 ),
-                email="admin@devhealth.local",
+                email="admin@devhealth.example",
                 username="admin",
                 password_hash=password_hash,
                 full_name="Admin User",

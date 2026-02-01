@@ -17,38 +17,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Rename _mergestat_synced_at to last_synced
-    tables = [
-        "git_refs",
-        "git_files",
-        "git_commits",
-        "git_commit_stats",
-        "git_blame",
-        "git_pull_requests",
-        "git_pull_request_reviews",
-        "ci_pipeline_runs",
-        "deployments",
-        "incidents",
-    ]
-
-    for table in tables:
-        op.alter_column(table, "_mergestat_synced_at", new_column_name="last_synced")
+    # Analytics tables now in ClickHouse only - no-op for migration chain
+    pass
 
 
 def downgrade() -> None:
-    # Rename last_synced back to _mergestat_synced_at
-    tables = [
-        "git_refs",
-        "git_files",
-        "git_commits",
-        "git_commit_stats",
-        "git_blame",
-        "git_pull_requests",
-        "git_pull_request_reviews",
-        "ci_pipeline_runs",
-        "deployments",
-        "incidents",
-    ]
-
-    for table in tables:
-        op.alter_column(table, "last_synced", new_column_name="_mergestat_synced_at")
+    pass

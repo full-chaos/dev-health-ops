@@ -18,8 +18,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("git_pull_requests", Column("body", Text, nullable=True))
+    # Analytics tables now in ClickHouse only - no-op for migration chain
+    pass
 
 
 def downgrade() -> None:
-    op.drop_column("git_pull_requests", "body")
+    pass

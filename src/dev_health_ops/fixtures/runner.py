@@ -109,6 +109,26 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             await store.insert_teams(all_teams)
             logging.info("Inserted %d synthetic teams.", len(all_teams))
 
+        if isinstance(store, SQLAlchemyStore) and db_type == "postgres":
+            user_generator = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+            user_data = user_generator.generate_users()
+            async with store.session_factory() as session:
+                for org in user_data["organizations"]:
+                    await session.merge(org)
+                await session.commit()
+                for user in user_data["users"]:
+                    await session.merge(user)
+                await session.commit()
+                for membership in user_data["memberships"]:
+                    await session.merge(membership)
+                await session.commit()
+            logging.info(
+                "Inserted %d users, %d orgs, %d memberships.",
+                len(user_data["users"]),
+                len(user_data["organizations"]),
+                len(user_data["memberships"]),
+            )
+
         allow_parallel_inserts = not isinstance(store, SQLAlchemyStore)
 
         sink = None

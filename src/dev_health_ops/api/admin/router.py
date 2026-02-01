@@ -14,6 +14,7 @@ from dev_health_ops.api.services.audit import (
 )
 from dev_health_ops.api.services.ip_allowlist import IPAllowlistService
 from dev_health_ops.api.services.retention import RetentionService
+from dev_health_ops.licensing import require_feature
 from dev_health_ops.api.services.settings import (
     IdentityMappingService,
     IntegrationCredentialsService,
@@ -1023,6 +1024,7 @@ async def transfer_ownership(
 
 
 @router.get("/audit-logs", response_model=AuditLogListResponse)
+@require_feature("audit_log", required_tier="enterprise")
 async def list_audit_logs(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_org_id),
@@ -1046,7 +1048,6 @@ async def list_audit_logs(
 
     Requires Enterprise tier (audit_log feature).
     """
-    # TODO: Add feature flag check for audit_log
     svc = AuditService(session)
 
     filters = ServiceAuditLogFilter(
@@ -1091,6 +1092,7 @@ async def list_audit_logs(
 
 
 @router.get("/audit-logs/{log_id}", response_model=AuditLogResponse)
+@require_feature("audit_log", required_tier="enterprise")
 async def get_audit_log(
     log_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1100,7 +1102,6 @@ async def get_audit_log(
 
     Requires Enterprise tier (audit_log feature).
     """
-    # TODO: Add feature flag check for audit_log
     svc = AuditService(session)
 
     log = await svc.get_log_by_id(
@@ -1131,6 +1132,7 @@ async def get_audit_log(
     "/audit-logs/resource/{resource_type}/{resource_id}",
     response_model=list[AuditLogResponse],
 )
+@require_feature("audit_log", required_tier="enterprise")
 async def get_resource_audit_history(
     resource_type: str,
     resource_id: str,
@@ -1142,7 +1144,6 @@ async def get_resource_audit_history(
 
     Requires Enterprise tier (audit_log feature).
     """
-    # TODO: Add feature flag check for audit_log
     svc = AuditService(session)
 
     logs = await svc.get_resource_history(
@@ -1172,6 +1173,7 @@ async def get_resource_audit_history(
 
 
 @router.get("/audit-logs/user/{user_id}", response_model=list[AuditLogResponse])
+@require_feature("audit_log", required_tier="enterprise")
 async def get_user_audit_activity(
     user_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1182,7 +1184,6 @@ async def get_user_audit_activity(
 
     Requires Enterprise tier (audit_log feature).
     """
-    # TODO: Add feature flag check for audit_log
     svc = AuditService(session)
 
     logs = await svc.get_user_activity(
@@ -1211,6 +1212,7 @@ async def get_user_audit_activity(
 
 
 @router.get("/ip-allowlist", response_model=IPAllowlistListResponse)
+@require_feature("ip_allowlist", required_tier="enterprise")
 async def list_ip_allowlist_entries(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_org_id),
@@ -1247,6 +1249,7 @@ async def list_ip_allowlist_entries(
 
 
 @router.post("/ip-allowlist", response_model=IPAllowlistResponse, status_code=201)
+@require_feature("ip_allowlist", required_tier="enterprise")
 async def create_ip_allowlist_entry(
     payload: IPAllowlistCreate,
     session: AsyncSession = Depends(get_session),
@@ -1278,6 +1281,7 @@ async def create_ip_allowlist_entry(
 
 
 @router.get("/ip-allowlist/{entry_id}", response_model=IPAllowlistResponse)
+@require_feature("ip_allowlist", required_tier="enterprise")
 async def get_ip_allowlist_entry(
     entry_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1304,6 +1308,7 @@ async def get_ip_allowlist_entry(
 
 
 @router.patch("/ip-allowlist/{entry_id}", response_model=IPAllowlistResponse)
+@require_feature("ip_allowlist", required_tier="enterprise")
 async def update_ip_allowlist_entry(
     entry_id: str,
     payload: IPAllowlistUpdate,
@@ -1338,6 +1343,7 @@ async def update_ip_allowlist_entry(
 
 
 @router.delete("/ip-allowlist/{entry_id}")
+@require_feature("ip_allowlist", required_tier="enterprise")
 async def delete_ip_allowlist_entry(
     entry_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1354,6 +1360,7 @@ async def delete_ip_allowlist_entry(
 
 
 @router.post("/ip-allowlist/check", response_model=IPCheckResponse)
+@require_feature("ip_allowlist", required_tier="enterprise")
 async def check_ip_allowed(
     payload: IPCheckRequest,
     session: AsyncSession = Depends(get_session),
@@ -1371,6 +1378,7 @@ async def check_ip_allowed(
 
 
 @router.get("/retention-policies", response_model=RetentionPolicyListResponse)
+@require_feature("retention_policies", required_tier="enterprise")
 async def list_retention_policies(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_org_id),
@@ -1410,6 +1418,7 @@ async def list_retention_policies(
 
 
 @router.get("/retention-policies/resource-types")
+@require_feature("retention_policies", required_tier="enterprise")
 async def list_retention_resource_types() -> list[str]:
     return RetentionService.get_available_resource_types()
 
@@ -1417,6 +1426,7 @@ async def list_retention_resource_types() -> list[str]:
 @router.post(
     "/retention-policies", response_model=RetentionPolicyResponse, status_code=201
 )
+@require_feature("retention_policies", required_tier="enterprise")
 async def create_retention_policy(
     payload: RetentionPolicyCreate,
     session: AsyncSession = Depends(get_session),
@@ -1451,6 +1461,7 @@ async def create_retention_policy(
 
 
 @router.get("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
+@require_feature("retention_policies", required_tier="enterprise")
 async def get_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1480,6 +1491,7 @@ async def get_retention_policy(
 
 
 @router.patch("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
+@require_feature("retention_policies", required_tier="enterprise")
 async def update_retention_policy(
     policy_id: str,
     payload: RetentionPolicyUpdate,
@@ -1516,6 +1528,7 @@ async def update_retention_policy(
 
 
 @router.delete("/retention-policies/{policy_id}")
+@require_feature("retention_policies", required_tier="enterprise")
 async def delete_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),
@@ -1534,6 +1547,7 @@ async def delete_retention_policy(
 @router.post(
     "/retention-policies/{policy_id}/execute", response_model=RetentionExecuteResponse
 )
+@require_feature("retention_policies", required_tier="enterprise")
 async def execute_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),

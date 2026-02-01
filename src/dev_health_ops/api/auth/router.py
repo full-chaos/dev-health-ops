@@ -26,6 +26,7 @@ from dev_health_ops.api.auth.schemas import (
 )
 from dev_health_ops.api.services.sso import SSOService
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.licensing import require_feature
 from dev_health_ops.models.users import User, Membership
 
 logger = logging.getLogger(__name__)
@@ -435,6 +436,7 @@ def _provider_to_response(provider) -> SSOProviderResponse:
 
 
 @router.get("/sso/providers", response_model=SSOProviderListResponse)
+@require_feature("sso", required_tier="enterprise")
 async def list_sso_providers(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     protocol: str | None = None,
@@ -463,6 +465,7 @@ async def list_sso_providers(
 
 
 @router.post("/sso/providers", response_model=SSOProviderResponse, status_code=201)
+@require_feature("sso", required_tier="enterprise")
 async def create_sso_provider(
     payload: SSOProviderCreate,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -511,6 +514,7 @@ async def create_sso_provider(
 
 
 @router.get("/sso/providers/{provider_id}", response_model=SSOProviderResponse)
+@require_feature("sso", required_tier="enterprise")
 async def get_sso_provider(
     provider_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -531,6 +535,7 @@ async def get_sso_provider(
 
 
 @router.patch("/sso/providers/{provider_id}", response_model=SSOProviderResponse)
+@require_feature("sso", required_tier="enterprise")
 async def update_sso_provider(
     provider_id: str,
     payload: SSOProviderUpdate,
@@ -579,6 +584,7 @@ async def update_sso_provider(
 
 
 @router.delete("/sso/providers/{provider_id}", status_code=204)
+@require_feature("sso", required_tier="enterprise")
 async def delete_sso_provider(
     provider_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -657,6 +663,7 @@ async def deactivate_sso_provider(
 
 
 @router.get("/saml/{provider_id}/metadata", response_model=SAMLMetadataResponse)
+@require_feature("sso", required_tier="enterprise")
 async def get_saml_metadata(provider_id: str) -> SAMLMetadataResponse:
     import uuid as uuid_mod
     import os
@@ -695,6 +702,7 @@ async def get_saml_metadata(provider_id: str) -> SAMLMetadataResponse:
 
 
 @router.post("/saml/{provider_id}/initiate", response_model=SAMLAuthResponse)
+@require_feature("sso", required_tier="enterprise")
 async def initiate_saml_auth(
     provider_id: str,
     payload: SAMLAuthRequest,
@@ -735,6 +743,7 @@ async def initiate_saml_auth(
 
 
 @router.post("/oidc/{provider_id}/authorize", response_model=OIDCAuthResponse)
+@require_feature("sso", required_tier="enterprise")
 async def initiate_oidc_auth(
     provider_id: str,
     payload: OIDCAuthRequest,

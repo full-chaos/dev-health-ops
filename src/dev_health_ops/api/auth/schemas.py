@@ -121,6 +121,13 @@ class SAMLAuthResponse(BaseModel):
     redirect_url: str
 
 
+class SAMLCallbackRequest(BaseModel):
+    saml_response: str = Field(..., alias="SAMLResponse")
+    relay_state: Optional[str] = Field(default=None, alias="RelayState")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class OIDCAuthRequest(BaseModel):
     redirect_uri: Optional[str] = None
     use_pkce: bool = True

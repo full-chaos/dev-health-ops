@@ -92,7 +92,7 @@ class GitHubWebhookHeaders(BaseModel):
     x_github_delivery: str = Field(..., alias="X-GitHub-Delivery")
     x_hub_signature_256: str | None = Field(None, alias="X-Hub-Signature-256")
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
 
 
 # GitLab-specific models
@@ -103,7 +103,7 @@ class GitLabWebhookHeaders(BaseModel):
     x_gitlab_token: str | None = Field(None, alias="X-Gitlab-Token")
     x_gitlab_instance: str | None = Field(None, alias="X-Gitlab-Instance")
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
 
 
 # Jira-specific models
@@ -114,7 +114,7 @@ class JiraWebhookHeaders(BaseModel):
         None, alias="X-Atlassian-Webhook-Identifier"
     )
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
 
 
 # Event type mappings

@@ -88,6 +88,7 @@ from .auth import router as auth_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
+DEFAULT_CLICKHOUSE_URI = "clickhouse://localhost:8123/default"
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +124,12 @@ def _postgres_url() -> str | None:
     return None
 
 
-def _clickhouse_url() -> str | None:
-    return os.getenv("CLICKHOUSE_URI")
+def _clickhouse_url() -> str:
+    return os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
+
+
+def _analytics_db_url() -> str:
+    return _clickhouse_url()
 
 
 def _check_sqlalchemy_health(dsn: str) -> bool:
@@ -412,7 +417,7 @@ async def meta() -> MetaResponse | JSONResponse:
 async def home_post(payload: HomeRequest) -> HomeResponse:
     try:
         return await build_home_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=payload.filters,
             cache=HOME_CACHE,
         )
@@ -435,7 +440,7 @@ async def home(
             scope_type, scope_id, range_days, compare_days, start_date, end_date
         )
         result = await build_home_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=filters,
             cache=HOME_CACHE,
         )
@@ -450,7 +455,7 @@ async def home(
 async def explain_post(payload: ExplainRequest) -> ExplainResponse:
     try:
         return await build_explain_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             metric=payload.metric,
             filters=payload.filters,
             cache=EXPLAIN_CACHE,
@@ -475,7 +480,7 @@ async def explain(
             scope_type, scope_id, range_days, compare_days, start_date, end_date
         )
         result = await build_explain_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             metric=metric,
             filters=filters,
             cache=EXPLAIN_CACHE,
@@ -504,7 +509,7 @@ async def heatmap(
     _reject_comparative_params(request)
     try:
         return await build_heatmap_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             type=type,
             metric=metric,
             scope_type=scope_type,
@@ -541,7 +546,7 @@ async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitInvestment]:
             filter_payload,
         )
         result = await build_work_unit_investments(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=payload.filters,
             limit=payload.limit or 200,
             include_text=include_textual,
@@ -581,7 +586,7 @@ async def work_units(
             filter_payload,
         )
         result = await build_work_unit_investments(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=filters,
             limit=limit,
             include_text=include_textual,
@@ -636,7 +641,7 @@ async def work_unit_explain_endpoint(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         investments = await build_work_unit_investments(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=filters,
             limit=1,
             include_text=True,
@@ -684,7 +689,7 @@ async def flame(
     _reject_comparative_params(request)
     try:
         return await build_flame_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             entity_type=entity_type,
             entity_id=entity_id,
         )
@@ -745,7 +750,7 @@ async def flame_aggregated(
 
     try:
         return await build_aggregated_flame_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             mode=mode,  # type: ignore
             start_day=start_day,
             end_day=end_day,
@@ -776,7 +781,7 @@ async def quadrant(
     _reject_comparative_params(request)
     try:
         return await build_quadrant_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             type=type,
             scope_type=scope_type,
             scope_id=scope_id,
@@ -795,7 +800,7 @@ async def quadrant(
 async def drilldown_prs_post(payload: DrilldownRequest) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
-        async with clickhouse_client(_db_url()) as sink:
+        async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
                 sink, metric_scope="repo", filters=payload.filters
             )
@@ -826,7 +831,7 @@ async def drilldown_prs(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         start_day, end_day, _, _ = time_window(filters)
-        async with clickhouse_client(_db_url()) as sink:
+        async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
                 sink, metric_scope="repo", filters=filters
             )
@@ -848,7 +853,7 @@ async def drilldown_prs(
 async def drilldown_issues_post(payload: DrilldownRequest) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
-        async with clickhouse_client(_db_url()) as sink:
+        async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
                 sink, metric_scope="team", filters=payload.filters
             )
@@ -879,7 +884,7 @@ async def drilldown_issues(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         start_day, end_day, _, _ = time_window(filters)
-        async with clickhouse_client(_db_url()) as sink:
+        async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
                 sink, metric_scope="team", filters=filters
             )
@@ -906,7 +911,7 @@ async def people_search(
     _reject_comparative_params(request)
     try:
         return await search_people_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             query=q,
             limit=_bounded_limit_param(limit, 50),
         )
@@ -924,7 +929,7 @@ async def people_summary(
     _reject_comparative_params(request)
     try:
         return await build_person_summary_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             person_id=person_id,
             range_days=range_days,
             compare_days=compare_days,
@@ -946,7 +951,7 @@ async def people_metric(
     _reject_comparative_params(request)
     try:
         return await build_person_metric_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             person_id=person_id,
             metric=metric,
             range_days=range_days,
@@ -978,7 +983,7 @@ async def people_drilldown_prs(
     _reject_comparative_params(request)
     try:
         return await build_person_drilldown_prs_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             person_id=person_id,
             range_days=range_days,
             limit=_bounded_limit_param(limit, 200),
@@ -1004,7 +1009,7 @@ async def people_drilldown_issues(
     _reject_comparative_params(request)
     try:
         return await build_person_drilldown_issues_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             person_id=person_id,
             range_days=range_days,
             limit=_bounded_limit_param(limit, 200),
@@ -1031,7 +1036,7 @@ async def opportunities(
             scope_type, scope_id, range_days, compare_days, start_date, end_date
         )
         result = await build_opportunities_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=filters,
             cache=HOME_CACHE,
         )
@@ -1046,7 +1051,7 @@ async def opportunities(
 async def opportunities_post(payload: HomeRequest) -> OpportunitiesResponse:
     try:
         return await build_opportunities_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=payload.filters,
             cache=HOME_CACHE,
         )
@@ -1067,7 +1072,9 @@ async def investment(
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
-        result = await build_investment_response(db_url=_db_url(), filters=filters)
+        result = await build_investment_response(
+            db_url=_analytics_db_url(), filters=filters
+        )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
         return result
@@ -1079,7 +1086,7 @@ async def investment(
 async def investment_post(payload: HomeRequest) -> InvestmentResponse:
     try:
         return await build_investment_response(
-            db_url=_db_url(), filters=payload.filters
+            db_url=_analytics_db_url(), filters=payload.filters
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -1103,7 +1110,7 @@ async def investment_sunburst(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         result = await build_investment_sunburst(
-            db_url=_db_url(), filters=filters, limit=limit
+            db_url=_analytics_db_url(), filters=filters, limit=limit
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -1126,7 +1133,7 @@ async def investment_explain(
         return StreamingResponse(
             keep_alive_wrapper(
                 explain_investment_mix(
-                    db_url=_db_url(),
+                    db_url=_analytics_db_url(),
                     filters=payload.filters,
                     theme=payload.theme,
                     subcategory=payload.subcategory,
@@ -1150,7 +1157,7 @@ async def investment_explain(
 async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
     try:
         return await build_investment_flow_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=payload.filters,
             theme=payload.theme,
             flow_mode=payload.flow_mode,
@@ -1168,7 +1175,7 @@ async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
 async def investment_flow_repo_team(payload: InvestmentFlowRequest) -> SankeyResponse:
     try:
         return await build_investment_repo_team_flow_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             filters=payload.filters,
             theme=payload.theme,
         )
@@ -1194,7 +1201,7 @@ async def sankey_get(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         result = await build_sankey_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             mode=mode,
             filters=filters,
             window_start=window_start,
@@ -1212,7 +1219,7 @@ async def sankey_get(
 async def sankey_post(payload: SankeyRequest) -> SankeyResponse:
     try:
         return await build_sankey_response(
-            db_url=_db_url(),
+            db_url=_analytics_db_url(),
             mode=payload.mode,
             filters=payload.filters,
             context=payload.context,
@@ -1229,7 +1236,7 @@ async def sankey_post(payload: SankeyRequest) -> SankeyResponse:
 @app.get("/api/v1/filters/options", response_model=FilterOptionsResponse)
 async def filter_options() -> FilterOptionsResponse:
     try:
-        async with clickhouse_client(_db_url()) as sink:
+        async with clickhouse_client(_analytics_db_url()) as sink:
             options = await fetch_filter_options(sink)
         return FilterOptionsResponse(**options)
     except Exception as exc:

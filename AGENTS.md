@@ -269,7 +269,12 @@ Explanation format:
    ```bash
    git checkout -b <descriptive-branch-name>  # e.g., feat/add-metrics-validation
    ```
-2. Identify which layer you're changing (connector, processor, metric, sink, viz).
+2. **Use git worktrees for parallel work** — When starting a new feature or unrelated task, use a worktree:
+   ```bash
+   git worktree add ../dev-health-ops-oauth-feature-name feature/branch-name
+   ```
+   This keeps each task isolated, preventing cross-contamination of changes.
+3. Identify which layer you're changing (connector, processor, metric, sink, viz).
 3. Re-state the relevant non-negotiables (WorkUnits are evidence; themes/subcats canonical; sinks only).
 4. Make the smallest possible change that achieves the outcome.
 5. Add a test (or update an existing one) for the new behavior.

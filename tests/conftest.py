@@ -15,6 +15,15 @@ def setup_test_env(monkeypatch):
     monkeypatch.setenv("DATABASE_URI", "sqlite:///:memory:")
 
 
+@pytest.fixture(autouse=True)
+def mock_analytics_db_url(monkeypatch):
+    """Mock analytics DB URL so endpoints don't return 503 in tests."""
+    monkeypatch.setattr(
+        "dev_health_ops.api.main._analytics_db_url",
+        lambda: "clickhouse://localhost:8123/default",
+    )
+
+
 @pytest.fixture
 def repo_path():
     """Return the path to the current repository for testing."""

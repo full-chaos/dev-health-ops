@@ -129,10 +129,6 @@ def _clickhouse_url() -> str:
 
 
 def _analytics_db_url() -> str:
-    return _clickhouse_url()
-
-
-def _analytics_db_url() -> str:
     uri = os.getenv("CLICKHOUSE_URI")
     if not uri:
         raise RuntimeError(

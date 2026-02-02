@@ -34,15 +34,6 @@ def client():
     return TestClient(app)
 
 
-@pytest.fixture(autouse=True)
-def mock_db_url(monkeypatch):
-    """Set a dummy DATABASE_URL so endpoints don't return 503."""
-    monkeypatch.setattr(
-        "dev_health_ops.api.main._db_url",
-        lambda: "clickhouse://localhost:8123/default",
-    )
-
-
 def test_home_endpoint_schema(client, monkeypatch):
     sample = HomeResponse(
         freshness=Freshness(

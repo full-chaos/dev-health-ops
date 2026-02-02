@@ -129,7 +129,13 @@ def _clickhouse_url() -> str:
 
 
 def _analytics_db_url() -> str:
-    return _clickhouse_url()
+    uri = os.getenv("CLICKHOUSE_URI")
+    if not uri:
+        raise RuntimeError(
+            "CLICKHOUSE_URI is required for analytics queries "
+            "(e.g. 'clickhouse://localhost:8123/default')."
+        )
+    return uri
 
 
 def _check_sqlalchemy_health(dsn: str) -> bool:

@@ -88,6 +88,7 @@ from .auth import router as auth_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
+DEFAULT_CLICKHOUSE_URI = "clickhouse://localhost:8123/default"
 
 logger = logging.getLogger(__name__)
 
@@ -123,18 +124,12 @@ def _postgres_url() -> str | None:
     return None
 
 
-def _clickhouse_url() -> str | None:
-    return os.getenv("CLICKHOUSE_URI")
+def _clickhouse_url() -> str:
+    return os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
 
 
 def _analytics_db_url() -> str:
-    uri = os.getenv("CLICKHOUSE_URI")
-    if not uri:
-        raise RuntimeError(
-            "CLICKHOUSE_URI is required for analytics queries "
-            "(e.g. 'clickhouse://localhost:8123/default')."
-        )
-    return uri
+    return _clickhouse_url()
 
 
 def _check_sqlalchemy_health(dsn: str) -> bool:

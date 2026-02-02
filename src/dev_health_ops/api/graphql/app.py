@@ -16,6 +16,8 @@ from .schema import schema
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CLICKHOUSE_URI = "clickhouse://localhost:8123/default"
+
 # Global cache instance for cross-request caching
 _graphql_cache: Optional[Any] = None
 
@@ -53,7 +55,7 @@ async def get_context(request: Request) -> GraphQLContext:
     if not org_id:
         org_id = request.query_params.get("org_id", "")
 
-    db_url = os.getenv("CLICKHOUSE_URI", "")
+    db_url = os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
     persisted_query_id = request.headers.get("X-Persisted-Query-Id")
 
     user = None

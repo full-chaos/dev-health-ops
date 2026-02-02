@@ -3,12 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Literal
 
-from pydantic import BaseModel, Field
-
-try:
-    from pydantic import ConfigDict
-except ImportError:  # pragma: no cover - pydantic v1 fallback
-    ConfigDict = None
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Coverage(BaseModel):
@@ -157,12 +152,7 @@ class InvestmentSubtype(BaseModel):
     value: float
     parent_key: str = Field(alias="parentKey")
 
-    if ConfigDict is not None:
-        model_config = ConfigDict(validate_by_name=True)
-    else:
-
-        class Config:
-            allow_population_by_field_name = True
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
 
 
 class InvestmentResponse(BaseModel):

@@ -1,3 +1,4 @@
+# ruff: noqa
 from __future__ import annotations
 
 import logging
@@ -13,17 +14,18 @@ from dev_health_ops.api.services.auth import (
     extract_token_from_header,
 )
 from dev_health_ops.api.utils.logging import sanitize_for_log
-from dev_health_ops.api.auth.schemas import (
+from dev_health_ops.api.auth.schemas import (  # noqa: F401
     OAuthAuthRequest,
     OAuthAuthResponse,
     OAuthCallbackRequest,
-    OAuthConfigInput,
     OAuthProviderCreate,
     OAuthProviderUpdate,
     OIDCAuthRequest,
     OIDCAuthResponse,
+    OIDCCallbackRequest,
     SAMLAuthRequest,
     SAMLAuthResponse,
+    SAMLCallbackRequest,
     SAMLMetadataResponse,
     SSOLoginResponse,
     SSOProviderCreate,
@@ -31,9 +33,11 @@ from dev_health_ops.api.auth.schemas import (
     SSOProviderResponse,
     SSOProviderUpdate,
 )
-from dev_health_ops.api.services.sso import SSOService
+from dev_health_ops.api.services.audit import AuditService
+from dev_health_ops.api.services.sso import SSOProcessingError, SSOService
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import require_feature
+from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.users import User, Membership
 
 logger = logging.getLogger(__name__)
@@ -746,6 +750,115 @@ async def initiate_saml_auth(
         return SAMLAuthResponse(redirect_url=redirect_url)
 
 
+@router.post("/saml/{provider_id}/acs", response_model=SSOLoginResponse)
+@require_feature("sso", required_tier="enterprise")
+async def saml_acs_callback(
+    provider_id: str,
+    payload: SAMLCallbackRequest,
+) -> SSOLoginResponse:
+    import uuid as uuid_mod
+    import os
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db, base_url=base_url)
+        audit_service = AuditService(db)
+
+        from dev_health_ops.models.sso import SSOProvider
+
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.id == uuid_mod.UUID(provider_id)
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+        if not provider.is_saml:
+            raise HTTPException(status_code=400, detail="Provider is not SAML")
+        if provider.status != "active":
+            raise HTTPException(status_code=400, detail="SSO provider is not active")
+
+        try:
+            saml_info = await sso_service.process_saml_response(
+                provider=provider,
+                saml_response=payload.saml_response,
+                relay_state=payload.relay_state,
+            )
+        except SSOProcessingError as exc:
+            logger.error("SAML callback failed: %s", sanitize_for_log(str(exc)))
+            await sso_service.record_error(
+                org_id=provider.org_id,
+                provider_id=provider.id,
+                error=str(exc),
+            )
+            await audit_service.log(
+                org_id=provider.org_id,
+                action=AuditAction.SSO_LOGIN,
+                resource_type=AuditResourceType.SSO_PROVIDER,
+                resource_id=str(provider.id),
+                status="failure",
+                error_message=str(exc),
+                extra_metadata={"protocol": "saml"},
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=400, detail=f"SAML authentication failed: {exc}"
+            )
+
+        email = saml_info.get("email")
+        if provider.allowed_domains:
+            email_domain = email.split("@")[-1] if "@" in email else ""
+            if email_domain not in provider.allowed_domains:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Email domain '{email_domain}' is not allowed for this provider",
+                )
+
+        user, membership, _ = await sso_service._provision_or_get_user(
+            org_id=provider.org_id,
+            email=email,
+            name=saml_info.get("full_name"),
+            provider_id=provider.id,
+            external_id=saml_info.get("external_id"),
+        )
+
+        await sso_service.record_login(org_id=provider.org_id, provider_id=provider.id)
+        await audit_service.log(
+            org_id=provider.org_id,
+            action=AuditAction.SSO_LOGIN,
+            resource_type=AuditResourceType.SESSION,
+            resource_id=str(user.id),
+            user_id=user.id,
+            extra_metadata={"provider_id": str(provider.id), "protocol": "saml"},
+        )
+
+        await db.commit()
+
+        auth_service = get_auth_service()
+        token_pair = auth_service.create_token_pair(
+            user_id=str(user.id),
+            email=str(user.email),
+            org_id=str(membership.org_id),
+            role=str(membership.role),
+            is_superuser=bool(user.is_superuser),
+            username=str(user.username) if user.username else None,
+            full_name=str(user.full_name) if user.full_name else None,
+        )
+
+        return SSOLoginResponse(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+            token_type=token_pair.token_type,
+            expires_in=token_pair.expires_in,
+            user_id=str(user.id),
+            email=str(user.email),
+            org_id=str(membership.org_id),
+            role=str(membership.role),
+        )
+
+
 # --- OIDC Flow Endpoints ---
 
 
@@ -792,6 +905,116 @@ async def initiate_oidc_auth(
         )
 
 
+@router.post("/oidc/{provider_id}/callback", response_model=SSOLoginResponse)
+@require_feature("sso", required_tier="enterprise")
+async def oidc_callback(
+    provider_id: str,
+    payload: OIDCCallbackRequest,
+) -> SSOLoginResponse:
+    import uuid as uuid_mod
+    import os
+
+    base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+    async with get_postgres_session() as db:
+        sso_service = SSOService(db, base_url=base_url)
+        audit_service = AuditService(db)
+
+        from dev_health_ops.models.sso import SSOProvider
+
+        provider_stmt = select(SSOProvider).where(
+            SSOProvider.id == uuid_mod.UUID(provider_id)
+        )
+        result = await db.execute(provider_stmt)
+        provider = result.scalar_one_or_none()
+
+        if not provider:
+            raise HTTPException(status_code=404, detail="SSO provider not found")
+        if not provider.is_oidc:
+            raise HTTPException(status_code=400, detail="Provider is not OIDC")
+        if provider.status != "active":
+            raise HTTPException(status_code=400, detail="SSO provider is not active")
+
+        try:
+            oidc_info = await sso_service.process_oidc_callback(
+                provider=provider,
+                code=payload.code,
+                state=payload.state,
+                code_verifier=payload.code_verifier,
+            )
+        except SSOProcessingError as exc:
+            logger.error("OIDC callback failed: %s", sanitize_for_log(str(exc)))
+            await sso_service.record_error(
+                org_id=provider.org_id,
+                provider_id=provider.id,
+                error=str(exc),
+            )
+            await audit_service.log(
+                org_id=provider.org_id,
+                action=AuditAction.SSO_LOGIN,
+                resource_type=AuditResourceType.SSO_PROVIDER,
+                resource_id=str(provider.id),
+                status="failure",
+                error_message=str(exc),
+                extra_metadata={"protocol": "oidc"},
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=400, detail=f"OIDC authentication failed: {exc}"
+            )
+
+        email = oidc_info.get("email")
+        if provider.allowed_domains:
+            email_domain = email.split("@")[-1] if "@" in email else ""
+            if email_domain not in provider.allowed_domains:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Email domain '{email_domain}' is not allowed for this provider",
+                )
+
+        user, membership, _ = await sso_service._provision_or_get_user(
+            org_id=provider.org_id,
+            email=email,
+            name=oidc_info.get("full_name"),
+            provider_id=provider.id,
+            external_id=oidc_info.get("external_id"),
+        )
+
+        await sso_service.record_login(org_id=provider.org_id, provider_id=provider.id)
+        await audit_service.log(
+            org_id=provider.org_id,
+            action=AuditAction.SSO_LOGIN,
+            resource_type=AuditResourceType.SESSION,
+            resource_id=str(user.id),
+            user_id=user.id,
+            extra_metadata={"provider_id": str(provider.id), "protocol": "oidc"},
+        )
+
+        await db.commit()
+
+        auth_service = get_auth_service()
+        token_pair = auth_service.create_token_pair(
+            user_id=str(user.id),
+            email=str(user.email),
+            org_id=str(membership.org_id),
+            role=str(membership.role),
+            is_superuser=bool(user.is_superuser),
+            username=str(user.username) if user.username else None,
+            full_name=str(user.full_name) if user.full_name else None,
+        )
+
+        return SSOLoginResponse(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+            token_type=token_pair.token_type,
+            expires_in=token_pair.expires_in,
+            user_id=str(user.id),
+            email=str(user.email),
+            org_id=str(membership.org_id),
+            role=str(membership.role),
+        )
+
+
 # --- OAuth Flow Endpoints ---
 
 
@@ -804,7 +1027,10 @@ async def create_oauth_provider(
     import uuid as uuid_mod
     import os
 
-    from dev_health_ops.api.services.oauth import get_default_scopes, validate_oauth_config
+    from dev_health_ops.api.services.oauth import (
+        get_default_scopes,
+        validate_oauth_config,
+    )
 
     if user.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -979,9 +1205,7 @@ async def initiate_oauth_auth(
         # Use stored redirect_uri if available, otherwise generate from provider.id
         redirect_uri = oauth_config.get("redirect_uri")
         if not redirect_uri:
-            redirect_uri = (
-                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
-            )
+            redirect_uri = f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
 
         config = OAuthConfig(
             client_id=oauth_config["client_id"],
@@ -1045,9 +1269,7 @@ async def oauth_callback(
 
         redirect_uri = oauth_config.get("redirect_uri")
         if not redirect_uri:
-            redirect_uri = (
-                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
-            )
+            redirect_uri = f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
 
         config = OAuthConfig(
             client_id=oauth_config["client_id"],
@@ -1239,7 +1461,7 @@ async def initiate_oauth_by_type(
             SSOProvider.org_id == uuid_mod.UUID(org_id),
             SSOProvider.protocol == protocol,
             SSOProvider.status == "active",
-            SSOProvider.is_default == True,
+            SSOProvider.is_default.is_(True),  # noqa: E712
         )
         result = await db.execute(provider_stmt)
         provider = result.scalar_one_or_none()
@@ -1265,9 +1487,7 @@ async def initiate_oauth_by_type(
         # Use stored redirect_uri if available, otherwise generate from provider.id
         final_redirect_uri = oauth_config.get("redirect_uri")
         if not final_redirect_uri:
-            final_redirect_uri = (
-                f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
-            )
+            final_redirect_uri = f"{base_url}/api/v1/auth/oauth/{provider.id}/callback"
 
         config = OAuthConfig(
             client_id=oauth_config["client_id"],

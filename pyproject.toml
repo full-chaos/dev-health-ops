@@ -34,7 +34,7 @@ dependencies = [
   "GitPython",
   "PyGithub>=2.1.0,<3.0.0",
   "requests",
-  "pydantic",
+  "pydantic>=2.7.0",
   "PyYAML",
   "typing_extensions",
   "jira",
@@ -124,7 +124,7 @@ python-gitlab = "*"
 GitPython = "*"
 PyGithub = ">=2.1.0,<3.0.0"
 requests = "*"
-pydantic = "*"
+pydantic = ">=2.7.0"
 PyYAML = "*"
 typing_extensions = "*"
 jira = "*"

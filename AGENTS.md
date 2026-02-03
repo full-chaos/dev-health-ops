@@ -248,6 +248,11 @@ Explanation format:
   ```bash
   git checkout -b <type>/<descriptive-name>  # e.g., fix/password-hashing, feat/oauth-sso
   ```
+* **Use git worktrees for parallel work** — When starting a new feature or unrelated task, use a worktree:
+  ```bash
+  git worktree add ../dev-health-ops-feature-name feature/branch-name
+  ```
+  This keeps each task isolated, preventing cross-contamination of changes.
 * Prefer **minimal, surgical** changes.
 * Keep surrounding style; use targeted edits.
 * Add/adjust tests under `tests/` for behavior changes.

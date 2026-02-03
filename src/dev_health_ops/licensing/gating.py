@@ -452,7 +452,9 @@ def require_feature(
         import inspect
 
         if inspect.iscoroutinefunction(func):
+            async_wrapper._require_feature = feature  # type: ignore[attr-defined]
             return async_wrapper  # type: ignore
+        wrapper._require_feature = feature  # type: ignore[attr-defined]
         return wrapper
 
     return decorator

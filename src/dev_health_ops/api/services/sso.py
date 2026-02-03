@@ -1,5 +1,3 @@
-# pyright: ignore
-# mypy: ignore-errors
 from __future__ import annotations
 
 import base64
@@ -7,13 +5,11 @@ import hashlib
 import logging
 import secrets
 import uuid
-from datetime import timedelta
-from typing import Mapping
-from xml.etree import ElementTree
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional, Sequence
-from urllib.parse import urlencode
+from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping, Optional, Sequence
+from urllib.parse import urlencode, urlparse
+from xml.etree import ElementTree
 
 import httpx
 import jwt
@@ -98,6 +94,11 @@ class OIDCAuthorizationRequest:
 
 
 class SSOService:
+    # Security and timing constants
+    SAML_TIMESTAMP_SKEW_MINUTES = 5
+    OIDC_JWT_LEEWAY_SECONDS = 60
+    HTTP_TIMEOUT_SECONDS = 30.0
+
     def __init__(self, session: AsyncSession, base_url: str = ""):
         self.session = session
         self.base_url = base_url.rstrip("/")
@@ -520,10 +521,10 @@ class SSOService:
         oidc_metadata = await self._get_oidc_metadata(config)
 
         expected_state = self._get_expected_state(provider)
-        if expected_state and state != expected_state:
-            raise OIDCProcessingError("OIDC state mismatch")
-        if not state:
+        if not state or not expected_state:
             raise OIDCProcessingError("Missing OIDC state")
+        if state != expected_state:
+            raise OIDCProcessingError("OIDC state mismatch")
 
         token_response = await self._exchange_oidc_code(
             provider=provider,
@@ -569,7 +570,7 @@ class SSOService:
             "id_claims": id_claims,
         }
 
-    async def _provision_or_get_user(
+    async def provision_or_get_user(
         self,
         org_id: uuid.UUID,
         email: str,
@@ -659,8 +660,13 @@ class SSOService:
                 from defusedxml import ElementTree as safe_tree
 
                 return safe_tree.fromstring(xml_bytes)
-            except ImportError:
-                return ElementTree.fromstring(xml_bytes)
+            except ImportError as exc:
+                logger.error(
+                    "defusedxml is required for secure SAML XML parsing but is not installed"
+                )
+                raise SAMLProcessingError(
+                    "SAML processing requires the 'defusedxml' package to be installed"
+                ) from exc
         except ElementTree.ParseError as exc:
             raise SAMLProcessingError("Invalid SAML XML") from exc
 
@@ -690,7 +696,7 @@ class SSOService:
 
         try:
             XMLVerifier().verify(xml_root, x509_cert=certificate)
-        except Exception as exc:
+        except (ValueError, KeyError, AttributeError) as exc:
             raise SAMLProcessingError("SAML signature validation failed") from exc
 
     @staticmethod
@@ -720,14 +726,14 @@ class SSOService:
                 mapped[target_field] = value.strip()
         return mapped
 
-    @staticmethod
     def _validate_saml_timestamps(
+        self,
         assertion: ElementTree.Element,
         subject_confirmation: ElementTree.Element,
         namespaces: Mapping[str, str],
     ) -> None:
         now = datetime.now(timezone.utc)
-        skew = timedelta(minutes=5)
+        skew = timedelta(minutes=self.SAML_TIMESTAMP_SKEW_MINUTES)
 
         conditions = assertion.find("./saml:Conditions", namespaces)
         if conditions is not None:
@@ -783,10 +789,22 @@ class SSOService:
         if not issuer:
             raise OIDCProcessingError("OIDC issuer is required")
 
+        # Validate issuer URL to prevent SSRF attacks
+        try:
+            parsed = urlparse(issuer)
+            if parsed.scheme not in ("https",):
+                raise OIDCProcessingError("OIDC issuer must use HTTPS")
+            if not parsed.netloc:
+                raise OIDCProcessingError("OIDC issuer must be a valid URL")
+        except ValueError as exc:
+            raise OIDCProcessingError("Invalid OIDC issuer URL") from exc
+
         discovery_url = issuer.rstrip("/") + "/.well-known/openid-configuration"
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.get(discovery_url, timeout=30.0)
+                response = await client.get(
+                    discovery_url, timeout=self.HTTP_TIMEOUT_SECONDS
+                )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 raise OIDCProcessingError(
@@ -838,7 +856,7 @@ class SSOService:
                     token_endpoint,
                     data=payload,
                     headers={"Accept": "application/json"},
-                    timeout=30.0,
+                    timeout=self.HTTP_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
@@ -873,9 +891,9 @@ class SSOService:
                 audience=client_id,
                 issuer=issuer,
                 options={"require": ["exp", "iat", "iss", "aud"]},
-                leeway=60,
+                leeway=self.OIDC_JWT_LEEWAY_SECONDS,
             )
-        except Exception as exc:
+        except (jwt.PyJWTError, httpx.HTTPError, ValueError, KeyError) as exc:
             raise OIDCProcessingError("OIDC id_token validation failed") from exc
 
         if expected_nonce and claims.get("nonce") != expected_nonce:
@@ -883,16 +901,15 @@ class SSOService:
 
         return claims
 
-    @staticmethod
     async def _fetch_userinfo(
-        userinfo_endpoint: str, access_token: str
+        self, userinfo_endpoint: str, access_token: str
     ) -> dict[str, Any]:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
                     userinfo_endpoint,
                     headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=30.0,
+                    timeout=self.HTTP_TIMEOUT_SECONDS,
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:

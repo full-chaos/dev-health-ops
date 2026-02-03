@@ -1,7 +1,8 @@
-# ruff: noqa
 from __future__ import annotations
 
 import logging
+import os
+import uuid as uuid_mod
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Header
@@ -14,7 +15,7 @@ from dev_health_ops.api.services.auth import (
     extract_token_from_header,
 )
 from dev_health_ops.api.utils.logging import sanitize_for_log
-from dev_health_ops.api.auth.schemas import (  # noqa: F401
+from dev_health_ops.api.auth.schemas import (
     OAuthAuthRequest,
     OAuthAuthResponse,
     OAuthCallbackRequest,
@@ -38,6 +39,7 @@ from dev_health_ops.api.services.sso import SSOProcessingError, SSOService
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import require_feature
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
+from dev_health_ops.models.sso import SSOProvider
 from dev_health_ops.models.users import User, Membership
 
 logger = logging.getLogger(__name__)
@@ -756,16 +758,11 @@ async def saml_acs_callback(
     provider_id: str,
     payload: SAMLCallbackRequest,
 ) -> SSOLoginResponse:
-    import uuid as uuid_mod
-    import os
-
     base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
     async with get_postgres_session() as db:
         sso_service = SSOService(db, base_url=base_url)
         audit_service = AuditService(db)
-
-        from dev_health_ops.models.sso import SSOProvider
 
         provider_stmt = select(SSOProvider).where(
             SSOProvider.id == uuid_mod.UUID(provider_id)
@@ -804,25 +801,61 @@ async def saml_acs_callback(
             )
             await db.commit()
             raise HTTPException(
-                status_code=400, detail=f"SAML authentication failed: {exc}"
+                status_code=400, detail="SAML authentication failed"
             )
 
         email = saml_info.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email address is missing from SAML response",
+            )
+
         if provider.allowed_domains:
-            email_domain = email.split("@")[-1] if "@" in email else ""
+            if "@" not in email:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Email address from SAML response is malformed",
+                )
+            email_domain = email.rsplit("@", 1)[-1]
             if email_domain not in provider.allowed_domains:
                 raise HTTPException(
                     status_code=403,
                     detail=f"Email domain '{email_domain}' is not allowed for this provider",
                 )
 
-        user, membership, _ = await sso_service._provision_or_get_user(
-            org_id=provider.org_id,
-            email=email,
-            name=saml_info.get("full_name"),
-            provider_id=provider.id,
-            external_id=saml_info.get("external_id"),
-        )
+        try:
+            user, membership, _ = await sso_service.provision_or_get_user(
+                org_id=provider.org_id,
+                email=email,
+                name=saml_info.get("full_name"),
+                provider_id=provider.id,
+                external_id=saml_info.get("external_id"),
+            )
+        except SSOProcessingError as exc:
+            logger.error(
+                "SAML user provisioning failed: %s",
+                sanitize_for_log(str(exc)),
+            )
+            await sso_service.record_error(
+                org_id=provider.org_id,
+                provider_id=provider.id,
+                error=str(exc),
+            )
+            await audit_service.log(
+                org_id=provider.org_id,
+                action=AuditAction.SSO_LOGIN,
+                resource_type=AuditResourceType.SSO_PROVIDER,
+                resource_id=str(provider.id),
+                status="failure",
+                error_message=str(exc),
+                extra_metadata={"protocol": "saml", "stage": "provisioning"},
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=400,
+                detail="SAML user provisioning failed",
+            )
 
         await sso_service.record_login(org_id=provider.org_id, provider_id=provider.id)
         await audit_service.log(
@@ -911,16 +944,11 @@ async def oidc_callback(
     provider_id: str,
     payload: OIDCCallbackRequest,
 ) -> SSOLoginResponse:
-    import uuid as uuid_mod
-    import os
-
     base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
     async with get_postgres_session() as db:
         sso_service = SSOService(db, base_url=base_url)
         audit_service = AuditService(db)
-
-        from dev_health_ops.models.sso import SSOProvider
 
         provider_stmt = select(SSOProvider).where(
             SSOProvider.id == uuid_mod.UUID(provider_id)
@@ -960,25 +988,61 @@ async def oidc_callback(
             )
             await db.commit()
             raise HTTPException(
-                status_code=400, detail=f"OIDC authentication failed: {exc}"
+                status_code=400, detail="OIDC authentication failed"
             )
 
         email = oidc_info.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email address is missing from OIDC claims",
+            )
+
         if provider.allowed_domains:
-            email_domain = email.split("@")[-1] if "@" in email else ""
+            if "@" not in email:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Email address from OIDC claims is malformed",
+                )
+            email_domain = email.rsplit("@", 1)[-1]
             if email_domain not in provider.allowed_domains:
                 raise HTTPException(
                     status_code=403,
                     detail=f"Email domain '{email_domain}' is not allowed for this provider",
                 )
 
-        user, membership, _ = await sso_service._provision_or_get_user(
-            org_id=provider.org_id,
-            email=email,
-            name=oidc_info.get("full_name"),
-            provider_id=provider.id,
-            external_id=oidc_info.get("external_id"),
-        )
+        try:
+            user, membership, _ = await sso_service.provision_or_get_user(
+                org_id=provider.org_id,
+                email=email,
+                name=oidc_info.get("full_name"),
+                provider_id=provider.id,
+                external_id=oidc_info.get("external_id"),
+            )
+        except SSOProcessingError as exc:
+            logger.error(
+                "OIDC user provisioning failed: %s",
+                sanitize_for_log(str(exc)),
+            )
+            await sso_service.record_error(
+                org_id=provider.org_id,
+                provider_id=provider.id,
+                error=str(exc),
+            )
+            await audit_service.log(
+                org_id=provider.org_id,
+                action=AuditAction.SSO_LOGIN,
+                resource_type=AuditResourceType.SSO_PROVIDER,
+                resource_id=str(provider.id),
+                status="failure",
+                error_message=str(exc),
+                extra_metadata={"protocol": "oidc", "stage": "provisioning"},
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=400,
+                detail="OIDC user provisioning failed",
+            )
 
         await sso_service.record_login(org_id=provider.org_id, provider_id=provider.id)
         await audit_service.log(

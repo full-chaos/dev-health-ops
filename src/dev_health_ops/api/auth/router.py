@@ -810,7 +810,7 @@ async def saml_acs_callback(
                 status_code=400,
                 detail="Email address is missing from SAML response",
             )
-        
+
         if provider.allowed_domains:
             if "@" not in email:
                 raise HTTPException(
@@ -997,7 +997,7 @@ async def oidc_callback(
                 status_code=400,
                 detail="Email address is missing from OIDC claims",
             )
-        
+
         if provider.allowed_domains:
             if "@" not in email:
                 raise HTTPException(

@@ -98,7 +98,7 @@ class SSOService:
     SAML_TIMESTAMP_SKEW_MINUTES = 5
     OIDC_JWT_LEEWAY_SECONDS = 60
     HTTP_TIMEOUT_SECONDS = 30.0
-    
+
     def __init__(self, session: AsyncSession, base_url: str = ""):
         self.session = session
         self.base_url = base_url.rstrip("/")
@@ -788,7 +788,7 @@ class SSOService:
         issuer = config.get("issuer")
         if not issuer:
             raise OIDCProcessingError("OIDC issuer is required")
-        
+
         # Validate issuer URL to prevent SSRF attacks
         try:
             parsed = urlparse(issuer)

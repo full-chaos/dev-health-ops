@@ -85,6 +85,7 @@ from .graphql.app import create_graphql_app
 from .webhooks import router as webhooks_router
 from .admin import router as admin_router
 from .auth import router as auth_router
+from dev_health_ops.licensing import LicenseManager
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
@@ -284,6 +285,16 @@ def _bounded_limit_param(limit: int, max_limit: int) -> int:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize licensing
+    try:
+        manager = LicenseManager.initialize()
+        if manager.is_licensed:
+            logger.info("License initialized: tier=%s", manager.tier.value)
+        else:
+            logger.info("No license configured, using community tier")
+    except Exception as e:
+        logger.warning("License initialization failed: %s (using community tier)", e)
+
     yield
     await close_global_client()
 

@@ -112,6 +112,18 @@ class TestSSOServiceOIDC:
         with (
             patch.object(
                 SSOService,
+                "_get_oidc_metadata",
+                new=AsyncMock(
+                    return_value={
+                        "issuer": "https://issuer.example.com",
+                        "token_endpoint": "https://issuer.example.com/token",
+                        "userinfo_endpoint": "https://issuer.example.com/userinfo",
+                        "jwks_uri": "https://issuer.example.com/jwks",
+                    }
+                ),
+            ),
+            patch.object(
+                SSOService,
                 "_exchange_oidc_code",
                 new=AsyncMock(
                     return_value={"access_token": "access", "id_token": "id-token"}
@@ -159,13 +171,24 @@ class TestSSOServiceOIDC:
         )
 
         service = SSOService(MagicMock(), base_url="https://app.example.com")
-        with pytest.raises(OIDCProcessingError, match="state mismatch"):
-            await service.process_oidc_callback(
-                provider=provider,
-                code="auth-code",
-                state="wrong-state",
-                code_verifier=None,
-            )
+        with patch.object(
+            SSOService,
+            "_get_oidc_metadata",
+            new=AsyncMock(
+                return_value={
+                    "issuer": "https://issuer.example.com",
+                    "token_endpoint": "https://issuer.example.com/token",
+                    "jwks_uri": "https://issuer.example.com/jwks",
+                }
+            ),
+        ):
+            with pytest.raises(OIDCProcessingError, match="state mismatch"):
+                await service.process_oidc_callback(
+                    provider=provider,
+                    code="auth-code",
+                    state="wrong-state",
+                    code_verifier=None,
+                )
 
     @pytest.mark.asyncio
     async def test_process_oidc_callback_missing_state(self):
@@ -184,13 +207,24 @@ class TestSSOServiceOIDC:
         )
 
         service = SSOService(MagicMock(), base_url="https://app.example.com")
-        with pytest.raises(OIDCProcessingError, match="Missing OIDC state"):
-            await service.process_oidc_callback(
-                provider=provider,
-                code="auth-code",
-                state=None,
-                code_verifier=None,
-            )
+        with patch.object(
+            SSOService,
+            "_get_oidc_metadata",
+            new=AsyncMock(
+                return_value={
+                    "issuer": "https://issuer.example.com",
+                    "token_endpoint": "https://issuer.example.com/token",
+                    "jwks_uri": "https://issuer.example.com/jwks",
+                }
+            ),
+        ):
+            with pytest.raises(OIDCProcessingError, match="Missing OIDC state"):
+                await service.process_oidc_callback(
+                    provider=provider,
+                    code="auth-code",
+                    state=None,
+                    code_verifier=None,
+                )
 
     @pytest.mark.asyncio
     async def test_process_oidc_callback_missing_email(self):
@@ -213,6 +247,17 @@ class TestSSOServiceOIDC:
 
         service = SSOService(MagicMock(), base_url="https://app.example.com")
         with (
+            patch.object(
+                SSOService,
+                "_get_oidc_metadata",
+                new=AsyncMock(
+                    return_value={
+                        "issuer": "https://issuer.example.com",
+                        "token_endpoint": "https://issuer.example.com/token",
+                        "jwks_uri": "https://issuer.example.com/jwks",
+                    }
+                ),
+            ),
             patch.object(
                 SSOService,
                 "_exchange_oidc_code",

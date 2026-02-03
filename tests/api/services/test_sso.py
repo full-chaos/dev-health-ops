@@ -391,7 +391,7 @@ class TestSSOServiceSAMLErrors:
     <saml:Assertion>
         <saml:Issuer>https://idp.example.com/metadata</saml:Issuer>
         <saml:Subject>
-            <saml:NameID>user@example.com</saml:NameID>
+            <saml:NameID>user-123</saml:NameID>
             <saml:SubjectConfirmation>
                 <saml:SubjectConfirmationData
                     Recipient="https://app.example.com/saml/acs"

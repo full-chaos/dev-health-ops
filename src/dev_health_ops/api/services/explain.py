@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import math
-from typing import Any, List
+from typing import List
 
 from ..models.filters import MetricFilter
 from ..models.schemas import Contributor, ExplainResponse
 from ..queries.client import clickhouse_client
 from ..queries.explain import fetch_metric_contributors, fetch_metric_driver_delta
 from ..queries.metrics import fetch_metric_value
+from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import filter_cache_key, scope_filter_for_metric, time_window
 
@@ -96,24 +96,6 @@ _METRIC_CONFIG = {
 }
 
 
-def _delta_pct(current: float, previous: float) -> float:
-    if previous == 0:
-        return 0.0
-    return (current - previous) / previous * 100.0
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
-
-
-def _safe_transform(transform, value: float) -> float:
-    return _safe_float(transform(value))
-
-
 async def build_explain_response(
     *,
     db_url: str,
@@ -155,9 +137,9 @@ async def build_explain_response(
             aggregator=config["aggregator"],
         )
 
-        current_value = _safe_float(current_value)
-        previous_value = _safe_float(previous_value)
-        delta_pct = _safe_float(_delta_pct(current_value, previous_value))
+        current_value = safe_float(current_value)
+        previous_value = safe_float(previous_value)
+        pct_change = safe_float(delta_pct(current_value, previous_value))
 
         drivers = await fetch_metric_driver_delta(
             sink,
@@ -184,13 +166,13 @@ async def build_explain_response(
 
     driver_models: List[Contributor] = []
     for row in drivers:
-        raw_value = _safe_float(row.get("value"))
-        raw_delta = _safe_float(row.get("delta_pct"))
+        raw_value = safe_float(row.get("value"))
+        raw_delta = safe_float(row.get("delta_pct"))
         driver_models.append(
             Contributor(
                 id=str(row.get("id") or ""),
                 label=str(row.get("id") or "Unknown"),
-                value=_safe_transform(config["transform"], raw_value),
+                value=safe_transform(config["transform"], raw_value),
                 delta_pct=raw_delta,
                 evidence_link=(
                     f"/api/v1/drilldown/prs?metric={metric}"
@@ -202,12 +184,12 @@ async def build_explain_response(
 
     contributor_models: List[Contributor] = []
     for row in contributors:
-        raw_value = _safe_float(row.get("value"))
+        raw_value = safe_float(row.get("value"))
         contributor_models.append(
             Contributor(
                 id=str(row.get("id") or ""),
                 label=str(row.get("id") or "Unknown"),
-                value=_safe_transform(config["transform"], raw_value),
+                value=safe_transform(config["transform"], raw_value),
                 delta_pct=0.0,
                 evidence_link=(
                     f"/api/v1/drilldown/prs?metric={metric}"
@@ -221,8 +203,8 @@ async def build_explain_response(
         metric=metric,
         label=config["label"],
         unit=config["unit"],
-        value=_safe_transform(config["transform"], current_value),
-        delta_pct=delta_pct,
+        value=safe_transform(config["transform"], current_value),
+        delta_pct=pct_change,
         drivers=driver_models,
         contributors=contributor_models,
         drilldown_links={

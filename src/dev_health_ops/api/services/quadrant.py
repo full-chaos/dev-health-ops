@@ -19,6 +19,7 @@ from ..models.schemas import (
 from ..queries.client import clickhouse_client
 from ..queries.people import fetch_person_team_id, resolve_person_identity
 from ..queries.quadrant import fetch_quadrant_metric
+from ..utils import build_reverse_alias_map, normalize_alias
 from .filtering import time_window
 from .people_identity import (
     display_name_for_identity,
@@ -315,27 +316,17 @@ def _normalize_range_days(range_days: int) -> int:
     return max(1, min(value, 180))
 
 
-def _reverse_aliases(aliases: Dict[str, List[str]]) -> Dict[str, str]:
-    reverse: Dict[str, str] = {}
-    for canonical, alias_list in aliases.items():
-        for alias in alias_list:
-            key = (alias or "").strip().lower()
-            if key:
-                reverse[key] = canonical
-    return reverse
-
-
 async def _resolve_identity_variants(
     sink: BaseMetricsSink,
     *,
     person_id: str,
 ) -> List[str]:
     aliases = load_identity_aliases()
-    reverse = _reverse_aliases(aliases)
+    reverse = build_reverse_alias_map(aliases)
 
     identity = await resolve_person_identity(sink, person_id=person_id)
     if identity:
-        normalized = (identity or "").strip().lower()
+        normalized = normalize_alias(identity)
         canonical = reverse.get(normalized, identity)
         alias_list = list(aliases.get(canonical, []))
         if identity not in alias_list and identity != canonical:

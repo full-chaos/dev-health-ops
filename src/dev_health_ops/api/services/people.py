@@ -45,6 +45,7 @@ from ..queries.people import (
     resolve_person_identity,
     search_people as query_people,
 )
+from ..utils import build_reverse_alias_map, normalize_alias
 from .people_identity import (
     display_name_for_identity,
     identities_for_person,
@@ -275,20 +276,6 @@ def _bounded_limit(limit: int, max_limit: int) -> int:
     return min(max(limit, 1), max_limit)
 
 
-def _normalize_alias(value: str) -> str:
-    return (value or "").strip().lower()
-
-
-def _reverse_aliases(aliases: Dict[str, List[str]]) -> Dict[str, str]:
-    reverse: Dict[str, str] = {}
-    for canonical, alias_list in aliases.items():
-        for alias in alias_list:
-            key = _normalize_alias(alias)
-            if key:
-                reverse[key] = canonical
-    return reverse
-
-
 async def _resolve_identity_context(
     sink: BaseMetricsSink,
     *,
@@ -296,10 +283,10 @@ async def _resolve_identity_context(
     aliases: Dict[str, List[str]],
 ) -> Tuple[str, List[str]]:
     identity = await resolve_person_identity(sink, person_id=person_id)
-    reverse = _reverse_aliases(aliases)
+    reverse = build_reverse_alias_map(aliases)
 
     if identity:
-        canonical = reverse.get(_normalize_alias(identity), identity)
+        canonical = reverse.get(normalize_alias(identity), identity)
         alias_list = list(aliases.get(canonical, []))
         if identity != canonical and identity not in alias_list:
             alias_list.append(identity)
@@ -423,7 +410,7 @@ async def search_people_response(
         return []
 
     aliases = load_identity_aliases()
-    reverse_aliases = _reverse_aliases(aliases)
+    reverse_aliases = build_reverse_alias_map(aliases)
     limit = _bounded_limit(limit, _MAX_SEARCH_LIMIT)
 
     async with clickhouse_client(db_url) as sink:
@@ -439,7 +426,7 @@ async def search_people_response(
         identity = str(row.get("identity_id") or "").strip()
         if not identity:
             continue
-        canonical = reverse_aliases.get(_normalize_alias(identity), identity)
+        canonical = reverse_aliases.get(normalize_alias(identity), identity)
         alias_list = list(aliases.get(canonical, []))
         if identity != canonical and identity not in alias_list:
             alias_list.append(identity)

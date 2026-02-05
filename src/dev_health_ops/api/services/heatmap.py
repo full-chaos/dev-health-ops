@@ -20,6 +20,7 @@ from ..queries.heatmap import (
     fetch_review_wait_evidence,
 )
 from ..queries.people import resolve_person_identity
+from ..utils import build_reverse_alias_map, normalize_alias
 from .filtering import scope_filter_for_metric, time_window
 from .people_identity import (
     identity_variants,
@@ -199,27 +200,17 @@ def _normalize_range_days(range_days: int) -> int:
     return max(1, min(int(range_days or 14), 180))
 
 
-def _reverse_aliases(aliases: Dict[str, List[str]]) -> Dict[str, str]:
-    reverse: Dict[str, str] = {}
-    for canonical, alias_list in aliases.items():
-        for alias in alias_list:
-            key = (alias or "").strip().lower()
-            if key:
-                reverse[key] = canonical
-    return reverse
-
-
 async def _resolve_identity_variants(
     sink: BaseMetricsSink,
     *,
     person_id: str,
 ) -> List[str]:
     aliases = load_identity_aliases()
-    reverse = _reverse_aliases(aliases)
+    reverse = build_reverse_alias_map(aliases)
 
     identity = await resolve_person_identity(sink, person_id=person_id)
     if identity:
-        normalized = (identity or "").strip().lower()
+        normalized = normalize_alias(identity)
         canonical = reverse.get(normalized, identity)
         alias_list = list(aliases.get(canonical, []))
         if identity not in alias_list and identity != canonical:

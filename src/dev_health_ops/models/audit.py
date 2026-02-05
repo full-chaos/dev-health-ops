@@ -90,6 +90,7 @@ class AuditAction(str, Enum):
     CREDENTIAL_CREATED = "credential_created"
     CREDENTIAL_UPDATED = "credential_updated"
     CREDENTIAL_DELETED = "credential_deleted"
+    CREDENTIAL_ACCESSED = "credential_accessed"
 
     # Generic
     OTHER = "other"

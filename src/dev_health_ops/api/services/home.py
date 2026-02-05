@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+
 from ..models.filters import MetricFilter
 from ..models.schemas import (
     ConstraintCard,
@@ -27,7 +28,6 @@ from ..queries.metrics import (
 from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import filter_cache_key, scope_filter_for_metric, time_window
-
 
 _METRICS = [
     {

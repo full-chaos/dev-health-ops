@@ -322,7 +322,7 @@ app.include_router(admin_router)
 app.include_router(auth_router)
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:
     services = {}
     required_services = []

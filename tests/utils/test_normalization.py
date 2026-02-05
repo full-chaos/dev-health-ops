@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from dev_health_ops.utils.normalization import (
     clamp,
     ensure_full_subcategory_vector,

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+
 from ..models.schemas import (
     CollaborationItem,
     CollaborationSection,
@@ -12,6 +12,7 @@ from ..models.schemas import (
     DriverStatement,
     FlowStageItem,
     Freshness,
+    IssueRow,
     MetricBreakdownItem,
     MetricDefinition,
     MetricTimeseriesPoint,
@@ -25,7 +26,6 @@ from ..models.schemas import (
     PersonSummaryResponse,
     PersonSummarySections,
     PullRequestRow,
-    IssueRow,
     SparkPoint,
     SummarySentence,
     WorkMixItem,
@@ -43,9 +43,16 @@ from ..queries.people import (
     fetch_person_pull_requests,
     fetch_person_work_mix,
     resolve_person_identity,
-    search_people as query_people,
 )
-from ..utils import build_reverse_alias_map, normalize_alias
+from ..queries.people import search_people as query_people
+from ..utils import (
+    build_reverse_alias_map,
+    delta_pct,
+    normalize_alias,
+    safe_float,
+    safe_optional_float,
+    safe_transform,
+)
 from .people_identity import (
     display_name_for_identity,
     identities_for_person,
@@ -233,39 +240,11 @@ def _time_window(range_days: int, compare_days: int) -> Tuple[date, date, date, 
     return start_day, end_day, compare_start, compare_end
 
 
-def _delta_pct(current: float, previous: float) -> float:
-    if previous == 0:
-        return 0.0
-    return (current - previous) / previous * 100.0
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
-
-
-def _safe_optional_float(value: Any) -> Optional[float]:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
-def _safe_transform(transform, value: float) -> float:
-    return _safe_float(transform(value))
-
-
 def _spark_points(rows: List[Dict[str, Any]], transform) -> List[SparkPoint]:
     points: List[SparkPoint] = []
     for row in rows:
-        value = _safe_float(row.get("value"))
-        points.append(
-            SparkPoint(ts=row["day"], value=_safe_transform(transform, value))
-        )
+        value = safe_float(row.get("value"))
+        points.append(SparkPoint(ts=row["day"], value=safe_transform(transform, value)))
     return points
 
 
@@ -485,7 +464,7 @@ async def build_person_summary_response(
         coverage_sources = await fetch_identity_coverage(
             sink, identities=identity_inputs
         )
-        identity_coverage_pct = _safe_float(_safe_float(coverage_sources) / 2.0 * 100.0)
+        identity_coverage_pct = safe_float(safe_float(coverage_sources) / 2.0 * 100.0)
 
         deltas: List[PersonDelta] = []
         for metric in _PERSON_METRICS:
@@ -524,16 +503,16 @@ async def build_person_summary_response(
             )
 
             transform = metric["transform"]
-            current_value = _safe_float(current_value)
-            previous_value = _safe_float(previous_value)
-            delta_pct = _safe_float(_delta_pct(current_value, previous_value))
+            current_value = safe_float(current_value)
+            previous_value = safe_float(previous_value)
+            pct_change = safe_float(delta_pct(current_value, previous_value))
             deltas.append(
                 PersonDelta(
                     metric=metric["metric"],
                     label=metric["label"],
-                    value=_safe_transform(transform, current_value),
+                    value=safe_transform(transform, current_value),
                     unit=metric["unit"],
-                    delta_pct=delta_pct,
+                    delta_pct=pct_change,
                     spark=_spark_points(series, transform),
                 )
             )
@@ -545,7 +524,7 @@ async def build_person_summary_response(
             WorkMixItem(
                 key=str(row.get("key") or ""),
                 name=str(row.get("name") or ""),
-                value=_safe_float(row.get("value")),
+                value=safe_float(row.get("value")),
             )
             for row in work_mix_rows
         ]
@@ -556,7 +535,7 @@ async def build_person_summary_response(
         flow_breakdown = [
             FlowStageItem(
                 stage=str(row.get("stage") or ""),
-                value=_safe_float(row.get("value")),
+                value=safe_float(row.get("value")),
                 unit=str(row.get("unit") or "hours"),
             )
             for row in flow_rows
@@ -570,7 +549,7 @@ async def build_person_summary_response(
         for row in collab_rows:
             item = CollaborationItem(
                 label=str(row.get("label") or ""),
-                value=_safe_float(row.get("value")),
+                value=safe_float(row.get("value")),
             )
             if row.get("section") == "handoff_points":
                 handoff_points.append(item)
@@ -644,7 +623,7 @@ async def build_person_metric_response(
         timeseries = [
             MetricTimeseriesPoint(
                 day=row["day"],
-                value=_safe_transform(transform, _safe_float(row.get("value"))),
+                value=safe_transform(transform, safe_float(row.get("value"))),
             )
             for row in series_rows
         ]
@@ -670,8 +649,8 @@ async def build_person_metric_response(
             breakdowns[key] = [
                 MetricBreakdownItem(
                     label=str(row.get("label") or ""),
-                    value=_safe_transform(
-                        detail["transform"], _safe_float(row.get("value"))
+                    value=safe_transform(
+                        detail["transform"], safe_float(row.get("value"))
                     ),
                 )
                 for row in rows
@@ -737,7 +716,7 @@ async def build_person_drilldown_prs_response(
                 created_at=row.get("created_at"),
                 merged_at=row.get("merged_at"),
                 first_review_at=row.get("first_review_at"),
-                review_latency_hours=_safe_optional_float(
+                review_latency_hours=safe_optional_float(
                     row.get("review_latency_hours")
                 ),
                 link=None,
@@ -785,8 +764,8 @@ async def build_person_drilldown_issues_response(
                 provider=str(row.get("provider") or ""),
                 status=str(row.get("status") or ""),
                 team_id=row.get("team_id"),
-                cycle_time_hours=_safe_optional_float(row.get("cycle_time_hours")),
-                lead_time_hours=_safe_optional_float(row.get("lead_time_hours")),
+                cycle_time_hours=safe_optional_float(row.get("cycle_time_hours")),
+                lead_time_hours=safe_optional_float(row.get("lead_time_hours")),
                 started_at=row.get("started_at"),
                 completed_at=row.get("completed_at"),
                 link=None,

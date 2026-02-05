@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-import math
 from typing import Any, Dict, List
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
@@ -25,8 +24,9 @@ from ..queries.metrics import (
     fetch_metric_series,
     fetch_metric_value,
 )
-from .filtering import filter_cache_key, scope_filter_for_metric, time_window
+from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
+from .filtering import filter_cache_key, scope_filter_for_metric, time_window
 
 
 _METRICS = [
@@ -133,38 +133,18 @@ _METRICS = [
 ]
 
 
-def _delta_pct(current: float, previous: float) -> float:
-    if previous == 0:
-        return 0.0
-    return (current - previous) / previous * 100.0
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    return number if math.isfinite(number) else default
-
-
-def _safe_transform(transform, value: float) -> float:
-    return _safe_float(transform(value))
-
-
 def _spark_points(rows: List[Dict[str, Any]], transform) -> List[SparkPoint]:
     points = []
     for row in rows:
-        value = _safe_float(row.get("value"))
-        points.append(
-            SparkPoint(ts=row["day"], value=_safe_transform(transform, value))
-        )
+        value = safe_float(row.get("value"))
+        points.append(SparkPoint(ts=row["day"], value=safe_transform(transform, value)))
     return points
 
 
-def _direction(delta_pct: float) -> str:
-    if delta_pct > 0:
+def _direction(pct_change: float) -> str:
+    if pct_change > 0:
         return "rose"
-    if delta_pct < 0:
+    if pct_change < 0:
         return "fell"
     return "held steady"
 
@@ -203,8 +183,8 @@ async def _metric_deltas(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
             )
-            current_value = _safe_float(current_value)
-            previous_value = _safe_float(previous_value)
+            current_value = safe_float(current_value)
+            previous_value = safe_float(previous_value)
             spark = _spark_points(current_series, metric["transform"])
         else:
             current_value = await fetch_metric_value(
@@ -227,8 +207,8 @@ async def _metric_deltas(
                 scope_params=scope_params,
                 aggregator=metric["aggregator"],
             )
-            current_value = _safe_float(current_value)
-            previous_value = _safe_float(previous_value)
+            current_value = safe_float(current_value)
+            previous_value = safe_float(previous_value)
             series = await fetch_metric_series(
                 sink,
                 table=metric["table"],
@@ -241,14 +221,14 @@ async def _metric_deltas(
             )
             spark = _spark_points(series, metric["transform"])
 
-        delta_pct = _safe_float(_delta_pct(current_value, previous_value))
+        pct_change = safe_float(delta_pct(current_value, previous_value))
         deltas.append(
             MetricDelta(
                 metric=metric["metric"],
                 label=metric["label"],
-                value=_safe_transform(metric["transform"], current_value),
+                value=safe_transform(metric["transform"], current_value),
                 unit=metric["unit"],
-                delta_pct=delta_pct,
+                delta_pct=pct_change,
                 spark=spark,
             )
         )

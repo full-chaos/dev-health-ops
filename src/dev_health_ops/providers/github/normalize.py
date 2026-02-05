@@ -14,7 +14,11 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.identity import IdentityResolver
-from dev_health_ops.providers.normalize_common import to_utc as _to_utc
+from dev_health_ops.providers.normalize_common import (
+    parse_iso_datetime as _parse_iso,
+    priority_from_labels as _priority_from_labels,
+    to_utc as _to_utc,
+)
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 
@@ -452,16 +456,6 @@ def github_project_v2_item_to_work_item(
     return None, []
 
 
-def _parse_iso(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        # GitHub returns RFC3339 with Z.
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-
-
 def github_pr_to_work_item(
     *,
     pr: Any,
@@ -855,40 +849,6 @@ def extract_github_dependencies(
         )
 
     return dependencies
-
-
-# Priority label mapping - maps label to (priority_raw, service_class)
-_PRIORITY_LABELS = {
-    "priority::critical": ("critical", "expedite"),
-    "priority::high": ("high", "fixed_date"),
-    "priority::medium": ("medium", "standard"),
-    "priority::low": ("low", "intangible"),
-    "p0": ("critical", "expedite"),
-    "p1": ("high", "fixed_date"),
-    "p2": ("medium", "standard"),
-    "p3": ("low", "intangible"),
-    "priority-critical": ("critical", "expedite"),
-    "priority-high": ("high", "fixed_date"),
-    "priority-medium": ("medium", "standard"),
-    "priority-low": ("low", "intangible"),
-    "critical": ("critical", "expedite"),
-    "urgent": ("critical", "expedite"),
-    "high-priority": ("high", "fixed_date"),
-    "low-priority": ("low", "intangible"),
-}
-
-
-def _priority_from_labels(labels: Sequence[str]) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extract priority_raw and service_class from GitHub labels.
-
-    Returns (priority_raw, service_class) or (None, None) if no match.
-    """
-    for label in labels:
-        normalized = label.lower().strip()
-        if normalized in _PRIORITY_LABELS:
-            return _PRIORITY_LABELS[normalized]
-    return (None, None)
 
 
 def enrich_work_item_with_priority(

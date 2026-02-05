@@ -5,6 +5,11 @@ available to both compute-time (`work_graph/`) and request-time (API) code even
 when `work_graph` is not installed as a package.
 """
 
-from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
+from dev_health_ops.investment_taxonomy import (
+    SUBCATEGORIES,
+    SUBCATEGORY_TO_THEME,
+    THEMES,
+    theme_of,
+)
 
-__all__ = ["THEMES", "SUBCATEGORIES", "theme_of"]
+__all__ = ["THEMES", "SUBCATEGORIES", "SUBCATEGORY_TO_THEME", "theme_of"]

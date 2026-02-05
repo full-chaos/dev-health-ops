@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, Set
 
-__all__ = ["THEMES", "SUBCATEGORIES", "theme_of"]
+__all__ = ["THEMES", "SUBCATEGORIES", "SUBCATEGORY_TO_THEME", "theme_of"]
 
 THEMES: Set[str] = {
     "feature_delivery",
@@ -37,11 +37,11 @@ SUBCATEGORIES: Set[str] = {
     "risk.vulnerability",
 }
 
-_SUBCATEGORY_TO_THEME: Dict[str, str] = {
+SUBCATEGORY_TO_THEME: Dict[str, str] = {
     subcategory: subcategory.split(".", 1)[0] for subcategory in SUBCATEGORIES
 }
 
 
 def theme_of(subcategory_key: str) -> str:
     """Return the canonical theme for a subcategory key."""
-    return _SUBCATEGORY_TO_THEME.get(subcategory_key, "")
+    return SUBCATEGORY_TO_THEME.get(subcategory_key, "")

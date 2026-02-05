@@ -1,21 +1,39 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
-from dev_health_ops.utils.normalization import clamp as _clamp, normalize_scores
+from dev_health_ops.investment_taxonomy import (
+    SUBCATEGORIES,
+    SUBCATEGORY_TO_THEME,
+    THEMES,
+)
+from dev_health_ops.utils.normalization import (
+    clamp as _clamp,
+    evidence_quality_band,
+    normalize_scores,
+    rollup_subcategories_to_themes as _rollup_subcategories_to_themes,
+    work_unit_id,
+)
+
+__all__ = [
+    "CANONICAL_INVESTMENT_THEMES",
+    "CANONICAL_SUBCATEGORIES",
+    "WORK_ITEM_TYPE_WEIGHTS",
+    "WorkUnitConfig",
+    "compute_subcategory_scores",
+    "merge_subcategory_vectors",
+    "rollup_subcategories_to_themes",
+    "compute_evidence_quality",
+    "evidence_quality_band",
+    "work_unit_id",
+]
 
 logger = logging.getLogger(__name__)
 
 CANONICAL_INVESTMENT_THEMES: Tuple[str, ...] = tuple(sorted(THEMES))
 CANONICAL_SUBCATEGORIES: Tuple[str, ...] = tuple(sorted(SUBCATEGORIES))
-
-SUBCATEGORY_TO_THEME: Dict[str, str] = {
-    subcategory: theme_of(subcategory) for subcategory in CANONICAL_SUBCATEGORIES
-}
 
 WORK_ITEM_TYPE_WEIGHTS: Dict[str, Dict[str, float]] = {
     "story": {"feature_delivery.roadmap": 1.0},
@@ -73,10 +91,6 @@ def _config() -> WorkUnitConfig:
     if _CONFIG is None:
         _CONFIG = WorkUnitConfig()
     return _CONFIG
-
-
-def _sha256_hex(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _normalize_work_item_type(value: Optional[str]) -> str:
@@ -148,13 +162,9 @@ def merge_subcategory_vectors(
 def rollup_subcategories_to_themes(
     subcategories: Dict[str, float],
 ) -> Dict[str, float]:
-    totals = {theme: 0.0 for theme in CANONICAL_INVESTMENT_THEMES}
-    for subcategory, value in subcategories.items():
-        theme = SUBCATEGORY_TO_THEME.get(subcategory)
-        if not theme:
-            continue
-        totals[theme] += float(value)
-    return normalize_scores(totals, CANONICAL_INVESTMENT_THEMES)
+    return _rollup_subcategories_to_themes(
+        subcategories, SUBCATEGORY_TO_THEME, CANONICAL_INVESTMENT_THEMES
+    )
 
 
 def compute_evidence_quality(
@@ -179,18 +189,3 @@ def compute_evidence_quality(
         + weights["contextual_strength"] * contextual_strength
     )
     return _clamp(value / total_weight)
-
-
-def evidence_quality_band(value: float) -> str:
-    if value >= 0.8:
-        return "high"
-    if value >= 0.6:
-        return "moderate"
-    if value >= 0.4:
-        return "low"
-    return "very_low"
-
-
-def work_unit_id(nodes: Iterable[Tuple[str, str]]) -> str:
-    tokens = sorted(f"{node_type}:{node_id}" for node_type, node_id in nodes)
-    return _sha256_hex("|".join(tokens))

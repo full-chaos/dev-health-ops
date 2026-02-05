@@ -11,7 +11,6 @@ from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import filter_cache_key, scope_filter_for_metric, time_window
 
-
 _METRIC_CONFIG = {
     "cycle_time": {
         "label": "Cycle Time",

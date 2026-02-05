@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+
 from ..models.schemas import (
     CollaborationItem,
     CollaborationSection,
@@ -11,6 +12,7 @@ from ..models.schemas import (
     DriverStatement,
     FlowStageItem,
     Freshness,
+    IssueRow,
     MetricBreakdownItem,
     MetricDefinition,
     MetricTimeseriesPoint,
@@ -24,7 +26,6 @@ from ..models.schemas import (
     PersonSummaryResponse,
     PersonSummarySections,
     PullRequestRow,
-    IssueRow,
     SparkPoint,
     SummarySentence,
     WorkMixItem,
@@ -42,8 +43,8 @@ from ..queries.people import (
     fetch_person_pull_requests,
     fetch_person_work_mix,
     resolve_person_identity,
-    search_people as query_people,
 )
+from ..queries.people import search_people as query_people
 from ..utils import (
     build_reverse_alias_map,
     delta_pct,

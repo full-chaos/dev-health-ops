@@ -1,3 +1,0 @@
-[console_scripts]
-dev-health-ops = dev_health_ops.cli:main
-dev-hops = dev_health_ops.cli:main

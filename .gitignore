@@ -17,3 +17,6 @@ demo-data**
 **/.beads/**
 **/site**
 docs/monetization-strategy.md
+*.egg-info/
+build/
+dist/

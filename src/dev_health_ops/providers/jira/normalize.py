@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from __future__ import annotations
-
 import os
 import re
 from datetime import datetime, timezone
@@ -17,33 +15,13 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.identity import IdentityResolver
+from dev_health_ops.providers.normalize_common import (
+    parse_jira_datetime as _parse_datetime,
+)
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 if TYPE_CHECKING:
     from atlassian import JiraChangelogEvent, JiraIssue, JiraSprint, JiraWorklog
-
-
-def _parse_datetime(value: Any) -> Optional[datetime]:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        dt = value
-    else:
-        raw = str(value).strip()
-        if not raw:
-            return None
-        # Jira commonly uses "+0000" offsets (no colon); normalize for fromisoformat.
-        raw = raw.replace("Z", "+00:00")
-        if re.search(r"[+-]\d{4}$", raw):
-            raw = raw[:-2] + ":" + raw[-2:]
-        try:
-            dt = datetime.fromisoformat(raw)
-        except ValueError:
-            return None
-
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _get_field(issue: Any, field_name: str) -> Any:

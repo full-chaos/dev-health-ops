@@ -14,50 +14,14 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.identity import IdentityResolver
-from dev_health_ops.providers.normalize_common import to_utc as _to_utc
+from dev_health_ops.providers.normalize_common import (
+    parse_iso_datetime as _parse_iso,
+    priority_from_labels as _priority_from_labels,
+    to_utc as _to_utc,
+)
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 logger = logging.getLogger(__name__)
-
-# Priority labels -> (priority_raw, service_class)
-_PRIORITY_LABEL_MAP = {
-    "priority::critical": ("critical", "expedite"),
-    "priority::high": ("high", "fixed_date"),
-    "priority::medium": ("medium", "standard"),
-    "priority::low": ("low", "intangible"),
-    "critical": ("critical", "expedite"),
-    "blocker": ("critical", "expedite"),
-    "high": ("high", "fixed_date"),
-    "medium": ("medium", "standard"),
-    "low": ("low", "intangible"),
-    "p0": ("critical", "expedite"),
-    "p1": ("high", "fixed_date"),
-    "p2": ("medium", "standard"),
-    "p3": ("low", "intangible"),
-    "p4": ("low", "intangible"),
-}
-
-
-def _parse_iso(value: Any) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _priority_from_labels(labels: Sequence[str]) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extract priority_raw and service_class from GitLab labels.
-
-    Returns (priority_raw, service_class) or (None, None) if no match.
-    """
-    for label in labels:
-        key = label.lower().strip()
-        if key in _PRIORITY_LABEL_MAP:
-            return _PRIORITY_LABEL_MAP[key]
-    return (None, None)
 
 
 def _get(obj: Any, key: str) -> Any:

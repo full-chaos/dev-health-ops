@@ -1,12 +1,12 @@
 FROM python:3.14-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+  PYTHONUNBUFFERED=1
 
 WORKDIR /build
 
 COPY . .
-RUN apt update && apt install -y build-essential git
+RUN apt update && apt install -y build-essential git wget
 
 ARG SETUPTOOLS_SCM_PRETEND_VERSION
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}

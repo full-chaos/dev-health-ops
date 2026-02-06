@@ -4,9 +4,10 @@ This module provides session factories for both the semantic layer (PostgreSQL)
 and analytics layer (ClickHouse).
 
 Environment Variables:
-    POSTGRES_URI: PostgreSQL connection string for semantic data
+    POSTGRES_URI: PostgreSQL connection string for semantic data (preferred)
+    DATABASE_URI: PostgreSQL connection string (general-purpose alias)
+    DATABASE_URL: PostgreSQL connection string (legacy alias)
     CLICKHOUSE_URI: ClickHouse connection string for analytics data
-    DATABASE_URI: Legacy fallback (defaults to ClickHouse behavior)
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ def get_postgres_uri() -> str | None:
         return _ensure_async_postgres(uri)
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if fallback and "postgres" in fallback.lower():
+    if fallback:
         return _ensure_async_postgres(fallback)
 
     return None
@@ -181,7 +182,7 @@ def _get_sync_postgres_uri() -> str | None:
         return uri
 
     fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if fallback and "postgres" in fallback.lower():
+    if fallback:
         if "asyncpg" in fallback:
             return fallback.replace("+asyncpg", "", 1)
         return fallback

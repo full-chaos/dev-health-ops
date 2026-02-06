@@ -1,5 +1,4 @@
 import asyncio
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -17,6 +16,8 @@ except ImportError as e:
         "Ensure models/git.py defines Base."
     ) from e
 
+from dev_health_ops.db import get_postgres_uri
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -32,11 +33,8 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
-db_url = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+# Use the same PostgreSQL URI resolution as the rest of the app (db.py).
+db_url = get_postgres_uri()
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
 else:
@@ -44,8 +42,8 @@ else:
     url = config.get_main_option("sqlalchemy.url")
     if not url:
         raise ValueError(
-            "Database URL not configured. Set DATABASE_URI environment variable "
-            "or configure sqlalchemy.url in alembic.ini"
+            "PostgreSQL URI not configured. Set POSTGRES_URI or a postgres:// "
+            "DATABASE_URI, or configure sqlalchemy.url in alembic.ini"
         )
 
 

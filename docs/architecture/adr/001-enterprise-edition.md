@@ -303,6 +303,27 @@ See [Licensing Architecture](../licensing.md) for full technical specification.
 
 ---
 
+## Decision 7: SaaS-First Deployment Model
+
+### Context
+As of February 2026, the platform is shifting to a SaaS-first model to accelerate adoption and simplify the user experience.
+
+### Decision
+> **DECIDED**: SaaS is the primary deployment model.
+
+### Rationale
+- **Fastest path to value**: Users can sign up and start seeing insights in minutes without managing infrastructure.
+- **Simplified Billing**: Stripe integration via `license-svc` provides a seamless upgrade path.
+- **Operational Efficiency**: Managed updates and maintenance ensure all users are on the latest version.
+
+### Implementation
+- **Primary**: Managed SaaS with logical isolation via `org_id`.
+- **Secondary**: Self-hosted Enterprise with Ed25519 license keys.
+- **Billing**: Integrated Stripe checkout and portal via `license-svc` (private).
+- **Entitlements**: Real-time tier updates in `dev-health-ops` via `license-svc` webhooks.
+
+---
+
 ## Summary of Decisions
 
 | Decision | Status | Choice |
@@ -313,6 +334,7 @@ See [Licensing Architecture](../licensing.md) for full technical specification.
 | Licensing Model | **DECIDED** | BSL (Business Source License) |
 | Public API | Recommended | Internal for now, document later |
 | Repository Strategy | **DECIDED** | Single repo with runtime feature gating |
+| Deployment Model | **DECIDED** | SaaS-First (Primary), Self-Hosted (Secondary) |
 
 ---
 
@@ -334,3 +356,4 @@ See [Licensing Architecture](../licensing.md) for full technical specification.
 | 2026-02-01 | Added Decision 6: Repository Strategy - DECIDED single repo (GitLab model) |
 | 2026-02-01 | Marked Decision 4: Licensing Model as DECIDED (BSL) |
 | 2026-02-01 | Created docs/architecture/licensing.md with Ed25519 JWT specification |
+| 2026-02-05 | Added Decision 7: SaaS-First Deployment Model - DECIDED SaaS primary |

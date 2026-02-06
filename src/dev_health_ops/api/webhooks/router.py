@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import GitHubWebhookBody, GitLabWebhookBody, JiraWebhookBody
 from .models import (
@@ -28,6 +31,7 @@ from .models import (
     map_gitlab_event,
     map_jira_event,
 )
+from dev_health_ops.db import get_postgres_session
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +264,83 @@ async def jira_webhook(
     )
 
 
+@router.post("/license", response_model=WebhookResponse)
+async def license_webhook(
+    request: Request,
+    session: AsyncSession = Depends(get_postgres_session),
+) -> WebhookResponse:
+    """Handle license/entitlement change notifications from license-svc.
+
+    Called by license-svc after Stripe webhook events that change an org's tier.
+    Updates Organization.tier in the database.
+    """
+    webhook_secret = os.getenv("LICENSE_WEBHOOK_SECRET")
+    if webhook_secret:
+        provided_secret = request.headers.get("x-webhook-secret")
+        if not provided_secret or provided_secret != webhook_secret:
+            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    from .models import LicenseWebhookPayload
+
+    try:
+        payload = LicenseWebhookPayload(**body)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {e}")
+
+    from dev_health_ops.models.licensing import Tier
+
+    tier_map = {
+        "community": Tier.FREE,
+        "free": Tier.FREE,
+        "team": Tier.STARTER,
+        "starter": Tier.STARTER,
+        "enterprise": Tier.ENTERPRISE,
+    }
+    new_tier = tier_map.get(payload.tier.lower(), Tier.FREE)
+
+    from dev_health_ops.models.users import Organization
+    from sqlalchemy import select
+
+    org = None
+    try:
+        org_uuid = uuid.UUID(payload.org_id)
+    except (ValueError, TypeError):
+        org_uuid = None
+
+    if org_uuid:
+        result = await session.execute(
+            select(Organization).where(Organization.id == org_uuid)
+        )
+        org = result.scalar_one_or_none()
+
+    if org:
+        org.tier = new_tier.value
+        await session.flush()
+        logger.info(
+            "Updated org tier: org_id=%s tier=%s action=%s",
+            payload.org_id,
+            payload.tier,
+            payload.action,
+        )
+    else:
+        logger.warning(
+            "License webhook for unknown org: org_id=%s",
+            payload.org_id,
+        )
+
+    event_id = uuid.uuid4()
+    return WebhookResponse(
+        status="accepted",
+        event_id=event_id,
+        message=f"License event '{payload.action}' processed for org {payload.org_id}",
+    )
+
+
 @router.get("/health")
 async def webhooks_health() -> dict:
     """Health check for webhook endpoints.
@@ -280,6 +361,7 @@ async def webhooks_health() -> dict:
     celery_available = False
     try:
         from dev_health_ops.workers.celery_app import celery_app
+
         celery_available = celery_app is not None
 
     except Exception as exc:

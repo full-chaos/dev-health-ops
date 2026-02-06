@@ -84,6 +84,15 @@ class WebhookResponse(BaseModel):
     message: str = Field(default="", description="Status message")
 
 
+class LicenseWebhookPayload(BaseModel):
+    org_id: str
+    tier: str
+    action: str
+    license_id: str | None = None
+    expires_at: str | None = None
+    previous_tier: str | None = None
+
+
 # GitHub-specific models
 
 

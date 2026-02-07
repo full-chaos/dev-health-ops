@@ -258,7 +258,7 @@ This document provides a comprehensive audit of all data connectors (GitHub, Git
 
 ### 3.8 Recommendations
 
-1. **Add Jira Server/DC support** for on-premise deployments
+1. **Add Jira Server/DC support** for on-premises deployments
 2. **Integrate AGG (GraphQL)** from `atlassian/` subproject
 3. **Add webhook support** for real-time updates
 4. **Implement Tempo integration** for time tracking

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Dev Health Enterprise Edition adds authentication, authorization, and compliance features to the open-source core. It is designed with a **SaaS-first** architecture that also supports self-hosted enterprise deployments via offline license keys.
+Dev Health Enterprise Edition adds authentication, authorization, and compliance features to the open-source core. It is designed with a **SaaS-first** architecture: the managed platform is the primary deployment model, providing the fastest path to value with zero infrastructure overhead. Self-hosted enterprise deployments are also supported via offline license keys for organizations requiring data sovereignty or air-gapped environments.
 
 ## Deployment Architecture (SaaS Primary)
 

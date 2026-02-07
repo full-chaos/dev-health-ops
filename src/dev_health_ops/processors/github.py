@@ -29,7 +29,7 @@ from dev_health_ops.processors.fetch_utils import (
 )
 from dev_health_ops.providers.pr_state import normalize_pr_state
 
-_BATCH_COLLECTOR_TYPES = (SyncBatchCollector, AsyncBatchCollector)
+_unused_BATCH_COLLECTOR_TYPES = (SyncBatchCollector, AsyncBatchCollector)
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (

@@ -48,7 +48,7 @@ def _dispatch_webhook_task(event: WebhookEvent) -> None:
     try:
         from dev_health_ops.workers.tasks import process_webhook_event
 
-        process_webhook_event.delay(
+        getattr(process_webhook_event, "delay")(
             provider=event.provider,
             event_type=event.event_type,
             delivery_id=event.delivery_id,
@@ -243,6 +243,7 @@ async def jira_webhook(
         delivery_id=delivery_id,
         org_id=org_id,
         repo_id=project_key,  # Jira projects map to repo concept
+        repo_name=None,
         payload=payload,
     )
 
@@ -292,13 +293,14 @@ async def license_webhook(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {e}")
 
-    from dev_health_ops.models.licensing import Tier
+    from dev_health_ops.models.licensing import OrgLicense, Tier
 
     tier_map = {
         "community": Tier.FREE,
         "free": Tier.FREE,
         "team": Tier.STARTER,
         "starter": Tier.STARTER,
+        "pro": Tier.PRO,
         "enterprise": Tier.ENTERPRISE,
     }
     new_tier = tier_map.get(payload.tier.lower(), Tier.FREE)
@@ -319,7 +321,46 @@ async def license_webhook(
         org = result.scalar_one_or_none()
 
     if org:
-        org.tier = new_tier.value
+        org.tier = str(new_tier.value)
+        await session.flush()
+
+        from datetime import datetime, timezone
+
+        result = await session.execute(
+            select(OrgLicense).where(OrgLicense.org_id == org_uuid)
+        )
+        org_license = result.scalar_one_or_none()
+
+        if org_license is None:
+            org_license = OrgLicense(
+                org_id=org_uuid,
+                tier=str(new_tier.value),
+                license_type="saas",
+            )
+            session.add(org_license)
+        else:
+            org_license.tier = str(new_tier.value)
+
+        if payload.licensed_users is not None:
+            org_license.licensed_users = payload.licensed_users
+        if payload.licensed_repos is not None:
+            org_license.licensed_repos = payload.licensed_repos
+        if payload.customer_id is not None:
+            org_license.customer_id = payload.customer_id
+        if payload.features_override is not None:
+            org_license.features_override = payload.features_override
+        if payload.limits_override is not None:
+            org_license.limits_override = payload.limits_override
+        if payload.expires_at is not None:
+            from dev_health_ops.processors.fetch_utils import safe_parse_datetime
+
+            parsed_expires = safe_parse_datetime(payload.expires_at)
+            if parsed_expires:
+                org_license.expires_at = parsed_expires
+
+        org_license.is_valid = True
+        org_license.last_validated_at = datetime.now(timezone.utc)
+
         await session.flush()
         logger.info(
             "Updated org tier: org_id=%s tier=%s action=%s",

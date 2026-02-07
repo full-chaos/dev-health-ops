@@ -4,7 +4,7 @@
 > **Last Updated**: 2026-02-05  
 > **Related Issues**: [#338](https://github.com/full-chaos/dev-health-ops/issues/338), [#299](https://github.com/full-chaos/dev-health-ops/issues/299)
 
-This document defines step-by-step manual test procedures for validating enterprise features across self-hosted and SaaS deployments.
+This document defines step-by-step manual test procedures for validating enterprise features across SaaS and self-hosted deployments.
 
 ---
 
@@ -27,21 +27,31 @@ This document defines step-by-step manual test procedures for validating enterpr
 
 ### 1.1 Required Environment Variables
 
+#### SaaS (Primary) Configuration
+
 ```bash
-# Core configuration
+# Core SaaS configuration
 export DATABASE_URI="clickhouse://localhost:8123/default"
 export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5432/devhealth"
 export AUTH_SECRET="$(openssl rand -base64 32)"
-
-# License configuration (for enterprise features)
-export LICENSE_PUBLIC_KEY="<base64-encoded-ed25519-public-key>"
-export LICENSE_KEY="<valid-license-key>"  # Generate from license-svc
 
 # SSO test IdP (optional, for SSO tests)
 export SSO_TEST_IDP_URL="https://idp.test.local"
 ```
 
+#### Self-Hosted Testing Configuration
+
+```bash
+# License configuration (for self-hosted enterprise features)
+export LICENSE_PUBLIC_KEY="<base64-encoded-ed25519-public-key>"
+export LICENSE_KEY="<valid-license-key>"  # Generate from license-svc
+```
+
+> **Note**: SaaS deployments manage entitlements via webhook (no license key needed). License keys are for self-hosted testing only.
+
 ### 1.2 Test License Keys
+
+> **SaaS Entitlements**: In SaaS deployments, entitlements are managed via webhook from `license-svc` → `dev-health-ops`. No license key environment variable is needed. The license key generation below is for **self-hosted testing only**.
 
 Generate test licenses for each tier using the `license-svc`:
 
@@ -476,6 +486,8 @@ helm install dev-health fullchaos/dev-health-platform \
 
 ## 10. Deployment-Specific Tests
 
+> **SaaS (Primary)**: Sections 10.1 (Docker Compose) and 10.2 (Kubernetes) cover the primary SaaS deployment paths. Section 10.3 covers self-hosted enterprise deployments.
+
 ### 10.1 Docker Compose
 
 | Step | Action | Expected Result | Pass/Fail |
@@ -545,6 +557,6 @@ helm install dev-health fullchaos/dev-health-platform \
 
 - [Enterprise Overview](../architecture/enterprise-overview.md)
 - [Licensing Architecture](../architecture/licensing.md)
-- [Self-Hosted Quickstart](../self-hosted-quickstart.md)
 - [SSO Setup Guide](./sso-setup.md) (TODO)
 - [ADR-001: Enterprise Edition](../architecture/adr/001-enterprise-edition.md)
+- [Self-Hosted Quickstart](../self-hosted-quickstart.md)

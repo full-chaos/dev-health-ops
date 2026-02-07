@@ -36,6 +36,7 @@ def _make_session(*values):
     session.execute = AsyncMock(side_effect=[_ScalarResult(value) for value in values])
     session.flush = AsyncMock()
     session.add = Mock()
+    session.rollback = AsyncMock()
     return session
 
 
@@ -52,10 +53,12 @@ def client():
         yield test_client
 
 
-def test_license_webhook_creates_org_license(client):
+def test_license_webhook_creates_org_license(client, monkeypatch):
     org_uuid = uuid.uuid4()
     org = _make_org(org_uuid)
     session = _make_session(org, None)
+
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
     async def override_get_session():
         yield session
@@ -75,6 +78,7 @@ def test_license_webhook_creates_org_license(client):
                 "limits_override": {"max_users": 40, "api_rate_limit_per_min": 2500},
                 "expires_at": "2027-01-01T00:00:00Z",
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -94,12 +98,14 @@ def test_license_webhook_creates_org_license(client):
     assert added.last_validated_at is not None
 
 
-def test_license_webhook_updates_existing_org_license(client):
+def test_license_webhook_updates_existing_org_license(client, monkeypatch):
     org_uuid = uuid.uuid4()
     org = _make_org(org_uuid)
     existing = OrgLicense(org_id=org_uuid, tier="starter", license_type="saas")
 
     session = _make_session(org, existing)
+
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
     async def override_get_session():
         yield session
@@ -118,6 +124,7 @@ def test_license_webhook_updates_existing_org_license(client):
                 "features_override": {"audit_log": True},
                 "limits_override": {"api_rate_limit_per_min": None},
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -134,10 +141,12 @@ def test_license_webhook_updates_existing_org_license(client):
     assert existing.last_validated_at is not None
 
 
-def test_license_webhook_partial_payload(client):
+def test_license_webhook_partial_payload(client, monkeypatch):
     org_uuid = uuid.uuid4()
     org = _make_org(org_uuid)
     session = _make_session(org, None)
+
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
     async def override_get_session():
         yield session
@@ -151,6 +160,7 @@ def test_license_webhook_partial_payload(client):
                 "tier": "team",
                 "action": "license_generated",
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
     finally:
         app.dependency_overrides.clear()

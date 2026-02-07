@@ -217,3 +217,66 @@ def test_entitlements_endpoint_org_not_found(client, monkeypatch):
     response = client.get(f"/api/v1/licensing/entitlements/{uuid.uuid4()}")
 
     assert response.status_code == 404
+
+
+def test_license_webhook_requires_secret_configured(client, monkeypatch):
+    """Test that webhook fails with 500 if LICENSE_WEBHOOK_SECRET is not set."""
+    monkeypatch.delenv("LICENSE_WEBHOOK_SECRET", raising=False)
+    
+    response = client.post(
+        "/api/v1/webhooks/license",
+        json={
+            "org_id": str(uuid.uuid4()),
+            "tier": "pro",
+            "action": "license_generated",
+        },
+    )
+    
+    assert response.status_code == 500
+    assert "not configured" in response.json()["detail"]
+
+
+def test_license_webhook_rejects_invalid_secret(client, monkeypatch):
+    """Test that webhook rejects requests with wrong secret."""
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "correct-secret")
+    
+    response = client.post(
+        "/api/v1/webhooks/license",
+        json={
+            "org_id": str(uuid.uuid4()),
+            "tier": "pro",
+            "action": "license_generated",
+        },
+        headers={"x-webhook-secret": "wrong-secret"},
+    )
+    
+    assert response.status_code == 401
+    assert "Invalid webhook secret" in response.json()["detail"]
+
+
+def test_license_webhook_accepts_valid_secret(client, monkeypatch):
+    """Test that webhook accepts requests with correct secret."""
+    org_uuid = uuid.uuid4()
+    org = _make_org(org_uuid)
+    session = _make_session(org, None)
+    
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "correct-secret")
+    
+    async def override_get_session():
+        yield session
+    
+    app.dependency_overrides[get_postgres_session] = override_get_session
+    try:
+        response = client.post(
+            "/api/v1/webhooks/license",
+            json={
+                "org_id": str(org_uuid),
+                "tier": "pro",
+                "action": "license_generated",
+            },
+            headers={"x-webhook-secret": "correct-secret"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    
+    assert response.status_code == 200

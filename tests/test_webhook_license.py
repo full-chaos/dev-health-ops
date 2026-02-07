@@ -36,6 +36,7 @@ def _make_session(*values):
     session.execute = AsyncMock(side_effect=[_ScalarResult(value) for value in values])
     session.flush = AsyncMock()
     session.add = Mock()
+    session.rollback = AsyncMock()
     return session
 
 
@@ -52,10 +53,12 @@ def client():
         yield test_client
 
 
-def test_license_webhook_creates_org_license(client):
+def test_license_webhook_creates_org_license(client, monkeypatch):
     org_uuid = uuid.uuid4()
     org = _make_org(org_uuid)
     session = _make_session(org, None)
+
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
     async def override_get_session():
         yield session
@@ -75,6 +78,7 @@ def test_license_webhook_creates_org_license(client):
                 "limits_override": {"max_users": 40, "api_rate_limit_per_min": 2500},
                 "expires_at": "2027-01-01T00:00:00Z",
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -94,12 +98,14 @@ def test_license_webhook_creates_org_license(client):
     assert added.last_validated_at is not None
 
 
-def test_license_webhook_updates_existing_org_license(client):
+def test_license_webhook_updates_existing_org_license(client, monkeypatch):
     org_uuid = uuid.uuid4()
     org = _make_org(org_uuid)
     existing = OrgLicense(org_id=org_uuid, tier="starter", license_type="saas")
 
     session = _make_session(org, existing)
+
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
     async def override_get_session():
         yield session
@@ -118,6 +124,7 @@ def test_license_webhook_updates_existing_org_license(client):
                 "features_override": {"audit_log": True},
                 "limits_override": {"api_rate_limit_per_min": None},
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -134,10 +141,12 @@ def test_license_webhook_updates_existing_org_license(client):
     assert existing.last_validated_at is not None
 
 
-def test_license_webhook_partial_payload(client):
+def test_license_webhook_partial_payload(client, monkeypatch):
     org_uuid = uuid.uuid4()
     org = _make_org(org_uuid)
     session = _make_session(org, None)
+
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
     async def override_get_session():
         yield session
@@ -151,6 +160,7 @@ def test_license_webhook_partial_payload(client):
                 "tier": "team",
                 "action": "license_generated",
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
     finally:
         app.dependency_overrides.clear()
@@ -217,3 +227,88 @@ def test_entitlements_endpoint_org_not_found(client, monkeypatch):
     response = client.get(f"/api/v1/licensing/entitlements/{uuid.uuid4()}")
 
     assert response.status_code == 404
+
+
+def test_license_webhook_requires_secret_configured(client, monkeypatch):
+    """Test that webhook fails with 500 if LICENSE_WEBHOOK_SECRET is not set."""
+    monkeypatch.delenv("LICENSE_WEBHOOK_SECRET", raising=False)
+    
+    # Even though we expect early failure, we need to provide a session mock
+    # because FastAPI dependency injection evaluates all dependencies
+    session = _make_session()
+    
+    async def override_get_session():
+        yield session
+    
+    app.dependency_overrides[get_postgres_session] = override_get_session
+    try:
+        response = client.post(
+            "/api/v1/webhooks/license",
+            json={
+                "org_id": str(uuid.uuid4()),
+                "tier": "pro",
+                "action": "license_generated",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+    
+    assert response.status_code == 500
+    assert "not configured" in response.json()["detail"]
+
+
+def test_license_webhook_rejects_invalid_secret(client, monkeypatch):
+    """Test that webhook rejects requests with wrong secret."""
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "correct-secret")
+    
+    # Even though we expect early failure, we need to provide a session mock
+    # because FastAPI dependency injection evaluates all dependencies
+    session = _make_session()
+    
+    async def override_get_session():
+        yield session
+    
+    app.dependency_overrides[get_postgres_session] = override_get_session
+    try:
+        response = client.post(
+            "/api/v1/webhooks/license",
+            json={
+                "org_id": str(uuid.uuid4()),
+                "tier": "pro",
+                "action": "license_generated",
+            },
+            headers={"x-webhook-secret": "wrong-secret"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    
+    assert response.status_code == 401
+    assert "Invalid webhook secret" in response.json()["detail"]
+
+
+def test_license_webhook_accepts_valid_secret(client, monkeypatch):
+    """Test that webhook accepts requests with correct secret."""
+    org_uuid = uuid.uuid4()
+    org = _make_org(org_uuid)
+    session = _make_session(org, None)
+    
+    monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "correct-secret")
+    
+    async def override_get_session():
+        yield session
+    
+    app.dependency_overrides[get_postgres_session] = override_get_session
+    try:
+        response = client.post(
+            "/api/v1/webhooks/license",
+            json={
+                "org_id": str(org_uuid),
+                "tier": "pro",
+                "action": "license_generated",
+            },
+            headers={"x-webhook-secret": "correct-secret"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    
+    assert response.status_code == 200

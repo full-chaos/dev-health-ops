@@ -233,14 +233,25 @@ def test_license_webhook_requires_secret_configured(client, monkeypatch):
     """Test that webhook fails with 500 if LICENSE_WEBHOOK_SECRET is not set."""
     monkeypatch.delenv("LICENSE_WEBHOOK_SECRET", raising=False)
     
-    response = client.post(
-        "/api/v1/webhooks/license",
-        json={
-            "org_id": str(uuid.uuid4()),
-            "tier": "pro",
-            "action": "license_generated",
-        },
-    )
+    # Even though we expect early failure, we need to provide a session mock
+    # because FastAPI dependency injection evaluates all dependencies
+    session = _make_session()
+    
+    async def override_get_session():
+        yield session
+    
+    app.dependency_overrides[get_postgres_session] = override_get_session
+    try:
+        response = client.post(
+            "/api/v1/webhooks/license",
+            json={
+                "org_id": str(uuid.uuid4()),
+                "tier": "pro",
+                "action": "license_generated",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
     
     assert response.status_code == 500
     assert "not configured" in response.json()["detail"]
@@ -250,15 +261,26 @@ def test_license_webhook_rejects_invalid_secret(client, monkeypatch):
     """Test that webhook rejects requests with wrong secret."""
     monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "correct-secret")
     
-    response = client.post(
-        "/api/v1/webhooks/license",
-        json={
-            "org_id": str(uuid.uuid4()),
-            "tier": "pro",
-            "action": "license_generated",
-        },
-        headers={"x-webhook-secret": "wrong-secret"},
-    )
+    # Even though we expect early failure, we need to provide a session mock
+    # because FastAPI dependency injection evaluates all dependencies
+    session = _make_session()
+    
+    async def override_get_session():
+        yield session
+    
+    app.dependency_overrides[get_postgres_session] = override_get_session
+    try:
+        response = client.post(
+            "/api/v1/webhooks/license",
+            json={
+                "org_id": str(uuid.uuid4()),
+                "tier": "pro",
+                "action": "license_generated",
+            },
+            headers={"x-webhook-secret": "wrong-secret"},
+        )
+    finally:
+        app.dependency_overrides.clear()
     
     assert response.status_code == 401
     assert "Invalid webhook secret" in response.json()["detail"]

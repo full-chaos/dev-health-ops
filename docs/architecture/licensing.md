@@ -6,7 +6,11 @@
 
 ## Overview
 
-Dev Health uses a **single-repository model** with all code visible under the BSL license. Premium features are gated at runtime by entitlement checks. We support two primary entitlement paths: SaaS subscriptions (primary) and self-hosted license keys (secondary).
+Dev Health uses a **single-repository model** with all code visible under the BSL license. Premium features are gated at runtime by entitlement checks.
+
+**Entitlement paths (in order of priority):**
+1. **SaaS subscriptions (primary)** — Stripe-managed billing with real-time entitlement sync via `license-svc` webhooks. This is the default for most users.
+2. **Self-hosted license keys (secondary)** — Ed25519-signed JWTs for offline validation. Used by organizations requiring data sovereignty or air-gapped environments.
 
 ---
 

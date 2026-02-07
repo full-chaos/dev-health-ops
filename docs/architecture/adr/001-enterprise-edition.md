@@ -317,8 +317,8 @@ As of February 2026, the platform is shifting to a SaaS-first model to accelerat
 - **Operational Efficiency**: Managed updates and maintenance ensure all users are on the latest version.
 
 ### Implementation
-- **Primary**: Managed SaaS with logical isolation via `org_id`.
-- **Secondary**: Self-hosted Enterprise with Ed25519 license keys.
+- **Primary**: Managed SaaS with logical isolation via `org_id`. All onboarding, documentation, and default examples should assume this path.
+- **Secondary**: Self-hosted Enterprise with Ed25519 license keys. Documented as an alternative for data sovereignty / air-gapped requirements.
 - **Billing**: Integrated Stripe checkout and portal via `license-svc` (private).
 - **Entitlements**: Real-time tier updates in `dev-health-ops` via `license-svc` webhooks.
 

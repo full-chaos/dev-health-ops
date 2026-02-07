@@ -21,6 +21,10 @@ from dev_health_ops.utils import (
     BATCH_SIZE,
 )
 from dev_health_ops.providers.pr_state import normalize_pr_state
+from dev_health_ops.processors.fetch_utils import (
+    safe_parse_datetime,
+    AsyncBatchCollector,
+)
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
@@ -92,9 +96,7 @@ def _fetch_gitlab_commits_sync(
             committed_when = None
             if hasattr(commit, "committed_date") and commit.committed_date:
                 try:
-                    committed_when = datetime.fromisoformat(
-                        commit.committed_date.replace("Z", "+00:00")
-                    )
+                    committed_when = safe_parse_datetime(commit.committed_date)
                 except Exception:
                     committed_when = None
 
@@ -112,7 +114,7 @@ def _fetch_gitlab_commits_sync(
                 ),
                 author_email=None,
                 author_when=(
-                    datetime.fromisoformat(commit.authored_date.replace("Z", "+00:00"))
+                    safe_parse_datetime(commit.authored_date)
                     if hasattr(commit, "authored_date")
                     else datetime.now(timezone.utc)
                 ),
@@ -123,7 +125,7 @@ def _fetch_gitlab_commits_sync(
                 ),
                 committer_email=None,
                 committer_when=(
-                    datetime.fromisoformat(commit.committed_date.replace("Z", "+00:00"))
+                    safe_parse_datetime(commit.committed_date)
                     if hasattr(commit, "committed_date")
                     else datetime.now(timezone.utc)
                 ),
@@ -275,18 +277,10 @@ def _sync_gitlab_mrs_to_store(
             if author_data:
                 author_name = author_data.get("username") or author_name
 
-            def _parse_dt(value):
-                if not value:
-                    return None
-                try:
-                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-                except ValueError:
-                    return None
-
-            created_at = _parse_dt(mr.get("created_at"))
-            updated_at = _parse_dt(mr.get("updated_at"))
-            merged_at = _parse_dt(mr.get("merged_at"))
-            closed_at = _parse_dt(mr.get("closed_at"))
+            created_at = safe_parse_datetime(mr.get("created_at"))
+            updated_at = safe_parse_datetime(mr.get("updated_at"))
+            merged_at = safe_parse_datetime(mr.get("merged_at"))
+            closed_at = safe_parse_datetime(mr.get("closed_at"))
             created_at = (
                 created_at or merged_at or closed_at or datetime.now(timezone.utc)
             )
@@ -357,16 +351,6 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
     """Sync helper to fetch GitLab CI/CD pipelines."""
     pipelines = []
 
-    def _coerce_datetime(value):
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-        return None
-
     try:
         list_params = {"per_page": 100, "order_by": "updated_at", "sort": "desc"}
         if max_pipelines > 100:
@@ -382,7 +366,7 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
         if count >= max_pipelines:
             break
 
-        created_at = _coerce_datetime(getattr(pipeline, "created_at", None))
+        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
 
         if created_at is None:
             continue
@@ -392,10 +376,10 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
 
         started_at = created_at
         started_at = (
-            _coerce_datetime(getattr(pipeline, "started_at", None)) or created_at
+            safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
         )
 
-        finished_at = _coerce_datetime(getattr(pipeline, "finished_at", None))
+        finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
 
         pipelines.append(
             CiPipelineRun(
@@ -434,9 +418,8 @@ def _fetch_gitlab_deployments_sync(
         if not created_at_str:
             continue
 
-        try:
-            created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-        except Exception:
+        created_at = safe_parse_datetime(created_at_str)
+        if created_at is None:
             continue
 
         if since is not None and created_at.astimezone(timezone.utc) < since:
@@ -446,12 +429,7 @@ def _fetch_gitlab_deployments_sync(
         finished_at = None
         finished_at_str = dep.get("finished_at")
         if finished_at_str:
-            try:
-                finished_at = datetime.fromisoformat(
-                    finished_at_str.replace("Z", "+00:00")
-                )
-            except Exception:
-                pass
+            finished_at = safe_parse_datetime(finished_at_str)
 
         deployments.append(
             Deployment(
@@ -492,9 +470,8 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
         if not created_at_str:
             continue
 
-        try:
-            created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-        except Exception:
+        created_at = safe_parse_datetime(created_at_str)
+        if created_at is None:
             continue
 
         if since is not None and created_at.astimezone(timezone.utc) < since:
@@ -503,12 +480,7 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
         resolved_at = None
         closed_at_str = issue.get("closed_at")
         if closed_at_str:
-            try:
-                resolved_at = datetime.fromisoformat(
-                    closed_at_str.replace("Z", "+00:00")
-                )
-            except Exception:
-                pass
+            resolved_at = safe_parse_datetime(closed_at_str)
 
         incidents.append(
             Incident(
@@ -679,21 +651,19 @@ async def _backfill_gitlab_missing_data(
             file_paths.append(path)
 
         if needs_files and file_paths:
-            batch: List[GitFile] = []
-            for path in file_paths:
-                batch.append(
-                    GitFile(
-                        repo_id=db_repo.id,
-                        path=path,
-                        executable=False,
-                        contents=None,
+            async with AsyncBatchCollector(
+                store.insert_git_file_data
+            ) as file_collector:
+                for path in file_paths:
+                    file_collector.add(
+                        GitFile(
+                            repo_id=db_repo.id,
+                            path=path,
+                            executable=False,
+                            contents=None,
+                        )
                     )
-                )
-                if len(batch) >= BATCH_SIZE:
-                    await store.insert_git_file_data(batch)
-                    batch.clear()
-            if batch:
-                await store.insert_git_file_data(batch)
+                    await file_collector.maybe_flush()
 
     if needs_commit_stats:
         try:
@@ -705,78 +675,74 @@ async def _backfill_gitlab_missing_data(
                 ref_name=default_branch, per_page=100, all=True
             )
 
-        commit_stats_batch: List[GitCommitStat] = []
-        commit_count = 0
-        for commit in commits or []:
-            if max_commits and commit_count >= max_commits:
-                break
-            commit_count += 1
-            sha = getattr(commit, "id", None) or getattr(commit, "sha", None)
-            if not sha:
-                continue
-            try:
-                stats = connector.get_commit_stats_by_project(
-                    sha=sha,
-                    project_name=project_full_name,
-                )
-                commit_stats_batch.append(
-                    GitCommitStat(
-                        repo_id=db_repo.id,
-                        commit_hash=sha,
-                        file_path=AGGREGATE_STATS_MARKER,
-                        additions=getattr(stats, "additions", 0),
-                        deletions=getattr(stats, "deletions", 0),
-                        old_file_mode="unknown",
-                        new_file_mode="unknown",
+        async with AsyncBatchCollector(
+            store.insert_git_commit_stats
+        ) as stats_collector:
+            commit_count = 0
+            for commit in commits or []:
+                if max_commits and commit_count >= max_commits:
+                    break
+                commit_count += 1
+                sha = getattr(commit, "id", None) or getattr(commit, "sha", None)
+                if not sha:
+                    continue
+                try:
+                    stats = connector.get_commit_stats_by_project(
+                        sha=sha,
+                        project_name=project_full_name,
                     )
-                )
-                if len(commit_stats_batch) >= BATCH_SIZE:
-                    await store.insert_git_commit_stats(commit_stats_batch)
-                    commit_stats_batch.clear()
-            except Exception as e:
-                logging.debug(
-                    f"Failed commit stat fetch for {project_full_name}@{sha}: {e}"
-                )
-
-        if commit_stats_batch:
-            await store.insert_git_commit_stats(commit_stats_batch)
-
-    if needs_blame and file_paths:
-        blame_batch: List[GitBlame] = []
-        for path in file_paths:
-            try:
-                blame_items = connector.rest_client.get_file_blame(
-                    project.id,
-                    path,
-                    default_branch,
-                )
-            except Exception as e:
-                logging.debug(f"Failed blame fetch for {project_full_name}:{path}: {e}")
-                continue
-
-            line_no = 1
-            for item in blame_items or []:
-                commit = item.get("commit", {})
-                for line in item.get("lines", []) or []:
-                    blame_batch.append(
-                        GitBlame(
+                    stats_collector.add(
+                        GitCommitStat(
                             repo_id=db_repo.id,
-                            path=path,
-                            line_no=line_no,
-                            author_email=commit.get("author_email"),
-                            author_name=commit.get("author_name"),
-                            author_when=None,
-                            commit_hash=commit.get("id"),
-                            line=line.rstrip("\n") if isinstance(line, str) else None,
+                            commit_hash=sha,
+                            file_path=AGGREGATE_STATS_MARKER,
+                            additions=getattr(stats, "additions", 0),
+                            deletions=getattr(stats, "deletions", 0),
+                            old_file_mode="unknown",
+                            new_file_mode="unknown",
                         )
                     )
-                    line_no += 1
-                    if len(blame_batch) >= BATCH_SIZE:
-                        await store.insert_blame_data(blame_batch)
-                        blame_batch.clear()
+                    await stats_collector.maybe_flush()
+                except Exception as e:
+                    logging.debug(
+                        f"Failed commit stat fetch for {project_full_name}@{sha}: {e}"
+                    )
 
-        if blame_batch:
-            await store.insert_blame_data(blame_batch)
+    if needs_blame and file_paths:
+        async with AsyncBatchCollector(store.insert_blame_data) as blame_collector:
+            for path in file_paths:
+                try:
+                    blame_items = connector.rest_client.get_file_blame(
+                        project.id,
+                        path,
+                        default_branch,
+                    )
+                except Exception as e:
+                    logging.debug(
+                        f"Failed blame fetch for {project_full_name}:{path}: {e}"
+                    )
+                    continue
+
+                line_no = 1
+                for item in blame_items or []:
+                    commit = item.get("commit", {})
+                    for line in item.get("lines", []) or []:
+                        blame_collector.add(
+                            GitBlame(
+                                repo_id=db_repo.id,
+                                path=path,
+                                line_no=line_no,
+                                author_email=commit.get("author_email"),
+                                author_name=commit.get("author_name"),
+                                author_when=None,
+                                commit_hash=commit.get("id"),
+                                line=line.rstrip("\n")
+                                if isinstance(line, str)
+                                else None,
+                            )
+                        )
+                        line_no += 1
+                        await blame_collector.maybe_flush()
 
 
 async def process_gitlab_project(

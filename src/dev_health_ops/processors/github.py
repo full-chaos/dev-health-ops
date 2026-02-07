@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Any, Tuple, List, Optional
 
@@ -22,7 +21,15 @@ from dev_health_ops.utils import (
     CONNECTORS_AVAILABLE,
     is_skippable,
 )
+from dev_health_ops.processors.fetch_utils import (
+    safe_parse_datetime as _coerce_datetime,
+    extract_retry_after,
+    SyncBatchCollector,
+    AsyncBatchCollector,
+)
 from dev_health_ops.providers.pr_state import normalize_pr_state
+
+_BATCH_COLLECTOR_TYPES = (SyncBatchCollector, AsyncBatchCollector)
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
@@ -239,16 +246,6 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
         if not hasattr(gh_repo, "get_workflows"):
             return runs
 
-    def _coerce_datetime(value):
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            try:
-                return datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError:
-                return None
-        return None
-
     try:
         if hasattr(gh_repo, "get_workflow_runs"):
             raw_runs = []
@@ -396,22 +393,7 @@ def _sync_github_prs_to_store(
         except StopIteration:
             break
         except RateLimitExceededException as e:
-            retry_after = None
-            if hasattr(connector, "_rate_limit_reset_delay_seconds"):
-                try:
-                    retry_after = connector._rate_limit_reset_delay_seconds()
-                except Exception:
-                    retry_after = None
-            if retry_after is None:
-                headers = getattr(e, "headers", None)
-                if isinstance(headers, dict):
-                    headers_ci = {str(k).lower(): v for k, v in headers.items()}
-                    ra = headers_ci.get("retry-after")
-                    if ra is not None:
-                        try:
-                            retry_after = float(ra)
-                        except ValueError:
-                            retry_after = None
+            retry_after = extract_retry_after(e, connector)
             applied = gate.penalize(retry_after)
             logging.info(
                 "GitHub rate limited fetching PRs; backoff %.1fs (%s)",
@@ -420,24 +402,7 @@ def _sync_github_prs_to_store(
             )
             continue
         except Exception as e:
-            headers = getattr(e, "headers", None)
-            retry_after = None
-            if isinstance(headers, dict):
-                # PyGithub header casing varies; treat keys case-insensitively.
-                headers_ci = {str(k).lower(): v for k, v in headers.items()}
-                ra = headers_ci.get("retry-after")
-                if ra:
-                    try:
-                        retry_after = float(ra)
-                    except ValueError:
-                        retry_after = None
-                if retry_after is None:
-                    reset = headers_ci.get("x-ratelimit-reset")
-                    if reset:
-                        try:
-                            retry_after = max(0.0, float(reset) - time.time())
-                        except ValueError:
-                            retry_after = None
+            retry_after = extract_retry_after(e, connector=None)
 
             if retry_after is not None:
                 applied = gate.penalize(retry_after)
@@ -666,21 +631,19 @@ async def _backfill_github_missing_data(
                 file_paths.append(path)
 
             if needs_files and file_paths:
-                batch: List[GitFile] = []
-                for path in file_paths:
-                    batch.append(
-                        GitFile(
-                            repo_id=db_repo.id,
-                            path=path,
-                            executable=False,
-                            contents=None,
+                async with AsyncBatchCollector(
+                    store.insert_git_file_data
+                ) as file_collector:
+                    for path in file_paths:
+                        file_collector.add(
+                            GitFile(
+                                repo_id=db_repo.id,
+                                path=path,
+                                executable=False,
+                                contents=None,
+                            )
                         )
-                    )
-                    if len(batch) >= BATCH_SIZE:
-                        await store.insert_git_file_data(batch)
-                        batch.clear()
-                if batch:
-                    await store.insert_git_file_data(batch)
+                        await file_collector.maybe_flush()
                 logging.info(
                     "Backfilled %d files for %s",
                     len(file_paths),
@@ -698,46 +661,38 @@ async def _backfill_github_missing_data(
                 repo_full_name,
             )
             commits_iter = gh_repo.get_commits()
-            commit_stats_batch: List[GitCommitStat] = []
-            commit_count = 0
-            for commit in commits_iter:
-                if max_commits and commit_count >= max_commits:
-                    break
-                commit_count += 1
-                try:
-                    detailed = gh_repo.get_commit(commit.sha)
-                    for file in getattr(detailed, "files", []) or []:
-                        commit_stats_batch.append(
-                            GitCommitStat(
-                                repo_id=db_repo.id,
-                                commit_hash=commit.sha,
-                                file_path=getattr(
-                                    file, "filename", AGGREGATE_STATS_MARKER
-                                ),
-                                additions=getattr(file, "additions", 0),
-                                deletions=getattr(file, "deletions", 0),
-                                old_file_mode="unknown",
-                                new_file_mode="unknown",
+            async with AsyncBatchCollector(
+                store.insert_git_commit_stats
+            ) as stats_collector:
+                commit_count = 0
+                for commit in commits_iter:
+                    if max_commits and commit_count >= max_commits:
+                        break
+                    commit_count += 1
+                    try:
+                        detailed = gh_repo.get_commit(commit.sha)
+                        for file in getattr(detailed, "files", []) or []:
+                            stats_collector.add(
+                                GitCommitStat(
+                                    repo_id=db_repo.id,
+                                    commit_hash=commit.sha,
+                                    file_path=getattr(
+                                        file, "filename", AGGREGATE_STATS_MARKER
+                                    ),
+                                    additions=getattr(file, "additions", 0),
+                                    deletions=getattr(file, "deletions", 0),
+                                    old_file_mode="unknown",
+                                    new_file_mode="unknown",
+                                )
                             )
+                            await stats_collector.maybe_flush()
+                    except Exception as e:
+                        logging.debug(
+                            "Failed commit stat fetch for %s@%s: %s",
+                            repo_full_name,
+                            commit.sha,
+                            e,
                         )
-                        if len(commit_stats_batch) >= BATCH_SIZE:
-                            await store.insert_git_commit_stats(commit_stats_batch)
-                            logging.debug(
-                                "Stored batch of %d commit stats for %s",
-                                len(commit_stats_batch),
-                                repo_full_name,
-                            )
-                            commit_stats_batch.clear()
-                except Exception as e:
-                    logging.debug(
-                        "Failed commit stat fetch for %s@%s: %s",
-                        repo_full_name,
-                        commit.sha,
-                        e,
-                    )
-
-            if commit_stats_batch:
-                await store.insert_git_commit_stats(commit_stats_batch)
             logging.info(
                 "Backfilled commit stats for %d commits in %s",
                 commit_count,
@@ -757,51 +712,41 @@ async def _backfill_github_missing_data(
                 len(file_paths),
                 repo_full_name,
             )
-            blame_batch: List[GitBlame] = []
-            processed_files = 0
-            for path in file_paths:
-                try:
-                    blame = connector.get_file_blame(
-                        owner=owner,
-                        repo=repo_name,
-                        path=path,
-                        ref=default_branch,
-                    )
-                    processed_files += 1
-                except Exception as e:
-                    logging.debug(
-                        f"Failed blame fetch for {repo_full_name}:{path}: {e}"
-                    )
-                    continue
-
-                for rng in blame.ranges:
-                    for line_no in range(
-                        rng.starting_line,
-                        rng.ending_line + 1,
-                    ):
-                        blame_batch.append(
-                            GitBlame(
-                                repo_id=db_repo.id,
-                                path=path,
-                                line_no=line_no,
-                                author_email=rng.author_email,
-                                author_name=rng.author,
-                                author_when=None,
-                                commit_hash=rng.commit_sha,
-                                line=None,
-                            )
+            async with AsyncBatchCollector(store.insert_blame_data) as blame_collector:
+                processed_files = 0
+                for path in file_paths:
+                    try:
+                        blame = connector.get_file_blame(
+                            owner=owner,
+                            repo=repo_name,
+                            path=path,
+                            ref=default_branch,
                         )
-                        if len(blame_batch) >= BATCH_SIZE:
-                            await store.insert_blame_data(blame_batch)
-                            logging.debug(
-                                "Stored batch of %d blame entries for %s",
-                                len(blame_batch),
-                                repo_full_name,
-                            )
-                            blame_batch.clear()
+                        processed_files += 1
+                    except Exception as e:
+                        logging.debug(
+                            f"Failed blame fetch for {repo_full_name}:{path}: {e}"
+                        )
+                        continue
 
-            if blame_batch:
-                await store.insert_blame_data(blame_batch)
+                    for rng in blame.ranges:
+                        for line_no in range(
+                            rng.starting_line,
+                            rng.ending_line + 1,
+                        ):
+                            blame_collector.add(
+                                GitBlame(
+                                    repo_id=db_repo.id,
+                                    path=path,
+                                    line_no=line_no,
+                                    author_email=rng.author_email,
+                                    author_name=rng.author,
+                                    author_when=None,
+                                    commit_hash=rng.commit_sha,
+                                    line=None,
+                                )
+                            )
+                            await blame_collector.maybe_flush()
             logging.info(
                 "Backfilled blame for %d files in %s",
                 processed_files,

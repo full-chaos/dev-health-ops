@@ -91,6 +91,11 @@ class LicenseWebhookPayload(BaseModel):
     license_id: str | None = None
     expires_at: str | None = None
     previous_tier: str | None = None
+    features_override: dict[str, bool] | None = None
+    limits_override: dict[str, int | float | None] | None = None
+    licensed_users: int | None = None
+    licensed_repos: int | None = None
+    customer_id: str | None = None
 
 
 # GitHub-specific models

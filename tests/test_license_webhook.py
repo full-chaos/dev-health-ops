@@ -23,7 +23,7 @@ class TestLicenseWebhook:
 
     def test_accepts_valid_payload(self, client, monkeypatch):
         """Valid tier change payload is accepted."""
-        monkeypatch.delenv("LICENSE_WEBHOOK_SECRET", raising=False)
+        monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
         response = client.post(
             "/api/v1/webhooks/license",
@@ -34,6 +34,7 @@ class TestLicenseWebhook:
                 "license_id": "lic-abc",
                 "expires_at": "2027-01-01T00:00:00Z",
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
         assert response.status_code == 200
         data = response.json()
@@ -42,7 +43,7 @@ class TestLicenseWebhook:
 
     def test_accepts_minimal_payload(self, client, monkeypatch):
         """Minimal required fields are sufficient."""
-        monkeypatch.delenv("LICENSE_WEBHOOK_SECRET", raising=False)
+        monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
         response = client.post(
             "/api/v1/webhooks/license",
@@ -51,27 +52,29 @@ class TestLicenseWebhook:
                 "tier": "enterprise",
                 "action": "license_upgraded",
             },
+            headers={"x-webhook-secret": "test-secret"},
         )
         assert response.status_code == 200
 
     def test_rejects_invalid_payload(self, client, monkeypatch):
         """Missing required fields return 400."""
-        monkeypatch.delenv("LICENSE_WEBHOOK_SECRET", raising=False)
+        monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
         response = client.post(
             "/api/v1/webhooks/license",
             json={"tier": "team"},  # missing org_id and action
+            headers={"x-webhook-secret": "test-secret"},
         )
         assert response.status_code == 400
 
     def test_rejects_invalid_json(self, client, monkeypatch):
         """Non-JSON body returns 400."""
-        monkeypatch.delenv("LICENSE_WEBHOOK_SECRET", raising=False)
+        monkeypatch.setenv("LICENSE_WEBHOOK_SECRET", "test-secret")
 
         response = client.post(
             "/api/v1/webhooks/license",
             content="not json",
-            headers={"content-type": "application/json"},
+            headers={"content-type": "application/json", "x-webhook-secret": "test-secret"},
         )
         assert response.status_code == 400
 

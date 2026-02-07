@@ -85,6 +85,7 @@ from .graphql.app import create_graphql_app
 from .webhooks import router as webhooks_router
 from .admin import router as admin_router
 from .auth import router as auth_router
+from .licensing import router as licensing_router
 from dev_health_ops.licensing import LicenseManager
 
 HOME_CACHE = create_cache(ttl_seconds=60)
@@ -320,6 +321,7 @@ app.include_router(graphql_app, prefix="/graphql")
 app.include_router(webhooks_router)
 app.include_router(admin_router)
 app.include_router(auth_router)
+app.include_router(licensing_router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)

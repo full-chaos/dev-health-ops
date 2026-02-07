@@ -12,6 +12,7 @@ This ensures webhooks don't timeout during heavy processing.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -48,7 +49,7 @@ def _dispatch_webhook_task(event: WebhookEvent) -> None:
     try:
         from dev_health_ops.workers.tasks import process_webhook_event
 
-        process_webhook_event.delay(
+        getattr(process_webhook_event, "delay")(
             provider=event.provider,
             event_type=event.event_type,
             delivery_id=event.delivery_id,
@@ -243,6 +244,7 @@ async def jira_webhook(
         delivery_id=delivery_id,
         org_id=org_id,
         repo_id=project_key,  # Jira projects map to repo concept
+        repo_name=None,
         payload=payload,
     )
 
@@ -275,10 +277,15 @@ async def license_webhook(
     Updates Organization.tier in the database.
     """
     webhook_secret = os.getenv("LICENSE_WEBHOOK_SECRET")
-    if webhook_secret:
-        provided_secret = request.headers.get("x-webhook-secret")
-        if not provided_secret or provided_secret != webhook_secret:
-            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    if not webhook_secret:
+        raise HTTPException(
+            status_code=500,
+            detail="LICENSE_WEBHOOK_SECRET not configured",
+        )
+    
+    provided_secret = request.headers.get("x-webhook-secret")
+    if not provided_secret or not hmac.compare_digest(provided_secret, webhook_secret):
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
     try:
         body = await request.json()
@@ -292,13 +299,14 @@ async def license_webhook(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {e}")
 
-    from dev_health_ops.models.licensing import Tier
+    from dev_health_ops.models.licensing import OrgLicense, Tier
 
     tier_map = {
         "community": Tier.FREE,
         "free": Tier.FREE,
         "team": Tier.STARTER,
         "starter": Tier.STARTER,
+        "pro": Tier.PRO,
         "enterprise": Tier.ENTERPRISE,
     }
     new_tier = tier_map.get(payload.tier.lower(), Tier.FREE)
@@ -319,14 +327,75 @@ async def license_webhook(
         org = result.scalar_one_or_none()
 
     if org:
-        org.tier = new_tier.value
+        org.tier = str(new_tier.value)
         await session.flush()
-        logger.info(
-            "Updated org tier: org_id=%s tier=%s action=%s",
-            payload.org_id,
-            payload.tier,
-            payload.action,
-        )
+
+        from datetime import datetime, timezone
+        from sqlalchemy.exc import IntegrityError
+
+        # Use a retry loop to handle race conditions on OrgLicense creation
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                result = await session.execute(
+                    select(OrgLicense).where(OrgLicense.org_id == org_uuid)
+                )
+                org_license = result.scalar_one_or_none()
+
+                if org_license is None:
+                    org_license = OrgLicense(
+                        org_id=org_uuid,
+                        tier=str(new_tier.value),
+                        license_type="saas",
+                    )
+                    session.add(org_license)
+                else:
+                    org_license.tier = str(new_tier.value)
+
+                if payload.licensed_users is not None:
+                    org_license.licensed_users = payload.licensed_users
+                if payload.licensed_repos is not None:
+                    org_license.licensed_repos = payload.licensed_repos
+                if payload.customer_id is not None:
+                    org_license.customer_id = payload.customer_id
+                if payload.features_override is not None:
+                    org_license.features_override = payload.features_override
+                if payload.limits_override is not None:
+                    org_license.limits_override = payload.limits_override
+                if payload.expires_at is not None:
+                    from dev_health_ops.processors.fetch_utils import safe_parse_datetime
+
+                    parsed_expires = safe_parse_datetime(payload.expires_at)
+                    if parsed_expires:
+                        org_license.expires_at = parsed_expires
+
+                org_license.is_valid = True
+                org_license.last_validated_at = datetime.now(timezone.utc)
+
+                await session.flush()
+                logger.info(
+                    "Updated org tier: org_id=%s tier=%s action=%s",
+                    payload.org_id,
+                    payload.tier,
+                    payload.action,
+                )
+                break  # Success, exit retry loop
+            except IntegrityError as e:
+                if attempt < max_retries - 1:
+                    # Rollback and retry - another webhook likely created the license
+                    await session.rollback()
+                    logger.warning(
+                        "OrgLicense creation conflict, retrying: org_id=%s attempt=%d",
+                        payload.org_id,
+                        attempt + 1,
+                    )
+                else:
+                    # Final attempt failed, re-raise
+                    logger.error(
+                        "Failed to create/update OrgLicense after retries: org_id=%s",
+                        payload.org_id,
+                    )
+                    raise
     else:
         logger.warning(
             "License webhook for unknown org: org_id=%s",

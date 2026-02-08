@@ -10,26 +10,27 @@ Dev Health Enterprise Edition adds authentication, authorization, and compliance
 
 ## Deployment Architecture (SaaS Primary)
 
-The primary deployment model is our managed SaaS platform, which consists of three main components:
+The primary deployment model is our managed SaaS platform, which consists of two main components:
 
 1. **dev-health-web (PUBLIC)**: The Next.js frontend that provides the user interface, including billing settings and upgrade prompts.
-2. **dev-health-ops (PUBLIC)**: The FastAPI backend that handles data collection, analytics, and feature gating.
-3. **license-svc (PRIVATE)**: A private service that manages Stripe integration, subscription lifecycles, and license generation.
+2. **dev-health-ops (PUBLIC)**: The FastAPI backend that handles data collection, analytics, feature gating, Stripe billing integration, and Ed25519 license signing.
 
 ### SaaS Entitlement Flow
 
 ```
-┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-│    Stripe    │─────▶│  license-svc │─────▶│dev-health-ops│
-└──────────────┘      └──────────────┘      └──────────────┘
-       │                     │                     │
-1. Subscription       2. Process event      3. Update tier
-   event (webhook)       & notify ops          & gate features
+┌──────────────┐      ┌──────────────┐
+│    Stripe    │─────▶│dev-health-ops│
+└──────────────┘      └──────────────┘
+       │                     │
+1. Subscription       2. Process event,
+   event (webhook)       sign JWT license,
+   POST /api/v1/         update org tier,
+   billing/webhooks/     gate features
+   stripe
 ```
 
 1. **Stripe**: Handles payments and subscription state.
-2. **license-svc**: Receives Stripe webhooks, manages entitlements, and notifies `dev-health-ops` of tier changes.
-3. **dev-health-ops**: Updates the `Organization.tier` in the database and gates features in real-time using the `@require_feature` decorator.
+2. **dev-health-ops**: Receives Stripe webhooks directly, processes subscription events, signs Ed25519 JWT licenses, updates `Organization.tier`, and gates features in real-time using the `@require_feature` decorator.
 
 ---
 
@@ -58,9 +59,8 @@ For self-hosted deployments, entitlements are managed via an offline license key
 
 | Repository | Visibility | Responsibility |
 |------------|------------|----------------|
-| **dev-health-ops** | PUBLIC | Open-source analytics platform, feature gating via `@require_feature`, license webhook receiver. |
-| **dev-health-web** | PUBLIC | Frontend UI, billing settings, `UpgradeGate` component, Stripe checkout redirects. |
-| **license-svc** | PRIVATE | Stripe integration, license generation, entitlements API, billing portal management. |
+| **dev-health-ops** | PUBLIC | Open-source analytics platform, feature gating via `@require_feature`, Stripe billing integration, Ed25519 license signing, entitlements API. |
+| **dev-health-web** | PUBLIC | Frontend UI, billing settings, `UpgradeGate` component, Stripe checkout redirects (via ops billing API). |
 
 ---
 

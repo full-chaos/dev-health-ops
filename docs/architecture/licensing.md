@@ -9,7 +9,7 @@
 Dev Health uses a **single-repository model** with all code visible under the BSL license. Premium features are gated at runtime by entitlement checks.
 
 **Entitlement paths (in order of priority):**
-1. **SaaS subscriptions (primary)** — Stripe-managed billing with real-time entitlement sync via `license-svc` webhooks. This is the default for most users.
+1. **SaaS subscriptions (primary)** — Stripe-managed billing with real-time entitlement sync via webhooks directly to `dev-health-ops`. This is the default for most users.
 2. **Self-hosted license keys (secondary)** — Ed25519-signed JWTs for offline validation. Used by organizations requiring data sovereignty or air-gapped environments.
 
 ---
@@ -21,19 +21,22 @@ In the SaaS model, entitlements are managed dynamically through our billing inte
 ### How It Works
 
 1. **Subscription**: Users subscribe to a tier (Team or Enterprise) via Stripe through the `dev-health-web` UI.
-2. **Lifecycle Management**: `license-svc` (private) manages the Stripe subscription lifecycle.
-3. **Sync**: When a subscription changes, `license-svc` notifies `dev-health-ops` via a secure webhook.
-4. **Enforcement**: `dev-health-ops` updates the `Organization.tier` in the database. Features are gated in real-time based on this tier.
+2. **Checkout**: `dev-health-web` calls the `dev-health-ops` billing API to create a Stripe Checkout Session.
+3. **Webhook**: When a subscription changes, Stripe sends a webhook directly to `dev-health-ops` at `/api/v1/billing/webhooks/stripe`.
+4. **Enforcement**: `dev-health-ops` processes the event, signs an Ed25519 JWT license, updates `Organization.tier`, and gates features in real-time.
 
 ### SaaS Entitlement Flow
 
 ```
-┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-│    Stripe    │─────▶│  license-svc │─────▶│dev-health-ops│
-└──────────────┘      └──────────────┘      └──────────────┘
-       │                     │                     │
-1. Subscription       2. Process event      3. Update tier
-   event (webhook)       & notify ops          & gate features
+┌──────────────┐      ┌──────────────┐
+│    Stripe    │─────▶│dev-health-ops│
+└──────────────┘      └──────────────┘
+       │                     │
+1. Subscription       2. Process event,
+   event (webhook)       sign JWT license,
+   POST /api/v1/         update org tier,
+   billing/webhooks/     gate features
+   stripe
 ```
 
 ---

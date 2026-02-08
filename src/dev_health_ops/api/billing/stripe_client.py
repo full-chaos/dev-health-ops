@@ -51,18 +51,16 @@ def get_private_key() -> str:
     return key
 
 
-_PRICE_TIER_MAP: dict[str, LicenseTier] | None = None
-
-
 def _build_price_tier_map() -> dict[str, LicenseTier]:
     """Build a mapping from Stripe price ID to LicenseTier.
 
     Reads ``STRIPE_PRICE_ID_TEAM`` and ``STRIPE_PRICE_ID_ENTERPRISE``
     from the environment.  Missing values are silently skipped.
+    Caches result on the function object after first build.
     """
-    global _PRICE_TIER_MAP
-    if _PRICE_TIER_MAP is not None:
-        return _PRICE_TIER_MAP
+    cache = getattr(_build_price_tier_map, "_cache", None)
+    if cache is not None:
+        return cache
 
     mapping: dict[str, LicenseTier] = {}
     team_price = os.getenv("STRIPE_PRICE_ID_TEAM")
@@ -73,7 +71,7 @@ def _build_price_tier_map() -> dict[str, LicenseTier]:
     if enterprise_price:
         mapping[enterprise_price] = LicenseTier.ENTERPRISE
 
-    _PRICE_TIER_MAP = mapping
+    _build_price_tier_map._cache = mapping  # type: ignore[attr-defined]
     return mapping
 
 
@@ -117,5 +115,4 @@ def get_tier_price_id(tier: LicenseTier) -> str | None:
 
 def reset_price_tier_map() -> None:
     """Reset the cached price-to-tier mapping (for testing)."""
-    global _PRICE_TIER_MAP
-    _PRICE_TIER_MAP = None
+    _build_price_tier_map._cache = None  # type: ignore[attr-defined]

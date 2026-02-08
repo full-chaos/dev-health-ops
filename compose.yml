@@ -82,6 +82,11 @@ services:
       DATABASE_URI: "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
       CLICKHOUSE_URI: "clickhouse://ch:ch@clickhouse:8123/default"
       REDIS_URL: "redis://redis:6379/1"
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
+      STRIPE_PRICE_ID_ENTERPRISE: ${STRIPE_PRICE_ID_ENTERPRISE:-}
+      LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

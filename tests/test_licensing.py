@@ -1001,6 +1001,87 @@ class TestSignPayload:
         assert result.payload.tier == LicenseTier.ENTERPRISE
 
 
+class TestTestKeypairAndGenerateTestLicense:
+    """Tests for the deterministic TEST_KEYPAIR and generate_test_license() helper."""
+
+    def test_test_keypair_is_deterministic(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR as kp1
+        from dev_health_ops.licensing.generator import TEST_KEYPAIR as kp2
+
+        assert kp1.public_key == kp2.public_key
+        assert kp1.private_key == kp2.private_key
+
+    def test_test_keypair_valid_base64(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR
+
+        pub_bytes = base64.b64decode(TEST_KEYPAIR.public_key)
+        priv_bytes = base64.b64decode(TEST_KEYPAIR.private_key)
+        assert len(pub_bytes) == 32
+        assert len(priv_bytes) == 32
+
+    def test_test_keypair_is_keypair_dataclass(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR
+
+        assert isinstance(TEST_KEYPAIR, KeyPair)
+
+    def test_generate_test_license_round_trip(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        license_str = generate_test_license()
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload is not None
+        assert result.payload.sub == "default-org"
+        assert result.payload.tier == LicenseTier.ENTERPRISE
+        assert result.payload.org_name == "Default Organization"
+        assert result.payload.iss == "fullchaos.studio"
+
+    def test_generate_test_license_custom_org(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        license_str = generate_test_license(org_id="custom-org", org_name="Custom Org")
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.sub == "custom-org"
+        assert result.payload.org_name == "Custom Org"
+
+    def test_generate_test_license_custom_tier(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        license_str = generate_test_license(tier=LicenseTier.TEAM)
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.tier == LicenseTier.TEAM
+
+    def test_generate_test_license_custom_duration(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        now = int(time.time())
+        license_str = generate_test_license(duration_days=30, issued_at=now)
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.iat == now
+        assert result.payload.exp == now + 30 * 86400
+
+    def test_generate_test_license_default_duration_10_years(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        now = int(time.time())
+        license_str = generate_test_license(issued_at=now)
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.payload.exp == now + 3650 * 86400
+
+
 class TestLicensesCliCommands:
     def test_keygen_returns_keypair(self, capsys):
         from dev_health_ops.api.admin.cli import licenses_keygen_cmd

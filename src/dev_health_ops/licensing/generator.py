@@ -31,6 +31,19 @@ class KeyPair:
     private_key: str
 
 
+_TEST_SEED = b"\x00" * 32
+_test_signing_key = SigningKey(_TEST_SEED)
+
+TEST_KEYPAIR = KeyPair(
+    public_key=base64.b64encode(_test_signing_key.verify_key.encode()).decode(),
+    private_key=base64.b64encode(_test_signing_key.encode()).decode(),
+)
+"""Deterministic Ed25519 key pair (zero seed) for fixtures, dev, and CI.
+**Never use in production.**"""
+
+del _test_signing_key
+
+
 def generate_keypair() -> KeyPair:
     """Generate a new Ed25519 key pair."""
     signing_key = SigningKey.generate()
@@ -103,3 +116,25 @@ def sign_payload(private_key_b64: str, payload: LicensePayload) -> str:
     signature_b64 = base64.b64encode(signed.signature).decode()
 
     return f"{payload_b64}.{signature_b64}"
+
+
+def generate_test_license(
+    *,
+    org_id: str = "default-org",
+    tier: LicenseTier | str = LicenseTier.ENTERPRISE,
+    duration_days: int = 3650,
+    org_name: str = "Default Organization",
+    issued_at: int | None = None,
+) -> str:
+    """Create a signed license using :data:`TEST_KEYPAIR`.
+
+    Returns a ready-to-use license string for dev/test environments.
+    """
+    return sign_license(
+        TEST_KEYPAIR.private_key,
+        org_id=org_id,
+        tier=tier,
+        duration_days=duration_days,
+        org_name=org_name,
+        issued_at=issued_at,
+    )

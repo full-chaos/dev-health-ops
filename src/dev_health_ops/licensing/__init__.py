@@ -14,7 +14,9 @@ from dev_health_ops.licensing.validator import (
 )
 from dev_health_ops.licensing.generator import (
     KeyPair,
+    TEST_KEYPAIR,
     generate_keypair,
+    generate_test_license,
     sign_license,
     sign_payload,
 )
@@ -46,7 +48,9 @@ __all__ = [
     "LicenseSignatureError",
     # Generator
     "KeyPair",
+    "TEST_KEYPAIR",
     "generate_keypair",
+    "generate_test_license",
     "sign_license",
     "sign_payload",
     # Gating

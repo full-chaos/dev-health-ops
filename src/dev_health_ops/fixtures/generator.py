@@ -1554,10 +1554,12 @@ class SyntheticDataGenerator:
     ) -> Dict[str, Any]:
         import bcrypt
         from dev_health_ops.models.users import User, Organization, Membership
+        from dev_health_ops.models.licensing import OrgLicense, Tier
 
         users = []
         orgs = []
         memberships = []
+        licenses = []
 
         password_hash = bcrypt.hashpw(
             default_password.encode("utf-8"), bcrypt.gensalt()
@@ -1600,6 +1602,18 @@ class SyntheticDataGenerator:
                 )
             )
 
+            licenses.append(
+                OrgLicense(
+                    org_id=admin_org.id,
+                    tier=Tier.ENTERPRISE.value,
+                    license_type="saas",
+                    licensed_users=None,
+                    licensed_repos=None,
+                    issued_at=datetime.now(timezone.utc),
+                    expires_at=datetime.now(timezone.utc) + timedelta(days=365),
+                )
+            )
+
         default_org_id = None
         if orgs:
             default_org_id = orgs[0].id
@@ -1635,5 +1649,6 @@ class SyntheticDataGenerator:
             "users": users,
             "organizations": orgs,
             "memberships": memberships,
+            "licenses": licenses,
             "default_password": default_password,
         }

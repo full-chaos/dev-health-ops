@@ -6,7 +6,6 @@ Output format: ``base64(payload_json).base64(signature)``
 from __future__ import annotations
 
 import base64
-import json
 import time
 from dataclasses import dataclass
 from uuid import uuid4

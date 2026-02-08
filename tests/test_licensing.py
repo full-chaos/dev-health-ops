@@ -854,7 +854,7 @@ class TestSignLicense:
         assert result.payload.iss == "fullchaos.studio"
 
     def test_all_tiers(self, keypair: KeyPair):
-        for tier in LicenseTier:
+        for tier in list(LicenseTier):
             license_str = sign_license(keypair.private_key, org_id="org-1", tier=tier)
             validator = LicenseValidator(keypair.public_key)
             result = validator.validate(license_str)

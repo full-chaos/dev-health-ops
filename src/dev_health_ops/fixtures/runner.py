@@ -122,11 +122,15 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 for membership in user_data["memberships"]:
                     await session.merge(membership)
                 await session.commit()
+                for org_license in user_data.get("licenses", []):
+                    await session.merge(org_license)
+                await session.commit()
             logging.info(
-                "Inserted %d users, %d orgs, %d memberships.",
+                "Inserted %d users, %d orgs, %d memberships, %d licenses.",
                 len(user_data["users"]),
                 len(user_data["organizations"]),
                 len(user_data["memberships"]),
+                len(user_data.get("licenses", [])),
             )
 
         allow_parallel_inserts = not isinstance(store, SQLAlchemyStore)

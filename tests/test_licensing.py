@@ -1,3 +1,4 @@
+import argparse
 import base64
 import json
 import time
@@ -6,10 +7,20 @@ import pytest
 from nacl.signing import SigningKey
 
 from dev_health_ops.licensing import (
+    KeyPair,
     LicensePayload,
     LicenseTier,
     LicenseValidator,
     LicenseValidationError,
+    generate_keypair,
+    sign_license,
+    sign_payload,
+)
+from dev_health_ops.licensing.types import (
+    DEFAULT_FEATURES,
+    DEFAULT_LIMITS,
+    GRACE_DAYS,
+    LicenseLimits,
 )
 
 
@@ -803,3 +814,329 @@ class TestLicenseAuditIntegration:
 
         assert result is False
         assert not any("limit_exceeded" in record.message for record in caplog.records)
+
+
+class TestGenerateKeypair:
+    def test_returns_keypair_dataclass(self):
+        kp = generate_keypair()
+        assert isinstance(kp, KeyPair)
+        assert kp.public_key
+        assert kp.private_key
+
+    def test_keys_are_valid_base64(self):
+        kp = generate_keypair()
+        pub_bytes = base64.b64decode(kp.public_key)
+        priv_bytes = base64.b64decode(kp.private_key)
+        assert len(pub_bytes) == 32
+        assert len(priv_bytes) == 32
+
+    def test_different_keys_each_call(self):
+        kp1 = generate_keypair()
+        kp2 = generate_keypair()
+        assert kp1.public_key != kp2.public_key
+        assert kp1.private_key != kp2.private_key
+
+
+class TestSignLicense:
+    @pytest.fixture
+    def keypair(self) -> KeyPair:
+        return generate_keypair()
+
+    def test_round_trip_with_validator(self, keypair: KeyPair):
+        license_str = sign_license(keypair.private_key, org_id="org-123", tier="team")
+        validator = LicenseValidator(keypair.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload is not None
+        assert result.payload.sub == "org-123"
+        assert result.payload.tier == LicenseTier.TEAM
+        assert result.payload.iss == "fullchaos.studio"
+
+    def test_all_tiers(self, keypair: KeyPair):
+        for tier in list(LicenseTier):
+            license_str = sign_license(keypair.private_key, org_id="org-1", tier=tier)
+            validator = LicenseValidator(keypair.public_key)
+            result = validator.validate(license_str)
+
+            assert result.valid is True
+            assert result.payload.tier == tier
+            assert result.payload.features == DEFAULT_FEATURES[tier]
+            assert result.payload.limits == DEFAULT_LIMITS[tier]
+            assert result.payload.grace_days == GRACE_DAYS[tier]
+
+    def test_tier_string_normalization(self, keypair: KeyPair):
+        license_str = sign_license(
+            keypair.private_key, org_id="org-1", tier="ENTERPRISE"
+        )
+        validator = LicenseValidator(keypair.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.tier == LicenseTier.ENTERPRISE
+
+    def test_invalid_tier(self, keypair: KeyPair):
+        with pytest.raises(ValueError, match="Invalid tier"):
+            sign_license(keypair.private_key, org_id="org-1", tier="platinum")
+
+    def test_invalid_duration(self, keypair: KeyPair):
+        with pytest.raises(ValueError, match="duration_days must be positive"):
+            sign_license(
+                keypair.private_key,
+                org_id="org-1",
+                tier="team",
+                duration_days=0,
+            )
+
+    def test_invalid_private_key(self):
+        with pytest.raises(ValueError, match="Invalid private key"):
+            sign_license("not-a-key", org_id="org-1", tier="team")
+
+    def test_custom_features_and_limits(self, keypair: KeyPair):
+        custom_features = {"basic_analytics": True, "sso": True}
+        custom_limits = LicenseLimits(users=100, repos=50, api_rate=1000)
+
+        license_str = sign_license(
+            keypair.private_key,
+            org_id="org-1",
+            tier="team",
+            features=custom_features,
+            limits=custom_limits,
+            grace_days=7,
+        )
+        validator = LicenseValidator(keypair.public_key)
+        result = validator.validate(license_str)
+
+        assert result.payload.features == custom_features
+        assert result.payload.limits == custom_limits
+        assert result.payload.grace_days == 7
+
+    def test_optional_fields(self, keypair: KeyPair):
+        license_str = sign_license(
+            keypair.private_key,
+            org_id="org-1",
+            tier="enterprise",
+            org_name="Acme Corp",
+            contact_email="billing@acme.com",
+        )
+        validator = LicenseValidator(keypair.public_key)
+        result = validator.validate(license_str)
+
+        assert result.payload.org_name == "Acme Corp"
+        assert result.payload.contact_email == "billing@acme.com"
+        assert result.payload.license_id is not None
+
+    def test_explicit_license_id(self, keypair: KeyPair):
+        license_str = sign_license(
+            keypair.private_key,
+            org_id="org-1",
+            tier="team",
+            license_id="custom-id-42",
+        )
+        validator = LicenseValidator(keypair.public_key)
+        result = validator.validate(license_str)
+
+        assert result.payload.license_id == "custom-id-42"
+
+    def test_duration_days_sets_expiry(self, keypair: KeyPair):
+        now = int(time.time())
+        license_str = sign_license(
+            keypair.private_key,
+            org_id="org-1",
+            tier="team",
+            duration_days=30,
+            issued_at=now,
+        )
+        validator = LicenseValidator(keypair.public_key)
+        result = validator.validate(license_str)
+
+        assert result.payload.iat == now
+        assert result.payload.exp == now + 30 * 86400
+
+    def test_tampered_license_rejected(self, keypair: KeyPair):
+        license_str = sign_license(keypair.private_key, org_id="org-1", tier="team")
+        payload_b64, signature_b64 = license_str.split(".")
+        payload_bytes = base64.b64decode(payload_b64)
+        payload_dict = json.loads(payload_bytes)
+        payload_dict["tier"] = "enterprise"
+        tampered_payload = base64.b64encode(json.dumps(payload_dict).encode()).decode()
+        tampered_license = f"{tampered_payload}.{signature_b64}"
+
+        validator = LicenseValidator(keypair.public_key)
+        result = validator.validate(tampered_license)
+        assert result.valid is False
+        assert "Invalid signature" in result.error
+
+    def test_wrong_key_rejected(self):
+        kp1 = generate_keypair()
+        kp2 = generate_keypair()
+        license_str = sign_license(kp1.private_key, org_id="org-1", tier="team")
+        validator = LicenseValidator(kp2.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is False
+        assert "Invalid signature" in result.error
+
+
+class TestSignPayload:
+    def test_sign_payload_round_trip(self):
+        kp = generate_keypair()
+        now = int(time.time())
+        payload = LicensePayload(
+            iss="fullchaos.studio",
+            sub="custom-org",
+            iat=now,
+            exp=now + 86400,
+            tier=LicenseTier.ENTERPRISE,
+            features=DEFAULT_FEATURES[LicenseTier.ENTERPRISE],
+            limits=DEFAULT_LIMITS[LicenseTier.ENTERPRISE],
+            grace_days=30,
+        )
+        license_str = sign_payload(kp.private_key, payload)
+        validator = LicenseValidator(kp.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.sub == "custom-org"
+        assert result.payload.tier == LicenseTier.ENTERPRISE
+
+
+class TestTestKeypairAndGenerateTestLicense:
+    """Tests for the deterministic TEST_KEYPAIR and generate_test_license() helper."""
+
+    def test_test_keypair_is_deterministic(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR as kp1
+        from dev_health_ops.licensing.generator import TEST_KEYPAIR as kp2
+
+        assert kp1.public_key == kp2.public_key
+        assert kp1.private_key == kp2.private_key
+
+    def test_test_keypair_valid_base64(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR
+
+        pub_bytes = base64.b64decode(TEST_KEYPAIR.public_key)
+        priv_bytes = base64.b64decode(TEST_KEYPAIR.private_key)
+        assert len(pub_bytes) == 32
+        assert len(priv_bytes) == 32
+
+    def test_test_keypair_is_keypair_dataclass(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR
+
+        assert isinstance(TEST_KEYPAIR, KeyPair)
+
+    def test_generate_test_license_round_trip(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        license_str = generate_test_license()
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload is not None
+        assert result.payload.sub == "default-org"
+        assert result.payload.tier == LicenseTier.ENTERPRISE
+        assert result.payload.org_name == "Default Organization"
+        assert result.payload.iss == "fullchaos.studio"
+
+    def test_generate_test_license_custom_org(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        license_str = generate_test_license(org_id="custom-org", org_name="Custom Org")
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.sub == "custom-org"
+        assert result.payload.org_name == "Custom Org"
+
+    def test_generate_test_license_custom_tier(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        license_str = generate_test_license(tier=LicenseTier.TEAM)
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.tier == LicenseTier.TEAM
+
+    def test_generate_test_license_custom_duration(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        now = int(time.time())
+        license_str = generate_test_license(duration_days=30, issued_at=now)
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.iat == now
+        assert result.payload.exp == now + 30 * 86400
+
+    def test_generate_test_license_default_duration_10_years(self):
+        from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
+
+        now = int(time.time())
+        license_str = generate_test_license(issued_at=now)
+        validator = LicenseValidator(TEST_KEYPAIR.public_key)
+        result = validator.validate(license_str)
+
+        assert result.payload.exp == now + 3650 * 86400
+
+
+class TestLicensesCliCommands:
+    def test_keygen_returns_keypair(self, capsys):
+        from dev_health_ops.api.admin.cli import licenses_keygen_cmd
+
+        ns = argparse.Namespace()
+        ret = licenses_keygen_cmd(ns)
+        assert ret == 0
+
+        output = capsys.readouterr().out
+        assert "PUBLIC_KEY=" in output
+        assert "LICENSE_PRIVATE_KEY=" in output
+
+        lines = output.strip().split("\n")
+        public_key = lines[0].split("=", 1)[1]
+        private_key = lines[1].split("=", 1)[1]
+
+        assert len(base64.b64decode(public_key)) == 32
+        assert len(base64.b64decode(private_key)) == 32
+
+    def test_create_requires_private_key(self, monkeypatch, capsys):
+        from dev_health_ops.api.admin.cli import licenses_create_cmd
+
+        monkeypatch.delenv("LICENSE_PRIVATE_KEY", raising=False)
+        ns = argparse.Namespace(
+            org_id="org-1",
+            tier="team",
+            duration_days=365,
+            org_name=None,
+            contact_email=None,
+        )
+        ret = licenses_create_cmd(ns)
+        assert ret == 1
+        assert "LICENSE_PRIVATE_KEY" in capsys.readouterr().out
+
+    def test_create_produces_valid_license(self, monkeypatch, capsys):
+        from dev_health_ops.api.admin.cli import licenses_create_cmd
+
+        kp = generate_keypair()
+        monkeypatch.setenv("LICENSE_PRIVATE_KEY", kp.private_key)
+
+        ns = argparse.Namespace(
+            org_id="org-42",
+            tier="enterprise",
+            duration_days=90,
+            org_name="Test Corp",
+            contact_email="test@test.com",
+        )
+        ret = licenses_create_cmd(ns)
+        assert ret == 0
+
+        license_str = capsys.readouterr().out.strip()
+        validator = LicenseValidator(kp.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.sub == "org-42"
+        assert result.payload.tier == LicenseTier.ENTERPRISE
+        assert result.payload.org_name == "Test Corp"

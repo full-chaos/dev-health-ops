@@ -122,3 +122,40 @@ def test_repo_team_assignments_distribution():
 
     multi_owned = sum(1 for count in owned_by_team.values() if count >= 2)
     assert multi_owned >= min(3, len(owned_by_team))
+
+
+@pytest.mark.asyncio
+async def test_fixtures_generation_initializes_license_manager(tmp_path):
+    from dev_health_ops.licensing import LicenseManager, LicenseTier
+    from dev_health_ops.licensing.gating import LicenseAuditLogger
+
+    LicenseManager.reset()
+    LicenseAuditLogger.reset()
+
+    db_file = tmp_path / "test_license.db"
+    db_uri = f"sqlite:///{db_file}"
+
+    ns = argparse.Namespace(
+        sink=db_uri,
+        db_type="sqlite",
+        repo_name="test/license-check",
+        repo_count=1,
+        days=1,
+        commits_per_day=1,
+        pr_count=1,
+        seed=99,
+        provider="synthetic",
+        with_work_graph=False,
+        with_metrics=False,
+        team_count=1,
+    )
+
+    result = await run_fixtures_generation(ns)
+    assert result == 0
+
+    manager = LicenseManager.get_instance()
+    assert manager.is_licensed is True
+    assert manager.tier == LicenseTier.ENTERPRISE
+
+    LicenseManager.reset()
+    LicenseAuditLogger.reset()

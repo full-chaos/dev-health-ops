@@ -12,6 +12,14 @@ from dev_health_ops.licensing.validator import (
     LicenseExpiredError,
     LicenseSignatureError,
 )
+from dev_health_ops.licensing.generator import (
+    KeyPair,
+    TEST_KEYPAIR,
+    generate_keypair,
+    generate_test_license,
+    sign_license,
+    sign_payload,
+)
 from dev_health_ops.licensing.gating import (
     LicenseManager,
     get_license_manager,
@@ -38,6 +46,13 @@ __all__ = [
     "LicenseValidationError",
     "LicenseExpiredError",
     "LicenseSignatureError",
+    # Generator
+    "KeyPair",
+    "TEST_KEYPAIR",
+    "generate_keypair",
+    "generate_test_license",
+    "sign_license",
+    "sign_payload",
     # Gating
     "LicenseManager",
     "get_license_manager",

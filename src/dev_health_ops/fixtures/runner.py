@@ -6,6 +6,8 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
+from dev_health_ops.licensing.gating import LicenseManager
 from dev_health_ops.work_graph.runner import materialize_fixture_investments
 from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 from dev_health_ops.metrics.compute_work_item_state_durations import (
@@ -128,6 +130,19 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 len(user_data["organizations"]),
                 len(user_data["memberships"]),
             )
+
+        license_key = generate_test_license(org_id="default-org")
+        LicenseManager.reset()
+        LicenseManager.initialize(
+            public_key=TEST_KEYPAIR.public_key,
+            license_key=license_key,
+        )
+        logging.info(
+            "Initialized LicenseManager with test keypair (tier=%s). "
+            "Set LICENSE_PUBLIC_KEY=%s and LICENSE_KEY=<generated> for manual runs.",
+            LicenseManager.get_instance().tier.value,
+            TEST_KEYPAIR.public_key,
+        )
 
         allow_parallel_inserts = not isinstance(store, SQLAlchemyStore)
 

@@ -141,6 +141,42 @@ def list_orgs(ns: argparse.Namespace) -> int:
     return asyncio.run(_list_orgs_async(ns))
 
 
+def licenses_keygen_cmd(ns: argparse.Namespace) -> int:
+    from dev_health_ops.licensing.generator import generate_keypair
+
+    kp = generate_keypair()
+    print(f"PUBLIC_KEY={kp.public_key}")
+    print(f"LICENSE_PRIVATE_KEY={kp.private_key}")
+    return 0
+
+
+def licenses_create_cmd(ns: argparse.Namespace) -> int:
+    import os
+
+    from dev_health_ops.licensing.generator import sign_license
+
+    private_key = os.environ.get("LICENSE_PRIVATE_KEY", "")
+    if not private_key:
+        print("Error: LICENSE_PRIVATE_KEY environment variable is required")
+        return 1
+
+    try:
+        license_str = sign_license(
+            private_key,
+            org_id=ns.org_id,
+            tier=ns.tier,
+            duration_days=ns.duration_days,
+            org_name=ns.org_name,
+            contact_email=ns.contact_email,
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+
+    print(license_str)
+    return 0
+
+
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     admin_parser = subparsers.add_parser(
         "admin", help="User and organization management."
@@ -194,3 +230,40 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Include inactive organizations.",
     )
     orgs_list.set_defaults(func=list_orgs)
+
+    licenses_parser = admin_sub.add_parser("licenses", help="License key management.")
+    licenses_sub = licenses_parser.add_subparsers(
+        dest="licenses_command", required=True
+    )
+
+    licenses_keygen = licenses_sub.add_parser(
+        "keygen", help="Generate an Ed25519 key pair for license signing."
+    )
+    licenses_keygen.set_defaults(func=licenses_keygen_cmd)
+
+    licenses_create = licenses_sub.add_parser(
+        "create", help="Create a signed license key."
+    )
+    licenses_create.add_argument(
+        "--org-id", dest="org_id", required=True, help="Organization ID."
+    )
+    licenses_create.add_argument(
+        "--tier",
+        required=True,
+        choices=["community", "team", "enterprise"],
+        help="License tier.",
+    )
+    licenses_create.add_argument(
+        "--duration-days",
+        dest="duration_days",
+        type=int,
+        default=365,
+        help="Days until expiry (default: 365).",
+    )
+    licenses_create.add_argument(
+        "--org-name", dest="org_name", help="Organization name."
+    )
+    licenses_create.add_argument(
+        "--contact-email", dest="contact_email", help="Billing contact email."
+    )
+    licenses_create.set_defaults(func=licenses_create_cmd)

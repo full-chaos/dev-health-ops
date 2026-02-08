@@ -313,39 +313,8 @@ def get_license_manager() -> LicenseManager:
     return LicenseManager.get_instance()
 
 
-def get_entitlements(org_id: str | None = None) -> dict:
-    if org_id is not None:
-        try:
-            org_uuid = uuid.UUID(org_id)
-            from dev_health_ops.db import get_postgres_session_sync
-            from dev_health_ops.api.services.licensing import (
-                FeatureService,
-                TierLimitService,
-            )
-
-            with get_postgres_session_sync() as session:
-                limit_svc = TierLimitService(session)
-                limits = limit_svc.get_all_limits(org_uuid)
-
-                feature_svc = FeatureService(session)
-                features = {}
-                for feat_key in DEFAULT_FEATURES.get(LicenseTier.ENTERPRISE, {}).keys():
-                    features[feat_key] = feature_svc.has_feature(org_uuid, feat_key)
-
-                return {
-                    "tier": "unknown",
-                    "features": features,
-                    "limits": limits,
-                    "is_licensed": True,
-                    "in_grace_period": False,
-                }
-        except Exception:
-            logger.debug(
-                "DB entitlements check failed for org '%s', falling back",
-                org_id,
-                exc_info=True,
-            )
-
+def get_entitlements() -> dict:
+    """Get current license entitlements from the JWT-backed LicenseManager."""
     manager = get_license_manager()
     tier = manager.tier
 
@@ -369,63 +338,8 @@ def get_entitlements(org_id: str | None = None) -> dict:
     }
 
 
-def _check_feature_for_org(org_id: str, feature: str) -> bool:
-    """Check feature access for a specific org using the DB-backed FeatureService.
-
-    Used in SaaS mode where each org has its own tier in the database.
-    Falls back to global LicenseManager check if the DB query fails.
-    """
-    try:
-        org_uuid = uuid.UUID(org_id)
-    except (ValueError, AttributeError):
-        logger.debug(
-            "Invalid org_id '%s' for feature check, falling back to global", org_id
-        )
-        return has_feature(feature, log_denial=True)
-
-    try:
-        from dev_health_ops.db import get_postgres_session_sync
-        from dev_health_ops.api.services.licensing import FeatureService
-
-        with get_postgres_session_sync() as session:
-            feature_svc = FeatureService(session)
-            access = feature_svc.check_feature_access(org_uuid, feature)
-            if not access.allowed:
-                audit_logger = get_license_audit_logger()
-                audit_logger.log_feature_access_denied(
-                    feature=feature,
-                    current_tier="unknown",
-                    required_tier=None,
-                )
-            return access.allowed
-    except Exception:
-        logger.debug(
-            "DB feature check failed for org '%s', falling back to global",
-            org_id,
-            exc_info=True,
-        )
-        return has_feature(feature, log_denial=True)
-
-
-def _extract_org_id(args: tuple, kwargs: dict) -> str | None:
-    """Extract org_id from function arguments.
-
-    Looks for org_id in kwargs (from FastAPI Depends injection).
-    """
-    return kwargs.get("org_id")
-
-
-def has_feature(
-    feature: str, *, org_id: str | None = None, log_denial: bool = True
-) -> bool:
-    """Check if a feature is available.
-
-    In SaaS mode (org_id provided), checks the org's tier in the database.
-    In self-hosted mode (no org_id), checks the global LicenseManager singleton.
-    """
-    if org_id is not None:
-        return _check_feature_for_org(org_id, feature)
-
+def has_feature(feature: str, *, log_denial: bool = True) -> bool:
+    """Check if a feature is available via the JWT-backed LicenseManager."""
     manager = get_license_manager()
 
     if manager.payload:
@@ -504,7 +418,7 @@ def require_feature(
     required_tier: str | None = None,
     raise_http: bool = True,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    def _deny(org_id: str | None) -> None:
+    def _deny() -> None:
         current_tier = get_license_manager().tier.value
         if raise_http:
             raise HTTPException(
@@ -521,16 +435,14 @@ def require_feature(
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
         @functools.wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            org_id = _extract_org_id(args, kwargs)
-            if not has_feature(feature, org_id=org_id):
-                _deny(org_id)
+            if not has_feature(feature):
+                _deny()
             return func(*args, **kwargs)
 
         @functools.wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            org_id = _extract_org_id(args, kwargs)
-            if not has_feature(feature, org_id=org_id):
-                _deny(org_id)
+            if not has_feature(feature):
+                _deny()
             return await func(*args, **kwargs)
 
         import inspect

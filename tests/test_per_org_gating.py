@@ -1,12 +1,11 @@
-"""Tests for per-org feature gating (SaaS mode).
+"""Tests for JWT-only feature gating.
 
-Validates that require_feature and has_feature correctly delegate to
-the DB-backed FeatureService when org_id is provided, and fall back
-to the global LicenseManager when it is not.
+Validates that require_feature, has_feature, and get_entitlements all route
+through the global LicenseManager (JWT path) exclusively, with no DB fallback.
 """
 
-import uuid
-from unittest.mock import MagicMock, patch
+import inspect
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -14,9 +13,9 @@ from fastapi import HTTPException
 from dev_health_ops.licensing.gating import (
     LicenseManager,
     LicenseAuditLogger,
-    _check_feature_for_org,
-    _extract_org_id,
+    FeatureNotLicensedError,
     has_feature,
+    get_entitlements,
     require_feature,
 )
 
@@ -30,143 +29,54 @@ def reset_singletons():
     LicenseAuditLogger.reset()
 
 
-class TestExtractOrgId:
-    def test_returns_org_id_from_kwargs(self):
-        assert _extract_org_id((), {"org_id": "abc-123"}) == "abc-123"
-
-    def test_returns_none_when_missing(self):
-        assert _extract_org_id((), {"session": "something"}) is None
-
-    def test_returns_none_for_empty_kwargs(self):
-        assert _extract_org_id((), {}) is None
-
-
-class TestCheckFeatureForOrg:
-    @patch("dev_health_ops.db.get_postgres_session_sync")
-    @patch("dev_health_ops.api.services.licensing.FeatureService")
-    def test_allows_feature_when_service_allows(self, MockFeatureSvc, mock_session_ctx):
-        org_uuid = uuid.uuid4()
-        mock_session = MagicMock()
-        mock_session_ctx.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_session_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
-        MockFeatureSvc.return_value.check_feature_access.return_value = MagicMock(
-            allowed=True
-        )
-        result = _check_feature_for_org(str(org_uuid), "team_dashboard")
-
-        assert result is True
-
-    @patch("dev_health_ops.db.get_postgres_session_sync")
-    @patch("dev_health_ops.api.services.licensing.FeatureService")
-    def test_denies_feature_when_service_denies(self, MockFeatureSvc, mock_session_ctx):
-        org_uuid = uuid.uuid4()
-        mock_session = MagicMock()
-        mock_session_ctx.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_session_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
-        MockFeatureSvc.return_value.check_feature_access.return_value = MagicMock(
-            allowed=False, reason="Requires enterprise tier"
-        )
-        result = _check_feature_for_org(str(org_uuid), "sso")
-
-        assert result is False
-
-    def test_falls_back_to_global_on_invalid_uuid(self):
-        LicenseManager.initialize()
-        result = _check_feature_for_org("not-a-uuid", "basic_analytics")
-        assert result is True
-
-    @patch(
-        "dev_health_ops.db.get_postgres_session_sync",
-        side_effect=Exception("DB unavailable"),
-    )
-    def test_falls_back_to_global_on_db_error(self, _mock):
-        LicenseManager.initialize()
-        result = _check_feature_for_org(str(uuid.uuid4()), "basic_analytics")
-        assert result is True
-
-
-class TestHasFeatureWithOrgId:
-    def test_without_org_id_uses_global(self):
+class TestHasFeatureJwtOnly:
+    def test_community_tier_allows_basic_analytics(self):
         LicenseManager.initialize()
         assert has_feature("basic_analytics") is True
-        assert has_feature("sso") is False
 
-    @patch("dev_health_ops.licensing.gating._check_feature_for_org")
-    def test_with_org_id_delegates_to_per_org(self, mock_check):
-        mock_check.return_value = True
-        org_id = str(uuid.uuid4())
-        result = has_feature("sso", org_id=org_id)
-        assert result is True
-        mock_check.assert_called_once_with(org_id, "sso")
+    def test_community_tier_denies_enterprise_features(self):
+        LicenseManager.initialize()
+        assert has_feature("sso", log_denial=False) is False
+        assert has_feature("audit_log", log_denial=False) is False
 
-    @patch("dev_health_ops.licensing.gating._check_feature_for_org")
-    def test_with_org_id_denied(self, mock_check):
-        mock_check.return_value = False
-        result = has_feature("sso", org_id=str(uuid.uuid4()))
-        assert result is False
+    def test_no_org_id_parameter(self):
+        sig = inspect.signature(has_feature)
+        assert "org_id" not in sig.parameters
+
+    def test_logs_denial_by_default(self):
+        LicenseManager.initialize()
+        with patch.object(LicenseAuditLogger, "log_feature_access_denied") as mock_log:
+            has_feature("sso")
+            mock_log.assert_called_once()
+
+    def test_suppresses_denial_log_when_requested(self):
+        LicenseManager.initialize()
+        with patch.object(LicenseAuditLogger, "log_feature_access_denied") as mock_log:
+            has_feature("sso", log_denial=False)
+            mock_log.assert_not_called()
 
 
-class TestRequireFeatureWithOrgId:
-    @patch("dev_health_ops.licensing.gating._check_feature_for_org")
-    def test_sync_passes_org_id_from_kwargs(self, mock_check):
-        mock_check.return_value = True
-        org_id = str(uuid.uuid4())
+class TestGetEntitlementsJwtOnly:
+    def test_returns_community_tier_unlicensed(self):
+        LicenseManager.initialize()
+        result = get_entitlements()
+        assert result["tier"] == "community"
+        assert result["is_licensed"] is False
 
-        @require_feature("sso", raise_http=False)
-        def my_endpoint(org_id: str = "default"):
-            return "success"
+    def test_no_org_id_parameter(self):
+        sig = inspect.signature(get_entitlements)
+        assert "org_id" not in sig.parameters
 
-        result = my_endpoint(org_id=org_id)
-        assert result == "success"
-        mock_check.assert_called_once_with(org_id, "sso")
+    def test_returns_features_and_limits(self):
+        LicenseManager.initialize()
+        result = get_entitlements()
+        assert "features" in result
+        assert "limits" in result
+        assert "in_grace_period" in result
 
-    @patch("dev_health_ops.licensing.gating._check_feature_for_org")
-    def test_sync_denied_with_org_id_raises_http(self, mock_check):
-        mock_check.return_value = False
-        org_id = str(uuid.uuid4())
 
-        @require_feature("sso", required_tier="enterprise", raise_http=True)
-        def my_endpoint(org_id: str = "default"):
-            return "success"
-
-        with pytest.raises(HTTPException) as exc_info:
-            my_endpoint(org_id=org_id)
-
-        assert exc_info.value.status_code == 402
-        assert exc_info.value.detail["feature"] == "sso"
-
-    @pytest.mark.asyncio
-    @patch("dev_health_ops.licensing.gating._check_feature_for_org")
-    async def test_async_passes_org_id_from_kwargs(self, mock_check):
-        mock_check.return_value = True
-        org_id = str(uuid.uuid4())
-
-        @require_feature("sso", raise_http=False)
-        async def my_endpoint(org_id: str = "default"):
-            return "async success"
-
-        result = await my_endpoint(org_id=org_id)
-        assert result == "async success"
-        mock_check.assert_called_once_with(org_id, "sso")
-
-    @pytest.mark.asyncio
-    @patch("dev_health_ops.licensing.gating._check_feature_for_org")
-    async def test_async_denied_with_org_id(self, mock_check):
-        mock_check.return_value = False
-        org_id = str(uuid.uuid4())
-
-        @require_feature("sso", raise_http=True)
-        async def my_endpoint(org_id: str = "default"):
-            return "async success"
-
-        with pytest.raises(HTTPException) as exc_info:
-            await my_endpoint(org_id=org_id)
-
-        assert exc_info.value.status_code == 402
-
-    def test_without_org_id_uses_global_path(self):
+class TestRequireFeatureJwtOnly:
+    def test_sync_allows_community_feature(self):
         LicenseManager.initialize()
 
         @require_feature("basic_analytics", raise_http=False)
@@ -175,7 +85,7 @@ class TestRequireFeatureWithOrgId:
 
         assert my_endpoint() == "success"
 
-    def test_without_org_id_denied_uses_global_path(self):
+    def test_sync_denies_enterprise_feature(self):
         LicenseManager.initialize()
 
         @require_feature("sso", raise_http=True)
@@ -185,46 +95,48 @@ class TestRequireFeatureWithOrgId:
         with pytest.raises(HTTPException) as exc_info:
             my_endpoint()
         assert exc_info.value.status_code == 402
+        assert exc_info.value.detail["feature"] == "sso"
 
-
-class TestGetEntitlementsWithOrgId:
-    def test_without_org_id_returns_global(self):
-        from dev_health_ops.licensing.gating import get_entitlements
-
+    @pytest.mark.asyncio
+    async def test_async_allows_community_feature(self):
         LicenseManager.initialize()
-        result = get_entitlements()
-        assert result["tier"] == "community"
-        assert result["is_licensed"] is False
 
-    @patch("dev_health_ops.db.get_postgres_session_sync")
-    @patch("dev_health_ops.api.services.licensing.TierLimitService")
-    @patch("dev_health_ops.api.services.licensing.FeatureService")
-    def test_with_org_id_queries_db(
-        self, MockFeatureSvc, MockLimitSvc, mock_session_ctx
-    ):
-        from dev_health_ops.licensing.gating import get_entitlements
+        @require_feature("basic_analytics", raise_http=False)
+        async def my_endpoint():
+            return "async success"
 
-        org_uuid = uuid.uuid4()
-        mock_session = MagicMock()
-        mock_session_ctx.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_session_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        result = await my_endpoint()
+        assert result == "async success"
 
-        mock_limits = {"max_users": 25, "max_repos": 10}
-        MockLimitSvc.return_value.get_all_limits.return_value = mock_limits
-        MockFeatureSvc.return_value.has_feature.return_value = True
-
-        result = get_entitlements(org_id=str(org_uuid))
-
-        assert result["limits"] == mock_limits
-        assert result["is_licensed"] is True
-
-    @patch(
-        "dev_health_ops.db.get_postgres_session_sync",
-        side_effect=Exception("DB down"),
-    )
-    def test_with_org_id_falls_back_on_error(self, _mock):
-        from dev_health_ops.licensing.gating import get_entitlements
-
+    @pytest.mark.asyncio
+    async def test_async_denies_enterprise_feature(self):
         LicenseManager.initialize()
-        result = get_entitlements(org_id=str(uuid.uuid4()))
-        assert result["tier"] == "community"
+
+        @require_feature("sso", raise_http=True)
+        async def my_endpoint():
+            return "async success"
+
+        with pytest.raises(HTTPException) as exc_info:
+            await my_endpoint()
+        assert exc_info.value.status_code == 402
+
+    def test_does_not_extract_org_id_from_kwargs(self):
+        LicenseManager.initialize()
+
+        @require_feature("basic_analytics", raise_http=False)
+        def my_endpoint(org_id: str = "should-be-ignored"):
+            return "success"
+
+        assert my_endpoint(org_id="some-org") == "success"
+
+    def test_raises_feature_not_licensed_when_not_http(self):
+        LicenseManager.initialize()
+
+        @require_feature("sso", required_tier="enterprise", raise_http=False)
+        def my_endpoint():
+            return "success"
+
+        with pytest.raises(FeatureNotLicensedError) as exc_info:
+            my_endpoint()
+        assert exc_info.value.feature == "sso"
+        assert exc_info.value.required_tier == "enterprise"

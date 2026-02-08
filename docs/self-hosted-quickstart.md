@@ -310,6 +310,18 @@ dev-hops sync work-items --provider github \
 | `JIRA_API_TOKEN` | Jira API token | — |
 | `JIRA_URL` | Jira instance URL | — |
 
+### Billing (SaaS Only)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `STRIPE_SECRET_KEY` | Stripe API secret key | — |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret | — |
+| `STRIPE_PRICE_ID_TEAM` | Stripe Price ID for Team tier | — |
+| `STRIPE_PRICE_ID_ENTERPRISE` | Stripe Price ID for Enterprise tier | — |
+| `LICENSE_PRIVATE_KEY` | Ed25519 private key for license signing (base64) | — |
+
+> **Note**: Billing variables are only required for SaaS deployments that process Stripe subscriptions. Self-hosted deployments use offline Ed25519 license keys instead (set `DEV_HEALTH_LICENSE`).
+
 ---
 
 ## Upgrading

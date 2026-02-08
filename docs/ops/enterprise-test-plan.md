@@ -44,32 +44,35 @@ export SSO_TEST_IDP_URL="https://idp.test.local"
 ```bash
 # License configuration (for self-hosted enterprise features)
 export LICENSE_PUBLIC_KEY="<base64-encoded-ed25519-public-key>"
-export LICENSE_KEY="<valid-license-key>"  # Generate from license-svc
+export LICENSE_KEY="<valid-license-key>"  # Generate from ops CLI (see below)
 ```
 
-> **Note**: SaaS deployments manage entitlements via webhook (no license key needed). License keys are for self-hosted testing only.
+> **Note**: SaaS deployments manage entitlements via Stripe webhooks directly to `dev-health-ops` (no license key needed). License keys are for self-hosted testing only.
 
 ### 1.2 Test License Keys
 
-> **SaaS Entitlements**: In SaaS deployments, entitlements are managed via webhook from `license-svc` → `dev-health-ops`. No license key environment variable is needed. The license key generation below is for **self-hosted testing only**.
+> **SaaS Entitlements**: In SaaS deployments, entitlements are managed via Stripe webhooks sent directly to `dev-health-ops` at `/api/v1/billing/webhooks/stripe`. No license key environment variable is needed. The license key generation below is for **self-hosted testing only**.
 
-Generate test licenses for each tier using the `license-svc`:
+Generate test licenses for each tier using the `dev-health-ops` CLI:
 
 ```bash
+# Generate an Ed25519 keypair (one-time setup)
+python -m dev_health_ops.cli admin licenses keygen
+
 # Community tier (no license needed - default behavior)
 unset LICENSE_KEY
 
 # Team tier license
-export LICENSE_KEY="$(license-svc generate --tier team --org test-org --days 30)"
+export LICENSE_KEY="$(python -m dev_health_ops.cli admin licenses create --tier team --org test-org --days 30)"
 
 # Enterprise tier license
-export LICENSE_KEY="$(license-svc generate --tier enterprise --org test-org --days 30)"
+export LICENSE_KEY="$(python -m dev_health_ops.cli admin licenses create --tier enterprise --org test-org --days 30)"
 
 # Expired license (for grace period testing)
-export LICENSE_KEY="$(license-svc generate --tier enterprise --org test-org --days -1)"
+export LICENSE_KEY="$(python -m dev_health_ops.cli admin licenses create --tier enterprise --org test-org --days -1)"
 
 # Hard-expired license (past grace period)
-export LICENSE_KEY="$(license-svc generate --tier enterprise --org test-org --days -45)"
+export LICENSE_KEY="$(python -m dev_health_ops.cli admin licenses create --tier enterprise --org test-org --days -45)"
 ```
 
 ### 1.3 Test Data Setup

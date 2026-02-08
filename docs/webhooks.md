@@ -52,4 +52,42 @@ Ensure the following variables are set in your deployment environment:
 | `GITHUB_WEBHOOK_SECRET` | HMAC secret for GitHub signature validation |
 | `GITLAB_WEBHOOK_TOKEN` | Token for GitLab X-Gitlab-Token validation |
 | `JIRA_WEBHOOK_SECRET` | Optional secret for Jira validation |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret (SaaS billing) |
 | `REDIS_URL` | Required for webhook delivery idempotency |
+
+## Stripe Configuration (SaaS Billing)
+
+Stripe webhooks are used for real-time subscription management in SaaS deployments. When a customer subscribes, upgrades, downgrades, or cancels, Stripe sends events directly to `dev-health-ops`.
+
+1. Go to your [Stripe Dashboard](https://dashboard.stripe.com/) > **Developers** > **Webhooks**.
+2. Click **Add endpoint**.
+3. Set **Endpoint URL** to `https://your-dev-health-instance.com/api/v1/billing/webhooks/stripe`.
+4. Under **Events to send**, select:
+   - `checkout.session.completed`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `invoice.payment_succeeded`
+   - `invoice.payment_failed`
+5. Click **Add endpoint**.
+6. Copy the **Signing secret** and set it as `STRIPE_WEBHOOK_SECRET` in your environment.
+
+### Billing Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/billing/webhooks/stripe` | POST | Receives Stripe webhook events |
+| `/api/v1/billing/checkout` | POST | Creates a Stripe Checkout Session (auth required) |
+| `/api/v1/billing/portal` | POST | Creates a Stripe Customer Portal session (auth required) |
+| `/api/v1/billing/entitlements/{org_id}` | GET | Returns current tier, features, and limits for an org |
+
+### Required Environment Variables (Billing)
+
+| Variable | Description |
+|----------|-------------|
+| `STRIPE_SECRET_KEY` | Stripe API secret key |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret from step 6 above |
+| `STRIPE_PRICE_ID_TEAM` | Stripe Price ID for the Team tier product |
+| `STRIPE_PRICE_ID_ENTERPRISE` | Stripe Price ID for the Enterprise tier product |
+| `LICENSE_PRIVATE_KEY` | Ed25519 private key for signing JWT licenses (base64-encoded) |
+
+> **Note**: Stripe webhooks are only relevant for SaaS deployments. Self-hosted deployments use offline Ed25519 license keys and do not require Stripe configuration.

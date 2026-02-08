@@ -2,7 +2,7 @@
 
 **Status**: PARTIALLY DECIDED  
 **Created**: 2026-01-30  
-**Updated**: 2026-02-01  
+**Updated**: 2026-02-08  
 **Parent Issue**: [#299](https://github.com/full-chaos/dev-health-ops/issues/299)
 
 ## Context
@@ -313,14 +313,14 @@ As of February 2026, the platform is shifting to a SaaS-first model to accelerat
 
 ### Rationale
 - **Fastest path to value**: Users can sign up and start seeing insights in minutes without managing infrastructure.
-- **Simplified Billing**: Stripe integration via `license-svc` provides a seamless upgrade path.
+- **Simplified Billing**: Stripe integration built directly into `dev-health-ops` provides a seamless upgrade path with no external billing service.
 - **Operational Efficiency**: Managed updates and maintenance ensure all users are on the latest version.
 
 ### Implementation
 - **Primary**: Managed SaaS with logical isolation via `org_id`. All onboarding, documentation, and default examples should assume this path.
 - **Secondary**: Self-hosted Enterprise with Ed25519 license keys. Documented as an alternative for data sovereignty / air-gapped requirements.
-- **Billing**: Integrated Stripe checkout and portal via `license-svc` (private).
-- **Entitlements**: Real-time tier updates in `dev-health-ops` via `license-svc` webhooks.
+- **Billing**: Stripe checkout, portal, and webhook processing built into `dev-health-ops` (`/api/v1/billing/*` endpoints).
+- **Entitlements**: Real-time tier updates via Stripe webhooks directly to `dev-health-ops`, with Ed25519-signed JWT licenses.
 
 ---
 
@@ -357,3 +357,4 @@ As of February 2026, the platform is shifting to a SaaS-first model to accelerat
 | 2026-02-01 | Marked Decision 4: Licensing Model as DECIDED (BSL) |
 | 2026-02-01 | Created docs/architecture/licensing.md with Ed25519 JWT specification |
 | 2026-02-05 | Added Decision 7: SaaS-First Deployment Model - DECIDED SaaS primary |
+| 2026-02-08 | Updated Decision 7: Removed license-svc references — billing now built into dev-health-ops |

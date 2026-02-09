@@ -427,6 +427,72 @@ def run_sync_config(
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
 
+@celery_app.task(bind=True)
+def dispatch_scheduled_syncs(self) -> dict:
+    """Check active sync configs and dispatch any that are due."""
+    from croniter import croniter
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import (
+        ScheduledJob,
+        SyncConfiguration,
+    )
+
+    now = datetime.now(timezone.utc)
+    dispatched: list[str] = []
+    skipped = 0
+
+    try:
+        with get_postgres_session_sync() as session:
+            configs = (
+                session.query(SyncConfiguration)
+                .filter(SyncConfiguration.is_active.is_(True))
+                .all()
+            )
+
+            for config in configs:
+                job = (
+                    session.query(ScheduledJob)
+                    .filter(
+                        ScheduledJob.sync_config_id == config.id,
+                        ScheduledJob.org_id == config.org_id,
+                    )
+                    .one_or_none()
+                )
+
+                if job and job.is_running:
+                    skipped += 1
+                    continue
+
+                cron_expr = job.schedule_cron if job else "0 * * * *"
+                last_sync = config.last_sync_at or config.created_at
+                cron = croniter(cron_expr, last_sync)
+                next_run = cron.get_next(datetime)
+
+                if next_run <= now:
+                    run_sync_config.apply_async(
+                        kwargs={
+                            "config_id": str(config.id),
+                            "org_id": config.org_id,
+                            "triggered_by": "schedule",
+                        },
+                        queue="sync",
+                    )
+                    dispatched.append(str(config.id))
+                else:
+                    skipped += 1
+
+    except Exception:
+        logger.exception("dispatch_scheduled_syncs failed")
+
+    logger.info(
+        "Scheduled sync dispatch: dispatched=%d skipped=%d",
+        len(dispatched),
+        skipped,
+    )
+    return {"dispatched": dispatched, "skipped": skipped}
+
+
 @celery_app.task(bind=True, max_retries=3, queue="metrics")
 def run_daily_metrics(
     self,

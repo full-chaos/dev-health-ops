@@ -329,6 +329,21 @@ class SyncConfigurationService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_id(self, config_id: str) -> Optional[SyncConfiguration]:
+        """Get a sync configuration by ID."""
+        import uuid as uuid_module
+
+        try:
+            uid = uuid_module.UUID(config_id)
+        except ValueError:
+            return None
+        stmt = select(SyncConfiguration).where(
+            SyncConfiguration.org_id == self.org_id,
+            SyncConfiguration.id == uid,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         name: str,

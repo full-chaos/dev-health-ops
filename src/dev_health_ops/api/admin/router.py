@@ -366,8 +366,10 @@ async def test_connection(
         safe_provider = str(payload.provider).replace("\r", "").replace("\n", "")
         logger.exception("Test connection failed for %s", safe_provider)
 
-    # Only update stored test result if credentials came from DB
-    if not payload.credentials:
+    # Always persist the test result when a stored credential exists
+    # (covers both inline pre-save tests and DB-sourced tests)
+    stored = await svc.get(payload.provider, payload.name)
+    if stored:
         await svc.update_test_result(payload.provider, success, error, payload.name)
     return TestConnectionResponse(success=success, error=error, details=details or None)
 

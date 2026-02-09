@@ -9,11 +9,12 @@ These tasks wrap the existing metrics jobs to enable async execution:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
-from datetime import date
-from typing import Optional
+from datetime import date, datetime, timezone
+from typing import Any, Optional
 
 from dev_health_ops.workers.celery_app import celery_app
 
@@ -21,8 +22,475 @@ logger = logging.getLogger(__name__)
 
 
 def _get_db_url() -> str:
-    """Get database URL from environment."""
-    return os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL") or ""
+    """Get data-store URL from environment.
+
+    Prefers CLICKHOUSE_URI (the primary data store for sync/metrics),
+    falling back to DATABASE_URI which may point to Postgres (admin DB).
+    """
+    return (
+        os.getenv("CLICKHOUSE_URI")
+        or os.getenv("DATABASE_URI")
+        or os.getenv("DATABASE_URL")
+        or ""
+    )
+
+
+def _merge_sync_flags(sync_targets: list[str]) -> dict[str, bool]:
+    from dev_health_ops.processors.sync import _sync_flags_for_target
+
+    merged_flags: dict[str, bool] = {}
+    for target in sync_targets:
+        flags = _sync_flags_for_target(target)
+        for key, enabled in flags.items():
+            if enabled:
+                merged_flags[key] = True
+
+    for key in (
+        "sync_git",
+        "sync_prs",
+        "sync_cicd",
+        "sync_deployments",
+        "sync_incidents",
+        "blame_only",
+    ):
+        merged_flags.setdefault(key, False)
+
+    return merged_flags
+
+
+def _extract_owner_repo(
+    config_name: str, sync_options: dict[str, Any]
+) -> tuple[str, str] | None:
+    owner = sync_options.get("owner")
+    repo_name = sync_options.get("repo")
+    if owner and repo_name:
+        return str(owner), str(repo_name)
+
+    search = sync_options.get("search")
+    if isinstance(search, str) and "/" in search:
+        search_owner, search_repo = search.split("/", 1)
+        repo_candidate = search_repo.replace("*", "").replace("?", "").strip()
+        if search_owner and repo_candidate:
+            return search_owner.strip(), repo_candidate
+
+    if "/" in config_name:
+        name_owner, name_repo = config_name.split("/", 1)
+        if name_owner and name_repo:
+            return name_owner.strip(), name_repo.strip()
+
+    return None
+
+
+def _decrypt_credential_sync(credential) -> dict[str, Any]:
+    from dev_health_ops.api.services.settings import decrypt_value
+
+    if credential.credentials_encrypted:
+        return json.loads(decrypt_value(credential.credentials_encrypted))
+    return {}
+
+
+def _inject_provider_token(provider: str, token: str) -> None:
+    env_var = {
+        "github": "GITHUB_TOKEN",
+        "gitlab": "GITLAB_TOKEN",
+    }.get(provider.lower())
+    if env_var and token:
+        os.environ[env_var] = token
+
+
+def _resolve_env_credentials(provider: str) -> dict[str, str]:
+    from dev_health_ops.credentials.resolver import PROVIDER_ENV_VARS
+
+    env_map = PROVIDER_ENV_VARS.get(provider.lower(), {})
+    return {
+        field_name: value
+        for field_name, env_var in env_map.items()
+        if (value := os.getenv(env_var))
+    }
+
+
+@celery_app.task(bind=True, max_retries=3, queue="sync")
+def run_sync_config(
+    self,
+    config_id: str,
+    org_id: str = "default",
+    triggered_by: str = "manual",
+) -> dict:
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
+    from dev_health_ops.models.settings import (
+        IntegrationCredential,
+        JobRun,
+        JobRunStatus,
+        JobStatus,
+        ScheduledJob,
+        SyncConfiguration,
+    )
+    from dev_health_ops.processors.github import process_github_repo
+    from dev_health_ops.processors.gitlab import process_gitlab_project
+    from dev_health_ops.storage import resolve_db_type, run_with_store
+
+    config_uuid = uuid.UUID(config_id)
+    db_url = _get_db_url()
+    db_type = resolve_db_type(db_url, None)
+
+    logger.info(
+        "Starting sync config task: config_id=%s org_id=%s triggered_by=%s",
+        config_id,
+        org_id,
+        triggered_by,
+    )
+
+    run_id: uuid.UUID | None = None
+    job_id: uuid.UUID | None = None
+    started_at = datetime.now(timezone.utc)
+    provider = ""
+    config_name = ""
+    sync_targets: list[str] = []
+    sync_options: dict[str, Any] = {}
+    credentials: dict[str, Any] = {}
+
+    try:
+        with get_postgres_session_sync() as session:
+            config = (
+                session.query(SyncConfiguration)
+                .filter(
+                    SyncConfiguration.id == config_uuid,
+                    SyncConfiguration.org_id == org_id,
+                )
+                .one_or_none()
+            )
+            if config is None:
+                raise ValueError(f"Sync configuration not found: {config_id}")
+
+            provider = (config.provider or "").lower()
+            config_name = config.name
+            sync_targets = list(config.sync_targets or [])
+            sync_options = dict(config.sync_options or {})
+
+            if config.credential_id:
+                credential = (
+                    session.query(IntegrationCredential)
+                    .filter(
+                        IntegrationCredential.id == config.credential_id,
+                        IntegrationCredential.org_id == org_id,
+                    )
+                    .one_or_none()
+                )
+                if credential is None:
+                    raise ValueError(
+                        f"Credential not found for sync configuration: {config.credential_id}"
+                    )
+
+                credentials = _decrypt_credential_sync(credential)
+            else:
+                credentials = _resolve_env_credentials(provider)
+
+            job = (
+                session.query(ScheduledJob)
+                .filter(
+                    ScheduledJob.org_id == org_id,
+                    ScheduledJob.sync_config_id == config_uuid,
+                )
+                .one_or_none()
+            )
+            if job is None:
+                job = ScheduledJob(
+                    name=f"sync-config-{config.id}",
+                    job_type="sync",
+                    schedule_cron="0 * * * *",
+                    org_id=org_id,
+                    job_config={
+                        "provider": provider,
+                        "sync_config_id": str(config.id),
+                    },
+                    sync_config_id=config.id,
+                    status=JobStatus.ACTIVE.value,
+                )
+                session.add(job)
+                session.flush()
+
+            job_id = job.id
+
+            run = JobRun(
+                job_id=job.id,
+                triggered_by=triggered_by,
+                status=JobRunStatus.PENDING.value,
+            )
+            session.add(run)
+            session.flush()
+            run_id = run.id
+
+            run.status = JobRunStatus.RUNNING.value
+            run.started_at = started_at
+            job.is_running = True
+            job.last_run_at = started_at
+            session.flush()
+
+        result_payload: dict[str, Any] = {
+            "provider": provider,
+            "config_id": config_id,
+            "sync_targets": sync_targets,
+            "triggered_by": triggered_by,
+        }
+
+        if provider == "github":
+            owner_repo = _extract_owner_repo(
+                config_name=config_name, sync_options=sync_options
+            )
+            if owner_repo is None:
+                raise ValueError(
+                    "Missing GitHub owner/repo in sync options or config name"
+                )
+
+            owner, repo_name = owner_repo
+            token = str(credentials.get("token") or "")
+            if not token:
+                raise ValueError("Missing GitHub token for sync configuration")
+
+            merged_flags = _merge_sync_flags(sync_targets)
+
+            async def _github_handler(store):
+                await process_github_repo(
+                    store=store,
+                    owner=owner,
+                    repo_name=repo_name,
+                    token=token,
+                    **merged_flags,
+                )
+
+            asyncio.run(run_with_store(db_url, db_type, _github_handler))
+            result_payload.update(
+                {
+                    "owner": owner,
+                    "repo": repo_name,
+                    "flags": merged_flags,
+                }
+            )
+
+        elif provider == "gitlab":
+            project_id = sync_options.get("project_id")
+            if project_id is None:
+                raise ValueError("Missing GitLab project_id in sync options")
+
+            token = str(credentials.get("token") or "")
+            if not token:
+                raise ValueError("Missing GitLab token for sync configuration")
+
+            gitlab_url = str(sync_options.get("gitlab_url", "https://gitlab.com"))
+            merged_flags = _merge_sync_flags(sync_targets)
+
+            async def _gitlab_handler(store):
+                await process_gitlab_project(
+                    store=store,
+                    project_id=int(project_id),
+                    token=token,
+                    gitlab_url=gitlab_url,
+                    **merged_flags,
+                )
+
+            asyncio.run(run_with_store(db_url, db_type, _gitlab_handler))
+            result_payload.update(
+                {
+                    "project_id": int(project_id),
+                    "gitlab_url": gitlab_url,
+                    "flags": merged_flags,
+                }
+            )
+
+        elif provider == "jira":
+            backfill_days = int(sync_options.get("backfill_days", 1))
+            run_work_items_sync_job(
+                db_url=db_url,
+                day=date.today(),
+                backfill_days=backfill_days,
+                provider="jira",
+            )
+            result_payload["backfill_days"] = backfill_days
+
+        if "work-items" in sync_targets and provider != "jira":
+            token = str(credentials.get("token") or "")
+            if token:
+                _inject_provider_token(provider, token)
+            backfill_days = int(sync_options.get("backfill_days", 1))
+            run_work_items_sync_job(
+                db_url=db_url,
+                day=date.today(),
+                backfill_days=backfill_days,
+                provider=provider,
+                repo_name=sync_options.get("repo"),
+                search_pattern=sync_options.get("search"),
+            )
+            result_payload["work_items_synced"] = True
+
+        completed_at = datetime.now(timezone.utc)
+        duration_seconds = int((completed_at - started_at).total_seconds())
+
+        with get_postgres_session_sync() as session:
+            run = session.query(JobRun).filter(JobRun.id == run_id).one_or_none()
+            job = (
+                session.query(ScheduledJob)
+                .filter(ScheduledJob.id == job_id)
+                .one_or_none()
+            )
+            config = (
+                session.query(SyncConfiguration)
+                .filter(
+                    SyncConfiguration.id == config_uuid,
+                    SyncConfiguration.org_id == org_id,
+                )
+                .one_or_none()
+            )
+
+            if run:
+                run.status = JobRunStatus.SUCCESS.value
+                run.completed_at = completed_at
+                run.duration_seconds = duration_seconds
+                run.result = result_payload
+                run.error = None
+
+            if job:
+                job.is_running = False
+                job.last_run_status = JobRunStatus.SUCCESS.value
+                job.last_run_duration_seconds = duration_seconds
+                job.last_run_error = None
+                job.run_count = int(job.run_count or 0) + 1
+
+            if config:
+                config.last_sync_at = completed_at
+                config.last_sync_success = True
+                config.last_sync_error = None
+                config.last_sync_stats = result_payload
+
+            session.flush()
+
+        return {
+            "status": "success",
+            "job_run_id": str(run_id),
+            "result": result_payload,
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "Sync config task failed: config_id=%s org_id=%s error=%s",
+            config_id,
+            org_id,
+            exc,
+        )
+
+        completed_at = datetime.now(timezone.utc)
+        duration_seconds = int((completed_at - started_at).total_seconds())
+
+        try:
+            if run_id is not None:
+                with get_postgres_session_sync() as session:
+                    run = (
+                        session.query(JobRun).filter(JobRun.id == run_id).one_or_none()
+                    )
+                    job = (
+                        session.query(ScheduledJob)
+                        .filter(ScheduledJob.id == job_id)
+                        .one_or_none()
+                    )
+                    config = (
+                        session.query(SyncConfiguration)
+                        .filter(
+                            SyncConfiguration.id == config_uuid,
+                            SyncConfiguration.org_id == org_id,
+                        )
+                        .one_or_none()
+                    )
+
+                    if run:
+                        run.status = JobRunStatus.FAILED.value
+                        run.completed_at = completed_at
+                        run.duration_seconds = duration_seconds
+                        run.error = str(exc)
+
+                    if job:
+                        job.is_running = False
+                        job.last_run_status = JobRunStatus.FAILED.value
+                        job.last_run_duration_seconds = duration_seconds
+                        job.last_run_error = str(exc)
+                        job.run_count = int(job.run_count or 0) + 1
+                        job.failure_count = int(job.failure_count or 0) + 1
+
+                    if config:
+                        config.last_sync_at = completed_at
+                        config.last_sync_success = False
+                        config.last_sync_error = str(exc)
+
+                    session.flush()
+        except Exception as update_error:
+            logger.error("Failed updating job run failure state: %s", update_error)
+
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
+@celery_app.task(bind=True)
+def dispatch_scheduled_syncs(self) -> dict:
+    """Check active sync configs and dispatch any that are due."""
+    from croniter import croniter
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import (
+        ScheduledJob,
+        SyncConfiguration,
+    )
+
+    now = datetime.now(timezone.utc)
+    dispatched: list[str] = []
+    skipped = 0
+
+    try:
+        with get_postgres_session_sync() as session:
+            configs = (
+                session.query(SyncConfiguration)
+                .filter(SyncConfiguration.is_active.is_(True))
+                .all()
+            )
+
+            for config in configs:
+                job = (
+                    session.query(ScheduledJob)
+                    .filter(
+                        ScheduledJob.sync_config_id == config.id,
+                        ScheduledJob.org_id == config.org_id,
+                    )
+                    .one_or_none()
+                )
+
+                if job and job.is_running:
+                    skipped += 1
+                    continue
+
+                cron_expr = job.schedule_cron if job else "0 * * * *"
+                last_sync = config.last_sync_at or config.created_at
+                cron = croniter(cron_expr, last_sync)
+                next_run = cron.get_next(datetime)
+
+                if next_run <= now:
+                    run_sync_config.apply_async(
+                        kwargs={
+                            "config_id": str(config.id),
+                            "org_id": config.org_id,
+                            "triggered_by": "schedule",
+                        },
+                        queue="sync",
+                    )
+                    dispatched.append(str(config.id))
+                else:
+                    skipped += 1
+
+    except Exception:
+        logger.exception("dispatch_scheduled_syncs failed")
+
+    logger.info(
+        "Scheduled sync dispatch: dispatched=%d skipped=%d",
+        len(dispatched),
+        skipped,
+    )
+    return {"dispatched": dispatched, "skipped": skipped}
 
 
 @celery_app.task(bind=True, max_retries=3, queue="metrics")

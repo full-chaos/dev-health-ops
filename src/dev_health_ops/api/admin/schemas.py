@@ -114,6 +114,21 @@ class SyncConfigUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class JobRunResponse(BaseModel):
+    id: str
+    job_id: str
+    status: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    result: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+    triggered_by: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class IdentityMappingResponse(BaseModel):
     id: str
     canonical_id: str

@@ -66,7 +66,9 @@ CONNECTORS_AVAILABLE = True
 try:
     import importlib.util
 
-    CONNECTORS_AVAILABLE = importlib.util.find_spec("connectors") is not None
+    CONNECTORS_AVAILABLE = (
+        importlib.util.find_spec("dev_health_ops.connectors") is not None
+    )
 except ImportError:
     CONNECTORS_AVAILABLE = False
 

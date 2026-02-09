@@ -32,5 +32,14 @@ task_queues = {
     "sync": {},  # Data sync tasks
 }
 
+# Beat schedule (periodic tasks)
+beat_schedule = {
+    "dispatch-scheduled-syncs": {
+        "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
+        "schedule": 300.0,  # Every 5 minutes
+        "options": {"queue": "default"},
+    },
+}
+
 # Result settings
 result_expires = 86400  # Results expire after 24 hours

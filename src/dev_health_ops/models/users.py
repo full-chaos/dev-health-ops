@@ -121,7 +121,7 @@ class Organization(Base):
     settings = Column(JSON, default=dict, nullable=False)
 
     # Billing/tier info (for SaaS)
-    tier = Column(Text, default="free", nullable=False)
+    tier = Column(Text, default="community", nullable=False)
     stripe_customer_id = Column(Text, nullable=True)
 
     # Status

@@ -13,12 +13,12 @@ from typing import TYPE_CHECKING, Any
 import jwt
 from jwt.exceptions import InvalidTokenError
 
+from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.licensing import (
     FeatureFlag,
     OrgFeatureOverride,
     OrgLicense,
     STANDARD_FEATURES,
-    Tier,
     TIER_LIMITS,
 )
 
@@ -43,7 +43,7 @@ def _get_license_secret_key() -> str | None:
 class LicenseInfo:
     """Decoded license information."""
 
-    tier: Tier
+    tier: LicenseTier
     org_id: str
     licensed_users: int | None = None
     licensed_repos: int | None = None
@@ -81,7 +81,7 @@ class LicenseService:
         """Validate a license key and extract its information."""
         if not license_key:
             return LicenseInfo(
-                tier=Tier.FREE,
+                tier=LicenseTier.COMMUNITY,
                 org_id="",
                 is_valid=False,
                 validation_error="No license key provided",
@@ -97,7 +97,7 @@ class LicenseService:
 
             if not key:
                 return LicenseInfo(
-                    tier=Tier.FREE,
+                    tier=LicenseTier.COMMUNITY,
                     org_id="",
                     is_valid=False,
                     validation_error="No license verification key configured",
@@ -118,7 +118,7 @@ class LicenseService:
             )
 
             return LicenseInfo(
-                tier=Tier(payload.get("tier", "free")),
+                tier=LicenseTier(payload.get("tier", "community")),
                 org_id=payload["sub"],
                 licensed_users=payload.get("users"),
                 licensed_repos=payload.get("repos"),
@@ -131,14 +131,14 @@ class LicenseService:
             )
         except jwt.ExpiredSignatureError:
             return LicenseInfo(
-                tier=Tier.FREE,
+                tier=LicenseTier.COMMUNITY,
                 org_id="",
                 is_valid=False,
                 validation_error="License has expired",
             )
         except InvalidTokenError as e:
             return LicenseInfo(
-                tier=Tier.FREE,
+                tier=LicenseTier.COMMUNITY,
                 org_id="",
                 is_valid=False,
                 validation_error=f"Invalid license key: {e}",
@@ -147,7 +147,7 @@ class LicenseService:
     def create_license_key(
         self,
         org_id: str,
-        tier: Tier,
+        tier: LicenseTier,
         expires_at: datetime,
         licensed_users: int | None = None,
         licensed_repos: int | None = None,
@@ -268,7 +268,9 @@ class FeatureService:
                     )
 
         org_license = self._get_org_license(org_id)
-        org_tier = Tier(org_license.tier) if org_license else Tier.FREE
+        org_tier = (
+            LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
+        )
 
         if org_license and org_license.features_override:
             if feature_key in org_license.features_override:
@@ -280,8 +282,12 @@ class FeatureService:
                         reason="Feature disabled in license",
                     )
 
-        feature_min_tier = Tier(feature.min_tier)
-        tier_order = [Tier.FREE, Tier.STARTER, Tier.PRO, Tier.ENTERPRISE]
+        feature_min_tier = LicenseTier(feature.min_tier)
+        tier_order = [
+            LicenseTier.COMMUNITY,
+            LicenseTier.TEAM,
+            LicenseTier.ENTERPRISE,
+        ]
 
         if tier_order.index(org_tier) >= tier_order.index(feature_min_tier):
             return FeatureAccess(allowed=True)
@@ -315,21 +321,25 @@ class TierLimitService:
     def get_limit(self, org_id: uuid.UUID, limit_key: str) -> int | float | None:
         """Get a specific limit for an organization."""
         org_license = self._get_org_license(org_id)
-        org_tier = Tier(org_license.tier) if org_license else Tier.FREE
+        org_tier = (
+            LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
+        )
 
         if org_license and org_license.limits_override:
             if limit_key in org_license.limits_override:
                 return org_license.limits_override[limit_key]
 
-        tier_limits = TIER_LIMITS.get(org_tier, TIER_LIMITS[Tier.FREE])
+        tier_limits = TIER_LIMITS.get(org_tier, TIER_LIMITS[LicenseTier.COMMUNITY])
         return tier_limits.get(limit_key)
 
     def get_all_limits(self, org_id: uuid.UUID) -> dict[str, int | float | None]:
         """Get all limits for an organization."""
         org_license = self._get_org_license(org_id)
-        org_tier = Tier(org_license.tier) if org_license else Tier.FREE
+        org_tier = (
+            LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
+        )
 
-        limits = dict(TIER_LIMITS.get(org_tier, TIER_LIMITS[Tier.FREE]))
+        limits = dict(TIER_LIMITS.get(org_tier, TIER_LIMITS[LicenseTier.COMMUNITY]))
 
         if org_license and org_license.limits_override:
             limits.update(org_license.limits_override)
@@ -390,6 +400,35 @@ def seed_feature_flags(session: "Session") -> int:
 
     if created > 0:
         session.commit()
+        logger.info("Seeded %d feature flags", created)
+
+    return created
+
+
+async def seed_feature_flags_async(session: Any) -> int:
+    """Seed the feature_flags table with standard features (async session)."""
+    from sqlalchemy import select
+
+    result = await session.execute(select(FeatureFlag.key))
+    existing = {row[0] for row in result.all()}
+    created = 0
+
+    for key, name, category, min_tier, description in STANDARD_FEATURES:
+        if key in existing:
+            continue
+
+        feature = FeatureFlag(
+            key=key,
+            name=name,
+            category=category.value,
+            min_tier=min_tier.value,
+            description=description,
+        )
+        session.add(feature)
+        created += 1
+
+    if created > 0:
+        await session.commit()
         logger.info("Seeded %d feature flags", created)
 
     return created

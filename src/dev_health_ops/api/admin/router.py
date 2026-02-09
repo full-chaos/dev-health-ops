@@ -62,6 +62,7 @@ from .schemas import (
     SettingUpdate,
     SyncConfigCreate,
     SyncConfigResponse,
+    SyncConfigUpdate,
     TeamMappingCreate,
     TeamMappingResponse,
     TestConnectionRequest,
@@ -477,23 +478,7 @@ async def list_sync_configs(
 ) -> list[SyncConfigResponse]:
     svc = SyncConfigurationService(session, org_id)
     configs = await svc.list_all(active_only=active_only)
-    return [
-        SyncConfigResponse(
-            id=str(c.id),
-            name=c.name,
-            provider=c.provider,
-            credential_id=str(c.credential_id) if c.credential_id else None,
-            sync_targets=c.sync_targets,
-            sync_options=c.sync_options,
-            is_active=c.is_active,
-            last_sync_at=c.last_sync_at,
-            last_sync_success=c.last_sync_success,
-            last_sync_error=c.last_sync_error,
-            created_at=c.created_at,
-            updated_at=c.updated_at,
-        )
-        for c in configs
-    ]
+    return [_sync_config_to_response(c) for c in configs]
 
 
 @router.post("/sync-configs", response_model=SyncConfigResponse)
@@ -510,20 +495,84 @@ async def create_sync_config(
         sync_options=payload.sync_options,
         credential_id=payload.credential_id,
     )
+    return _sync_config_to_response(config)
+
+
+def _sync_config_to_response(c) -> SyncConfigResponse:
     return SyncConfigResponse(
-        id=str(config.id),
-        name=config.name,
-        provider=config.provider,
-        credential_id=str(config.credential_id) if config.credential_id else None,
-        sync_targets=config.sync_targets,
-        sync_options=config.sync_options,
-        is_active=config.is_active,
-        last_sync_at=config.last_sync_at,
-        last_sync_success=config.last_sync_success,
-        last_sync_error=config.last_sync_error,
-        created_at=config.created_at,
-        updated_at=config.updated_at,
+        id=str(c.id),
+        name=c.name,
+        provider=c.provider,
+        credential_id=str(c.credential_id) if c.credential_id else None,
+        sync_targets=c.sync_targets,
+        sync_options=c.sync_options,
+        is_active=c.is_active,
+        last_sync_at=c.last_sync_at,
+        last_sync_success=c.last_sync_success,
+        last_sync_error=c.last_sync_error,
+        created_at=c.created_at,
+        updated_at=c.updated_at,
     )
+
+
+@router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)
+async def get_sync_config(
+    config_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> SyncConfigResponse:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    return _sync_config_to_response(config)
+
+
+@router.patch("/sync-configs/{config_id}", response_model=SyncConfigResponse)
+async def update_sync_config(
+    config_id: str,
+    payload: SyncConfigUpdate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> SyncConfigResponse:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+
+    updated = await svc.update(
+        name=config.name,
+        sync_targets=payload.sync_targets,
+        sync_options=payload.sync_options,
+        is_active=payload.is_active,
+    )
+    return _sync_config_to_response(updated)
+
+
+@router.delete("/sync-configs/{config_id}", status_code=204)
+async def delete_sync_config(
+    config_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> None:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    await svc.delete(config.name)
+
+
+@router.post("/sync-configs/{config_id}/trigger", status_code=202)
+async def trigger_sync_config(
+    config_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> dict:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    return {"status": "triggered", "config_id": config_id}
 
 
 @router.get("/identities", response_model=list[IdentityMappingResponse])

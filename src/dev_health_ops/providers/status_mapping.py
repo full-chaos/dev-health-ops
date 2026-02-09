@@ -13,7 +13,9 @@ from dev_health_ops.models.work_items import (
     WorkItemType,
 )
 
-DEFAULT_STATUS_MAPPING_PATH = Path("src/dev_health_ops/config/status_mapping.yaml")
+DEFAULT_STATUS_MAPPING_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "status_mapping.yaml"
+)
 
 # If multiple label/status rules match, prefer "more terminal" states.
 _STATUS_PRIORITY: List[WorkItemStatusCategory] = [

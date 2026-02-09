@@ -22,8 +22,17 @@ logger = logging.getLogger(__name__)
 
 
 def _get_db_url() -> str:
-    """Get database URL from environment."""
-    return os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL") or ""
+    """Get data-store URL from environment.
+
+    Prefers CLICKHOUSE_URI (the primary data store for sync/metrics),
+    falling back to DATABASE_URI which may point to Postgres (admin DB).
+    """
+    return (
+        os.getenv("CLICKHOUSE_URI")
+        or os.getenv("DATABASE_URI")
+        or os.getenv("DATABASE_URL")
+        or ""
+    )
 
 
 def _merge_sync_flags(sync_targets: list[str]) -> dict[str, bool]:

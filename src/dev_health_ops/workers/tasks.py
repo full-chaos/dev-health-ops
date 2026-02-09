@@ -72,17 +72,12 @@ def _extract_owner_repo(
     return None
 
 
-async def _get_decrypted_credentials_async(
-    provider: str,
-    credential_name: str,
-    org_id: str,
-) -> dict[str, Any] | None:
-    from dev_health_ops.api.services.settings import IntegrationCredentialsService
-    from dev_health_ops.db import get_postgres_session
+def _decrypt_credential_sync(credential) -> dict[str, Any]:
+    from dev_health_ops.api.services.settings import decrypt_value
 
-    async with get_postgres_session() as session:
-        service = IntegrationCredentialsService(session, org_id)
-        return await service.get_decrypted_credentials(provider, credential_name)
+    if credential.credentials_encrypted:
+        return json.loads(decrypt_value(credential.credentials_encrypted))
+    return {}
 
 
 def _resolve_env_credentials(provider: str) -> dict[str, str]:
@@ -103,7 +98,6 @@ def run_sync_config(
     org_id: str = "default",
     triggered_by: str = "manual",
 ) -> dict:
-    from dev_health_ops.api.services.settings import decrypt_value
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
     from dev_health_ops.models.settings import (
@@ -170,20 +164,7 @@ def run_sync_config(
                         f"Credential not found for sync configuration: {config.credential_id}"
                     )
 
-                credentials = (
-                    asyncio.run(
-                        _get_decrypted_credentials_async(
-                            provider=provider,
-                            credential_name=credential.name,
-                            org_id=org_id,
-                        )
-                    )
-                    or {}
-                )
-                if not credentials and credential.credentials_encrypted:
-                    credentials = json.loads(
-                        decrypt_value(credential.credentials_encrypted)
-                    )
+                credentials = _decrypt_credential_sync(credential)
             else:
                 credentials = _resolve_env_credentials(provider)
 

@@ -339,9 +339,12 @@ async def test_connection(
     org_id: str = Depends(get_org_id),
 ) -> TestConnectionResponse:
     svc = IntegrationCredentialsService(session, org_id)
-    creds = await svc.get_decrypted_credentials(payload.provider, payload.name)
+
+    creds = payload.credentials  # inline (pre-save) or fall back to stored
     if not creds:
-        raise HTTPException(status_code=404, detail="Credential not found")
+        creds = await svc.get_decrypted_credentials(payload.provider, payload.name)
+        if not creds:
+            raise HTTPException(status_code=404, detail="Credential not found")
 
     success = False
     error = None
@@ -363,7 +366,9 @@ async def test_connection(
         safe_provider = str(payload.provider).replace("\r", "").replace("\n", "")
         logger.exception("Test connection failed for %s", safe_provider)
 
-    await svc.update_test_result(payload.provider, success, error, payload.name)
+    # Only update stored test result if credentials came from DB
+    if not payload.credentials:
+        await svc.update_test_result(payload.provider, success, error, payload.name)
     return TestConnectionResponse(success=success, error=error, details=details or None)
 
 
@@ -397,7 +402,7 @@ async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
     if not token:
         return False, {"error": "No token provided"}
 
-    base_url = creds.get("base_url", "https://gitlab.com/api/v4")
+    base_url = creds.get("url") or creds.get("base_url", "https://gitlab.com/api/v4")
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{base_url}/user",
@@ -414,8 +419,8 @@ async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
     import httpx
 
     email = creds.get("email")
-    api_token = creds.get("api_token")
-    base_url = creds.get("base_url")
+    api_token = creds.get("token") or creds.get("api_token")
+    base_url = creds.get("url") or creds.get("base_url")
 
     if not all([email, api_token, base_url]):
         return False, {
@@ -443,7 +448,7 @@ async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
 async def _test_linear_connection(creds: dict) -> tuple[bool, dict]:
     import httpx
 
-    api_key = creds.get("api_key")
+    api_key = creds.get("apiKey") or creds.get("api_key")
     if not api_key:
         return False, {"error": "No API key provided"}
 

@@ -70,6 +70,11 @@ class IntegrationCredentialUpdate(BaseModel):
 class TestConnectionRequest(BaseModel):
     provider: str
     name: str = "default"
+    credentials: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Inline credentials to test without saving. "
+        "When provided, these are used directly instead of looking up stored credentials.",
+    )
 
 
 class TestConnectionResponse(BaseModel):

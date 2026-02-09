@@ -89,6 +89,15 @@ def _decrypt_credential_sync(credential) -> dict[str, Any]:
     return {}
 
 
+def _inject_provider_token(provider: str, token: str) -> None:
+    env_var = {
+        "github": "GITHUB_TOKEN",
+        "gitlab": "GITLAB_TOKEN",
+    }.get(provider.lower())
+    if env_var and token:
+        os.environ[env_var] = token
+
+
 def _resolve_env_credentials(provider: str) -> dict[str, str]:
     from dev_health_ops.credentials.resolver import PROVIDER_ENV_VARS
 
@@ -300,6 +309,9 @@ def run_sync_config(
             result_payload["backfill_days"] = backfill_days
 
         if "work-items" in sync_targets and provider != "jira":
+            token = str(credentials.get("token") or "")
+            if token:
+                _inject_provider_token(provider, token)
             backfill_days = int(sync_options.get("backfill_days", 1))
             run_work_items_sync_job(
                 db_url=db_url,

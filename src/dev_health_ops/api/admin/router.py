@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Annotated, AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.audit import (
@@ -28,7 +29,7 @@ from dev_health_ops.api.services.users import (
     UserService,
 )
 from dev_health_ops.db import get_postgres_session
-from dev_health_ops.models.settings import SettingCategory
+from dev_health_ops.models.settings import JobRun, ScheduledJob, SettingCategory
 
 from .schemas import (
     AuditLogListResponse,
@@ -38,6 +39,7 @@ from .schemas import (
     IntegrationCredentialCreate,
     IntegrationCredentialResponse,
     IntegrationCredentialUpdate,
+    JobRunResponse,
     IPAllowlistCreate,
     IPAllowlistListResponse,
     IPAllowlistResponse,
@@ -572,7 +574,69 @@ async def trigger_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
-    return {"status": "triggered", "config_id": config_id}
+
+    try:
+        from dev_health_ops.workers.tasks import run_sync_config
+
+        result = run_sync_config.delay(
+            config_id=str(config.id),
+            org_id=org_id,
+            triggered_by="manual",
+        )
+        return {
+            "status": "triggered",
+            "config_id": str(config.id),
+            "task_id": result.id,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+
+
+@router.get("/sync-configs/{config_id}/jobs", response_model=list[JobRunResponse])
+async def list_sync_config_jobs(
+    config_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> list[JobRunResponse]:
+    svc = SyncConfigurationService(session, org_id)
+    existing = await svc.get_by_id(config_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+
+    job_stmt = select(ScheduledJob.id).where(
+        ScheduledJob.org_id == org_id,
+        ScheduledJob.sync_config_id == uuid.UUID(config_id),
+    )
+    job_result = await session.execute(job_stmt)
+    job_ids = list(job_result.scalars().all())
+
+    if not job_ids:
+        return []
+
+    runs_stmt = (
+        select(JobRun)
+        .where(JobRun.job_id.in_(job_ids))
+        .order_by(JobRun.created_at.desc())
+        .limit(50)
+    )
+    runs_result = await session.execute(runs_stmt)
+    runs = list(runs_result.scalars().all())
+
+    return [
+        JobRunResponse(
+            id=str(run.id),
+            job_id=str(run.job_id),
+            status=run.status,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            duration_seconds=run.duration_seconds,
+            result=run.result,
+            error=run.error,
+            triggered_by=run.triggered_by,
+            created_at=run.created_at,
+        )
+        for run in runs
+    ]
 
 
 @router.get("/identities", response_model=list[IdentityMappingResponse])

@@ -235,7 +235,7 @@ class OrganizationCreate(BaseModel):
     name: str = Field(..., min_length=1)
     slug: Optional[str] = None
     description: Optional[str] = None
-    tier: str = "free"
+    tier: str = "community"
     settings: dict[str, Any] = Field(default_factory=dict)
     owner_user_id: Optional[str] = None
 

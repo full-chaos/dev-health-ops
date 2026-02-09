@@ -1,4 +1,4 @@
-"""Licensing, Feature Flags, and Tier models for Enterprise Edition.
+"""Licensing and Feature Flag models for Enterprise Edition.
 
 This module defines the models for:
 - Feature Flags: Available features that can be gated by tier or toggle
@@ -29,16 +29,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
+from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.git import Base, GUID
-
-
-class Tier(str, Enum):
-    """Organization tier levels. Higher tiers unlock more features and limits."""
-
-    FREE = "free"
-    STARTER = "starter"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
 
 
 class FeatureCategory(str, Enum):
@@ -87,7 +79,7 @@ class FeatureFlag(Base):
     min_tier = Column(
         Text,
         nullable=False,
-        default=Tier.FREE.value,
+        default=LicenseTier.COMMUNITY.value,
         comment="Minimum tier required to access this feature",
     )
     is_enabled = Column(
@@ -132,7 +124,7 @@ class FeatureFlag(Base):
         name: str,
         description: Optional[str] = None,
         category: str = FeatureCategory.CORE.value,
-        min_tier: str = Tier.FREE.value,
+        min_tier: str = LicenseTier.COMMUNITY.value,
         is_enabled: bool = True,
         is_beta: bool = False,
         is_deprecated: bool = False,
@@ -287,7 +279,7 @@ class OrgLicense(Base):
     tier = Column(
         Text,
         nullable=False,
-        default=Tier.FREE.value,
+        default=LicenseTier.COMMUNITY.value,
         comment="Decoded tier from license",
     )
     licensed_users = Column(
@@ -367,7 +359,7 @@ class OrgLicense(Base):
     def __init__(
         self,
         org_id: uuid.UUID,
-        tier: str = Tier.FREE.value,
+        tier: str = LicenseTier.COMMUNITY.value,
         license_key: Optional[str] = None,
         licensed_users: Optional[int] = None,
         licensed_repos: Optional[int] = None,
@@ -399,7 +391,7 @@ class OrgLicense(Base):
 
 
 TIER_LIMITS = {
-    Tier.FREE: {
+    LicenseTier.COMMUNITY: {
         "max_users": 5,
         "max_repos": 3,
         "max_work_items": 1000,
@@ -407,7 +399,7 @@ TIER_LIMITS = {
         "api_rate_limit_per_min": 100,
         "min_sync_interval_hours": 24,
     },
-    Tier.STARTER: {
+    LicenseTier.TEAM: {
         "max_users": 20,
         "max_repos": 10,
         "max_work_items": 10000,
@@ -415,15 +407,7 @@ TIER_LIMITS = {
         "api_rate_limit_per_min": 500,
         "min_sync_interval_hours": 6,
     },
-    Tier.PRO: {
-        "max_users": 100,
-        "max_repos": 50,
-        "max_work_items": 100000,
-        "retention_days": 365,
-        "api_rate_limit_per_min": 2000,
-        "min_sync_interval_hours": 1,
-    },
-    Tier.ENTERPRISE: {
+    LicenseTier.ENTERPRISE: {
         "max_users": None,
         "max_repos": None,
         "max_work_items": None,
@@ -438,175 +422,175 @@ STANDARD_FEATURES = [
         "git_sync",
         "Git Sync",
         FeatureCategory.CORE,
-        Tier.FREE,
+        LicenseTier.COMMUNITY,
         "Sync git commits and PRs",
     ),
     (
         "work_items_sync",
         "Work Items Sync",
         FeatureCategory.CORE,
-        Tier.FREE,
+        LicenseTier.COMMUNITY,
         "Sync work items from providers",
     ),
     (
         "basic_analytics",
         "Basic Analytics",
         FeatureCategory.ANALYTICS,
-        Tier.FREE,
+        LicenseTier.COMMUNITY,
         "Basic metrics and dashboards",
     ),
     (
         "team_management",
         "Team Management",
         FeatureCategory.CORE,
-        Tier.FREE,
+        LicenseTier.COMMUNITY,
         "Basic team configuration",
     ),
     (
         "github_integration",
         "GitHub Integration",
         FeatureCategory.INTEGRATIONS,
-        Tier.STARTER,
+        LicenseTier.TEAM,
         "GitHub provider integration",
     ),
     (
         "gitlab_integration",
         "GitLab Integration",
         FeatureCategory.INTEGRATIONS,
-        Tier.STARTER,
+        LicenseTier.TEAM,
         "GitLab provider integration",
     ),
     (
         "jira_integration",
         "Jira Integration",
         FeatureCategory.INTEGRATIONS,
-        Tier.STARTER,
+        LicenseTier.TEAM,
         "Jira provider integration",
     ),
     (
         "investment_view",
         "Investment View",
         FeatureCategory.ANALYTICS,
-        Tier.STARTER,
+        LicenseTier.TEAM,
         "Investment categorization view",
     ),
     (
         "api_access",
         "API Access",
         FeatureCategory.CORE,
-        Tier.STARTER,
+        LicenseTier.TEAM,
         "REST and GraphQL API access",
     ),
     (
         "capacity_forecast",
         "Capacity Forecast",
         FeatureCategory.ANALYTICS,
-        Tier.PRO,
+        LicenseTier.TEAM,
         "Capacity planning forecasts",
     ),
     (
         "work_graph",
         "Work Graph",
         FeatureCategory.ANALYTICS,
-        Tier.PRO,
+        LicenseTier.TEAM,
         "Work graph analysis",
     ),
     (
         "quadrant_analysis",
         "Quadrant Analysis",
         FeatureCategory.ANALYTICS,
-        Tier.PRO,
+        LicenseTier.TEAM,
         "Quadrant metrics analysis",
     ),
     (
         "linear_integration",
         "Linear Integration",
         FeatureCategory.INTEGRATIONS,
-        Tier.PRO,
+        LicenseTier.TEAM,
         "Linear provider integration",
     ),
     (
         "llm_categorization",
         "LLM Categorization",
         FeatureCategory.ANALYTICS,
-        Tier.PRO,
+        LicenseTier.TEAM,
         "AI-powered work categorization",
     ),
     (
         "webhooks",
         "Webhooks",
         FeatureCategory.INTEGRATIONS,
-        Tier.PRO,
+        LicenseTier.TEAM,
         "Webhook ingestion",
     ),
     (
         "scheduled_jobs",
         "Scheduled Jobs",
         FeatureCategory.CORE,
-        Tier.PRO,
+        LicenseTier.TEAM,
         "Automated scheduled sync jobs",
     ),
     (
         "sso_saml",
         "SAML SSO",
         FeatureCategory.SECURITY,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "SAML single sign-on",
     ),
     (
         "sso_oidc",
         "OIDC SSO",
         FeatureCategory.SECURITY,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "OIDC single sign-on",
     ),
     (
         "audit_log",
         "Audit Log",
         FeatureCategory.COMPLIANCE,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "Audit logging",
     ),
     (
         "custom_retention",
         "Custom Retention",
         FeatureCategory.COMPLIANCE,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "Custom data retention policies",
     ),
     (
         "ip_allowlist",
         "IP Allowlist",
         FeatureCategory.SECURITY,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "IP address allowlisting",
     ),
     (
         "data_export",
         "Data Export",
         FeatureCategory.COMPLIANCE,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "Bulk data export",
     ),
     (
         "multi_org",
         "Multi-Organization",
         FeatureCategory.ADMIN,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "Multiple organization support",
     ),
     (
         "custom_branding",
         "Custom Branding",
         FeatureCategory.ADMIN,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "Custom branding and white-label",
     ),
     (
         "priority_support",
         "Priority Support",
         FeatureCategory.ADMIN,
-        Tier.ENTERPRISE,
+        LicenseTier.ENTERPRISE,
         "Priority support SLA",
     ),
 ]

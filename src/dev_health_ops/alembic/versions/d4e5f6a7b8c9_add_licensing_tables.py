@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("category", sa.Text(), nullable=False, server_default="core"),
-        sa.Column("min_tier", sa.Text(), nullable=False, server_default="free"),
+        sa.Column("min_tier", sa.Text(), nullable=False, server_default="community"),
         sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default="true"),
         sa.Column("is_beta", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column(
@@ -74,7 +74,7 @@ def upgrade() -> None:
         sa.Column("id", UUID(as_uuid=True), nullable=False),
         sa.Column("org_id", UUID(as_uuid=True), nullable=False),
         sa.Column("license_key", sa.Text(), nullable=True),
-        sa.Column("tier", sa.Text(), nullable=False, server_default="free"),
+        sa.Column("tier", sa.Text(), nullable=False, server_default="community"),
         sa.Column("licensed_users", sa.Integer(), nullable=True),
         sa.Column("licensed_repos", sa.Integer(), nullable=True),
         sa.Column("issued_at", sa.DateTime(timezone=True), nullable=True),

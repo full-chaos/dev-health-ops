@@ -33,7 +33,6 @@ from .licensing import (
     FeatureFlag,
     OrgFeatureOverride,
     OrgLicense,
-    Tier,
     TIER_LIMITS,
     STANDARD_FEATURES,
 )
@@ -91,7 +90,6 @@ __all__ = [
     "STANDARD_FEATURES",
     "SyncConfiguration",
     "TeamMapping",
-    "Tier",
     "TIER_LIMITS",
     "User",
     "JiraProjectOpsTeamLink",

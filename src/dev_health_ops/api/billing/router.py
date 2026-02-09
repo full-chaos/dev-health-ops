@@ -214,15 +214,8 @@ async def _persist_license(
         from sqlalchemy import select
 
         from dev_health_ops.db import get_postgres_session
-        from dev_health_ops.models.licensing import OrgLicense, Tier
+        from dev_health_ops.models.licensing import OrgLicense
         from dev_health_ops.models.users import Organization
-
-        tier_map = {
-            LicenseTier.COMMUNITY: Tier.FREE,
-            LicenseTier.TEAM: Tier.STARTER,
-            LicenseTier.ENTERPRISE: Tier.ENTERPRISE,
-        }
-        db_tier = tier_map.get(tier, Tier.FREE)
 
         async with get_postgres_session() as session:
             import uuid as uuid_mod
@@ -238,7 +231,7 @@ async def _persist_license(
             )
             org = result.scalar_one_or_none()
             if org:
-                org.tier = str(db_tier.value)
+                org.tier = str(tier.value)
 
             result = await session.execute(
                 select(OrgLicense).where(OrgLicense.org_id == org_uuid)
@@ -248,13 +241,13 @@ async def _persist_license(
             if org_license is None:
                 org_license = OrgLicense(
                     org_id=org_uuid,
-                    tier=str(db_tier.value),
+                    tier=str(tier.value),
                     license_type="saas",
                     license_key=license_key,
                 )
                 session.add(org_license)
             else:
-                org_license.tier = str(db_tier.value)
+                org_license.tier = str(tier.value)
                 org_license.license_key = license_key
 
             if customer_id:
@@ -274,7 +267,7 @@ async def _revoke_license(org_id: str) -> None:
         from sqlalchemy import select
 
         from dev_health_ops.db import get_postgres_session
-        from dev_health_ops.models.licensing import OrgLicense, Tier
+        from dev_health_ops.models.licensing import OrgLicense
         from dev_health_ops.models.users import Organization
 
         async with get_postgres_session() as session:
@@ -290,7 +283,7 @@ async def _revoke_license(org_id: str) -> None:
             )
             org = result.scalar_one_or_none()
             if org:
-                org.tier = str(Tier.FREE.value)
+                org.tier = str(LicenseTier.COMMUNITY.value)
 
             result = await session.execute(
                 select(OrgLicense).where(OrgLicense.org_id == org_uuid)
@@ -298,7 +291,7 @@ async def _revoke_license(org_id: str) -> None:
             org_license = result.scalar_one_or_none()
             if org_license:
                 org_license.is_valid = False
-                org_license.tier = str(Tier.FREE.value)
+                org_license.tier = str(LicenseTier.COMMUNITY.value)
 
             await session.commit()
 

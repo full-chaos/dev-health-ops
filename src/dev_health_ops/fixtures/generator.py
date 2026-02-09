@@ -1553,8 +1553,9 @@ class SyntheticDataGenerator:
         include_admin: bool = True,
     ) -> Dict[str, Any]:
         import bcrypt
+        from dev_health_ops.licensing.types import LicenseTier
         from dev_health_ops.models.users import User, Organization, Membership
-        from dev_health_ops.models.licensing import OrgLicense, Tier
+        from dev_health_ops.models.licensing import OrgLicense
 
         users = []
         orgs = []
@@ -1605,7 +1606,7 @@ class SyntheticDataGenerator:
             licenses.append(
                 OrgLicense(
                     org_id=admin_org.id,
-                    tier=Tier.ENTERPRISE.value,
+                    tier=LicenseTier.ENTERPRISE.value,
                     license_type="saas",
                     licensed_users=None,
                     licensed_repos=None,

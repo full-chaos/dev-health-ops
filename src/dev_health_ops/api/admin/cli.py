@@ -141,6 +141,28 @@ def list_orgs(ns: argparse.Namespace) -> int:
     return asyncio.run(_list_orgs_async(ns))
 
 
+async def _seed_features_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.services.licensing import seed_feature_flags_async
+
+    session = await _get_session(ns)
+    try:
+        created = await seed_feature_flags_async(session)
+        if created:
+            print(f"Seeded {created} feature flags.")
+        else:
+            print("All feature flags already exist.")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def seed_features(ns: argparse.Namespace) -> int:
+    return asyncio.run(_seed_features_async(ns))
+
+
 def licenses_keygen_cmd(ns: argparse.Namespace) -> int:
     from dev_health_ops.licensing.generator import generate_keypair
 
@@ -215,7 +237,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     orgs_create.add_argument("--description", help="Organization description.")
     orgs_create.add_argument(
-        "--tier", default="free", help="Subscription tier (default: free)."
+        "--tier", default="community", help="Subscription tier (default: community)."
     )
     orgs_create.add_argument(
         "--owner-email", dest="owner_email", help="Email of the initial owner."
@@ -267,3 +289,13 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--contact-email", dest="contact_email", help="Billing contact email."
     )
     licenses_create.set_defaults(func=licenses_create_cmd)
+
+    features_parser = admin_sub.add_parser("features", help="Feature flag management.")
+    features_sub = features_parser.add_subparsers(
+        dest="features_command", required=True
+    )
+
+    features_seed = features_sub.add_parser(
+        "seed", help="Seed standard feature flags into the database."
+    )
+    features_seed.set_defaults(func=seed_features)

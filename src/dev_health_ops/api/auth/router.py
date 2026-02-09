@@ -229,7 +229,7 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
         org = Organization(
             slug=org_slug,
             name=org_name,
-            tier="free",
+            tier="community",
             is_active=True,
         )
         db.add(org)
@@ -800,9 +800,7 @@ async def saml_acs_callback(
                 extra_metadata={"protocol": "saml"},
             )
             await db.commit()
-            raise HTTPException(
-                status_code=400, detail="SAML authentication failed"
-            )
+            raise HTTPException(status_code=400, detail="SAML authentication failed")
 
         email = saml_info.get("email")
         if not email:
@@ -987,9 +985,7 @@ async def oidc_callback(
                 extra_metadata={"protocol": "oidc"},
             )
             await db.commit()
-            raise HTTPException(
-                status_code=400, detail="OIDC authentication failed"
-            )
+            raise HTTPException(status_code=400, detail="OIDC authentication failed")
 
         email = oidc_info.get("email")
         if not email:

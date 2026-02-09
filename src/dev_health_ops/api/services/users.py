@@ -239,7 +239,7 @@ class OrganizationService:
         slug: str | None = None,
         description: str | None = None,
         settings: dict[str, Any] | None = None,
-        tier: str = "free",
+        tier: str = "community",
         owner_user_id: str | None = None,
     ) -> Organization:
         slug = slug or _slugify(name)

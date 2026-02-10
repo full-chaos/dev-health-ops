@@ -90,6 +90,15 @@ from .schemas import (
 
 logger = logging.getLogger(__name__)
 
+# Canonical mapping of provider → supported sync targets.
+# Jira/Linear only support work-items; Git/CI/CD come from code hosts.
+PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
+    "github": ["git", "prs", "cicd", "deployments", "incidents", "work-items"],
+    "gitlab": ["git", "prs", "cicd", "deployments", "incidents", "work-items"],
+    "jira": ["work-items"],
+    "linear": ["work-items"],
+}
+
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
@@ -483,6 +492,11 @@ async def _test_linear_connection(creds: dict) -> tuple[bool, dict]:
             if viewer:
                 return True, {"user": viewer.get("email"), "name": viewer.get("name")}
         return False, {"status": resp.status_code, "error": resp.text[:200]}
+
+
+@router.get("/sync-targets")
+async def get_provider_sync_targets() -> dict[str, list[str]]:
+    return PROVIDER_SYNC_TARGETS
 
 
 @router.get("/sync-configs", response_model=list[SyncConfigResponse])

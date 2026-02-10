@@ -1,6 +1,15 @@
 -- Migration 024: Add org_id column to all analytics tables for multi-tenancy.
 -- Uses String type with DEFAULT 'default' for backward compatibility.
 -- Existing rows automatically get org_id='default'.
+--
+-- PERFORMANCE NOTE: This migration adds org_id as a regular column, not part of
+-- the sorting key (ORDER BY/primary key). If tenant-scoped queries filter by org_id,
+-- leaving it out of the sorting key can significantly degrade query performance and
+-- may not provide strong isolation guarantees.
+--
+-- For production multi-tenant deployments with filtering by org_id, consider a
+-- follow-up migration that rebuilds tables with org_id in the sorting key, or add
+-- projections/materialized views with org_id-first ordering for optimal performance.
 
 -- Core metrics tables
 ALTER TABLE repo_metrics_daily ADD COLUMN IF NOT EXISTS org_id String DEFAULT 'default';

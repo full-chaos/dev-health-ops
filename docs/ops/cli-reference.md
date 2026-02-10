@@ -51,17 +51,17 @@ Sync git repository data. Uses `CLICKHOUSE_URI` (analytics layer).
 
 ```bash
 # Local repository
-python cli.py sync git --provider local \
+dev-hops sync git --provider local \
   --repo-path /path/to/repo
 
 # GitHub
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
   --repo linux
 
 # GitLab
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
 ```
@@ -81,7 +81,7 @@ python cli.py sync git --provider gitlab \
 Sync pull request data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-python cli.py sync prs --provider github \
+dev-hops sync prs --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -93,22 +93,22 @@ Sync work items from issue trackers. Uses `CLICKHOUSE_URI`.
 
 ```bash
 # All providers
-python cli.py sync work-items --provider all \
+dev-hops sync work-items --provider all \
   --date 2025-02-01 \
   --backfill 30
 
 # Jira only
-python cli.py sync work-items --provider jira
+dev-hops sync work-items --provider jira
 
 # GitHub with pattern
-python cli.py sync work-items --provider github \
+dev-hops sync work-items --provider github \
   -s "org/*"
 
 # Linear (all teams)
-python cli.py sync work-items --provider linear
+dev-hops sync work-items --provider linear
 
 # Linear (specific team by key)
-python cli.py sync work-items --provider linear \
+dev-hops sync work-items --provider linear \
   --repo ENG
 ```
 
@@ -120,13 +120,13 @@ Sync CI/CD pipeline data. Uses `CLICKHOUSE_URI`.
 
 ```bash
 # GitHub
-python cli.py sync cicd --provider github \
+dev-hops sync cicd --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
 
 # GitLab
-python cli.py sync cicd --provider gitlab \
+dev-hops sync cicd --provider gitlab \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
   --project-id 123
@@ -137,7 +137,7 @@ python cli.py sync cicd --provider gitlab \
 Sync deployment events. Uses `CLICKHOUSE_URI`.
 
 ```bash
-python cli.py sync deployments --provider github \
+dev-hops sync deployments --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -148,7 +148,7 @@ python cli.py sync deployments --provider github \
 Sync incident data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-python cli.py sync incidents --provider github \
+dev-hops sync incidents --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
@@ -160,13 +160,23 @@ Sync team definitions.
 
 ```bash
 # From config file
-python cli.py sync teams --path config/team_mapping.yaml
+dev-hops sync teams --path config/team_mapping.yaml
 
 # From Jira projects
-python cli.py sync teams --provider jira
+dev-hops sync teams --provider jira
 
 # Synthetic teams
-python cli.py sync teams --provider synthetic
+dev-hops sync teams --provider synthetic
+
+# From GitHub org (requires --owner and token)
+dev-hops sync teams --provider github \
+  --owner my-org \
+  --auth "$GITHUB_TOKEN"
+
+# From GitLab group (fetches group + subgroups)
+dev-hops sync teams --provider gitlab \
+  --owner my-group/path \
+  --auth "$GITLAB_TOKEN"
 ```
 
 ---
@@ -179,21 +189,21 @@ Compute daily metrics. Uses `CLICKHOUSE_URI`.
 
 ```bash
 # Single day
-python cli.py metrics daily \
+dev-hops metrics daily \
   --date 2025-02-01
 
 # With backfill
-python cli.py metrics daily \
+dev-hops metrics daily \
   --date 2025-02-01 \
   --backfill 7
 
 # Filter to one repo
-python cli.py metrics daily \
+dev-hops metrics daily \
   --date 2025-02-01 \
   --repo-id <uuid>
 
 # Specify output format
-python cli.py metrics daily \
+dev-hops metrics daily \
   --date 2025-02-01 \
   --sink clickhouse
 ```
@@ -214,7 +224,7 @@ python cli.py metrics daily \
 Generate synthetic test data. Uses `CLICKHOUSE_URI`.
 
 ```bash
-python cli.py fixtures generate --days 30
+dev-hops fixtures generate --days 30
 ```
 
 **Options:**
@@ -359,18 +369,18 @@ export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
 export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
 
 # 1. Sync git data
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner myorg \
   --repo myrepo
 
 # 2. Sync work items
-python cli.py sync work-items --provider jira \
+dev-hops sync work-items --provider jira \
   --date 2025-02-01 \
   --backfill 30
 
 # 3. Compute metrics
-python cli.py metrics daily \
+dev-hops metrics daily \
   --date 2025-02-01 \
   --backfill 30
 ```
@@ -382,17 +392,17 @@ python cli.py metrics daily \
 export CLICKHOUSE_URI="sqlite+aiosqlite:///./dev.db"
 
 # Generate synthetic data
-python cli.py fixtures generate --days 30
+dev-hops fixtures generate --days 30
 
 # Compute metrics
-python cli.py metrics daily --backfill 30
+dev-hops metrics daily --backfill 30
 ```
 
 ### Batch Organization Sync
 
 ```bash
 # Sync all repos in org
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   -s "myorg/*" \
   --group myorg \

@@ -13,7 +13,7 @@
 - No ClickHouse query timings or `system.query_log` samples are checked into the repo.
 - No performance benchmarks or issue notes reference slow ClickHouse queries.
 - Timing status: unchecked (no evidence to confirm slow queries).
-- Use `python cli.py audit perf --db <clickhouse_uri>` to sample slow queries from `system.query_log` (requires `log_queries` enabled).
+- Use `dev-hops audit perf --db <clickhouse_uri>` to sample slow queries from `system.query_log` (requires `log_queries` enabled).
 
 ## Decision
 

@@ -173,25 +173,25 @@ Explanation format:
 
 * Git data (local):
 
-  * `python cli.py sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo`
+  * `dev-hops sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo`
 
 * Work items:
 
-  * `python cli.py sync work-items --provider <jira|github|gitlab|synthetic|all> -s "org/*" --db "$DATABASE_URI"`
+  * `dev-hops sync work-items --provider <jira|github|gitlab|synthetic|all> -s "org/*" --db "$DATABASE_URI"`
 
 * Teams:
 
-  * `python cli.py sync teams --provider <config|jira|synthetic> --db "$DATABASE_URI"`
+  * `dev-hops sync teams --provider <config|jira|jira-ops|synthetic|ms-teams|github|gitlab> --db "$DATABASE_URI"`
 
 ### 6.2 Generate synthetic data
 
-* `python cli.py fixtures generate --db "$DATABASE_URI" --days 30`
+* `dev-hops fixtures generate --db "$DATABASE_URI" --days 30`
 
 ### 6.3 Compute metrics
 
 * Daily rollups:
 
-  * `python cli.py metrics daily --db "$DATABASE_URI"`
+  * `dev-hops metrics daily --db "$DATABASE_URI"`
 
 ---
 

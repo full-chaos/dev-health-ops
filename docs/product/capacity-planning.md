@@ -136,14 +136,14 @@ type Query {
 
 ```bash
 # Compute forecast for a team
-python cli.py forecast capacity \
+dev-hops forecast capacity \
   --team-id team-123 \
   --target-items 50 \
   --history-days 90 \
   --db "$DATABASE_URI"
 
 # Compute for all teams
-python cli.py forecast capacity \
+dev-hops forecast capacity \
   --all-teams \
   --db "$DATABASE_URI"
 ```

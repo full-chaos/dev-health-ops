@@ -34,7 +34,7 @@ The GraphQL endpoint is already mounted at `/graphql`:
 ```bash
 cd dev-health-ops
 # Start the API server
-python cli.py api --port 8000 --db "$DATABASE_URI"
+dev-hops api --port 8000 --db "$DATABASE_URI"
 
 # GraphiQL is available at http://localhost:8000/graphql
 ```

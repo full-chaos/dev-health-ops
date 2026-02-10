@@ -26,19 +26,19 @@ mkdocs serve
 ### Sync a local repository
 
 ```bash
-python cli.py sync git --provider local --db "<DB_CONN>" --repo-path /path/to/repo
+dev-hops sync git --provider local --db "<DB_CONN>" --repo-path /path/to/repo
 ```
 
 ### Sync work items from GitHub
 
 ```bash
-python cli.py sync work-items --provider github --auth "$GITHUB_TOKEN" -s "org/*" --db "<DB_CONN>"
+dev-hops sync work-items --provider github --auth "$GITHUB_TOKEN" -s "org/*" --db "<DB_CONN>"
 ```
 
 ### Compute daily metrics
 
 ```bash
-python cli.py metrics daily --db "<DB_CONN>"
+dev-hops metrics daily --db "<DB_CONN>"
 ```
 
 ### Bring up Grafana dashboards

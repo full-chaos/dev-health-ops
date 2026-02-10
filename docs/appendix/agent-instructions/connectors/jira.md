@@ -44,7 +44,7 @@ The URL is normalized to `https://` automatically.
 ### Sync Work Items
 
 ```bash
-python cli.py sync work-items --provider jira \
+dev-hops sync work-items --provider jira \
   --date 2025-02-01 \
   --backfill 30 \
   --db "clickhouse://localhost:8123/default"
@@ -130,7 +130,7 @@ teams:
 
 Sync:
 ```bash
-python cli.py sync teams --path config/team_mapping.yaml
+dev-hops sync teams --path config/team_mapping.yaml
 ```
 
 ### Jira Project-Based
@@ -138,7 +138,7 @@ python cli.py sync teams --path config/team_mapping.yaml
 Auto-import Jira projects as teams:
 
 ```bash
-python cli.py sync teams --provider jira
+dev-hops sync teams --provider jira
 ```
 
 ---

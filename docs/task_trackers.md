@@ -2,7 +2,7 @@
 
 This repo normalizes Jira issues, GitHub issues/Projects items, GitLab issues, and Linear issues into a unified `WorkItem` model (`models/work_items.py`) and computes daily aggregates + cycle times.
 
-Jira is used to track associated project work (planning/throughput/WIP). Pull request metrics are computed from PR/MR data synced via the CLI (`python cli.py sync ...`) and are independent of Jira.
+Jira is used to track associated project work (planning/throughput/WIP). Pull request metrics are computed from PR/MR data synced via the CLI (`dev-hops sync ...`) and are independent of Jira.
 
 ## Provider Credentials (env vars)
 
@@ -22,7 +22,7 @@ Optional Jira field mappings (instance-specific):
 
 ### GitHub
 - `GITHUB_TOKEN`
-  - Optional CLI override: `python cli.py sync work-items --provider github --auth "$GITHUB_TOKEN" ...`
+  - Optional CLI override: `dev-hops sync work-items --provider github --auth "$GITHUB_TOKEN" ...`
 
 Optional Projects v2 ingestion:
 - `GITHUB_PROJECTS_V2` as comma-separated `org_login:project_number` entries, e.g.:
@@ -31,7 +31,7 @@ Optional Projects v2 ingestion:
 ### GitLab
 - `GITLAB_TOKEN`
 - `GITLAB_URL` (optional, default: `https://gitlab.com`)
-  - Optional CLI override: `python cli.py sync work-items --provider gitlab --auth "$GITLAB_TOKEN" ...`
+  - Optional CLI override: `dev-hops sync work-items --provider gitlab --auth "$GITLAB_TOKEN" ...`
 
 ### Linear
 - `LINEAR_API_KEY` (required)
@@ -45,10 +45,10 @@ Optional configuration:
 Usage:
 ```bash
 # Sync all teams
-python cli.py sync work-items --provider linear --db "$DATABASE_URI"
+dev-hops sync work-items --provider linear --db "$DATABASE_URI"
 
 # Sync specific team by key (e.g., ENG, PROD)
-python cli.py sync work-items --provider linear --repo ENG --db "$DATABASE_URI"
+dev-hops sync work-items --provider linear --repo ENG --db "$DATABASE_URI"
 ```
 
 ## Status & Type Normalization
@@ -92,13 +92,13 @@ To enable team filtering in Grafana, you can sync teams from various sources.
 Populate `config/team_mapping.yaml` (schema: `team_id`, `team_name`, `members`).
 Then run:
 ```bash
-python cli.py sync teams --path config/team_mapping.yaml
+dev-hops sync teams --path config/team_mapping.yaml
 ```
 
 ### Jira Project Mapping
 Automatically import Jira projects as teams:
 ```bash
-python cli.py sync teams --provider jira
+dev-hops sync teams --provider jira
 ```
 
 ## Running Jira work metrics
@@ -106,13 +106,13 @@ python cli.py sync teams --provider jira
 Jira work items are fetched via the work item sync job:
 
 ```bash
-python cli.py sync work-items --provider jira --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
+dev-hops sync work-items --provider jira --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
 ```
 
 Use `-s`/`--search` to filter repos by name (glob pattern), e.g.:
 
 ```bash
-python cli.py sync work-items --provider github -s "org/*" --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
+dev-hops sync work-items --provider github -s "org/*" --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
 ```
 
 ### Quick Jira API smoke test (curl)

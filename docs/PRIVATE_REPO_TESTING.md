@@ -67,7 +67,7 @@ pytest tests/test_private_repo_access.py::TestGitHubPrivateRepoAccess -v
 **Option C: Test with actual data sync**
 
 ```bash
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITHUB_TOKEN" \
   --owner myusername \
@@ -128,7 +128,7 @@ pytest tests/test_private_repo_access.py::TestGitLabPrivateProjectAccess -v
 **Option C: Test with actual data sync**
 
 ```bash
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITLAB_TOKEN" \
   --project-id 12345

@@ -79,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("CLICKHOUSE_URI"),
         help="ClickHouse URI for analytics data (metrics, work items). Env: CLICKHOUSE_URI",
     )
+    parser.add_argument(
+        "--org",
+        default=os.getenv("ORG_ID", "default"),
+        help="Organization ID for multi-tenant scoping. Env: ORG_ID. Defaults to 'default'.",
+    )
     from dev_health_ops.llm.cli import add_llm_arguments
 
     add_llm_arguments(parser)

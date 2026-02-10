@@ -56,6 +56,11 @@ beat_schedule = {
         "schedule": crontab(hour=2, minute=30),
         "options": {"queue": "sync"},
     },
+    "reconcile-team-members": {
+        "task": "dev_health_ops.workers.tasks.reconcile_team_members",
+        "schedule": crontab(hour=3, minute=0),
+        "options": {"queue": "sync"},
+    },
 }
 
 # Result settings

@@ -22,6 +22,7 @@ from dev_health_ops.api.services.settings import (
     SettingsService,
     SyncConfigurationService,
     TeamDiscoveryService,
+    TeamMembershipService,
     TeamMappingService,
 )
 from dev_health_ops.api.services.users import (
@@ -35,6 +36,8 @@ from dev_health_ops.models.settings import JobRun, ScheduledJob, SettingCategory
 from .schemas import (
     AuditLogListResponse,
     AuditLogResponse,
+    ConfirmMembersRequest,
+    ConfirmMembersResponse,
     IdentityMappingCreate,
     IdentityMappingResponse,
     IntegrationCredentialCreate,
@@ -70,6 +73,7 @@ from .schemas import (
     TeamDiscoverResponse,
     TeamImportRequest,
     TeamImportResponse,
+    TeamMembersDiscoverResponse,
     TeamMappingCreate,
     TeamMappingResponse,
     TestConnectionRequest,
@@ -900,6 +904,118 @@ async def trigger_drift_sync(
 
     sync_team_drift.apply_async(kwargs={"org_id": org_id}, queue="sync")
     return {"status": "dispatched"}
+
+
+@router.get(
+    "/teams/{team_id}/discover-members",
+    response_model=TeamMembersDiscoverResponse,
+)
+async def discover_team_members(
+    team_id: str,
+    provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> TeamMembersDiscoverResponse:
+    team_svc = TeamMappingService(session, org_id)
+    team = await team_svc.get(team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    creds_svc = IntegrationCredentialsService(session, org_id)
+    credential = await creds_svc.get(provider, "default")
+    decrypted = await creds_svc.get_decrypted_credentials(provider, "default")
+    if credential is None or decrypted is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No credentials found for provider '{provider}'",
+        )
+
+    config = credential.config or {}
+    membership_svc = TeamMembershipService(session, org_id)
+    provider_team_id = str((team.extra_data or {}).get("provider_team_id") or team_id)
+
+    if provider == "github":
+        token = decrypted.get("token")
+        org_name = config.get("org")
+        team_slug = provider_team_id.removeprefix("gh:")
+        if not token or not org_name:
+            raise HTTPException(
+                status_code=400,
+                detail="GitHub credentials require token and config.org",
+            )
+        members = await membership_svc.discover_members_github(
+            token=token,
+            org_name=org_name,
+            team_slug=team_slug,
+        )
+    elif provider == "gitlab":
+        token = decrypted.get("token")
+        group_path = provider_team_id.removeprefix("gl:")
+        url = config.get("url", "https://gitlab.com")
+        if not token or not group_path:
+            raise HTTPException(
+                status_code=400,
+                detail="GitLab credentials require token and team provider path",
+            )
+        members = await membership_svc.discover_members_gitlab(
+            token=token,
+            group_path=group_path,
+            url=url,
+        )
+    else:
+        email = decrypted.get("email")
+        api_token = decrypted.get("api_token") or decrypted.get("token")
+        jira_url = config.get("url") or decrypted.get("url")
+        project_key = provider_team_id
+        if ":" in project_key:
+            project_key = project_key.split(":", 1)[1]
+        if not project_key and team.project_keys:
+            project_key = team.project_keys[0]
+        if not email or not api_token or not jira_url or not project_key:
+            raise HTTPException(
+                status_code=400,
+                detail="Jira credentials require email, api_token, url, and project key",
+            )
+        members = await membership_svc.discover_members_jira(
+            email=email,
+            api_token=api_token,
+            url=jira_url,
+            project_key=project_key,
+        )
+
+    matched = await membership_svc.match_members(members)
+    return TeamMembersDiscoverResponse(
+        team_id=team_id,
+        provider=provider,
+        members=matched,
+        total=len(matched),
+    )
+
+
+@router.post(
+    "/teams/{team_id}/confirm-members",
+    response_model=ConfirmMembersResponse,
+)
+async def confirm_team_members(
+    team_id: str,
+    payload: ConfirmMembersRequest,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> ConfirmMembersResponse:
+    if payload.team_id != team_id:
+        raise HTTPException(
+            status_code=400, detail="team_id mismatch between path and body"
+        )
+
+    team_svc = TeamMappingService(session, org_id)
+    team = await team_svc.get(team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    membership_svc = TeamMembershipService(session, org_id)
+    result = await membership_svc.confirm_links(team_id=team_id, links=payload.links)
+    await session.commit()
+    return ConfirmMembersResponse(**result)
 
 
 @router.get("/users", response_model=list[UserResponse])

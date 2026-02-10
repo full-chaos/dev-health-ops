@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import difflib
 import hashlib
 import json
 import logging
@@ -20,8 +21,23 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.models.settings import (
+    IdentityMapping,
+    IntegrationCredential,
+    Setting,
+    SettingCategory,
+    SyncConfiguration,
+    TeamMapping,
+)
+
 if TYPE_CHECKING:
-    from dev_health_ops.api.admin.schemas import DiscoveredTeam
+    from dev_health_ops.api.admin.schemas import (
+        ConfirmMemberLink,
+        DiscoveredMember,
+        DiscoveredTeam,
+        MemberMatchResult,
+    )
 
 
 def _get_discovered_team_cls() -> type:
@@ -31,15 +47,23 @@ def _get_discovered_team_cls() -> type:
     return _DT
 
 
-from dev_health_ops.models.settings import (
-    IdentityMapping,
-    IntegrationCredential,
-    Setting,
-    SettingCategory,
-    SyncConfiguration,
-    TeamMapping,
-)
-from dev_health_ops.api.utils.logging import sanitize_for_log
+def _get_discovered_member_cls() -> type:
+    from dev_health_ops.api.admin.schemas import DiscoveredMember as _DM
+
+    return _DM
+
+
+def _get_member_match_result_cls() -> type:
+    from dev_health_ops.api.admin.schemas import MemberMatchResult as _MMR
+
+    return _MMR
+
+
+def _get_identity_mapping_response_cls() -> type:
+    from dev_health_ops.api.admin.schemas import IdentityMappingResponse as _IMR
+
+    return _IMR
+
 
 logger = logging.getLogger(__name__)
 
@@ -1038,3 +1062,252 @@ class TeamDriftSyncService:
                 )
 
         return all_changes
+
+
+class TeamMembershipService:
+    def __init__(self, session: AsyncSession, org_id: str = "default"):
+        self.session = session
+        self.org_id = org_id
+
+    async def discover_members_github(
+        self,
+        token: str,
+        org_name: str,
+        team_slug: str,
+    ) -> list[DiscoveredMember]:
+        def _discover() -> list[DiscoveredMember]:
+            from github import Auth, Github
+
+            DiscoveredMember = _get_discovered_member_cls()
+            auth = Auth.Token(token)
+            gh = Github(auth=auth, per_page=100)
+            try:
+                org = gh.get_organization(org_name)
+                team = org.get_team_by_slug(team_slug)
+                members: list[DiscoveredMember] = []
+                for member in team.get_members():
+                    members.append(
+                        DiscoveredMember(
+                            provider_type="github",
+                            provider_identity=member.login,
+                            display_name=getattr(member, "name", None),
+                            email=getattr(member, "email", None),
+                            role=None,
+                        )
+                    )
+                return members
+            finally:
+                gh.close()
+
+        return await asyncio.to_thread(_discover)
+
+    async def discover_members_gitlab(
+        self,
+        token: str,
+        group_path: str,
+        url: str,
+    ) -> list[DiscoveredMember]:
+        def _discover() -> list[DiscoveredMember]:
+            import gitlab as gl_lib
+
+            DiscoveredMember = _get_discovered_member_cls()
+            gl = gl_lib.Gitlab(url=url, private_token=token)
+            group = gl.groups.get(group_path)
+            members: list[DiscoveredMember] = []
+            for member in group.members.list(per_page=100, get_all=True):
+                members.append(
+                    DiscoveredMember(
+                        provider_type="gitlab",
+                        provider_identity=str(getattr(member, "username", "")),
+                        display_name=getattr(member, "name", None),
+                        email=getattr(member, "email", None),
+                        role=str(getattr(member, "access_level", "")) or None,
+                    )
+                )
+            return [m for m in members if m.provider_identity]
+
+        return await asyncio.to_thread(_discover)
+
+    async def discover_members_jira(
+        self,
+        email: str,
+        api_token: str,
+        url: str,
+        project_key: str,
+    ) -> list[DiscoveredMember]:
+        def _discover() -> list[DiscoveredMember]:
+            DiscoveredMember = _get_discovered_member_cls()
+            response = requests.get(
+                f"{url.rstrip('/')}/rest/api/3/project/{project_key}",
+                auth=(email, api_token),
+                headers={"Accept": "application/json"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            lead = payload.get("lead") or {}
+            provider_identity = (
+                lead.get("accountId")
+                or lead.get("emailAddress")
+                or lead.get("displayName")
+                or ""
+            )
+            if not provider_identity:
+                return []
+            return [
+                DiscoveredMember(
+                    provider_type="jira",
+                    provider_identity=provider_identity,
+                    display_name=lead.get("displayName"),
+                    email=lead.get("emailAddress"),
+                    role="lead",
+                )
+            ]
+
+        return await asyncio.to_thread(_discover)
+
+    async def match_members(
+        self,
+        members: list[DiscoveredMember],
+    ) -> list[MemberMatchResult]:
+        IdentityMappingResponse = _get_identity_mapping_response_cls()
+        MemberMatchResult = _get_member_match_result_cls()
+        identity_svc = IdentityMappingService(self.session, self.org_id)
+        matched: list[MemberMatchResult] = []
+
+        for member in members:
+            mapping = await identity_svc.find_by_provider_identity(
+                member.provider_type,
+                member.provider_identity,
+            )
+            if mapping is not None:
+                matched.append(
+                    MemberMatchResult(
+                        discovered=member,
+                        match_status="matched",
+                        matched_identity=IdentityMappingResponse.model_validate(
+                            mapping
+                        ),
+                        confidence=1.0,
+                    )
+                )
+                continue
+
+            if member.email:
+                stmt = select(IdentityMapping).where(
+                    IdentityMapping.org_id == self.org_id,
+                    IdentityMapping.email == member.email,
+                    IdentityMapping.is_active == True,  # noqa: E712
+                )
+                email_result = await self.session.execute(stmt)
+                email_match = email_result.scalar_one_or_none()
+                if email_match is not None:
+                    matched.append(
+                        MemberMatchResult(
+                            discovered=member,
+                            match_status="suggested",
+                            matched_identity=IdentityMappingResponse.model_validate(
+                                email_match
+                            ),
+                            confidence=0.95,
+                            suggestion_reason="email_match",
+                        )
+                    )
+                    continue
+
+            if member.display_name:
+                name_stmt = select(IdentityMapping).where(
+                    IdentityMapping.org_id == self.org_id,
+                    IdentityMapping.display_name.isnot(None),
+                    IdentityMapping.is_active == True,  # noqa: E712
+                )
+                name_result = await self.session.execute(name_stmt)
+                best_match: Optional[IdentityMapping] = None
+                best_score = 0.0
+                for candidate in name_result.scalars().all():
+                    if not candidate.display_name:
+                        continue
+                    score = difflib.SequenceMatcher(
+                        a=member.display_name.lower(),
+                        b=candidate.display_name.lower(),
+                    ).ratio()
+                    if score > best_score:
+                        best_score = score
+                        best_match = candidate
+
+                if best_match is not None and best_score >= 0.8:
+                    matched.append(
+                        MemberMatchResult(
+                            discovered=member,
+                            match_status="suggested",
+                            matched_identity=IdentityMappingResponse.model_validate(
+                                best_match
+                            ),
+                            confidence=round(best_score, 2),
+                            suggestion_reason="display_name_similarity",
+                        )
+                    )
+                    continue
+
+            matched.append(
+                MemberMatchResult(
+                    discovered=member,
+                    match_status="unmatched",
+                    matched_identity=None,
+                    confidence=None,
+                    suggestion_reason=None,
+                )
+            )
+
+        return matched
+
+    async def confirm_links(
+        self,
+        team_id: str,
+        links: list[ConfirmMemberLink],
+    ) -> dict[str, int]:
+        identity_svc = IdentityMappingService(self.session, self.org_id)
+        linked = 0
+        created = 0
+        skipped = 0
+
+        for link in links:
+            if link.action == "skip":
+                skipped += 1
+                continue
+
+            if link.action == "link":
+                mapping = await identity_svc.get(link.canonical_id)
+                if mapping is None:
+                    skipped += 1
+                    continue
+
+                team_ids = list(mapping.team_ids or [])
+                if team_id not in team_ids:
+                    team_ids.append(team_id)
+                    mapping.team_ids = team_ids
+                await identity_svc.add_provider_identity(
+                    canonical_id=link.canonical_id,
+                    provider=link.provider,
+                    identity=link.provider_identity,
+                )
+                linked += 1
+                continue
+
+            if link.action == "create":
+                await identity_svc.create_or_update(
+                    canonical_id=link.canonical_id,
+                    provider_identities={link.provider: [link.provider_identity]},
+                    team_ids=[team_id],
+                )
+                created += 1
+                continue
+
+            skipped += 1
+
+        await self.session.flush()
+        return {
+            "linked": linked,
+            "created": created,
+            "skipped": skipped,
+        }

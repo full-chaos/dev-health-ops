@@ -826,6 +826,67 @@ def sync_team_drift(self, org_id: str = "default") -> dict:
         raise self.retry(exc=exc, countdown=300)
 
 
+@celery_app.task(bind=True, max_retries=2, queue="sync")
+def reconcile_team_members(self, org_id: str = "default") -> dict:
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import IdentityMapping
+
+    team_members: dict[str, set[str]] = {}
+    with get_postgres_session_sync() as session:
+        mappings = (
+            session.query(IdentityMapping)
+            .filter(IdentityMapping.org_id == org_id)
+            .all()
+        )
+
+        for mapping in mappings:
+            canonical_id = str(mapping.canonical_id)
+            for team_id in mapping.team_ids or []:
+                if not team_id:
+                    continue
+                team_members.setdefault(str(team_id), set()).add(canonical_id)
+
+    async def _run() -> dict:
+        from dev_health_ops.models.teams import Team
+        from dev_health_ops.storage.clickhouse import ClickHouseStore
+
+        db_url = _get_db_url()
+        if not db_url:
+            raise ValueError(
+                "Missing CLICKHOUSE_URI or DATABASE_URI for reconciliation"
+            )
+
+        async with ClickHouseStore(db_url) as store:
+            teams = await store.get_all_teams()
+            now = datetime.now(timezone.utc)
+            updated_teams = [
+                Team(
+                    id=team.id,
+                    team_uuid=uuid.UUID(str(team.team_uuid)),
+                    name=team.name,
+                    description=team.description,
+                    members=sorted(team_members.get(team.id, set())),
+                    updated_at=now,
+                )
+                for team in teams
+            ]
+            if updated_teams:
+                await store.insert_teams(updated_teams)
+
+            return {
+                "status": "success",
+                "teams_scanned": len(teams),
+                "teams_updated": len(updated_teams),
+                "mapped_teams": len(team_members),
+            }
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        logger.exception("reconcile_team_members failed: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
 @celery_app.task(bind=True)
 def health_check(self) -> dict:
     """Simple health check task to verify worker is running."""

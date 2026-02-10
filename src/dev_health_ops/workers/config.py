@@ -51,6 +51,11 @@ beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
         "options": {"queue": "metrics"},
     },
+    "sync-team-drift": {
+        "task": "dev_health_ops.workers.tasks.sync_team_drift",
+        "schedule": crontab(hour=2, minute=30),
+        "options": {"queue": "sync"},
+    },
 }
 
 # Result settings

@@ -745,6 +745,88 @@ def run_work_items_sync(
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
 
+@celery_app.task(bind=True, max_retries=2, queue="sync")
+def sync_team_drift(self, org_id: str = "default") -> dict:
+    import asyncio
+
+    from dev_health_ops.api.services.settings import (
+        IntegrationCredentialsService,
+        TeamDiscoveryService,
+        TeamDriftSyncService,
+    )
+    from dev_health_ops.db import get_postgres_session
+
+    async def _run():
+        results = []
+        async with get_postgres_session() as session:
+            creds_svc = IntegrationCredentialsService(session, org_id)
+            discovery_svc = TeamDiscoveryService(session, org_id)
+            drift_svc = TeamDriftSyncService(session, org_id)
+
+            for provider in ("github", "gitlab", "jira"):
+                credential = await creds_svc.get(provider, "default")
+                if credential is None:
+                    continue
+                decrypted = await creds_svc.get_decrypted_credentials(
+                    provider, "default"
+                )
+                if decrypted is None:
+                    continue
+
+                config = credential.config or {}
+                try:
+                    if provider == "github":
+                        token = decrypted.get("token")
+                        org_name = config.get("org")
+                        if not token or not org_name:
+                            continue
+                        teams = await discovery_svc.discover_github(
+                            token=token,
+                            org_name=org_name,
+                        )
+                    elif provider == "gitlab":
+                        token = decrypted.get("token")
+                        group_path = config.get("group")
+                        url = config.get("url", "https://gitlab.com")
+                        if not token or not group_path:
+                            continue
+                        teams = await discovery_svc.discover_gitlab(
+                            token=token,
+                            group_path=group_path,
+                            url=url,
+                        )
+                    else:
+                        email = decrypted.get("email")
+                        api_token = decrypted.get("api_token") or decrypted.get("token")
+                        jira_url = config.get("url") or decrypted.get("url")
+                        if not email or not api_token or not jira_url:
+                            continue
+                        teams = await discovery_svc.discover_jira(
+                            email=email,
+                            api_token=api_token,
+                            url=jira_url,
+                        )
+
+                    result = await drift_svc.run_drift_sync(provider, teams)
+                    results.append(result)
+                except Exception as exc:
+                    logger.warning(
+                        "Team drift sync failed for provider %s: %s",
+                        provider,
+                        exc,
+                    )
+                    results.append({"provider": provider, "error": str(exc)})
+
+            await session.commit()
+        return {"status": "success", "results": results}
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        logger.exception("sync_team_drift failed: %s", exc)
+        raise self.retry(exc=exc, countdown=300)
+
+
 @celery_app.task(bind=True)
 def health_check(self) -> dict:
     """Simple health check task to verify worker is running."""

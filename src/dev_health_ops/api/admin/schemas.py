@@ -175,6 +175,10 @@ class TeamMappingResponse(BaseModel):
     repo_patterns: list[str]
     project_keys: list[str]
     extra_data: dict[str, Any]
+    managed_fields: list[str]
+    sync_policy: int
+    flagged_changes: Optional[dict[str, Any]] = None
+    last_drift_sync_at: Optional[datetime] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -189,6 +193,8 @@ class TeamMappingCreate(BaseModel):
     repo_patterns: list[str] = Field(default_factory=list)
     project_keys: list[str] = Field(default_factory=list)
     extra_data: dict[str, Any] = Field(default_factory=dict)
+    managed_fields: list[str] = Field(default_factory=list)
+    sync_policy: int = Field(default=1, ge=0, le=2)
 
 
 class TeamMappingUpdate(BaseModel):
@@ -197,6 +203,8 @@ class TeamMappingUpdate(BaseModel):
     repo_patterns: Optional[list[str]] = None
     project_keys: Optional[list[str]] = None
     extra_data: Optional[dict[str, Any]] = None
+    managed_fields: Optional[list[str]] = None
+    sync_policy: Optional[int] = Field(default=None, ge=0, le=2)
 
 
 class DiscoveredTeam(BaseModel):
@@ -224,6 +232,26 @@ class TeamImportResponse(BaseModel):
     skipped: int
     merged: int
     details: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FlaggedChange(BaseModel):
+    team_id: str
+    team_name: str
+    change_type: str
+    field: Optional[str] = None
+    old_value: Any = None
+    new_value: Any = None
+    discovered_at: datetime
+
+
+class PendingChangesResponse(BaseModel):
+    changes: list[FlaggedChange]
+    total: int
+
+
+class ApproveChangesRequest(BaseModel):
+    change_ids: list[str] = Field(default_factory=list)
+    approve_all: bool = False
 
 
 # ---- User schemas ----

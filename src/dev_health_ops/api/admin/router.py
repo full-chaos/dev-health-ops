@@ -833,6 +833,67 @@ async def import_teams(
     return TeamImportResponse(**result)
 
 
+@router.get("/teams/pending-changes")
+async def get_pending_changes(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.api.services.settings import TeamDriftSyncService
+
+    svc = TeamDriftSyncService(session, org_id)
+    changes = await svc.get_all_pending_changes()
+    return {"changes": changes, "total": len(changes)}
+
+
+@router.post("/teams/{team_id}/approve-changes")
+async def approve_team_changes(
+    team_id: str,
+    change_indices: list[int] | None = None,
+    approve_all: bool = False,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.api.services.settings import TeamDriftSyncService
+
+    svc = TeamDriftSyncService(session, org_id)
+    indices = None if approve_all else change_indices
+    result = await svc.approve_changes(team_id, indices)
+    await session.commit()
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/teams/{team_id}/dismiss-changes")
+async def dismiss_team_changes(
+    team_id: str,
+    change_indices: list[int] | None = None,
+    dismiss_all: bool = False,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.api.services.settings import TeamDriftSyncService
+
+    svc = TeamDriftSyncService(session, org_id)
+    indices = None if dismiss_all else change_indices
+    result = await svc.dismiss_changes(team_id, indices)
+    await session.commit()
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/teams/trigger-drift-sync")
+async def trigger_drift_sync(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.workers.tasks import sync_team_drift
+
+    sync_team_drift.apply_async(kwargs={"org_id": org_id}, queue="sync")
+    return {"status": "dispatched"}
+
+
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     limit: int = 100,

@@ -313,7 +313,12 @@ async def run_daily_metrics_job(
         for rid, times in bug_times.items():
             mttr_by_repo[rid] = sum(times) / len(times)
 
+        # Build active_repos from ALL data sources, not just commits.
+        # Repos with CI/CD or deployment data but no commits in the window
+        # were previously excluded, causing missing metrics (gh-377).
         active_repos: Set[uuid.UUID] = {r["repo_id"] for r in commit_rows}
+        active_repos |= {r["repo_id"] for r in pipeline_rows if "repo_id" in r}
+        active_repos |= {r["repo_id"] for r in deployment_rows if "repo_id" in r}
         rework_ratio_by_repo: Dict[uuid.UUID, float] = {}
         single_owner_ratio_by_repo: Dict[uuid.UUID, float] = {}
         bus_factor_by_repo: Dict[uuid.UUID, int] = {}

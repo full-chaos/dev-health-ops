@@ -2,6 +2,8 @@
 
 import os
 
+from celery.schedules import crontab
+
 # Broker and backend (Redis)
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
@@ -36,8 +38,18 @@ task_queues = {
 beat_schedule = {
     "dispatch-scheduled-syncs": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
-        "schedule": 300.0,  # Every 5 minutes
+        "schedule": 300.0,
         "options": {"queue": "default"},
+    },
+    "dispatch-scheduled-metrics": {
+        "task": "dev_health_ops.workers.tasks.dispatch_scheduled_metrics",
+        "schedule": 300.0,
+        "options": {"queue": "default"},
+    },
+    "run-daily-metrics": {
+        "task": "dev_health_ops.workers.tasks.run_daily_metrics",
+        "schedule": crontab(hour=1, minute=0),
+        "options": {"queue": "metrics"},
     },
 }
 

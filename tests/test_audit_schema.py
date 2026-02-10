@@ -9,7 +9,7 @@ from dev_health_ops.audit.schema import (
 def test_clickhouse_schema_includes_added_columns():
     repo_root = Path(__file__).resolve().parents[1]
     expected, migrations = _build_clickhouse_expected_schema(
-        repo_root / "migrations" / "clickhouse"
+        repo_root / "src" / "dev_health_ops" / "migrations" / "clickhouse"
     )
 
     assert "work_items" in expected

@@ -237,6 +237,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "mttr_hours",
                 "change_failure_rate",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -284,6 +285,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "cycle_p50_hours",
                 "cycle_p90_hours",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -310,6 +312,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "cycle_p50_30d_hours",
                 "wip_max_30d",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -328,6 +331,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "commits_count",
                 "hotspot_score",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -346,6 +350,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "files_changed",
                 "size_bucket",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -365,6 +370,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "after_hours_commit_ratio",
                 "weekend_commit_ratio",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -402,6 +408,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "wip_congestion_ratio",
                 "predictability_score",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -426,6 +433,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "cycle_time_p50_hours",
                 "cycle_time_p90_hours",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -453,6 +461,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "cycle_time_hours",
                 "lead_time_hours",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -475,6 +484,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "items_touched",
                 "avg_wip",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -490,6 +500,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "relationship_type",
                 "relationship_type_raw",
                 "last_synced",
+                "org_id",
             ],
             rows,
         )
@@ -510,6 +521,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "to_status_raw",
                 "actor",
                 "last_synced",
+                "org_id",
             ],
             rows,
         )
@@ -529,6 +541,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "actor",
                 "body_length",
                 "last_synced",
+                "org_id",
             ],
             rows,
         )
@@ -547,6 +560,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "ended_at",
                 "completed_at",
                 "last_synced",
+                "org_id",
             ],
             rows,
         )
@@ -566,6 +580,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "created_at",
                 "updated_at",
                 "last_synced",
+                "org_id",
             ],
             rows,
         )
@@ -582,6 +597,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "author",
                 "reviews_count",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -600,6 +616,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "p90_duration_minutes",
                 "avg_queue_minutes",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -617,6 +634,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "deploy_time_p50_hours",
                 "lead_time_p50_hours",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -635,6 +653,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "mttr_p50_hours",
                 "mttr_p90_hours",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -650,6 +669,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "metric_name",
                 "value",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -674,6 +694,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "high_complexity_functions",
                 "very_high_complexity_functions",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -692,6 +713,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "high_complexity_functions",
                 "very_high_complexity_functions",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -712,6 +734,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "blame_concentration",
                 "risk_score",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -734,6 +757,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "confidence",
                 "rule_id",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -755,6 +779,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "churn_loc",
                 "cycle_p50_hours",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -777,6 +802,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "cycle_p90_hours",
                 "lead_p50_hours",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -813,6 +839,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "categorization_input_hash",
                 "categorization_run_id",
                 "computed_at",
+                "org_id",
             ],
             rows,
         )
@@ -831,6 +858,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "source_id",
                 "computed_at",
                 "categorization_run_id",
+                "org_id",
             ],
             rows,
         )
@@ -845,6 +873,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "llm_provider",
                 "llm_model",
                 "computed_at",
+                "org_id",
             ],
             [record],
         )
@@ -909,6 +938,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "last_synced",
             "event_ts",
             "day",
+            "org_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             data = []
@@ -930,6 +960,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
                         "event_ts": _dt_to_clickhouse_datetime(r.event_ts),
                         "day": r.day,
+                        "org_id": getattr(r, "org_id", "default"),
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]
@@ -946,6 +977,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "provenance",
             "evidence",
             "last_synced",
+            "org_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             data = []
@@ -959,6 +991,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "provenance": r.provenance,
                         "evidence": r.evidence,
                         "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                        "org_id": getattr(r, "org_id", "default"),
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]
@@ -977,6 +1010,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "provenance",
             "evidence",
             "last_synced",
+            "org_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             data = []
@@ -990,6 +1024,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "provenance": r.provenance,
                         "evidence": r.evidence,
                         "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
+                        "org_id": getattr(r, "org_id", "default"),
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]
@@ -1051,6 +1086,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                     "epic_id": str(get("epic_id") or ""),
                     "url": str(get("url") or ""),
                     "last_synced": _dt_to_clickhouse_datetime(synced_at),
+                    "org_id": get("org_id", "default"),
                 }
             )
 
@@ -1079,6 +1115,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "epic_id",
             "url",
             "last_synced",
+            "org_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             matrix = [[row[col] for col in column_names] for row in chunk]
@@ -1122,6 +1159,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                     "to_status_raw": str(get("to_status_raw") or ""),
                     "actor": str(get("actor") or ""),
                     "last_synced": _dt_to_clickhouse_datetime(synced_at),
+                    "org_id": get("org_id", "default"),
                 }
             )
 
@@ -1136,6 +1174,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "to_status_raw",
             "actor",
             "last_synced",
+            "org_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             matrix = [[row[col] for col in column_names] for row in chunk]
@@ -1303,6 +1342,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             "throughput_stddev",
             "insufficient_history",
             "high_variance",
+            "org_id",
         ]
         for chunk in _chunked(rows, DEFAULT_BATCH_SIZE):
             data = []
@@ -1331,6 +1371,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "throughput_stddev": r.throughput_stddev,
                         "insufficient_history": 1 if r.insufficient_history else 0,
                         "high_variance": 1 if r.high_variance else 0,
+                        "org_id": getattr(r, "org_id", "default"),
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]

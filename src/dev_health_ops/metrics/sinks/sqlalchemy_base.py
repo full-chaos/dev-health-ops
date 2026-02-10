@@ -155,6 +155,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               mttr_hours REAL,
               change_failure_rate REAL NOT NULL DEFAULT 0.0,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day)
             )
             """,
@@ -189,6 +190,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               active_hours REAL NOT NULL DEFAULT 0.0,
               weekend_days INTEGER NOT NULL DEFAULT 0,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, author_email, day)
             )
             """,
@@ -202,6 +204,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               files_changed INTEGER NOT NULL,
               size_bucket TEXT NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day, author_email, commit_hash)
             )
             """,
@@ -212,7 +215,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               name TEXT NOT NULL,
               description TEXT,
               members TEXT, -- JSON array of member identities
-              updated_at TEXT NOT NULL
+              updated_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default'
             )
             """,
             """
@@ -226,6 +230,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               after_hours_commit_ratio REAL NOT NULL,
               weekend_commit_ratio REAL NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (team_id, day)
             )
             """,
@@ -239,6 +244,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               commits_count INTEGER NOT NULL,
               hotspot_score REAL NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day, path)
             )
             """,
@@ -269,6 +275,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               wip_congestion_ratio REAL NOT NULL DEFAULT 0.0,
               predictability_score REAL NOT NULL DEFAULT 0.0,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (provider, day, team_id, work_scope_id)
             )
             """,
@@ -286,6 +293,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cycle_time_p50_hours REAL,
               cycle_time_p90_hours REAL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (provider, work_scope_id, user_identity, day)
             )
             """,
@@ -309,6 +317,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               wait_time_hours REAL,
               flow_efficiency REAL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (provider, work_item_id)
             )
             """,
@@ -324,6 +333,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               items_touched INTEGER NOT NULL,
               avg_wip REAL NOT NULL DEFAULT 0.0,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (provider, work_scope_id, team_id, status, day)
             )
             """,
@@ -335,6 +345,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               author TEXT NOT NULL,
               reviews_count INTEGER NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, reviewer, author, day)
             )
             """,
@@ -348,6 +359,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               p90_duration_minutes REAL,
               avg_queue_minutes REAL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day)
             )
             """,
@@ -360,6 +372,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               deploy_time_p50_hours REAL,
               lead_time_p50_hours REAL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day)
             )
             """,
@@ -371,6 +384,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               mttr_p50_hours REAL,
               mttr_p90_hours REAL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day)
             )
             """,
@@ -381,6 +395,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               metric_name TEXT NOT NULL,
               value REAL NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day, metric_name)
             )
             """,
@@ -400,6 +415,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cycle_p50_30d_hours REAL NOT NULL DEFAULT 0.0,
               wip_max_30d INTEGER NOT NULL DEFAULT 0,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, map_name, as_of_day, identity_id)
             )
             """,
@@ -417,6 +433,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               high_complexity_functions INTEGER NOT NULL,
               very_high_complexity_functions INTEGER NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, as_of_day, file_path)
             )
             """,
@@ -430,6 +447,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               high_complexity_functions INTEGER NOT NULL,
               very_high_complexity_functions INTEGER NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day)
             )
             """,
@@ -445,6 +463,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               blame_concentration REAL,
               risk_score REAL NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, day, file_path)
             )
             """,
@@ -460,6 +479,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               confidence REAL NOT NULL,
               rule_id TEXT NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (provider, artifact_type, artifact_id, day)
             )
             """,
@@ -476,6 +496,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               churn_loc INTEGER NOT NULL,
               cycle_p50_hours REAL NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (day, investment_area, team_id, project_stream)
             )
             """,
@@ -493,6 +514,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cycle_p90_hours REAL NOT NULL,
               lead_p50_hours REAL NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (day, provider, team_id, issue_type_norm)
             )
             """,
@@ -502,7 +524,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               explanation_json TEXT NOT NULL,
               llm_provider TEXT NOT NULL,
               llm_model TEXT,
-              computed_at TEXT NOT NULL
+              computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default'
             )
             """,
             """
@@ -527,6 +550,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               categorization_input_hash TEXT NOT NULL,
               categorization_run_id TEXT NOT NULL,
               computed_at TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (work_unit_id, categorization_run_id)
             )
             """,
@@ -538,6 +562,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               source_id TEXT NOT NULL,
               computed_at TEXT NOT NULL,
               categorization_run_id TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (work_unit_id, source_type, source_id, categorization_run_id)
             )
             """,
@@ -557,7 +582,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               discovered_at TEXT NOT NULL,
               last_synced TEXT NOT NULL,
               event_ts TEXT NOT NULL,
-              day TEXT NOT NULL
+              day TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default'
             )
             """,
             """
@@ -569,6 +595,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               provenance TEXT NOT NULL,
               evidence TEXT,
               last_synced TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, work_item_id, pr_number)
             )
             """,
@@ -581,6 +608,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               provenance TEXT NOT NULL,
               evidence TEXT,
               last_synced TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (repo_id, pr_number, commit_hash)
             )
             """,
@@ -612,7 +640,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               url TEXT,
               priority_raw TEXT,
               service_class TEXT,
-              due_at TEXT
+              due_at TEXT,
+              org_id TEXT NOT NULL DEFAULT 'default'
             )
             """,
             """
@@ -625,6 +654,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               from_status TEXT NOT NULL,
               to_status TEXT NOT NULL,
               actor TEXT,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (work_item_id, occurred_at, to_status)
             )
             """,
@@ -635,6 +665,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               relationship_type TEXT NOT NULL,
               relationship_type_raw TEXT NOT NULL,
               last_synced TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (source_work_item_id, target_work_item_id, relationship_type)
             )
             """,
@@ -648,6 +679,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               to_status_raw TEXT,
               actor TEXT,
               last_synced TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (work_item_id, occurred_at)
             )
             """,
@@ -660,6 +692,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               actor TEXT,
               body_length INTEGER NOT NULL,
               last_synced TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (work_item_id, occurred_at, interaction_type)
             )
             """,
@@ -673,6 +706,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               ended_at TEXT,
               completed_at TEXT,
               last_synced TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (provider, sprint_id)
             )
             """,
@@ -687,6 +721,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
               last_synced TEXT NOT NULL,
+              org_id TEXT NOT NULL DEFAULT 'default',
               PRIMARY KEY (provider, worklog_id)
             )
             """,
@@ -727,6 +762,107 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         with self.engine.begin() as conn:
             for stmt in stmts:
                 conn.execute(text(stmt))
+
+            for table, col, type_ in [
+                ("repo_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("user_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("commit_metrics", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("teams", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("team_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("file_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                (
+                    "work_item_metrics_daily",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "work_item_user_metrics_daily",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                ("work_item_cycle_times", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                (
+                    "work_item_state_durations_daily",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                ("review_edges_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("cicd_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("deploy_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("incident_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("dora_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                (
+                    "ic_landscape_rolling_30d",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "file_complexity_snapshots",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                ("repo_complexity_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("file_hotspot_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                (
+                    "investment_classifications_daily",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "investment_metrics_daily",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "issue_type_metrics_daily",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "investment_explanations",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "work_unit_investments",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "work_unit_investment_quotes",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                ("work_graph_edges", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("work_graph_issue_pr", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("work_graph_pr_commit", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("work_items", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                (
+                    "work_item_transitions",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "work_item_dependencies",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "work_item_reopen_events",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                (
+                    "work_item_interactions",
+                    "org_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+                ("sprints", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("worklogs", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+            ]:
+                if not self._table_has_column(conn, table, col):
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {type_}"))
+
             # Best-effort upgrades for older SQLite schemas (no destructive migrations):
             # - Add work_scope_id columns
             # - Add UNIQUE indexes so ON CONFLICT(...) upserts work
@@ -999,7 +1135,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               rework_churn_ratio_30d, single_owner_file_ratio_30d, review_load_top_reviewer_ratio,
               bus_factor, code_ownership_gini,
               mttr_hours, change_failure_rate,
-              computed_at
+              computed_at, org_id
             ) VALUES (
               :repo_id, :day, :commits_count, :total_loc_touched, :avg_commit_size_loc,
               :large_commit_ratio, :prs_merged, :median_pr_cycle_hours,
@@ -1010,7 +1146,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               :rework_churn_ratio_30d, :single_owner_file_ratio_30d, :review_load_top_reviewer_ratio,
               :bus_factor, :code_ownership_gini,
               :mttr_hours, :change_failure_rate,
-              :computed_at
+              :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day) DO UPDATE SET
               commits_count=excluded.commits_count,
@@ -1039,7 +1175,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               code_ownership_gini=excluded.code_ownership_gini,
               mttr_hours=excluded.mttr_hours,
               change_failure_rate=excluded.change_failure_rate,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._repo_row(r) for r in rows]
@@ -1059,7 +1196,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               pr_first_review_p50_hours, pr_first_review_p90_hours, pr_review_time_p50_hours, pr_pickup_time_p50_hours,
               reviews_given, changes_requested_given, reviews_received, review_reciprocity, team_id, team_name,
               active_hours, weekend_days, identity_id, loc_touched, prs_opened, work_items_completed, work_items_active,
-              delivery_units, cycle_p50_hours, cycle_p90_hours, computed_at
+              delivery_units, cycle_p50_hours, cycle_p90_hours, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :author_email, :commits_count, :loc_added, :loc_deleted,
               :files_changed, :large_commits_count, :avg_commit_size_loc,
@@ -1068,7 +1205,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               :pr_first_review_p50_hours, :pr_first_review_p90_hours, :pr_review_time_p50_hours, :pr_pickup_time_p50_hours,
               :reviews_given, :changes_requested_given, :reviews_received, :review_reciprocity, :team_id, :team_name,
               :active_hours, :weekend_days, :identity_id, :loc_touched, :prs_opened, :work_items_completed, :work_items_active,
-              :delivery_units, :cycle_p50_hours, :cycle_p90_hours, :computed_at
+              :delivery_units, :cycle_p50_hours, :cycle_p90_hours, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, author_email, day) DO UPDATE SET
               commits_count=excluded.commits_count,
@@ -1104,7 +1241,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               delivery_units=excluded.delivery_units,
               cycle_p50_hours=excluded.cycle_p50_hours,
               cycle_p90_hours=excluded.cycle_p90_hours,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._user_row(r) for r in rows]
@@ -1117,15 +1255,16 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO commit_metrics (
-              repo_id, commit_hash, day, author_email, total_loc, files_changed, size_bucket, computed_at
+              repo_id, commit_hash, day, author_email, total_loc, files_changed, size_bucket, computed_at, org_id
             ) VALUES (
-              :repo_id, :commit_hash, :day, :author_email, :total_loc, :files_changed, :size_bucket, :computed_at
+              :repo_id, :commit_hash, :day, :author_email, :total_loc, :files_changed, :size_bucket, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day, author_email, commit_hash) DO UPDATE SET
               total_loc=excluded.total_loc,
               files_changed=excluded.files_changed,
               size_bucket=excluded.size_bucket,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._commit_row(r) for r in rows]
@@ -1138,16 +1277,17 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO file_metrics_daily (
-              repo_id, day, path, churn, contributors, commits_count, hotspot_score, computed_at
+              repo_id, day, path, churn, contributors, commits_count, hotspot_score, computed_at, org_id
             ) VALUES (
-              :repo_id, :day, :path, :churn, :contributors, :commits_count, :hotspot_score, :computed_at
+              :repo_id, :day, :path, :churn, :contributors, :commits_count, :hotspot_score, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day, path) DO UPDATE SET
               churn=excluded.churn,
               contributors=excluded.contributors,
               commits_count=excluded.commits_count,
               hotspot_score=excluded.hotspot_score,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._file_row(r) for r in rows]
@@ -1165,6 +1305,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "commits_count": int(data["commits_count"]),
             "hotspot_score": float(data["hotspot_score"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _repo_row(self, row: RepoMetricsDailyRecord) -> dict:
@@ -1205,6 +1346,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "mttr_hours": data.get("mttr_hours"),
             "change_failure_rate": float(data.get("change_failure_rate", 0.0) or 0.0),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _user_row(self, row: UserMetricsDailyRecord) -> dict:
@@ -1248,6 +1390,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "cycle_p50_hours": float(data.get("cycle_p50_hours", 0.0) or 0.0),
             "cycle_p90_hours": float(data.get("cycle_p90_hours", 0.0) or 0.0),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _review_edge_row(self, row: ReviewEdgeDailyRecord) -> dict:
@@ -1259,6 +1402,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "author": str(data["author"]),
             "reviews_count": int(data["reviews_count"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _cicd_row(self, row: CICDMetricsDailyRecord) -> dict:
@@ -1272,6 +1416,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "p90_duration_minutes": data.get("p90_duration_minutes"),
             "avg_queue_minutes": data.get("avg_queue_minutes"),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _deploy_row(self, row: DeployMetricsDailyRecord) -> dict:
@@ -1284,6 +1429,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "deploy_time_p50_hours": data.get("deploy_time_p50_hours"),
             "lead_time_p50_hours": data.get("lead_time_p50_hours"),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _incident_row(self, row: IncidentMetricsDailyRecord) -> dict:
@@ -1295,6 +1441,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "mttr_p50_hours": data.get("mttr_p50_hours"),
             "mttr_p90_hours": data.get("mttr_p90_hours"),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _dora_row(self, row: DORAMetricsRecord) -> dict:
@@ -1305,6 +1452,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "metric_name": str(data["metric_name"]),
             "value": float(data["value"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def write_ic_landscape_rolling(
@@ -1316,10 +1464,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO ic_landscape_rolling_30d (
               repo_id, as_of_day, identity_id, team_id, map_name, x_raw, y_raw, x_norm, y_norm,
-              churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at
+              churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at, org_id
             ) VALUES (
               :repo_id, :as_of_day, :identity_id, :team_id, :map_name, :x_raw, :y_raw, :x_norm, :y_norm,
-              :churn_loc_30d, :delivery_units_30d, :cycle_p50_30d_hours, :wip_max_30d, :computed_at
+              :churn_loc_30d, :delivery_units_30d, :cycle_p50_30d_hours, :wip_max_30d, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, map_name, as_of_day, identity_id) DO UPDATE SET
               team_id=excluded.team_id,
@@ -1331,7 +1479,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               delivery_units_30d=excluded.delivery_units_30d,
               cycle_p50_30d_hours=excluded.cycle_p50_30d_hours,
               wip_max_30d=excluded.wip_max_30d,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -1353,6 +1502,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                     "cycle_p50_30d_hours": float(data["cycle_p50_30d_hours"]),
                     "wip_max_30d": int(data["wip_max_30d"]),
                     "computed_at": _dt_to_iso(data["computed_at"]),
+                    "org_id": str(data.get("org_id", "default") or "default"),
                 }
             )
         with self.engine.begin() as conn:
@@ -1451,10 +1601,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO team_metrics_daily (
               day, team_id, team_name, commits_count, after_hours_commits_count, weekend_commits_count,
-              after_hours_commit_ratio, weekend_commit_ratio, computed_at
+              after_hours_commit_ratio, weekend_commit_ratio, computed_at, org_id
             ) VALUES (
               :day, :team_id, :team_name, :commits_count, :after_hours_commits_count, :weekend_commits_count,
-              :after_hours_commit_ratio, :weekend_commit_ratio, :computed_at
+              :after_hours_commit_ratio, :weekend_commit_ratio, :computed_at, :org_id
             )
             ON CONFLICT(team_id, day) DO UPDATE SET
               team_name=excluded.team_name,
@@ -1463,7 +1613,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               weekend_commits_count=excluded.weekend_commits_count,
               after_hours_commit_ratio=excluded.after_hours_commit_ratio,
               weekend_commit_ratio=excluded.weekend_commit_ratio,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [asdict(r) for r in rows]
@@ -1486,13 +1637,13 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                   items_started_unassigned, items_completed_unassigned, wip_unassigned_end_of_day,
                   cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours,
                   wip_age_p50_hours, wip_age_p90_hours, bug_completed_ratio, story_points_completed,
-                  new_bugs_count, new_items_count, defect_intro_rate, wip_congestion_ratio, predictability_score, computed_at
+                  new_bugs_count, new_items_count, defect_intro_rate, wip_congestion_ratio, predictability_score, computed_at, org_id
                 ) VALUES (
                   :day, :provider, :work_scope_id, :team_id, :team_name, :items_started, :items_completed, :wip_count_end_of_day,
                   :items_started_unassigned, :items_completed_unassigned, :wip_unassigned_end_of_day,
                   :cycle_time_p50_hours, :cycle_time_p90_hours, :lead_time_p50_hours, :lead_time_p90_hours,
                   :wip_age_p50_hours, :wip_age_p90_hours, :bug_completed_ratio, :story_points_completed,
-                  :new_bugs_count, :new_items_count, :defect_intro_rate, :wip_congestion_ratio, :predictability_score, :computed_at
+                  :new_bugs_count, :new_items_count, :defect_intro_rate, :wip_congestion_ratio, :predictability_score, :computed_at, :org_id
                 )
                 ON CONFLICT(provider, day, team_id, work_scope_id) DO UPDATE SET
                   team_name=excluded.team_name,
@@ -1515,7 +1666,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                   defect_intro_rate=excluded.defect_intro_rate,
                   wip_congestion_ratio=excluded.wip_congestion_ratio,
                   predictability_score=excluded.predictability_score,
-                  computed_at=excluded.computed_at
+                  computed_at=excluded.computed_at,
+                  org_id=excluded.org_id
                 """
             )
         else:
@@ -1527,13 +1679,13 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                   items_started_unassigned, items_completed_unassigned, wip_unassigned_end_of_day,
                   cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours,
                   wip_age_p50_hours, wip_age_p90_hours, bug_completed_ratio, story_points_completed,
-                  new_bugs_count, new_items_count, defect_intro_rate, wip_congestion_ratio, predictability_score, computed_at
+                  new_bugs_count, new_items_count, defect_intro_rate, wip_congestion_ratio, predictability_score, computed_at, org_id
                 ) VALUES (
                   :day, :provider, :repo_id, :team_id, :team_name, :items_started, :items_completed, :wip_count_end_of_day,
                   :items_started_unassigned, :items_completed_unassigned, :wip_unassigned_end_of_day,
                   :cycle_time_p50_hours, :cycle_time_p90_hours, :lead_time_p50_hours, :lead_time_p90_hours,
                   :wip_age_p50_hours, :wip_age_p90_hours, :bug_completed_ratio, :story_points_completed,
-                  :new_bugs_count, :new_items_count, :defect_intro_rate, :wip_congestion_ratio, :predictability_score, :computed_at
+                  :new_bugs_count, :new_items_count, :defect_intro_rate, :wip_congestion_ratio, :predictability_score, :computed_at, :org_id
                 )
                 ON CONFLICT(provider, day, team_id, repo_id) DO UPDATE SET
                   team_name=excluded.team_name,
@@ -1556,7 +1708,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                   defect_intro_rate=excluded.defect_intro_rate,
                   wip_congestion_ratio=excluded.wip_congestion_ratio,
                   predictability_score=excluded.predictability_score,
-                  computed_at=excluded.computed_at
+                  computed_at=excluded.computed_at,
+                  org_id=excluded.org_id
                 """
             )
         payload = []
@@ -1586,10 +1739,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO work_item_user_metrics_daily (
               day, provider, work_scope_id, user_identity, team_id, team_name, items_started, items_completed, wip_count_end_of_day,
-              cycle_time_p50_hours, cycle_time_p90_hours, computed_at
+              cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id
             ) VALUES (
               :day, :provider, :work_scope_id, :user_identity, :team_id, :team_name, :items_started, :items_completed, :wip_count_end_of_day,
-              :cycle_time_p50_hours, :cycle_time_p90_hours, :computed_at
+              :cycle_time_p50_hours, :cycle_time_p90_hours, :computed_at, :org_id
             )
             ON CONFLICT(provider, work_scope_id, user_identity, day) DO UPDATE SET
               team_id=excluded.team_id,
@@ -1599,7 +1752,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               wip_count_end_of_day=excluded.wip_count_end_of_day,
               cycle_time_p50_hours=excluded.cycle_time_p50_hours,
               cycle_time_p90_hours=excluded.cycle_time_p90_hours,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -1628,11 +1782,11 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             INSERT INTO work_item_cycle_times (
               work_item_id, provider, day, work_scope_id, team_id, team_name, assignee, type, status,
               created_at, started_at, completed_at, cycle_time_hours, lead_time_hours,
-              active_time_hours, wait_time_hours, flow_efficiency, computed_at
+              active_time_hours, wait_time_hours, flow_efficiency, computed_at, org_id
             ) VALUES (
               :work_item_id, :provider, :day, :work_scope_id, :team_id, :team_name, :assignee, :type, :status,
               :created_at, :started_at, :completed_at, :cycle_time_hours, :lead_time_hours,
-              :active_time_hours, :wait_time_hours, :flow_efficiency, :computed_at
+              :active_time_hours, :wait_time_hours, :flow_efficiency, :computed_at, :org_id
             )
             ON CONFLICT(provider, work_item_id) DO UPDATE SET
               day=excluded.day,
@@ -1650,7 +1804,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               active_time_hours=excluded.active_time_hours,
               wait_time_hours=excluded.wait_time_hours,
               flow_efficiency=excluded.flow_efficiency,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -1685,6 +1840,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "files_changed": int(data["files_changed"]),
             "size_bucket": str(data["size_bucket"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def write_work_item_state_durations(
@@ -1695,16 +1851,17 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO work_item_state_durations_daily (
-              day, provider, work_scope_id, team_id, team_name, status, duration_hours, items_touched, avg_wip, computed_at
+              day, provider, work_scope_id, team_id, team_name, status, duration_hours, items_touched, avg_wip, computed_at, org_id
             ) VALUES (
-              :day, :provider, :work_scope_id, :team_id, :team_name, :status, :duration_hours, :items_touched, :avg_wip, :computed_at
+              :day, :provider, :work_scope_id, :team_id, :team_name, :status, :duration_hours, :items_touched, :avg_wip, :computed_at, :org_id
             )
             ON CONFLICT(provider, work_scope_id, team_id, status, day) DO UPDATE SET
               team_name=excluded.team_name,
               duration_hours=excluded.duration_hours,
               items_touched=excluded.items_touched,
               avg_wip=excluded.avg_wip,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -1729,13 +1886,14 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO review_edges_daily (
-              repo_id, day, reviewer, author, reviews_count, computed_at
+              repo_id, day, reviewer, author, reviews_count, computed_at, org_id
             ) VALUES (
-              :repo_id, :day, :reviewer, :author, :reviews_count, :computed_at
+              :repo_id, :day, :reviewer, :author, :reviews_count, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, reviewer, author, day) DO UPDATE SET
               reviews_count=excluded.reviews_count,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._review_edge_row(r) for r in rows]
@@ -1749,10 +1907,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO cicd_metrics_daily (
               repo_id, day, pipelines_count, success_rate, avg_duration_minutes,
-              p90_duration_minutes, avg_queue_minutes, computed_at
+              p90_duration_minutes, avg_queue_minutes, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :pipelines_count, :success_rate, :avg_duration_minutes,
-              :p90_duration_minutes, :avg_queue_minutes, :computed_at
+              :p90_duration_minutes, :avg_queue_minutes, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day) DO UPDATE SET
               pipelines_count=excluded.pipelines_count,
@@ -1760,7 +1918,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               avg_duration_minutes=excluded.avg_duration_minutes,
               p90_duration_minutes=excluded.p90_duration_minutes,
               avg_queue_minutes=excluded.avg_queue_minutes,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._cicd_row(r) for r in rows]
@@ -1774,17 +1933,18 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO deploy_metrics_daily (
               repo_id, day, deployments_count, failed_deployments_count,
-              deploy_time_p50_hours, lead_time_p50_hours, computed_at
+              deploy_time_p50_hours, lead_time_p50_hours, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :deployments_count, :failed_deployments_count,
-              :deploy_time_p50_hours, :lead_time_p50_hours, :computed_at
+              :deploy_time_p50_hours, :lead_time_p50_hours, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day) DO UPDATE SET
               deployments_count=excluded.deployments_count,
               failed_deployments_count=excluded.failed_deployments_count,
               deploy_time_p50_hours=excluded.deploy_time_p50_hours,
               lead_time_p50_hours=excluded.lead_time_p50_hours,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._deploy_row(r) for r in rows]
@@ -1799,15 +1959,16 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO incident_metrics_daily (
-              repo_id, day, incidents_count, mttr_p50_hours, mttr_p90_hours, computed_at
+              repo_id, day, incidents_count, mttr_p50_hours, mttr_p90_hours, computed_at, org_id
             ) VALUES (
-              :repo_id, :day, :incidents_count, :mttr_p50_hours, :mttr_p90_hours, :computed_at
+              :repo_id, :day, :incidents_count, :mttr_p50_hours, :mttr_p90_hours, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day) DO UPDATE SET
               incidents_count=excluded.incidents_count,
               mttr_p50_hours=excluded.mttr_p50_hours,
               mttr_p90_hours=excluded.mttr_p90_hours,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._incident_row(r) for r in rows]
@@ -1820,13 +1981,14 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO dora_metrics_daily (
-              repo_id, day, metric_name, value, computed_at
+              repo_id, day, metric_name, value, computed_at, org_id
             ) VALUES (
-              :repo_id, :day, :metric_name, :value, :computed_at
+              :repo_id, :day, :metric_name, :value, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day, metric_name) DO UPDATE SET
               value=excluded.value,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._dora_row(r) for r in rows]
@@ -1843,11 +2005,11 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             INSERT INTO file_complexity_snapshots (
               repo_id, as_of_day, ref, file_path, language, loc, functions_count,
               cyclomatic_total, cyclomatic_avg, high_complexity_functions,
-              very_high_complexity_functions, computed_at
+              very_high_complexity_functions, computed_at, org_id
             ) VALUES (
               :repo_id, :as_of_day, :ref, :file_path, :language, :loc, :functions_count,
               :cyclomatic_total, :cyclomatic_avg, :high_complexity_functions,
-              :very_high_complexity_functions, :computed_at
+              :very_high_complexity_functions, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, as_of_day, file_path) DO UPDATE SET
               ref=excluded.ref,
@@ -1858,7 +2020,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cyclomatic_avg=excluded.cyclomatic_avg,
               high_complexity_functions=excluded.high_complexity_functions,
               very_high_complexity_functions=excluded.very_high_complexity_functions,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._complexity_row(r) for r in rows]
@@ -1872,10 +2035,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO repo_complexity_daily (
               repo_id, day, loc_total, cyclomatic_total, cyclomatic_per_kloc,
-              high_complexity_functions, very_high_complexity_functions, computed_at
+              high_complexity_functions, very_high_complexity_functions, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :loc_total, :cyclomatic_total, :cyclomatic_per_kloc,
-              :high_complexity_functions, :very_high_complexity_functions, :computed_at
+              :high_complexity_functions, :very_high_complexity_functions, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day) DO UPDATE SET
               loc_total=excluded.loc_total,
@@ -1883,7 +2046,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cyclomatic_per_kloc=excluded.cyclomatic_per_kloc,
               high_complexity_functions=excluded.high_complexity_functions,
               very_high_complexity_functions=excluded.very_high_complexity_functions,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._repo_complexity_row(r) for r in rows]
@@ -1897,10 +2061,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO file_hotspot_daily (
               repo_id, day, file_path, churn_loc_30d, churn_commits_30d,
-              cyclomatic_total, cyclomatic_avg, blame_concentration, risk_score, computed_at
+              cyclomatic_total, cyclomatic_avg, blame_concentration, risk_score, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :file_path, :churn_loc_30d, :churn_commits_30d,
-              :cyclomatic_total, :cyclomatic_avg, :blame_concentration, :risk_score, :computed_at
+              :cyclomatic_total, :cyclomatic_avg, :blame_concentration, :risk_score, :computed_at, :org_id
             )
             ON CONFLICT(repo_id, day, file_path) DO UPDATE SET
               churn_loc_30d=excluded.churn_loc_30d,
@@ -1909,7 +2073,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cyclomatic_avg=excluded.cyclomatic_avg,
               blame_concentration=excluded.blame_concentration,
               risk_score=excluded.risk_score,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._hotspot_row(r) for r in rows]
@@ -1933,6 +2098,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 data["very_high_complexity_functions"]
             ),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _repo_complexity_row(self, row: RepoComplexityDaily) -> dict:
@@ -1948,6 +2114,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 data["very_high_complexity_functions"]
             ),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def _hotspot_row(self, row: FileHotspotDaily) -> dict:
@@ -1963,6 +2130,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "blame_concentration": data.get("blame_concentration"),
             "risk_score": float(data["risk_score"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     # -------------------------------------------------------------------------
@@ -1978,10 +2146,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO investment_classifications_daily (
               repo_id, day, artifact_type, artifact_id, provider,
-              investment_area, project_stream, confidence, rule_id, computed_at
+              investment_area, project_stream, confidence, rule_id, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :artifact_type, :artifact_id, :provider,
-              :investment_area, :project_stream, :confidence, :rule_id, :computed_at
+              :investment_area, :project_stream, :confidence, :rule_id, :computed_at, :org_id
             )
             ON CONFLICT (provider, artifact_type, artifact_id, day) DO UPDATE SET
               repo_id=excluded.repo_id,
@@ -1989,7 +2157,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               project_stream=excluded.project_stream,
               confidence=excluded.confidence,
               rule_id=excluded.rule_id,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._investment_classification_row(r) for r in rows]
@@ -2011,6 +2180,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "confidence": float(data["confidence"]),
             "rule_id": str(data["rule_id"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def write_investment_metrics(self, rows: Sequence[InvestmentMetricsRecord]) -> None:
@@ -2021,11 +2191,11 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             INSERT INTO investment_metrics_daily (
               repo_id, day, team_id, investment_area, project_stream,
               delivery_units, work_items_completed, prs_merged, churn_loc,
-              cycle_p50_hours, computed_at
+              cycle_p50_hours, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :team_id, :investment_area, :project_stream,
               :delivery_units, :work_items_completed, :prs_merged, :churn_loc,
-              :cycle_p50_hours, :computed_at
+              :cycle_p50_hours, :computed_at, :org_id
             )
             ON CONFLICT (day, investment_area, team_id, project_stream) DO UPDATE SET
               repo_id=excluded.repo_id,
@@ -2034,7 +2204,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               prs_merged=excluded.prs_merged,
               churn_loc=excluded.churn_loc,
               cycle_p50_hours=excluded.cycle_p50_hours,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._investment_metrics_row(r) for r in rows]
@@ -2055,6 +2226,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "churn_loc": int(data["churn_loc"]),
             "cycle_p50_hours": float(data["cycle_p50_hours"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def write_issue_type_metrics(self, rows: Sequence[IssueTypeMetricsRecord]) -> None:
@@ -2065,11 +2237,11 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             INSERT INTO issue_type_metrics_daily (
               repo_id, day, provider, team_id, issue_type_norm,
               created_count, completed_count, active_count,
-              cycle_p50_hours, cycle_p90_hours, lead_p50_hours, computed_at
+              cycle_p50_hours, cycle_p90_hours, lead_p50_hours, computed_at, org_id
             ) VALUES (
               :repo_id, :day, :provider, :team_id, :issue_type_norm,
               :created_count, :completed_count, :active_count,
-              :cycle_p50_hours, :cycle_p90_hours, :lead_p50_hours, :computed_at
+              :cycle_p50_hours, :cycle_p90_hours, :lead_p50_hours, :computed_at, :org_id
             )
             ON CONFLICT (day, provider, team_id, issue_type_norm) DO UPDATE SET
               repo_id=excluded.repo_id,
@@ -2079,7 +2251,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cycle_p50_hours=excluded.cycle_p50_hours,
               cycle_p90_hours=excluded.cycle_p90_hours,
               lead_p50_hours=excluded.lead_p50_hours,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = [self._issue_type_metrics_row(r) for r in rows]
@@ -2101,6 +2274,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "cycle_p90_hours": float(data["cycle_p90_hours"]),
             "lead_p50_hours": float(data["lead_p50_hours"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
+            "org_id": str(data.get("org_id", "default") or "default"),
         }
 
     def write_work_unit_investments(
@@ -2117,7 +2291,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               structural_evidence_json, evidence_quality, evidence_quality_band,
               categorization_status, categorization_errors_json,
               categorization_model_version, categorization_input_hash,
-              categorization_run_id, computed_at
+              categorization_run_id, computed_at, org_id
             ) VALUES (
               :work_unit_id, :work_unit_type, :work_unit_name, :from_ts, :to_ts,
               :repo_id, :provider, :effort_metric, :effort_value,
@@ -2125,7 +2299,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               :structural_evidence_json, :evidence_quality, :evidence_quality_band,
               :categorization_status, :categorization_errors_json,
               :categorization_model_version, :categorization_input_hash,
-              :categorization_run_id, :computed_at
+              :categorization_run_id, :computed_at, :org_id
             )
             ON CONFLICT (work_unit_id, categorization_run_id) DO UPDATE SET
               theme_distribution_json=excluded.theme_distribution_json,
@@ -2135,7 +2309,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               evidence_quality_band=excluded.evidence_quality_band,
               categorization_status=excluded.categorization_status,
               categorization_errors_json=excluded.categorization_errors_json,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         import json
@@ -2169,11 +2344,12 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO work_unit_investment_quotes (
-              work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id
+              work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id
             ) VALUES (
-              :work_unit_id, :quote, :source_type, :source_id, :computed_at, :categorization_run_id
+              :work_unit_id, :quote, :source_type, :source_id, :computed_at, :categorization_run_id, :org_id
             )
-            ON CONFLICT (work_unit_id, source_type, source_id, categorization_run_id) DO NOTHING
+            ON CONFLICT (work_unit_id, source_type, source_id, categorization_run_id) DO UPDATE SET
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2197,15 +2373,16 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO investment_explanations (
-              cache_key, explanation_json, llm_provider, llm_model, computed_at
+              cache_key, explanation_json, llm_provider, llm_model, computed_at, org_id
             ) VALUES (
-              :cache_key, :explanation_json, :llm_provider, :llm_model, :computed_at
+              :cache_key, :explanation_json, :llm_provider, :llm_model, :computed_at, :org_id
             )
             ON CONFLICT (cache_key) DO UPDATE SET
               explanation_json=excluded.explanation_json,
               llm_provider=excluded.llm_provider,
               llm_model=excluded.llm_model,
-              computed_at=excluded.computed_at
+              computed_at=excluded.computed_at,
+              org_id=excluded.org_id
             """
         )
         payload = {
@@ -2246,16 +2423,17 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             INSERT INTO work_graph_edges (
               edge_id, source_type, source_id, target_type, target_id, edge_type,
               repo_id, provider, provenance, confidence, evidence,
-              discovered_at, last_synced, event_ts, day
+              discovered_at, last_synced, event_ts, day, org_id
             ) VALUES (
               :edge_id, :source_type, :source_id, :target_type, :target_id, :edge_type,
               :repo_id, :provider, :provenance, :confidence, :evidence,
-              :discovered_at, :last_synced, :event_ts, :day
+              :discovered_at, :last_synced, :event_ts, :day, :org_id
             )
             ON CONFLICT (edge_id) DO UPDATE SET
               last_synced=excluded.last_synced,
               confidence=excluded.confidence,
-              evidence=excluded.evidence
+              evidence=excluded.evidence,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2280,14 +2458,15 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO work_graph_issue_pr (
-              repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced
+              repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id
             ) VALUES (
-              :repo_id, :work_item_id, :pr_number, :confidence, :provenance, :evidence, :last_synced
+              :repo_id, :work_item_id, :pr_number, :confidence, :provenance, :evidence, :last_synced, :org_id
             )
             ON CONFLICT (repo_id, work_item_id, pr_number) DO UPDATE SET
               confidence=excluded.confidence,
               evidence=excluded.evidence,
-              last_synced=excluded.last_synced
+              last_synced=excluded.last_synced,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2311,14 +2490,15 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         stmt = text(
             """
             INSERT INTO work_graph_pr_commit (
-              repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced
+              repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced, org_id
             ) VALUES (
-              :repo_id, :pr_number, :commit_hash, :confidence, :provenance, :evidence, :last_synced
+              :repo_id, :pr_number, :commit_hash, :confidence, :provenance, :evidence, :last_synced, :org_id
             )
             ON CONFLICT (repo_id, pr_number, commit_hash) DO UPDATE SET
               confidence=excluded.confidence,
               evidence=excluded.evidence,
-              last_synced=excluded.last_synced
+              last_synced=excluded.last_synced,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2348,13 +2528,13 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               repo_id, project_key, project_id, assignees, reporter,
               created_at, updated_at, started_at, completed_at, closed_at,
               labels, story_points, sprint_id, sprint_name, parent_id, epic_id,
-              url, priority_raw, service_class, due_at
+              url, priority_raw, service_class, due_at, org_id
             ) VALUES (
               :work_item_id, :provider, :title, :type, :status, :status_raw, :description,
               :repo_id, :project_key, :project_id, :assignees, :reporter,
               :created_at, :updated_at, :started_at, :completed_at, :closed_at,
               :labels, :story_points, :sprint_id, :sprint_name, :parent_id, :epic_id,
-              :url, :priority_raw, :service_class, :due_at
+              :url, :priority_raw, :service_class, :due_at, :org_id
             )
             ON CONFLICT (work_item_id) DO UPDATE SET
               title=excluded.title,
@@ -2371,7 +2551,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               sprint_name=excluded.sprint_name,
               priority_raw=excluded.priority_raw,
               service_class=excluded.service_class,
-              due_at=excluded.due_at
+              due_at=excluded.due_at,
+              org_id=excluded.org_id
             """
         )
         import json
@@ -2411,12 +2592,13 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO work_item_transitions (
               work_item_id, provider, occurred_at, from_status_raw, to_status_raw,
-              from_status, to_status, actor
+              from_status, to_status, actor, org_id
             ) VALUES (
               :work_item_id, :provider, :occurred_at, :from_status_raw, :to_status_raw,
-              :from_status, :to_status, :actor
+              :from_status, :to_status, :actor, :org_id
             )
-            ON CONFLICT (work_item_id, occurred_at, to_status) DO NOTHING
+            ON CONFLICT (work_item_id, occurred_at, to_status) DO UPDATE SET
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2438,13 +2620,14 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO work_item_dependencies (
               source_work_item_id, target_work_item_id, relationship_type,
-              relationship_type_raw, last_synced
+              relationship_type_raw, last_synced, org_id
             ) VALUES (
               :source_work_item_id, :target_work_item_id, :relationship_type,
-              :relationship_type_raw, :last_synced
+              :relationship_type_raw, :last_synced, :org_id
             )
             ON CONFLICT (source_work_item_id, target_work_item_id, relationship_type) DO UPDATE SET
-              last_synced=excluded.last_synced
+              last_synced=excluded.last_synced,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2468,12 +2651,13 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO work_item_reopen_events (
               work_item_id, occurred_at, from_status, to_status,
-              from_status_raw, to_status_raw, actor, last_synced
+              from_status_raw, to_status_raw, actor, last_synced, org_id
             ) VALUES (
               :work_item_id, :occurred_at, :from_status, :to_status,
-              :from_status_raw, :to_status_raw, :actor, :last_synced
+              :from_status_raw, :to_status_raw, :actor, :last_synced, :org_id
             )
-            ON CONFLICT (work_item_id, occurred_at) DO NOTHING
+            ON CONFLICT (work_item_id, occurred_at) DO UPDATE SET
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2498,12 +2682,13 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO work_item_interactions (
               work_item_id, provider, interaction_type, occurred_at, actor,
-              body_length, last_synced
+              body_length, last_synced, org_id
             ) VALUES (
               :work_item_id, :provider, :interaction_type, :occurred_at, :actor,
-              :body_length, :last_synced
+              :body_length, :last_synced, :org_id
             )
-            ON CONFLICT (work_item_id, occurred_at, interaction_type) DO NOTHING
+            ON CONFLICT (work_item_id, occurred_at, interaction_type) DO UPDATE SET
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2526,10 +2711,10 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO sprints (
               provider, sprint_id, name, state, started_at, ended_at,
-              completed_at, last_synced
+              completed_at, last_synced, org_id
             ) VALUES (
               :provider, :sprint_id, :name, :state, :started_at, :ended_at,
-              :completed_at, :last_synced
+              :completed_at, :last_synced, :org_id
             )
             ON CONFLICT (provider, sprint_id) DO UPDATE SET
               name=excluded.name,
@@ -2537,7 +2722,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               started_at=excluded.started_at,
               ended_at=excluded.ended_at,
               completed_at=excluded.completed_at,
-              last_synced=excluded.last_synced
+              last_synced=excluded.last_synced,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2568,17 +2754,18 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             """
             INSERT INTO worklogs (
               work_item_id, provider, worklog_id, author, started_at,
-              time_spent_seconds, created_at, updated_at, last_synced
+              time_spent_seconds, created_at, updated_at, last_synced, org_id
             ) VALUES (
               :work_item_id, :provider, :worklog_id, :author, :started_at,
-              :time_spent_seconds, :created_at, :updated_at, :last_synced
+              :time_spent_seconds, :created_at, :updated_at, :last_synced, :org_id
             )
             ON CONFLICT (provider, worklog_id) DO UPDATE SET
               author=excluded.author,
               started_at=excluded.started_at,
               time_spent_seconds=excluded.time_spent_seconds,
               updated_at=excluded.updated_at,
-              last_synced=excluded.last_synced
+              last_synced=excluded.last_synced,
+              org_id=excluded.org_id
             """
         )
         payload = []
@@ -2639,6 +2826,9 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 t_desc = getattr(team, "description", None) or (
                     team.get("description") if isinstance(team, dict) else None
                 )
+                t_org = getattr(team, "org_id", None) or (
+                    team.get("org_id") if isinstance(team, dict) else "default"
+                )
                 t_updated = getattr(team, "updated_at", None) or (
                     team.get("updated_at")
                     if isinstance(team, dict)
@@ -2647,13 +2837,14 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
 
                 conn.execute(
                     text("""
-                        INSERT INTO teams (id, team_uuid, name, description, members, updated_at)
-                        VALUES (:id, :uuid, :name, :desc, :members, :updated)
+                        INSERT INTO teams (id, team_uuid, name, description, members, updated_at, org_id)
+                        VALUES (:id, :uuid, :name, :desc, :members, :updated, :org_id)
                         ON CONFLICT(id) DO UPDATE SET
                             name=excluded.name,
                             description=excluded.description,
                             members=excluded.members,
-                            updated_at=excluded.updated_at
+                            updated_at=excluded.updated_at,
+                            org_id=excluded.org_id
                     """),
                     {
                         "id": t_id,
@@ -2664,5 +2855,6 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                         "updated": _dt_to_iso(t_updated)
                         if isinstance(t_updated, datetime)
                         else str(t_updated),
+                        "org_id": str(t_org or "default"),
                     },
                 )

@@ -122,6 +122,7 @@ class WorkItemDependency:
     relationship_type: str
     relationship_type_raw: str
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    org_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,7 @@ class WorkItemReopenEvent:
     to_status_raw: Optional[str]
     actor: Optional[str]
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    org_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,7 @@ class WorkItemInteractionEvent:
     actor: Optional[str]
     body_length: int
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    org_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -157,6 +160,7 @@ class Sprint:
     ended_at: Optional[datetime]
     completed_at: Optional[datetime]
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    org_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -170,3 +174,4 @@ class Worklog:
     created_at: datetime
     updated_at: datetime
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    org_id: str = "default"

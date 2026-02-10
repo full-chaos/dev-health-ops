@@ -747,7 +747,6 @@ def run_work_items_sync(
 
 @celery_app.task(bind=True, max_retries=2, queue="sync")
 def sync_team_drift(self, org_id: str = "default") -> dict:
-    import asyncio
 
     from dev_health_ops.api.services.settings import (
         IntegrationCredentialsService,

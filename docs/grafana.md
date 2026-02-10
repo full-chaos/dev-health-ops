@@ -40,7 +40,7 @@ The Work Tracking dashboard supports filtering by `provider`, `team_id`, and `wo
 
 ## Expected ClickHouse tables
 
-Git facts (synced via the CLI, e.g., `python cli.py sync ...`):
+Git facts (synced via the CLI, e.g., `dev-hops sync ...`):
 - `repos`
 - `git_commits`
 - `git_commit_stats`
@@ -60,14 +60,14 @@ Derived metrics (computed by `scripts/compute_metrics_daily.py`):
 1) Sync git data into ClickHouse:
 
 ```bash
-python cli.py sync git --provider local --db "clickhouse://localhost:8123/default" --repo-path .
+dev-hops sync git --provider local --db "clickhouse://localhost:8123/default" --repo-path .
 ```
 
 2) Compute derived metrics:
 
 ```bash
-python cli.py sync work-items --provider all --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
-python cli.py metrics daily --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
+dev-hops sync work-items --provider all --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
+dev-hops metrics daily --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
 ```
 
 Work tracking providers require credentials; see `docs/task_trackers.md`.

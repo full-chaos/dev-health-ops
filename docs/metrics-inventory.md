@@ -1,7 +1,7 @@
 # Metrics Inventory
 
 This inventory tracks the implementation status of all metrics defined in the `dev-health-ops` project.
-Work item metrics assume provider data has been synced via `python cli.py sync work-items ...` (use `-s` to filter repos; `--auth` to override GitHub/GitLab tokens when needed; tags/settings filtering planned).
+Work item metrics assume provider data has been synced via `dev-hops sync work-items ...` (use `-s` to filter repos; `--auth` to override GitHub/GitLab tokens when needed; tags/settings filtering planned).
 
 ## 1. Delivery & Velocity (Flow & DORA)
 

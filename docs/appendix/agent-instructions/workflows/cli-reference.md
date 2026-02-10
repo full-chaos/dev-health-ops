@@ -40,19 +40,19 @@ Sync git repository data.
 
 ```bash
 # Local repository
-python cli.py sync git --provider local \
+dev-hops sync git --provider local \
   --db "$DATABASE_URI" \
   --repo-path /path/to/repo
 
 # GitHub
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
   --repo linux
 
 # GitLab
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "$DATABASE_URI" \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
@@ -73,7 +73,7 @@ python cli.py sync git --provider gitlab \
 Sync pull request data.
 
 ```bash
-python cli.py sync prs --provider github \
+dev-hops sync prs --provider github \
   --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
@@ -86,17 +86,17 @@ Sync work items from issue trackers.
 
 ```bash
 # All providers
-python cli.py sync work-items --provider all \
+dev-hops sync work-items --provider all \
   --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 30
 
 # Jira only
-python cli.py sync work-items --provider jira \
+dev-hops sync work-items --provider jira \
   --db "$DATABASE_URI"
 
 # GitHub with pattern
-python cli.py sync work-items --provider github \
+dev-hops sync work-items --provider github \
   --db "$DATABASE_URI" \
   -s "org/*"
 ```
@@ -109,14 +109,14 @@ Sync CI/CD pipeline data.
 
 ```bash
 # GitHub
-python cli.py sync cicd --provider github \
+dev-hops sync cicd --provider github \
   --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
   --repo repo
 
 # GitLab
-python cli.py sync cicd --provider gitlab \
+dev-hops sync cicd --provider gitlab \
   --db "$DATABASE_URI" \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
@@ -128,7 +128,7 @@ python cli.py sync cicd --provider gitlab \
 Sync deployment events.
 
 ```bash
-python cli.py sync deployments --provider github \
+dev-hops sync deployments --provider github \
   --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
@@ -140,7 +140,7 @@ python cli.py sync deployments --provider github \
 Sync incident data.
 
 ```bash
-python cli.py sync incidents --provider github \
+dev-hops sync incidents --provider github \
   --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner org \
@@ -153,13 +153,23 @@ Sync team definitions.
 
 ```bash
 # From config file
-python cli.py sync teams --path config/team_mapping.yaml
+dev-hops sync teams --path config/team_mapping.yaml
 
 # From Jira projects
-python cli.py sync teams --provider jira
+dev-hops sync teams --provider jira
 
 # Synthetic teams
-python cli.py sync teams --provider synthetic
+dev-hops sync teams --provider synthetic
+
+# From GitHub org (requires --owner and token)
+dev-hops sync teams --provider github \
+  --owner my-org \
+  --auth "$GITHUB_TOKEN"
+
+# From GitLab group (fetches group + subgroups)
+dev-hops sync teams --provider gitlab \
+  --owner my-group/path \
+  --auth "$GITLAB_TOKEN"
 ```
 
 ---
@@ -172,18 +182,18 @@ Compute daily metrics.
 
 ```bash
 # Single day
-python cli.py metrics daily \
+dev-hops metrics daily \
   --db "$DATABASE_URI" \
   --date 2025-02-01
 
 # With backfill
-python cli.py metrics daily \
+dev-hops metrics daily \
   --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 7
 
 # Filter to one repo
-python cli.py metrics daily \
+dev-hops metrics daily \
   --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --repo-id <uuid>
@@ -205,7 +215,7 @@ python cli.py metrics daily \
 Generate synthetic test data.
 
 ```bash
-python cli.py fixtures generate \
+dev-hops fixtures generate \
   --db "$DATABASE_URI" \
   --days 30
 ```
@@ -270,20 +280,20 @@ For GitHub/GitLab batch operations:
 
 ```bash
 # 1. Sync git data
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   --owner myorg \
   --repo myrepo
 
 # 2. Sync work items
-python cli.py sync work-items --provider jira \
+dev-hops sync work-items --provider jira \
   --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 30
 
 # 3. Compute metrics
-python cli.py metrics daily \
+dev-hops metrics daily \
   --db "$DATABASE_URI" \
   --date 2025-02-01 \
   --backfill 30
@@ -293,12 +303,12 @@ python cli.py metrics daily \
 
 ```bash
 # Generate synthetic data
-python cli.py fixtures generate \
+dev-hops fixtures generate \
   --db "sqlite+aiosqlite:///./dev.db" \
   --days 30
 
 # Compute metrics
-python cli.py metrics daily \
+dev-hops metrics daily \
   --db "sqlite+aiosqlite:///./dev.db" \
   --backfill 30
 ```
@@ -307,7 +317,7 @@ python cli.py metrics daily \
 
 ```bash
 # Sync all repos in org
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "$DATABASE_URI" \
   --auth "$GITHUB_TOKEN" \
   -s "myorg/*" \

@@ -40,5 +40,5 @@ Distribution of historical throughput with:
 
 Requires `work_item_metrics_daily` with `items_completed` data. Run:
 ```bash
-python cli.py metrics daily --with-work-items
+dev-hops metrics daily --with-work-items
 ```

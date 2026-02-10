@@ -38,7 +38,7 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 - AGG GraphQL is used for enrichment (worklogs) and ops team mappings.
 - Enable worklog GraphQL enrichment with `ATLASSIAN_GQL_ENABLED=true` and `JIRA_FETCH_WORKLOGS=true`.
 - Use `JIRA_USE_PROVIDER=true` to route work-items ingestion through `JiraProvider`.
-- Ops teams are synced via `python cli.py sync teams --provider jira-ops` using AGG project queries.
+- Ops teams are synced via `dev-hops sync teams --provider jira-ops` using AGG project queries.
 
 ## Deprecated repo-root agent docs
 The following repo-root files were historical duplicates and are no longer authoritative:
@@ -218,25 +218,25 @@ Explanation format:
 
 * Git data (local):
 
-  * `python cli.py sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo`
+  * `dev-hops sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo`
 
 * Work items:
 
-  * `python cli.py sync work-items --provider <jira|github|gitlab|synthetic|all> -s "org/*" --db "$DATABASE_URI"`
+  * `dev-hops sync work-items --provider <jira|github|gitlab|synthetic|all> -s "org/*" --db "$DATABASE_URI"`
 
 * Teams:
 
-  * `python cli.py sync teams --provider <config|jira|synthetic> --db "$DATABASE_URI"`
+  * `dev-hops sync teams --provider <config|jira|jira-ops|synthetic|ms-teams|github|gitlab> --db "$DATABASE_URI"`
 
 ### 6.2 Generate synthetic data
 
-* `python cli.py fixtures generate --db "$DATABASE_URI" --days 30`
+* `dev-hops fixtures generate --db "$DATABASE_URI" --days 30`
 
 ### 6.3 Compute metrics
 
 * Daily rollups:
 
-  * `python cli.py metrics daily --db "$DATABASE_URI"`
+  * `dev-hops metrics daily --db "$DATABASE_URI"`
 
 ---
 

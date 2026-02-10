@@ -7,7 +7,7 @@ The `cli.py` front end exposes target-specific sync jobs with a provider switch:
 
 ## Simplified Library Dispatch
 
-The dedicated CLI (`python cli.py sync ...`) now exposes:
+The dedicated CLI (`dev-hops sync ...`) now exposes:
 
 - **Unified authentication** with `--auth` (works for both GitHub and GitLab)
 - **Auto-detection of database type** from connection string URL scheme
@@ -21,16 +21,16 @@ This is the original mode that analyzes a local git repository.
 # Using environment variables
 export DATABASE_URI="postgresql+asyncpg://localhost:5432/mergestat"
 export REPO_PATH="/path/to/repo"
-python cli.py sync git --provider local
+dev-hops sync git --provider local
 
 # Using command-line arguments (auto-detects database type from URL)
-python cli.py sync git --provider local --db "postgresql+asyncpg://localhost:5432/mergestat" --repo-path "/path/to/repo"
+dev-hops sync git --provider local --db "postgresql+asyncpg://localhost:5432/mergestat" --repo-path "/path/to/repo"
 
 # Limit to commits and blames since a date (ISO date or datetime)
-python cli.py sync git --provider local --db "sqlite+aiosqlite:///mergestat.db" --repo-path "/path/to/repo" --since 2024-01-01
+dev-hops sync git --provider local --db "sqlite+aiosqlite:///mergestat.db" --repo-path "/path/to/repo" --since 2024-01-01
 
 # Explicit connector type (not needed with the CLI mode, but shown for parity)
-python cli.py sync git --provider local --db "postgresql://..." --repo-path "/path/to/repo"
+dev-hops sync git --provider local --db "postgresql://..." --repo-path "/path/to/repo"
 ```
 
 **How filtering works**: `--since` / `--date` restricts commits and commit stats to changes at or after the timestamp.
@@ -51,14 +51,14 @@ Fetch repository data directly from GitHub without cloning. **Fully supports bot
 ```bash
 # Public repository with unified auth
 export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
   --repo linux
 
 # Private repository (token must have 'repo' scope)
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITHUB_TOKEN" \
   --owner your-org \
@@ -66,7 +66,7 @@ python cli.py sync git --provider github \
 
 # Token from environment variable (GITHUB_TOKEN) - no --auth needed
 export GITHUB_TOKEN="ghp_xxxxxxxxxxxx"
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "postgresql://..." \
   --owner torvalds \
   --repo linux
@@ -76,7 +76,7 @@ python cli.py sync git --provider github \
 
 ```bash
 # Process repositories matching a pattern
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "sqlite+aiosqlite:///mergestat.db" \
   --auth "$GITHUB_TOKEN" \
   -s "myorg/api-*" \
@@ -108,19 +108,19 @@ Fetch project data directly from GitLab (including self-hosted instances). **Ful
 
 ```bash
 # Public project on GitLab.com with unified auth
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
 
 # Private project (token must have required scopes)
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "postgresql://..." \
   --auth "$GITLAB_TOKEN" \
   --project-id 12345
 
 # Self-hosted GitLab
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "postgresql://..." \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.example.com" \
@@ -128,7 +128,7 @@ python cli.py sync git --provider gitlab \
 
 # Token from environment variable (GITLAB_TOKEN)
 export GITLAB_TOKEN="glpat-xxxxxxxxxxxx"
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "mongodb://localhost:27017" \
   --project-id 278964
 ```
@@ -137,7 +137,7 @@ python cli.py sync git --provider gitlab \
 
 ```bash
 # Process projects matching a pattern
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "sqlite+aiosqlite:///mergestat.db" \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \
@@ -182,14 +182,14 @@ All modes support these environment variables:
 
 The CLI exposes target-specific sync jobs (`sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`) with a `--provider` flag.
 
-### Local provider (`python cli.py sync <target> --provider local`)
+### Local provider (`dev-hops sync <target> --provider local`)
 
 - `--db DB` (required): Database connection string (auto-detects the backend from the URL).
 - `--repo-path PATH`: Path to the repository (`.` by default).
 - `--since / --date / --backfill`: Time filters for commits and stats.
 - `--db-type {postgres,mongo,sqlite,clickhouse}`: Optional override when the scheme is ambiguous.
 
-### GitHub provider (`python cli.py sync <target> --provider github`)
+### GitHub provider (`dev-hops sync <target> --provider github`)
 
 Single-repo execution (required: `--owner` and `--repo`):
 
@@ -206,7 +206,7 @@ Batch processing:
 - `--use-async`: Enable async workers.
 - Shared options: `--max-commits-per-repo`.
 
-### GitLab provider (`python cli.py sync <target> --provider gitlab`)
+### GitLab provider (`dev-hops sync <target> --provider gitlab`)
 
 - `--db DB` (required).
 - `--auth TOKEN`: Token overrides `GITLAB_TOKEN`.
@@ -220,7 +220,7 @@ Batch processing:
 ### Analyze Linux Kernel from GitHub
 
 ```bash
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
@@ -230,7 +230,7 @@ python cli.py sync git --provider github \
 ### Analyze GitLab's GitLab from GitLab.com
 
 ```bash
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
@@ -239,7 +239,7 @@ python cli.py sync git --provider gitlab \
 ### Analyze Local Repository
 
 ```bash
-python cli.py sync git --provider local \
+dev-hops sync git --provider local \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --repo-path "/home/user/my-project"
 ```
@@ -248,7 +248,7 @@ python cli.py sync git --provider local \
 
 ```bash
 # GitHub batch processing
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "sqlite+aiosqlite:///mergestat.db" \
   --auth "$GITHUB_TOKEN" \
   --group myorg \
@@ -258,7 +258,7 @@ python cli.py sync git --provider github \
   --use-async
 
 # GitLab batch processing
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "sqlite+aiosqlite:///mergestat.db" \
   --auth "$GITLAB_TOKEN" \
   --group mygroup \

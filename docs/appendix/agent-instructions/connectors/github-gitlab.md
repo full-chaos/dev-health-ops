@@ -45,15 +45,15 @@ Analyze a local git repository.
 # Environment variables
 export DATABASE_URI="postgresql+asyncpg://localhost:5432/mergestat"
 export REPO_PATH="/path/to/repo"
-python cli.py sync git --provider local
+dev-hops sync git --provider local
 
 # Command-line arguments
-python cli.py sync git --provider local \
+dev-hops sync git --provider local \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --repo-path "/path/to/repo"
 
 # With date filtering
-python cli.py sync git --provider local \
+dev-hops sync git --provider local \
   --db "sqlite+aiosqlite:///mergestat.db" \
   --repo-path "/path/to/repo" \
   --since 2024-01-01
@@ -69,14 +69,14 @@ Fetch data directly from GitHub without cloning. Supports both public and privat
 
 ```bash
 # Public repository
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITHUB_TOKEN" \
   --owner torvalds \
   --repo linux
 
 # Private repository (token must have 'repo' scope)
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITHUB_TOKEN" \
   --owner your-org \
@@ -86,7 +86,7 @@ python cli.py sync git --provider github \
 ### Batch Processing
 
 ```bash
-python cli.py sync git --provider github \
+dev-hops sync git --provider github \
   --db "sqlite+aiosqlite:///mergestat.db" \
   --auth "$GITHUB_TOKEN" \
   -s "myorg/api-*" \
@@ -113,13 +113,13 @@ Fetch data from GitLab (including self-hosted). Supports public and private proj
 
 ```bash
 # GitLab.com
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "postgresql+asyncpg://localhost:5432/mergestat" \
   --auth "$GITLAB_TOKEN" \
   --project-id 278964
 
 # Self-hosted GitLab
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "postgresql://..." \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.example.com" \
@@ -129,7 +129,7 @@ python cli.py sync git --provider gitlab \
 ### Batch Processing
 
 ```bash
-python cli.py sync git --provider gitlab \
+dev-hops sync git --provider gitlab \
   --db "sqlite+aiosqlite:///mergestat.db" \
   --auth "$GITLAB_TOKEN" \
   --gitlab-url "https://gitlab.com" \

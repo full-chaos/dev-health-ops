@@ -19,24 +19,24 @@ Git facts must already exist in the backend you point the job at:
 - `git_commit_stats`
 - `git_pull_requests`
 
-Work tracking facts should be synced from provider APIs via `python cli.py sync work-items ...`.
+Work tracking facts should be synced from provider APIs via `dev-hops sync work-items ...`.
 See `docs/task_trackers.md` for configuration. (`metrics daily --provider ...` still exists as a convenience/backward-compatible path.)
 `--provider auto` (default) loads work items from the database only and skips provider API calls.
 
 CI/CD pipeline facts are synced from GitHub/GitLab via the `sync cicd` job:
 
 ```bash
-python cli.py sync cicd --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
-python cli.py sync cicd --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
+dev-hops sync cicd --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
+dev-hops sync cicd --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
 ```
 
 Deployments and incident facts are synced via their own jobs:
 
 ```bash
-python cli.py sync deployments --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
-python cli.py sync incidents --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
-python cli.py sync deployments --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
-python cli.py sync incidents --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
+dev-hops sync deployments --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
+dev-hops sync incidents --provider github --db "<DB_CONN>" --auth "$GITHUB_TOKEN" --owner "<org>" --repo "<repo>"
+dev-hops sync deployments --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
+dev-hops sync incidents --provider gitlab --db "<DB_CONN>" --auth "$GITLAB_TOKEN" --gitlab-url "<URL>" --project-id <ID>
 ```
 
 Note: Jira Ops/Service Desk incidents are planned once project-to-repo or deployment mapping is defined.
@@ -269,16 +269,16 @@ The job reads source data from the **same backend** you point it at (ClickHouse 
 ### Examples
 
 - Compute one day (backend inferred from `--db` or `DATABASE_URI`):
-  - `python cli.py metrics daily --date 2025-02-01 --db clickhouse://localhost:8123/default`
-  - `python cli.py metrics daily --date 2025-02-01 --db mongodb://localhost:27017/mergestat`
-  - `python cli.py metrics daily --date 2025-02-01 --db sqlite:///./mergestat.db`
+  - `dev-hops metrics daily --date 2025-02-01 --db clickhouse://localhost:8123/default`
+  - `dev-hops metrics daily --date 2025-02-01 --db mongodb://localhost:27017/mergestat`
+  - `dev-hops metrics daily --date 2025-02-01 --db sqlite:///./mergestat.db`
 - Compute 7-day backfill ending at a date:
-  - `python cli.py metrics daily --date 2025-02-01 --backfill 7 --db clickhouse://localhost:8123/default`
+  - `dev-hops metrics daily --date 2025-02-01 --backfill 7 --db clickhouse://localhost:8123/default`
 - Filter to one repository:
-  - `python cli.py metrics daily --date 2025-02-01 --repo-id <uuid> --db clickhouse://localhost:8123/default`
+  - `dev-hops metrics daily --date 2025-02-01 --repo-id <uuid> --db clickhouse://localhost:8123/default`
 - Compute git + work item metrics (requires provider credentials; see `docs/task_trackers.md`):
-  - `python cli.py sync work-items --provider all --date 2025-02-01 --backfill 30 --db clickhouse://localhost:8123/default`
-  - `python cli.py metrics daily --date 2025-02-01 --backfill 30 --db clickhouse://localhost:8123/default`
+  - `dev-hops sync work-items --provider all --date 2025-02-01 --backfill 30 --db clickhouse://localhost:8123/default`
+  - `dev-hops metrics daily --date 2025-02-01 --backfill 30 --db clickhouse://localhost:8123/default`
 
 ## Dependencies
 

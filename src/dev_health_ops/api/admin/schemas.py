@@ -114,6 +114,15 @@ class SyncConfigUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+JOB_RUN_STATUS_LABELS: dict[int, str] = {
+    0: "pending",
+    1: "running",
+    2: "success",
+    3: "failed",
+    4: "cancelled",
+}
+
+
 class JobRunResponse(BaseModel):
     id: str
     job_id: str

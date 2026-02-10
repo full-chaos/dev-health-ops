@@ -55,22 +55,18 @@ class IntegrationProvider(str, Enum):
     ATLASSIAN = "atlassian"
 
 
-class JobStatus(str, Enum):
-    """Status of a scheduled job."""
-
-    ACTIVE = "active"
-    PAUSED = "paused"
-    DISABLED = "disabled"
+class JobStatus(int, Enum):
+    ACTIVE = 0
+    PAUSED = 1
+    DISABLED = 2
 
 
-class JobRunStatus(str, Enum):
-    """Status of a job run."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCESS = "success"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+class JobRunStatus(int, Enum):
+    PENDING = 0
+    RUNNING = 1
+    SUCCESS = 2
+    FAILED = 3
+    CANCELLED = 4
 
 
 class Setting(Base):
@@ -322,11 +318,11 @@ class ScheduledJob(Base):
     )
     sync_config = relationship("SyncConfiguration")
 
-    status = Column(Text, nullable=False, default=JobStatus.ACTIVE.value)
+    status = Column(Integer, nullable=False, default=JobStatus.ACTIVE.value)
     is_running = Column(Boolean, nullable=False, default=False)
 
     last_run_at = Column(DateTime(timezone=True), nullable=True)
-    last_run_status = Column(Text, nullable=True)
+    last_run_status = Column(Integer, nullable=True)
     last_run_duration_seconds = Column(Integer, nullable=True)
     last_run_error = Column(Text, nullable=True)
     next_run_at = Column(DateTime(timezone=True), nullable=True)
@@ -360,7 +356,7 @@ class ScheduledJob(Base):
         job_config: Optional[dict] = None,
         sync_config_id: Optional[uuid.UUID] = None,
         tz: str = "UTC",
-        status: str = JobStatus.ACTIVE.value,
+        status: int = JobStatus.ACTIVE.value,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id
@@ -395,7 +391,7 @@ class JobRun(Base):
     )
     job = relationship("ScheduledJob")
 
-    status = Column(Text, nullable=False, default=JobRunStatus.PENDING.value)
+    status = Column(Integer, nullable=False, default=JobRunStatus.PENDING.value)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     duration_seconds = Column(Integer, nullable=True)
@@ -426,7 +422,7 @@ class JobRun(Base):
         self,
         job_id: uuid.UUID,
         triggered_by: str = "scheduler",
-        status: str = JobRunStatus.PENDING.value,
+        status: int = JobRunStatus.PENDING.value,
     ):
         self.id = uuid.uuid4()
         self.job_id = job_id

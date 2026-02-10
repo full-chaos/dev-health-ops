@@ -1,10 +1,6 @@
 """Tests for P1 bug fixes: gh-377 (active_repos scope) and gh-378 (metrics scheduling)."""
 
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 class TestActiveReposUnion:

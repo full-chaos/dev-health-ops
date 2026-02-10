@@ -199,6 +199,33 @@ class TeamMappingUpdate(BaseModel):
     extra_data: Optional[dict[str, Any]] = None
 
 
+class DiscoveredTeam(BaseModel):
+    provider_type: str
+    provider_team_id: str
+    name: str
+    description: Optional[str] = None
+    member_count: Optional[int] = None
+    associations: dict[str, Any] = Field(default_factory=dict)
+
+
+class TeamDiscoverResponse(BaseModel):
+    provider: str
+    teams: list[DiscoveredTeam]
+    total: int
+
+
+class TeamImportRequest(BaseModel):
+    teams: list[DiscoveredTeam]
+    on_conflict: str = Field(default="skip", pattern="^(skip|merge)$")
+
+
+class TeamImportResponse(BaseModel):
+    imported: int
+    skipped: int
+    merged: int
+    details: list[dict[str, Any]] = Field(default_factory=list)
+
+
 # ---- User schemas ----
 
 

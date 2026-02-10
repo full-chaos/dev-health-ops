@@ -21,6 +21,7 @@ from dev_health_ops.api.services.settings import (
     IntegrationCredentialsService,
     SettingsService,
     SyncConfigurationService,
+    TeamDiscoveryService,
     TeamMappingService,
 )
 from dev_health_ops.api.services.users import (
@@ -66,6 +67,9 @@ from .schemas import (
     SyncConfigCreate,
     SyncConfigResponse,
     SyncConfigUpdate,
+    TeamDiscoverResponse,
+    TeamImportRequest,
+    TeamImportResponse,
     TeamMappingCreate,
     TeamMappingResponse,
     TestConnectionRequest,
@@ -756,6 +760,77 @@ async def delete_team(
     if not deleted:
         raise HTTPException(status_code=404, detail="Team not found")
     return {"deleted": True}
+
+
+@router.get("/teams/discover", response_model=TeamDiscoverResponse)
+async def discover_teams(
+    provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> TeamDiscoverResponse:
+    creds_svc = IntegrationCredentialsService(session, org_id)
+    credential = await creds_svc.get(provider, "default")
+    decrypted = await creds_svc.get_decrypted_credentials(provider, "default")
+    if credential is None or decrypted is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No credentials found for provider '{provider}'",
+        )
+
+    config = credential.config or {}
+    discovery_svc = TeamDiscoveryService(session, org_id)
+
+    if provider == "github":
+        token = decrypted.get("token")
+        org_name = config.get("org")
+        if not token or not org_name:
+            raise HTTPException(
+                status_code=400,
+                detail="GitHub credentials require token and config.org",
+            )
+        teams = await discovery_svc.discover_github(token=token, org_name=org_name)
+    elif provider == "gitlab":
+        token = decrypted.get("token")
+        group_path = config.get("group")
+        url = config.get("url", "https://gitlab.com")
+        if not token or not group_path:
+            raise HTTPException(
+                status_code=400,
+                detail="GitLab credentials require token and config.group",
+            )
+        teams = await discovery_svc.discover_gitlab(
+            token=token,
+            group_path=group_path,
+            url=url,
+        )
+    else:
+        email = decrypted.get("email")
+        api_token = decrypted.get("api_token") or decrypted.get("token")
+        jira_url = config.get("url") or decrypted.get("url")
+        if not email or not api_token or not jira_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Jira credentials require email, api_token, and url",
+            )
+        teams = await discovery_svc.discover_jira(
+            email=email,
+            api_token=api_token,
+            url=jira_url,
+        )
+
+    return TeamDiscoverResponse(provider=provider, teams=teams, total=len(teams))
+
+
+@router.post("/teams/import", response_model=TeamImportResponse)
+async def import_teams(
+    payload: TeamImportRequest,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> TeamImportResponse:
+    svc = TeamDiscoveryService(session, org_id)
+    result = await svc.import_teams(payload.teams, payload.on_conflict)
+    await session.commit()
+    return TeamImportResponse(**result)
 
 
 @router.get("/users", response_model=list[UserResponse])

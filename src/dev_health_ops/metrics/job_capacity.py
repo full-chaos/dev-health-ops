@@ -171,7 +171,6 @@ async def run_capacity_forecast(
     simulations: int = 10000,
     all_teams: bool = False,
     persist: bool = True,
-    org_id: str = "default",
 ) -> List[ForecastResult]:
     sink = create_sink(db_url)
     try:
@@ -275,7 +274,6 @@ async def _run_cli(args: argparse.Namespace) -> int:
         simulations=args.simulations,
         all_teams=args.all_teams,
         persist=not args.dry_run,
-        org_id=getattr(args, "org", "default"),
     )
 
     if not results:

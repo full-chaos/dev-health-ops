@@ -193,7 +193,6 @@ def run_complexity_db_job(
     max_files: Optional[int],
     search_pattern: Optional[str] = None,
     exclude_globs: Optional[List[str]] = None,
-    org_id: str = "default",
 ) -> int:
     """
     Compute complexity metrics from ClickHouse git_files/git_blame contents.
@@ -400,5 +399,4 @@ def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
         max_files=ns.max_files,
         search_pattern=ns.search,
         exclude_globs=ns.exclude,
-        org_id=getattr(ns, "org", "default"),
     )

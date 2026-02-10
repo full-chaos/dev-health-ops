@@ -60,7 +60,6 @@ def run_work_items_sync_job(
     repo_id: Optional[uuid.UUID] = None,
     repo_name: Optional[str] = None,
     search_pattern: Optional[str] = None,
-    org_id: str = "default",
 ) -> None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
@@ -568,7 +567,6 @@ def _cmd_sync_work_items(ns: argparse.Namespace) -> int:
             repo_id=ns.repo_id,
             repo_name=ns.repo_name,
             search_pattern=ns.search,
-            org_id=getattr(ns, "org", "default"),
         )
         return 0
     except Exception as e:

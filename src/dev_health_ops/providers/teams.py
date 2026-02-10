@@ -267,6 +267,88 @@ def sync_teams(ns: argparse.Namespace) -> int:
         teams_data = generator.generate_teams(count=8)
         logging.info(f"Generated {len(teams_data)} synthetic teams.")
 
+    elif provider == "github":
+        from github import Auth, Github
+
+        token = getattr(ns, "auth", None) or os.getenv("GITHUB_TOKEN") or ""
+        owner = getattr(ns, "owner", None)
+        if not owner:
+            logging.error("--owner is required for github provider (org name).")
+            return 1
+        if not token:
+            logging.error(
+                "GitHub token required. Use --auth or set GITHUB_TOKEN env var."
+            )
+            return 1
+
+        try:
+            auth = Auth.Token(token)
+            gh = Github(auth=auth, per_page=100)
+            logging.info(f"Fetching teams from GitHub org '{owner}'...")
+            org = gh.get_organization(owner)
+            for gh_team in org.get_teams():
+                members = [m.login for m in gh_team.get_members()]
+                teams_data.append(
+                    Team(
+                        id=f"gh:{gh_team.slug}",
+                        name=gh_team.name,
+                        description=gh_team.description
+                        or f"GitHub team {gh_team.slug}",
+                        members=members,
+                    )
+                )
+            gh.close()
+            logging.info(f"Fetched {len(teams_data)} teams from GitHub.")
+        except Exception as e:
+            logging.error(f"Failed to fetch GitHub teams: {e}")
+            return 1
+
+    elif provider == "gitlab":
+        import gitlab as gl_lib
+
+        token = getattr(ns, "auth", None) or os.getenv("GITLAB_TOKEN") or ""
+        owner = getattr(ns, "owner", None)
+        url = os.getenv("GITLAB_URL", "https://gitlab.com")
+        if not owner:
+            logging.error("--owner is required for gitlab provider (group path).")
+            return 1
+        if not token:
+            logging.error(
+                "GitLab token required. Use --auth or set GITLAB_TOKEN env var."
+            )
+            return 1
+
+        try:
+            gl = gl_lib.Gitlab(url=url, private_token=token)
+            logging.info(f"Fetching teams from GitLab group '{owner}'...")
+            group = gl.groups.get(owner)
+            members_list = group.members.list(per_page=100, get_all=True)
+            teams_data.append(
+                Team(
+                    id=f"gl:{group.path}",
+                    name=group.name,
+                    description=group.description or f"GitLab group {group.full_path}",
+                    members=[m.username for m in members_list],
+                )
+            )
+            # Also fetch subgroups as separate teams
+            for subgroup in group.subgroups.list(per_page=100, get_all=True):
+                full_sg = gl.groups.get(subgroup.id)
+                sg_members = full_sg.members.list(per_page=100, get_all=True)
+                teams_data.append(
+                    Team(
+                        id=f"gl:{full_sg.path}",
+                        name=full_sg.name,
+                        description=full_sg.description
+                        or f"GitLab group {full_sg.full_path}",
+                        members=[m.username for m in sg_members],
+                    )
+                )
+            logging.info(f"Fetched {len(teams_data)} teams from GitLab.")
+        except Exception as e:
+            logging.error(f"Failed to fetch GitLab teams: {e}")
+            return 1
+
     elif provider == "ms-teams":
         from dev_health_ops.connectors.teams import TeamsConnector
 
@@ -328,7 +410,57 @@ def sync_teams(ns: argparse.Namespace) -> int:
         logging.info(f"Synced {len(teams_data)} teams to DB.")
 
     asyncio.run(run_with_store(db_uri, db_type, _handler))
+
+    _bridge_teams_to_postgres(teams_data, ns)
     return 0
+
+
+def _bridge_teams_to_postgres(teams_data: List, ns: argparse.Namespace) -> None:
+    """Upsert Team records into PostgreSQL TeamMapping table for multi-tenant bridge."""
+    import logging
+
+    from sqlalchemy import select
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import TeamMapping
+
+    org_id = getattr(ns, "org", "default")
+
+    try:
+        with get_postgres_session_sync() as session:
+            for team in teams_data:
+                team_id = str(getattr(team, "id", "")).strip()
+                if not team_id:
+                    continue
+
+                existing = session.execute(
+                    select(TeamMapping).where(
+                        TeamMapping.org_id == org_id,
+                        TeamMapping.team_id == team_id,
+                    )
+                ).scalar_one_or_none()
+
+                if existing:
+                    existing.name = getattr(team, "name", team_id)
+                    existing.description = getattr(team, "description", None)
+                    existing.is_active = True
+                else:
+                    session.add(
+                        TeamMapping(
+                            team_id=team_id,
+                            name=getattr(team, "name", team_id),
+                            org_id=org_id,
+                            description=getattr(team, "description", None),
+                            is_active=True,
+                        )
+                    )
+            logging.info(
+                "Bridged %d teams to PostgreSQL TeamMapping (org=%s).",
+                len(teams_data),
+                org_id,
+            )
+    except Exception as e:
+        logging.warning("Failed to bridge teams to PostgreSQL (non-fatal): %s", e)
 
 
 def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
@@ -343,11 +475,27 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     )
     teams.add_argument(
         "--provider",
-        choices=["config", "jira", "jira-ops", "synthetic", "ms-teams"],
+        choices=[
+            "config",
+            "jira",
+            "jira-ops",
+            "synthetic",
+            "ms-teams",
+            "github",
+            "gitlab",
+        ],
         default="config",
-        help="Source of team data (default: config). Use 'ms-teams' for Microsoft Teams.",
+        help="Source of team data (default: config).",
     )
     teams.add_argument(
         "--path", help="Path to teams.yaml config (used if provider=config)."
+    )
+    teams.add_argument(
+        "--owner",
+        help="GitHub org or GitLab group path (required for github/gitlab providers).",
+    )
+    teams.add_argument(
+        "--auth",
+        help="Provider token override (GitHub/GitLab). Falls back to env vars.",
     )
     teams.set_defaults(func=sync_teams)

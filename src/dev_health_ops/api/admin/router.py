@@ -21,6 +21,7 @@ from dev_health_ops.api.services.settings import (
     IntegrationCredentialsService,
     SettingsService,
     SyncConfigurationService,
+    TeamDiscoveryService,
     TeamMappingService,
 )
 from dev_health_ops.api.services.users import (
@@ -66,6 +67,9 @@ from .schemas import (
     SyncConfigCreate,
     SyncConfigResponse,
     SyncConfigUpdate,
+    TeamDiscoverResponse,
+    TeamImportRequest,
+    TeamImportResponse,
     TeamMappingCreate,
     TeamMappingResponse,
     TestConnectionRequest,
@@ -708,6 +712,10 @@ async def list_teams(
             repo_patterns=t.repo_patterns,
             project_keys=t.project_keys,
             extra_data=t.extra_data,
+            managed_fields=t.managed_fields,
+            sync_policy=t.sync_policy,
+            flagged_changes=t.flagged_changes,
+            last_drift_sync_at=t.last_drift_sync_at,
             is_active=t.is_active,
             created_at=t.created_at,
             updated_at=t.updated_at,
@@ -739,6 +747,10 @@ async def create_or_update_team(
         repo_patterns=team.repo_patterns,
         project_keys=team.project_keys,
         extra_data=team.extra_data,
+        managed_fields=team.managed_fields,
+        sync_policy=team.sync_policy,
+        flagged_changes=team.flagged_changes,
+        last_drift_sync_at=team.last_drift_sync_at,
         is_active=team.is_active,
         created_at=team.created_at,
         updated_at=team.updated_at,
@@ -756,6 +768,138 @@ async def delete_team(
     if not deleted:
         raise HTTPException(status_code=404, detail="Team not found")
     return {"deleted": True}
+
+
+@router.get("/teams/discover", response_model=TeamDiscoverResponse)
+async def discover_teams(
+    provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> TeamDiscoverResponse:
+    creds_svc = IntegrationCredentialsService(session, org_id)
+    credential = await creds_svc.get(provider, "default")
+    decrypted = await creds_svc.get_decrypted_credentials(provider, "default")
+    if credential is None or decrypted is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No credentials found for provider '{provider}'",
+        )
+
+    config = credential.config or {}
+    discovery_svc = TeamDiscoveryService(session, org_id)
+
+    if provider == "github":
+        token = decrypted.get("token")
+        org_name = config.get("org")
+        if not token or not org_name:
+            raise HTTPException(
+                status_code=400,
+                detail="GitHub credentials require token and config.org",
+            )
+        teams = await discovery_svc.discover_github(token=token, org_name=org_name)
+    elif provider == "gitlab":
+        token = decrypted.get("token")
+        group_path = config.get("group")
+        url = config.get("url", "https://gitlab.com")
+        if not token or not group_path:
+            raise HTTPException(
+                status_code=400,
+                detail="GitLab credentials require token and config.group",
+            )
+        teams = await discovery_svc.discover_gitlab(
+            token=token,
+            group_path=group_path,
+            url=url,
+        )
+    else:
+        email = decrypted.get("email")
+        api_token = decrypted.get("api_token") or decrypted.get("token")
+        jira_url = config.get("url") or decrypted.get("url")
+        if not email or not api_token or not jira_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Jira credentials require email, api_token, and url",
+            )
+        teams = await discovery_svc.discover_jira(
+            email=email,
+            api_token=api_token,
+            url=jira_url,
+        )
+
+    return TeamDiscoverResponse(provider=provider, teams=teams, total=len(teams))
+
+
+@router.post("/teams/import", response_model=TeamImportResponse)
+async def import_teams(
+    payload: TeamImportRequest,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> TeamImportResponse:
+    svc = TeamDiscoveryService(session, org_id)
+    result = await svc.import_teams(payload.teams, payload.on_conflict)
+    await session.commit()
+    return TeamImportResponse(**result)
+
+
+@router.get("/teams/pending-changes")
+async def get_pending_changes(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.api.services.settings import TeamDriftSyncService
+
+    svc = TeamDriftSyncService(session, org_id)
+    changes = await svc.get_all_pending_changes()
+    return {"changes": changes, "total": len(changes)}
+
+
+@router.post("/teams/{team_id}/approve-changes")
+async def approve_team_changes(
+    team_id: str,
+    change_indices: list[int] | None = None,
+    approve_all: bool = False,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.api.services.settings import TeamDriftSyncService
+
+    svc = TeamDriftSyncService(session, org_id)
+    indices = None if approve_all else change_indices
+    result = await svc.approve_changes(team_id, indices)
+    await session.commit()
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/teams/{team_id}/dismiss-changes")
+async def dismiss_team_changes(
+    team_id: str,
+    change_indices: list[int] | None = None,
+    dismiss_all: bool = False,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.api.services.settings import TeamDriftSyncService
+
+    svc = TeamDriftSyncService(session, org_id)
+    indices = None if dismiss_all else change_indices
+    result = await svc.dismiss_changes(team_id, indices)
+    await session.commit()
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/teams/trigger-drift-sync")
+async def trigger_drift_sync(
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+):
+    from dev_health_ops.workers.tasks import sync_team_drift
+
+    sync_team_drift.apply_async(kwargs={"org_id": org_id}, queue="sync")
+    return {"status": "dispatched"}
 
 
 @router.get("/users", response_model=list[UserResponse])

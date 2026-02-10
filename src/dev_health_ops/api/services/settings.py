@@ -6,16 +6,30 @@ Uses Fernet symmetric encryption with a key derived from SETTINGS_ENCRYPTION_KEY
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
 import logging
 import os
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Optional
 
+import requests
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from dev_health_ops.api.admin.schemas import DiscoveredTeam
+
+
+def _get_discovered_team_cls() -> type:
+    """Lazy import to avoid circular dependency with admin.schemas."""
+    from dev_health_ops.api.admin.schemas import DiscoveredTeam as _DT
+
+    return _DT
+
 
 from dev_health_ops.models.settings import (
     IdentityMapping,
@@ -583,3 +597,444 @@ class TeamMappingService:
         await self.session.delete(mapping)
         await self.session.flush()
         return True
+
+
+class TeamDiscoveryService:
+    """Service for discovering teams from external providers."""
+
+    def __init__(self, session: AsyncSession, org_id: str = "default"):
+        self.session = session
+        self.org_id = org_id
+
+    async def discover_github(self, token: str, org_name: str) -> list[DiscoveredTeam]:
+        """Discover teams from GitHub organization."""
+
+        def _discover() -> list[DiscoveredTeam]:
+            from github import Auth, Github
+
+            DiscoveredTeam = _get_discovered_team_cls()
+            auth = Auth.Token(token)
+            gh = Github(auth=auth, per_page=100)
+            try:
+                org = gh.get_organization(org_name)
+                teams: list[DiscoveredTeam] = []
+                for gh_team in org.get_teams():
+                    repos = [f"{org_name}/{repo.name}" for repo in gh_team.get_repos()]
+                    teams.append(
+                        DiscoveredTeam(
+                            provider_type="github",
+                            provider_team_id=gh_team.slug,
+                            name=gh_team.name,
+                            description=gh_team.description,
+                            member_count=getattr(gh_team, "members_count", None),
+                            associations={
+                                "repo_patterns": repos,
+                                "provider_org": org_name,
+                            },
+                        )
+                    )
+                return teams
+            finally:
+                gh.close()
+
+        return await asyncio.to_thread(_discover)
+
+    async def discover_gitlab(
+        self,
+        token: str,
+        group_path: str,
+        url: str = "https://gitlab.com",
+    ) -> list[DiscoveredTeam]:
+        """Discover groups/subgroups from GitLab."""
+
+        def _discover() -> list[DiscoveredTeam]:
+            import gitlab as gl_lib
+
+            DiscoveredTeam = _get_discovered_team_cls()
+            gl = gl_lib.Gitlab(url=url, private_token=token)
+            root_group = gl.groups.get(group_path)
+            groups = [root_group]
+            for subgroup in root_group.subgroups.list(per_page=100, get_all=True):
+                groups.append(gl.groups.get(subgroup.id))
+
+            teams: list[DiscoveredTeam] = []
+            for group in groups:
+                projects = group.projects.list(per_page=100, get_all=True)
+                repo_patterns = [p.path_with_namespace for p in projects]
+                teams.append(
+                    DiscoveredTeam(
+                        provider_type="gitlab",
+                        provider_team_id=group.full_path,
+                        name=group.name,
+                        description=group.description,
+                        associations={
+                            "repo_patterns": repo_patterns,
+                            "provider_org": root_group.full_path,
+                        },
+                    )
+                )
+
+            return teams
+
+        return await asyncio.to_thread(_discover)
+
+    async def discover_jira(
+        self,
+        email: str,
+        api_token: str,
+        url: str,
+    ) -> list[DiscoveredTeam]:
+        """Discover projects from Jira (as team units)."""
+
+        def _discover() -> list[DiscoveredTeam]:
+            DiscoveredTeam = _get_discovered_team_cls()
+            response = requests.get(
+                f"{url.rstrip('/')}/rest/api/3/project/search",
+                auth=(email, api_token),
+                params={"maxResults": 100},
+                headers={"Accept": "application/json"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+            teams: list[DiscoveredTeam] = []
+            for project in payload.get("values", []):
+                project_key = project.get("key")
+                project_name = project.get("name") or project_key
+                if not project_key or not project_name:
+                    continue
+                teams.append(
+                    DiscoveredTeam(
+                        provider_type="jira",
+                        provider_team_id=project_key,
+                        name=project_name,
+                        description=project.get("description"),
+                        associations={
+                            "project_keys": [project_key],
+                            "provider_org": url,
+                        },
+                    )
+                )
+
+            return teams
+
+        return await asyncio.to_thread(_discover)
+
+    async def import_teams(
+        self,
+        teams: list[DiscoveredTeam],
+        on_conflict: str = "skip",
+    ) -> dict[str, Any]:
+        """Import discovered teams into TeamMapping."""
+        team_mapping_svc = TeamMappingService(self.session, self.org_id)
+        imported = 0
+        skipped = 0
+        merged = 0
+        details: list[dict[str, Any]] = []
+
+        for team in teams:
+            if team.provider_type == "github":
+                team_id = f"gh:{team.provider_team_id}"
+            elif team.provider_type == "gitlab":
+                team_id = f"gl:{team.provider_team_id}"
+            else:
+                team_id = team.provider_team_id
+
+            existing = await team_mapping_svc.get(team_id)
+            if existing is not None and on_conflict == "skip":
+                skipped += 1
+                details.append(
+                    {
+                        "team_id": team_id,
+                        "provider_team_id": team.provider_team_id,
+                        "action": "skipped",
+                    }
+                )
+                continue
+
+            associations = team.associations or {}
+            provider_linkage = {
+                "provider_type": team.provider_type,
+                "provider_team_id": team.provider_team_id,
+                "provider_org": associations.get("provider_org"),
+                "last_discovered_at": datetime.now(timezone.utc).isoformat(),
+                "sync_source": "imported",
+            }
+
+            extra_data = dict(existing.extra_data or {}) if existing else {}
+            extra_data.update(
+                {k: v for k, v in provider_linkage.items() if v is not None}
+            )
+
+            await team_mapping_svc.create_or_update(
+                team_id=team_id,
+                name=team.name,
+                description=team.description,
+                repo_patterns=associations.get("repo_patterns", []),
+                project_keys=associations.get("project_keys", []),
+                extra_data=extra_data,
+            )
+
+            if existing is None:
+                imported += 1
+                details.append(
+                    {
+                        "team_id": team_id,
+                        "provider_team_id": team.provider_team_id,
+                        "action": "imported",
+                    }
+                )
+            else:
+                merged += 1
+                details.append(
+                    {
+                        "team_id": team_id,
+                        "provider_team_id": team.provider_team_id,
+                        "action": "merged",
+                    }
+                )
+
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "merged": merged,
+            "details": details,
+        }
+
+
+class TeamDriftSyncService:
+    """Compares discovered teams against stored TeamMappings and flags/merges changes."""
+
+    def __init__(self, session: AsyncSession, org_id: str = "default"):
+        self.session = session
+        self.org_id = org_id
+
+    async def run_drift_sync(
+        self,
+        provider: str,
+        discovered_teams: list[DiscoveredTeam],
+    ) -> dict[str, Any]:
+        team_svc = TeamMappingService(self.session, self.org_id)
+        existing_teams = await team_svc.list_all(active_only=True)
+
+        provider_lookup: dict[str, TeamMapping] = {}
+        for team in existing_teams:
+            ed = team.extra_data or {}
+            if ed.get("provider_type") == provider:
+                provider_lookup[ed.get("provider_team_id", "")] = team
+
+        discovered_lookup: dict[str, DiscoveredTeam] = {
+            t.provider_team_id: t for t in discovered_teams
+        }
+
+        now = datetime.now(timezone.utc)
+        auto_applied = 0
+        flagged = 0
+        new_available = 0
+        provider_removed = 0
+
+        for disc_team in discovered_teams:
+            existing = provider_lookup.get(disc_team.provider_team_id)
+            if existing is None:
+                new_available += 1
+                continue
+
+            changes = self._compute_field_diffs(existing, disc_team)
+            if not changes:
+                existing.last_drift_sync_at = now
+                continue
+
+            if existing.sync_policy == 0:
+                self._apply_changes(existing, changes, now)
+                auto_applied += 1
+            elif existing.sync_policy == 1:
+                current_flagged = dict(existing.flagged_changes or {})
+                current_flagged["pending"] = current_flagged.get("pending", [])
+                for change in changes:
+                    change["discovered_at"] = now.isoformat()
+                    current_flagged["pending"].append(change)
+                existing.flagged_changes = current_flagged
+                flagged += 1
+
+            existing.last_drift_sync_at = now
+
+        for provider_team_id, existing in provider_lookup.items():
+            if provider_team_id not in discovered_lookup:
+                current_flagged = dict(existing.flagged_changes or {})
+                current_flagged["pending"] = current_flagged.get("pending", [])
+                current_flagged["pending"].append(
+                    {
+                        "change_type": "provider_removed",
+                        "discovered_at": now.isoformat(),
+                    }
+                )
+                existing.flagged_changes = current_flagged
+                existing.last_drift_sync_at = now
+                provider_removed += 1
+
+        await self.session.flush()
+
+        return {
+            "provider": provider,
+            "auto_applied": auto_applied,
+            "flagged": flagged,
+            "new_available": new_available,
+            "provider_removed": provider_removed,
+        }
+
+    def _compute_field_diffs(
+        self,
+        existing: TeamMapping,
+        discovered: DiscoveredTeam,
+    ) -> list[dict[str, Any]]:
+        changes: list[dict[str, Any]] = []
+        managed = existing.managed_fields or []
+        associations = discovered.associations or {}
+
+        field_map = {
+            "name": discovered.name,
+            "description": discovered.description,
+            "repo_patterns": associations.get("repo_patterns", []),
+            "project_keys": associations.get("project_keys", []),
+        }
+
+        for field_name in managed:
+            if field_name not in field_map:
+                continue
+            new_val = field_map[field_name]
+            old_val = getattr(existing, field_name, None)
+
+            if isinstance(old_val, list) and isinstance(new_val, list):
+                if sorted(old_val) == sorted(new_val):
+                    continue
+            elif old_val == new_val:
+                continue
+
+            changes.append(
+                {
+                    "change_type": "field_changed",
+                    "field": field_name,
+                    "old_value": old_val,
+                    "new_value": new_val,
+                }
+            )
+
+        return changes
+
+    def _apply_changes(
+        self,
+        existing: TeamMapping,
+        changes: list[dict[str, Any]],
+        now: datetime,
+    ) -> None:
+        for change in changes:
+            field = change.get("field")
+            if field and hasattr(existing, field):
+                setattr(existing, field, change["new_value"])
+        existing.last_drift_sync_at = now
+        ed = dict(existing.extra_data or {})
+        ed["last_discovered_at"] = now.isoformat()
+        existing.extra_data = ed
+
+    async def approve_changes(
+        self,
+        team_id: str,
+        change_indices: list[int] | None = None,
+    ) -> dict[str, Any]:
+        team_svc = TeamMappingService(self.session, self.org_id)
+        team = await team_svc.get(team_id)
+        if team is None:
+            return {"error": "Team not found"}
+
+        flagged = dict(team.flagged_changes or {})
+        pending = flagged.get("pending", [])
+
+        if not pending:
+            return {"approved": 0}
+
+        now = datetime.now(timezone.utc)
+        to_approve = (
+            pending
+            if change_indices is None
+            else [pending[i] for i in change_indices if i < len(pending)]
+        )
+
+        applied = 0
+        for change in to_approve:
+            ct = change.get("change_type")
+            if ct == "field_changed":
+                field = change.get("field")
+                if field and hasattr(team, field):
+                    setattr(team, field, change["new_value"])
+                    applied += 1
+            elif ct == "new_team_available":
+                pass
+            elif ct == "provider_removed":
+                applied += 1
+
+        if change_indices is None:
+            flagged["pending"] = []
+        else:
+            flagged["pending"] = [
+                p for i, p in enumerate(pending) if i not in change_indices
+            ]
+
+        team.flagged_changes = flagged if flagged.get("pending") else None
+        team.last_drift_sync_at = now
+        await self.session.flush()
+
+        return {"approved": applied}
+
+    async def dismiss_changes(
+        self,
+        team_id: str,
+        change_indices: list[int] | None = None,
+    ) -> dict[str, Any]:
+        team_svc = TeamMappingService(self.session, self.org_id)
+        team = await team_svc.get(team_id)
+        if team is None:
+            return {"error": "Team not found"}
+
+        flagged = dict(team.flagged_changes or {})
+        pending = flagged.get("pending", [])
+
+        if not pending:
+            return {"dismissed": 0}
+
+        count = (
+            len(pending)
+            if change_indices is None
+            else len([i for i in change_indices if i < len(pending)])
+        )
+
+        if change_indices is None:
+            flagged["pending"] = []
+        else:
+            flagged["pending"] = [
+                p for i, p in enumerate(pending) if i not in change_indices
+            ]
+
+        team.flagged_changes = flagged if flagged.get("pending") else None
+        await self.session.flush()
+
+        return {"dismissed": count}
+
+    async def get_all_pending_changes(self) -> list[dict[str, Any]]:
+        team_svc = TeamMappingService(self.session, self.org_id)
+        teams = await team_svc.list_all(active_only=True)
+
+        all_changes: list[dict[str, Any]] = []
+        for team in teams:
+            flagged = team.flagged_changes or {}
+            pending = flagged.get("pending", [])
+            for change in pending:
+                all_changes.append(
+                    {
+                        "team_id": team.team_id,
+                        "team_name": team.name,
+                        **change,
+                    }
+                )
+
+        return all_changes

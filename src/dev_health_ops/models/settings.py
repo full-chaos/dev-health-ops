@@ -541,6 +541,28 @@ class TeamMapping(Base):
         default=dict,
         comment="Additional team data (cost center, manager, etc.)",
     )
+    managed_fields = Column(
+        JSON,
+        nullable=False,
+        default=list,
+        comment="Fields the provider owns (e.g. name, repo_patterns)",
+    )
+    sync_policy = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="0=merge (auto-apply), 1=flag (review), 2=manual_only",
+    )
+    flagged_changes = Column(
+        JSON,
+        nullable=True,
+        comment="Pending provider-suggested changes for admin review",
+    )
+    last_drift_sync_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Last time this team was checked for drift",
+    )
 
     is_active = Column(Boolean, nullable=False, default=True)
 
@@ -569,6 +591,9 @@ class TeamMapping(Base):
         repo_patterns: Optional[list] = None,
         project_keys: Optional[list] = None,
         extra_data: Optional[dict] = None,
+        managed_fields: Optional[list] = None,
+        sync_policy: int = 1,
+        flagged_changes: Optional[dict] = None,
         is_active: bool = True,
     ):
         self.id = uuid.uuid4()
@@ -579,6 +604,9 @@ class TeamMapping(Base):
         self.repo_patterns = repo_patterns or []
         self.project_keys = project_keys or []
         self.extra_data = extra_data or {}
+        self.managed_fields = managed_fields or []
+        self.sync_policy = sync_policy
+        self.flagged_changes = flagged_changes
         self.is_active = is_active
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)

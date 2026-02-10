@@ -39,6 +39,7 @@ from .schemas import (
     IntegrationCredentialCreate,
     IntegrationCredentialResponse,
     IntegrationCredentialUpdate,
+    JOB_RUN_STATUS_LABELS,
     JobRunResponse,
     IPAllowlistCreate,
     IPAllowlistListResponse,
@@ -626,7 +627,7 @@ async def list_sync_config_jobs(
         JobRunResponse(
             id=str(run.id),
             job_id=str(run.job_id),
-            status=run.status,
+            status=JOB_RUN_STATUS_LABELS.get(run.status, "unknown"),
             started_at=run.started_at,
             completed_at=run.completed_at,
             duration_seconds=run.duration_seconds,

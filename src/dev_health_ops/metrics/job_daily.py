@@ -201,7 +201,6 @@ async def run_daily_metrics_job(
     include_commit_metrics: bool = True,
     sink: str = "auto",
     provider: str = "auto",
-    org_id: str = "default",
 ) -> None:
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not db_url:
@@ -465,7 +464,6 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             include_commit_metrics=ns.commit_metrics,
             sink=ns.sink,
             provider=ns.provider,
-            org_id=getattr(ns, "org", "default"),
         )
         return 0
     except Exception as e:

@@ -379,7 +379,9 @@ def run_schema_audit(*, db_url: str) -> Dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[3]
 
     if backend == "clickhouse":
-        migrations_dir = repo_root / "migrations" / "clickhouse"
+        migrations_dir = (
+            repo_root / "src" / "dev_health_ops" / "migrations" / "clickhouse"
+        )
         expected, migrations = _build_clickhouse_expected_schema(migrations_dir)
         try:
             from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink

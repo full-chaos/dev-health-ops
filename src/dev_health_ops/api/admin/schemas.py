@@ -234,6 +234,47 @@ class TeamImportResponse(BaseModel):
     details: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DiscoveredMember(BaseModel):
+    provider_type: str
+    provider_identity: str
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+
+
+class MemberMatchResult(BaseModel):
+    discovered: DiscoveredMember
+    match_status: str = Field(pattern="^(matched|suggested|unmatched)$")
+    matched_identity: Optional[IdentityMappingResponse] = None
+    confidence: Optional[float] = None
+    suggestion_reason: Optional[str] = None
+
+
+class TeamMembersDiscoverResponse(BaseModel):
+    team_id: str
+    provider: str
+    members: list[MemberMatchResult]
+    total: int
+
+
+class ConfirmMemberLink(BaseModel):
+    provider_identity: str
+    provider: str = Field(pattern="^(github|gitlab|jira)$")
+    canonical_id: str
+    action: str = Field(pattern="^(link|create|skip)$")
+
+
+class ConfirmMembersRequest(BaseModel):
+    team_id: str
+    links: list[ConfirmMemberLink]
+
+
+class ConfirmMembersResponse(BaseModel):
+    linked: int
+    created: int
+    skipped: int
+
+
 class FlaggedChange(BaseModel):
     team_id: str
     team_name: str

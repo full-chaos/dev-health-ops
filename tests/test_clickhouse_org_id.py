@@ -159,8 +159,8 @@ def test_clickhouse_sink_write_repo_metrics_includes_org_id():
     """write_repo_metrics must pass org_id column to _insert_rows."""
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-    with patch.object(ClickHouseMetricsSink, "__init__", lambda self: None):
-        sink = ClickHouseMetricsSink()
+    with patch.object(ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None):
+        sink = ClickHouseMetricsSink("clickhouse://dummy")
         sink.client = MagicMock()
 
         row = RepoMetricsDailyRecord(
@@ -191,8 +191,8 @@ def test_clickhouse_sink_write_work_graph_edges_includes_org_id():
     """Pattern B: write_work_graph_edges must include org_id in both column_names and data."""
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-    with patch.object(ClickHouseMetricsSink, "__init__", lambda self: None):
-        sink = ClickHouseMetricsSink()
+    with patch.object(ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None):
+        sink = ClickHouseMetricsSink("clickhouse://dummy")
         sink.client = MagicMock()
 
         row = WorkGraphEdgeRecord(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -270,6 +270,45 @@ class ConfirmMembersRequest(BaseModel):
 
 
 class ConfirmMembersResponse(BaseModel):
+    linked: int
+    created: int
+    skipped: int
+
+
+class InferredMember(BaseModel):
+    account_id: str
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    activity_count: int = Field(ge=0)
+    confidence: Literal["core", "active", "peripheral"]
+    roles: list[Literal["assignee", "reporter", "commenter"]] = Field(
+        default_factory=list
+    )
+    last_active: Optional[datetime] = None
+
+
+class JiraActivityInferenceResponse(BaseModel):
+    team_id: str
+    project_key: str
+    window_days: int
+    inferred_members: list[InferredMember]
+    total: int
+
+
+class ConfirmInferredMemberAction(BaseModel):
+    account_id: str
+    action: Literal["add", "skip"]
+    canonical_id: Optional[str] = None
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class ConfirmInferredMembersRequest(BaseModel):
+    team_id: str
+    members: list[ConfirmInferredMemberAction] = Field(default_factory=list)
+
+
+class ConfirmInferredMembersResponse(BaseModel):
     linked: int
     created: int
     skipped: int

@@ -19,6 +19,7 @@ from dev_health_ops.licensing import require_feature
 from dev_health_ops.api.services.settings import (
     IdentityMappingService,
     IntegrationCredentialsService,
+    JiraActivityInferenceService,
     SettingsService,
     SyncConfigurationService,
     TeamDiscoveryService,
@@ -38,6 +39,8 @@ from .schemas import (
     AuditLogResponse,
     ConfirmMembersRequest,
     ConfirmMembersResponse,
+    ConfirmInferredMembersRequest,
+    ConfirmInferredMembersResponse,
     IdentityMappingCreate,
     IdentityMappingResponse,
     IntegrationCredentialCreate,
@@ -58,6 +61,7 @@ from .schemas import (
     OrganizationResponse,
     OrganizationUpdate,
     OwnershipTransfer,
+    JiraActivityInferenceResponse,
     RetentionExecuteResponse,
     RetentionPolicyCreate,
     RetentionPolicyListResponse,
@@ -1016,6 +1020,102 @@ async def confirm_team_members(
     result = await membership_svc.confirm_links(team_id=team_id, links=payload.links)
     await session.commit()
     return ConfirmMembersResponse(**result)
+
+
+@router.get(
+    "/teams/{team_id}/infer-members",
+    response_model=JiraActivityInferenceResponse,
+)
+async def infer_team_members_from_jira_activity(
+    team_id: str,
+    window_days: int = Query(90, ge=1, le=365),
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> JiraActivityInferenceResponse:
+    team_svc = TeamMappingService(session, org_id)
+    team = await team_svc.get(team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    extra_data = team.extra_data or {}
+    project_key = next(iter(team.project_keys or []), None)
+    if not project_key and extra_data.get("provider_type") == "jira":
+        project_key = extra_data.get("provider_team_id")
+    if not project_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Team does not have a Jira project key configured",
+        )
+
+    creds_svc = IntegrationCredentialsService(session, org_id)
+    credential = await creds_svc.get("jira", "default")
+    decrypted = await creds_svc.get_decrypted_credentials("jira", "default")
+    if credential is None or decrypted is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No credentials found for provider 'jira'",
+        )
+
+    config = credential.config or {}
+    email = decrypted.get("email")
+    api_token = decrypted.get("api_token") or decrypted.get("token")
+    jira_url = config.get("url") or decrypted.get("url")
+    if not email or not api_token or not jira_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Jira credentials require email, api_token, and url",
+        )
+
+    inference_svc = JiraActivityInferenceService(session, org_id)
+    inferred_members = await inference_svc.infer_members(
+        email=email,
+        api_token=api_token,
+        jira_url=jira_url,
+        project_key=project_key,
+        window_days=window_days,
+    )
+
+    identity_svc = IdentityMappingService(session, org_id)
+    for member in inferred_members:
+        matched = await identity_svc.find_by_provider_identity(
+            "jira", member.account_id
+        )
+        if matched is not None:
+            if not member.display_name and matched.display_name:
+                member.display_name = matched.display_name
+            if not member.email and matched.email:
+                member.email = matched.email
+
+    return JiraActivityInferenceResponse(
+        team_id=team_id,
+        project_key=project_key,
+        window_days=window_days,
+        inferred_members=inferred_members,
+        total=len(inferred_members),
+    )
+
+
+@router.post(
+    "/teams/{team_id}/confirm-inferred-members",
+    response_model=ConfirmInferredMembersResponse,
+)
+async def confirm_inferred_team_members(
+    team_id: str,
+    payload: ConfirmInferredMembersRequest,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> ConfirmInferredMembersResponse:
+    if payload.team_id != team_id:
+        raise HTTPException(status_code=400, detail="team_id in path/body must match")
+
+    inference_svc = JiraActivityInferenceService(session, org_id)
+    try:
+        result = await inference_svc.match_and_confirm(team_id, payload.members)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    await session.commit()
+    return ConfirmInferredMembersResponse(**result)
 
 
 @router.get("/users", response_model=list[UserResponse])

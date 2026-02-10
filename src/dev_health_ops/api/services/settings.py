@@ -13,14 +13,24 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.api.admin.schemas import DiscoveredTeam
+if TYPE_CHECKING:
+    from dev_health_ops.api.admin.schemas import DiscoveredTeam
+
+
+def _get_discovered_team_cls() -> type:
+    """Lazy import to avoid circular dependency with admin.schemas."""
+    from dev_health_ops.api.admin.schemas import DiscoveredTeam as _DT
+
+    return _DT
+
+
 from dev_health_ops.models.settings import (
     IdentityMapping,
     IntegrationCredential,
@@ -602,6 +612,7 @@ class TeamDiscoveryService:
         def _discover() -> list[DiscoveredTeam]:
             from github import Auth, Github
 
+            DiscoveredTeam = _get_discovered_team_cls()
             auth = Auth.Token(token)
             gh = Github(auth=auth, per_page=100)
             try:
@@ -639,6 +650,7 @@ class TeamDiscoveryService:
         def _discover() -> list[DiscoveredTeam]:
             import gitlab as gl_lib
 
+            DiscoveredTeam = _get_discovered_team_cls()
             gl = gl_lib.Gitlab(url=url, private_token=token)
             root_group = gl.groups.get(group_path)
             groups = [root_group]
@@ -675,6 +687,7 @@ class TeamDiscoveryService:
         """Discover projects from Jira (as team units)."""
 
         def _discover() -> list[DiscoveredTeam]:
+            DiscoveredTeam = _get_discovered_team_cls()
             response = requests.get(
                 f"{url.rstrip('/')}/rest/api/3/project/search",
                 auth=(email, api_token),

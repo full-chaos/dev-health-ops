@@ -134,11 +134,19 @@ def resolve_db_type(db_url: str, db_type: Optional[str]) -> str:
     return resolved
 
 
-async def run_with_store(db_url: str, db_type: str, handler: Callable) -> None:
+async def run_with_store(
+    db_url: str,
+    db_type: str,
+    handler: Callable,
+    org_id: str = "default",
+) -> None:
     """
     Helper to create a store and run a handler within its context.
+
+    :param org_id: Organisation / tenant identifier propagated from ``--org``.
     """
     store = create_store(db_url, db_type)
+    store.org_id = org_id  # type: ignore[attr-defined]
     async with store:
         await handler(store)
 

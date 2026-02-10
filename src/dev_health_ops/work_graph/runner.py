@@ -41,7 +41,7 @@ def _component_count(edges: list[tuple[str, str, str, str]]) -> int:
 
 
 def run_work_graph_build(ns: argparse.Namespace) -> int:
-    """Build work graph edges from raw data."""
+    org_id = getattr(ns, "org", "default")
 
     # Parse dates
     from_date = None
@@ -148,7 +148,7 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
 
 
 def run_investment_materialization(ns: argparse.Namespace) -> int:
-    """Materialize investment metrics for a given window."""
+    org_id = getattr(ns, "org", "default")
 
     now = datetime.now(timezone.utc)
     if ns.to_date:

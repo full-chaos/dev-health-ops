@@ -71,6 +71,7 @@ def run_dora_metrics_job(
     interval: str = "daily",
     gitlab_url: Optional[str] = None,
     auth: Optional[str] = None,
+    org_id: str = "default",
 ) -> None:
     if not db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
@@ -251,6 +252,7 @@ def _cmd_metrics_dora(ns: argparse.Namespace) -> int:
             interval=ns.interval,
             gitlab_url=ns.gitlab_url,
             auth=ns.auth,
+            org_id=getattr(ns, "org", "default"),
         )
         return 0
     except Exception as e:

@@ -67,7 +67,9 @@ async def sync_local_target(ns: argparse.Namespace, target: str) -> int:
             sync_blame=False,
         )
 
-    await run_with_store(db_uri, db_type, _handler)
+    await run_with_store(
+        db_uri, db_type, _handler, org_id=getattr(ns, "org", "default")
+    )
     return 0
 
 
@@ -128,7 +130,9 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
             since=since,
         )
 
-    await run_with_store(db_uri, db_type, _handler)
+    await run_with_store(
+        db_uri, db_type, _handler, org_id=getattr(ns, "org", "default")
+    )
     return 0
 
 
@@ -187,7 +191,9 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
             since=since,
         )
 
-    await run_with_store(db_uri, db_type, _handler)
+    await run_with_store(
+        db_uri, db_type, _handler, org_id=getattr(ns, "org", "default")
+    )
     return 0
 
 
@@ -232,7 +238,9 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
                 await store.insert_blame_data(blame_data)
             return
 
-    await run_with_store(db_uri, db_type, _handler)
+    await run_with_store(
+        db_uri, db_type, _handler, org_id=getattr(ns, "org", "default")
+    )
     return 0
 
 

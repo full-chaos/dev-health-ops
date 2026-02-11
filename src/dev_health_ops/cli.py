@@ -31,7 +31,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def resolve_org_id(ns: argparse.Namespace) -> str:
-    """Return the org_id from the CLI namespace, defaulting to ``"default"``."""
+    """Return the org_id from the CLI namespace, defaulting to ``"default"``.
+
+    NOTE: This is plumbing only — run functions accept org_id but don't yet
+    filter queries by it. Query-level scoping (``WHERE org_id = …``) is a
+    follow-up tracked per-function.
+    """
     return getattr(ns, "org", "default") or "default"
 
 

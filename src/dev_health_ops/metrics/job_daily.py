@@ -440,7 +440,7 @@ async def run_daily_metrics_job(
         ic_metrics = compute_ic_metrics_daily(
             git_metrics=result.user_metrics,
             wi_metrics=wi_user_metrics,
-            team_map={},  # TODO: Pass actual team map if available
+            team_map=load_team_map(),
         )
         for s in sinks:
             s.write_user_metrics(ic_metrics)

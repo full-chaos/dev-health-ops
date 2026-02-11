@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from dev_health_ops.metrics.schemas import CommitStatRow, TeamMetricsDailyRecord
 from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
-from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.providers.teams import RepoPatternTeamResolver, TeamResolver
 from dev_health_ops.utils.datetime import to_utc
 
 
@@ -35,6 +35,8 @@ def compute_team_wellbeing_metrics_daily(
     commit_stat_rows: Sequence[CommitStatRow],
     team_resolver: Optional[TeamResolver],
     computed_at: datetime,
+    repo_team_resolver: Optional[RepoPatternTeamResolver] = None,
+    repo_names_by_id: Optional[Dict[uuid.UUID, str]] = None,
     business_timezone: str = "UTC",
     business_hours_start: int = 9,
     business_hours_end: int = 17,
@@ -74,6 +76,9 @@ def compute_team_wellbeing_metrics_daily(
         team_name = None
         if team_resolver is not None:
             team_id, team_name = team_resolver.resolve(identity)
+        if (not team_id) and repo_team_resolver is not None:
+            repo_name = (repo_names_by_id or {}).get(_key[0])
+            team_id, team_name = repo_team_resolver.resolve(repo_name)
         if not team_id:
             team_id = unknown_team_id
             team_name = unknown_team_name

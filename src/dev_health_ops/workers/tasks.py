@@ -973,6 +973,18 @@ def reconcile_team_members(self, org_id: str = "default") -> dict:
         raise self.retry(exc=exc, countdown=300)
 
 
+@celery_app.task(bind=True, max_retries=2, queue="metrics")
+def sync_teams_to_analytics(self, org_id: str = "default") -> dict:
+    from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
+
+    try:
+        count = bridge_teams_to_clickhouse(org_id=org_id)
+        return {"status": "success", "teams_synced": count}
+    except Exception as exc:
+        logger.exception("sync_teams_to_analytics failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
 @celery_app.task(bind=True, max_retries=3, queue="metrics")
 def run_dora_metrics(
     self,

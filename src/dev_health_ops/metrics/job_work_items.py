@@ -37,7 +37,10 @@ from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
-from dev_health_ops.providers.teams import load_team_resolver
+from dev_health_ops.providers.teams import (
+    build_project_key_resolver,
+    load_team_resolver,
+)
 from dev_health_ops.storage import detect_db_type
 
 logger = logging.getLogger(__name__)
@@ -149,6 +152,15 @@ def run_work_items_sync_job(
                 s.ensure_tables()
             elif isinstance(s, SQLiteMetricsSink):
                 s.ensure_tables()
+
+        _teams_data = (
+            primary_sink.query_dicts(
+                "SELECT id, name, project_keys FROM teams FINAL", {}
+            )
+            if hasattr(primary_sink, "query_dicts")
+            else []
+        )
+        pk_resolver = build_project_key_resolver(_teams_data)
 
         discovered_repos = _discover_repos(
             backend=backend,
@@ -326,6 +338,7 @@ def run_work_items_sync_job(
                     transitions=transitions,
                     computed_at=computed_at,
                     team_resolver=team_resolver,
+                    project_key_resolver=pk_resolver,
                 )
             )
             wi_state_durations = compute_work_item_state_durations_daily(
@@ -334,12 +347,20 @@ def run_work_items_sync_job(
                 transitions=transitions,
                 computed_at=computed_at,
                 team_resolver=team_resolver,
+                project_key_resolver=pk_resolver,
             )
 
             # --- Issue Type Metrics ---
             issue_type_stats: Dict[Tuple[uuid.UUID, str, str, str], Dict[str, Any]] = {}
 
             def _get_team(wi: Any) -> str:
+                if pk_resolver:
+                    t_id, _ = pk_resolver.resolve(
+                        getattr(wi, "work_scope_id", None)
+                        or getattr(wi, "project_key", None)
+                    )
+                    if t_id:
+                        return t_id
                 if getattr(wi, "assignees", None):
                     t_id, _ = team_resolver.resolve(wi.assignees[0])
                     if t_id:

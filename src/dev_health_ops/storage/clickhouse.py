@@ -967,14 +967,23 @@ class ClickHouseStore:
         rows: List[Dict[str, Any]] = []
         for item in teams:
             if isinstance(item, dict):
+                team_id = str(item.get("id") or "")
                 rows.append(
                     {
-                        "id": item.get("id"),
+                        "id": team_id,
+                        "team_uuid": self._normalize_uuid(
+                            item.get("team_uuid")
+                            or uuid.uuid5(uuid.NAMESPACE_URL, f"team:{team_id}")
+                        ),
                         "name": item.get("name"),
                         "description": item.get("description"),
                         "members": item.get("members") or [],
+                        "project_keys": item.get("project_keys") or [],
+                        "repo_patterns": item.get("repo_patterns") or [],
+                        "is_active": int(item.get("is_active", 1)),
                         "updated_at": self._normalize_datetime(item.get("updated_at")),
                         "last_synced": synced_at,
+                        "org_id": item.get("org_id") or "default",
                     }
                 )
             else:
@@ -985,10 +994,14 @@ class ClickHouseStore:
                         "name": getattr(item, "name"),
                         "description": getattr(item, "description"),
                         "members": getattr(item, "members", []) or [],
+                        "project_keys": getattr(item, "project_keys", []) or [],
+                        "repo_patterns": getattr(item, "repo_patterns", []) or [],
+                        "is_active": int(getattr(item, "is_active", 1) or 0),
                         "updated_at": self._normalize_datetime(
                             getattr(item, "updated_at")
                         ),
                         "last_synced": synced_at,
+                        "org_id": getattr(item, "org_id", "default") or "default",
                     }
                 )
 
@@ -1000,8 +1013,12 @@ class ClickHouseStore:
                 "name",
                 "description",
                 "members",
+                "project_keys",
+                "repo_patterns",
+                "is_active",
                 "updated_at",
                 "last_synced",
+                "org_id",
             ],
             rows,
         )

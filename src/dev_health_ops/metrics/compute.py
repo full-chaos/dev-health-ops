@@ -14,7 +14,7 @@ from dev_health_ops.metrics.schemas import (
     RepoMetricsDailyRecord,
     UserMetricsDailyRecord,
 )
-from dev_health_ops.providers.teams import TeamResolver
+from dev_health_ops.providers.teams import RepoPatternTeamResolver, TeamResolver
 from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
 from dev_health_ops.utils.datetime import to_utc
 
@@ -150,6 +150,8 @@ def compute_daily_metrics(
     include_commit_metrics: bool = True,
     large_pr_total_loc_threshold: int = 1000,
     team_resolver: Optional[TeamResolver] = None,
+    repo_team_resolver: Optional[RepoPatternTeamResolver] = None,
+    repo_names_by_id: Optional[Dict[uuid.UUID, str]] = None,
     identity_resolver: Optional[IdentityResolver] = None,
     mttr_by_repo: Optional[Dict[uuid.UUID, float]] = None,
     rework_churn_ratio_by_repo: Optional[Dict[uuid.UUID, float]] = None,
@@ -386,6 +388,12 @@ def compute_daily_metrics(
         team_name = "Unassigned"
         if team_resolver is not None:
             t_id, t_name = team_resolver.resolve(author_identity)
+            if t_id:
+                team_id = t_id
+                team_name = t_name or t_id
+        if (not team_id or team_id == "unassigned") and repo_team_resolver is not None:
+            repo_name = (repo_names_by_id or {}).get(repo_id)
+            t_id, t_name = repo_team_resolver.resolve(repo_name)
             if t_id:
                 team_id = t_id
                 team_name = t_name or t_id

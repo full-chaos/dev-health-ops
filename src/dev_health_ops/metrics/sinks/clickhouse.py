@@ -117,7 +117,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
 
     async def get_all_teams(self) -> List[Dict[str, Any]]:
         """Fetch all teams from ClickHouse for identity resolution."""
-        query = "SELECT id, name, members FROM teams FINAL"
+        query = "SELECT id, name, members, project_keys, repo_patterns FROM teams FINAL"
         result = await asyncio.to_thread(self.client.query, query)
         teams: List[Dict[str, Any]] = []
         for row in result.result_rows or []:
@@ -126,9 +126,70 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                     "id": row[0],
                     "name": row[1],
                     "members": row[2] or [],
+                    "project_keys": row[3] or [],
+                    "repo_patterns": row[4] or [],
                 }
             )
         return teams
+
+    async def insert_teams(self, teams: List[Any]) -> None:
+        if not teams:
+            return
+        column_names = [
+            "id",
+            "team_uuid",
+            "name",
+            "description",
+            "members",
+            "project_keys",
+            "repo_patterns",
+            "is_active",
+            "updated_at",
+            "org_id",
+        ]
+        matrix = []
+        for team in teams:
+            if isinstance(team, dict):
+                team_id = str(team.get("id", ""))
+                matrix.append(
+                    [
+                        team_id,
+                        team.get("team_uuid")
+                        or uuid.uuid5(uuid.NAMESPACE_URL, f"team:{team_id}"),
+                        team.get("name", ""),
+                        team.get("description"),
+                        team.get("members", []),
+                        team.get("project_keys", []),
+                        team.get("repo_patterns", []),
+                        1 if team.get("is_active", True) else 0,
+                        _dt_to_clickhouse_datetime(
+                            team.get("updated_at", datetime.now(timezone.utc))
+                        ),
+                        team.get("org_id", "default"),
+                    ]
+                )
+            else:
+                team_id = str(getattr(team, "id", ""))
+                matrix.append(
+                    [
+                        team_id,
+                        getattr(team, "team_uuid", None)
+                        or uuid.uuid5(uuid.NAMESPACE_URL, f"team:{team_id}"),
+                        getattr(team, "name", ""),
+                        getattr(team, "description", None),
+                        getattr(team, "members", []),
+                        getattr(team, "project_keys", []),
+                        getattr(team, "repo_patterns", []),
+                        1 if getattr(team, "is_active", True) else 0,
+                        _dt_to_clickhouse_datetime(
+                            getattr(team, "updated_at", datetime.now(timezone.utc))
+                        ),
+                        getattr(team, "org_id", "default"),
+                    ]
+                )
+        await asyncio.to_thread(
+            self.client.insert, "teams", matrix, column_names=column_names
+        )
 
     def _apply_sql_migrations(self) -> None:
         migrations_dir = (

@@ -11,6 +11,7 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.teams import (
+    ProjectKeyTeamResolver,
     TeamResolver,
     normalize_team_id,
     normalize_team_name,
@@ -25,11 +26,17 @@ def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
 
 
 def _resolve_team(
-    team_resolver: Optional[TeamResolver], identity: Optional[str]
+    team_resolver: Optional[TeamResolver],
+    project_key_resolver: Optional[ProjectKeyTeamResolver],
+    work_scope_id: Optional[str],
+    identity: Optional[str],
 ) -> Tuple[str, str]:
-    if team_resolver is None:
-        return normalize_team_id(None), normalize_team_name(None)
-    team_id, team_name = team_resolver.resolve(identity)
+    team_id: Optional[str] = None
+    team_name: Optional[str] = None
+    if project_key_resolver is not None:
+        team_id, team_name = project_key_resolver.resolve(work_scope_id)
+    if not team_id and team_resolver is not None:
+        team_id, team_name = team_resolver.resolve(identity)
     return normalize_team_id(team_id), normalize_team_name(team_name)
 
 
@@ -90,6 +97,7 @@ def compute_work_item_state_durations_daily(
     transitions: Sequence[WorkItemStatusTransition],
     computed_at: datetime,
     team_resolver: Optional[TeamResolver] = None,
+    project_key_resolver: Optional[ProjectKeyTeamResolver] = None,
 ) -> List[WorkItemStateDurationDailyRecord]:
     """
     Compute per-day time-in-state totals from status transitions.
@@ -117,7 +125,12 @@ def compute_work_item_state_durations_daily(
             continue
 
         assignee = item.assignees[0] if item.assignees else None
-        team_id, team_name = _resolve_team(team_resolver, assignee)
+        team_id, team_name = _resolve_team(
+            team_resolver,
+            project_key_resolver,
+            item.work_scope_id,
+            assignee,
+        )
         work_scope_id = item.work_scope_id or ""
         team_name_by_key[(item.provider, work_scope_id, team_id)] = team_name
 

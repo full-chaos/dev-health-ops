@@ -753,6 +753,8 @@ async def create_or_update_team(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_org_id),
 ) -> TeamMappingResponse:
+    from dev_health_ops.workers.tasks import sync_teams_to_analytics
+
     svc = TeamMappingService(session, org_id)
     team = await svc.create_or_update(
         team_id=payload.team_id,
@@ -762,6 +764,8 @@ async def create_or_update_team(
         project_keys=payload.project_keys,
         extra_data=payload.extra_data,
     )
+    await session.commit()
+    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
     return TeamMappingResponse(
         id=str(team.id),
         team_id=team.team_id,
@@ -858,9 +862,12 @@ async def import_teams(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_org_id),
 ) -> TeamImportResponse:
+    from dev_health_ops.workers.tasks import sync_teams_to_analytics
+
     svc = TeamDiscoveryService(session, org_id)
     result = await svc.import_teams(payload.teams, payload.on_conflict)
     await session.commit()
+    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
     return TeamImportResponse(**result)
 
 
@@ -885,11 +892,13 @@ async def approve_team_changes(
     org_id: str = Depends(get_org_id),
 ):
     from dev_health_ops.api.services.settings import TeamDriftSyncService
+    from dev_health_ops.workers.tasks import sync_teams_to_analytics
 
     svc = TeamDriftSyncService(session, org_id)
     indices = None if approve_all else change_indices
     result = await svc.approve_changes(team_id, indices)
     await session.commit()
+    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -1095,6 +1104,8 @@ async def confirm_team_members(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_org_id),
 ) -> ConfirmMembersResponse:
+    from dev_health_ops.workers.tasks import sync_teams_to_analytics
+
     if payload.team_id != team_id:
         raise HTTPException(
             status_code=400, detail="team_id mismatch between path and body"
@@ -1108,6 +1119,7 @@ async def confirm_team_members(
     membership_svc = TeamMembershipService(session, org_id)
     result = await membership_svc.confirm_links(team_id=team_id, links=payload.links)
     await session.commit()
+    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
     return ConfirmMembersResponse(**result)
 
 
@@ -1194,6 +1206,8 @@ async def confirm_inferred_team_members(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_org_id),
 ) -> ConfirmInferredMembersResponse:
+    from dev_health_ops.workers.tasks import sync_teams_to_analytics
+
     if payload.team_id != team_id:
         raise HTTPException(status_code=400, detail="team_id in path/body must match")
 
@@ -1204,6 +1218,7 @@ async def confirm_inferred_team_members(
         raise HTTPException(status_code=400, detail=str(exc))
 
     await session.commit()
+    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
     return ConfirmInferredMembersResponse(**result)
 
 

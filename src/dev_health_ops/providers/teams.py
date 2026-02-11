@@ -4,7 +4,7 @@ import argparse
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
@@ -56,6 +56,35 @@ class TeamResolver:
         if not team:
             return None, None
         return team[0], team[1]
+
+
+@dataclass(frozen=True)
+class ProjectKeyTeamResolver:
+    project_key_to_team: Mapping[str, Tuple[str, str]]
+
+    def resolve(
+        self, work_scope_id: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if not work_scope_id:
+            return None, None
+        return self.project_key_to_team.get(work_scope_id.strip(), (None, None))
+
+
+@dataclass(frozen=True)
+class RepoPatternTeamResolver:
+    _exact: Mapping[str, Tuple[str, str]]
+    _prefixes: Sequence[Tuple[str, str, str]]
+
+    def resolve(self, repo_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+        if not repo_name:
+            return None, None
+        key = repo_name.strip().lower()
+        if key in self._exact:
+            return self._exact[key]
+        for prefix, tid, tname in self._prefixes:
+            if key.startswith(prefix):
+                return tid, tname
+        return None, None
 
 
 def _build_member_to_team(teams_data: List) -> Dict[str, Tuple[str, str]]:
@@ -120,6 +149,77 @@ async def load_team_resolver_from_store(store: Any) -> TeamResolver:
 
         logging.warning(f"Failed to load teams from store: {e}")
         return TeamResolver(member_to_team={})
+
+
+def build_project_key_resolver(teams_data: List) -> ProjectKeyTeamResolver:
+    mapping: Dict[str, Tuple[str, str]] = {}
+    for team in teams_data:
+        team_id = str(
+            team.get("id") if isinstance(team, dict) else getattr(team, "id", "")
+        ).strip()
+        team_name = str(
+            team.get("name")
+            if isinstance(team, dict)
+            else getattr(team, "name", team_id)
+        ).strip()
+        project_keys = (
+            team.get("project_keys")
+            if isinstance(team, dict)
+            else getattr(team, "project_keys", [])
+        )
+        if not team_id or not project_keys:
+            continue
+        for pk in project_keys:
+            key = str(pk).strip()
+            if key and key not in mapping:
+                mapping[key] = (team_id, team_name)
+    return ProjectKeyTeamResolver(project_key_to_team=mapping)
+
+
+async def load_project_key_resolver_from_store(store: Any) -> ProjectKeyTeamResolver:
+    try:
+        teams = await store.get_all_teams()
+        return build_project_key_resolver(teams)
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Failed to load project key resolver: %s", e
+        )
+        return ProjectKeyTeamResolver(project_key_to_team={})
+
+
+def build_repo_pattern_resolver(teams_data: List) -> RepoPatternTeamResolver:
+    exact: Dict[str, Tuple[str, str]] = {}
+    prefixes: List[Tuple[str, str, str]] = []
+    for team in teams_data:
+        team_id = str(
+            team.get("id") if isinstance(team, dict) else getattr(team, "id", "")
+        ).strip()
+        team_name = str(
+            team.get("name")
+            if isinstance(team, dict)
+            else getattr(team, "name", team_id)
+        ).strip()
+        repo_patterns_raw = (
+            team.get("repo_patterns")
+            if isinstance(team, dict)
+            else getattr(team, "repo_patterns", [])
+        )
+        if not team_id or not repo_patterns_raw:
+            continue
+        for pattern in repo_patterns_raw:
+            p = str(pattern).strip().lower()
+            if not p:
+                continue
+            if "*" in p:
+                prefix = p.rstrip("*").rstrip("/")
+                if prefix:
+                    prefixes.append((prefix, team_id, team_name))
+            else:
+                exact[p] = (team_id, team_name)
+    prefixes.sort(key=lambda x: -len(x[0]))
+    return RepoPatternTeamResolver(_exact=exact, _prefixes=tuple(prefixes))
 
 
 def sync_teams(ns: argparse.Namespace) -> int:

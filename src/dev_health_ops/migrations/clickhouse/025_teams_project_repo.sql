@@ -1,0 +1,3 @@
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS project_keys Array(String) DEFAULT [];
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS repo_patterns Array(String) DEFAULT [];
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS is_active UInt8 DEFAULT 1;

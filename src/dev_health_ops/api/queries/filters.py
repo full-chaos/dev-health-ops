@@ -23,8 +23,8 @@ async def fetch_filter_options(client: Any) -> Dict[str, List[str]]:
         SELECT DISTINCT value
         FROM (
             SELECT id AS value
-            FROM teams
-            WHERE id != ''
+            FROM teams FINAL
+            WHERE id != '' AND is_active = 1
 
             UNION ALL
 

@@ -47,6 +47,7 @@ from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
 from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.providers.identity import load_identity_resolver
+from dev_health_ops.providers.teams import build_repo_pattern_resolver
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.metrics.db_utils import (
     normalize_sqlite_url as _normalize_sqlite_url,
@@ -242,6 +243,17 @@ async def run_daily_metrics_job(
 
     await init_team_resolver(primary_sink)
     team_resolver = get_team_resolver()
+    teams_data = await primary_sink.get_all_teams()
+    repo_team_resolver = build_repo_pattern_resolver(teams_data)
+    repo_names_by_id = {
+        r.repo_id: r.full_name
+        for r in discover_repos(
+            backend=backend,
+            primary_sink=primary_sink,
+            repo_id=repo_id,
+            repo_name=repo_name,
+        )
+    }
 
     loader = await _get_loader(db_url, backend)
 
@@ -354,6 +366,8 @@ async def run_daily_metrics_job(
             computed_at=computed_at,
             include_commit_metrics=include_commit_metrics,
             team_resolver=team_resolver,
+            repo_team_resolver=repo_team_resolver,
+            repo_names_by_id=repo_names_by_id,
             identity_resolver=identity,
             mttr_by_repo=mttr_by_repo,
             rework_churn_ratio_by_repo=rework_ratio_by_repo,
@@ -366,6 +380,8 @@ async def run_daily_metrics_job(
             day=d,
             commit_stat_rows=commit_rows,
             team_resolver=team_resolver,
+            repo_team_resolver=repo_team_resolver,
+            repo_names_by_id=repo_names_by_id,
             computed_at=computed_at,
             business_timezone=business_tz,
             business_hours_start=business_start,

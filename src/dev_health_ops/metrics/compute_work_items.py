@@ -10,6 +10,7 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
 from dev_health_ops.providers.teams import (
+    ProjectKeyTeamResolver,
     TeamResolver,
     normalize_team_id,
     normalize_team_name,
@@ -166,6 +167,7 @@ def compute_work_item_metrics_daily(
     transitions: Sequence[WorkItemStatusTransition],
     computed_at: datetime,
     team_resolver: Optional[TeamResolver] = None,
+    project_key_resolver: Optional[ProjectKeyTeamResolver] = None,
 ) -> Tuple[
     List[WorkItemMetricsDailyRecord],
     List[WorkItemUserMetricsDailyRecord],
@@ -207,7 +209,11 @@ def compute_work_item_metrics_daily(
             continue
 
         assignee = item.assignees[0] if item.assignees else None
-        team_id, team_name = _resolve_team(team_resolver, assignee)
+        team_id, team_name = None, None
+        if project_key_resolver is not None:
+            team_id, team_name = project_key_resolver.resolve(work_scope_id)
+        if team_id is None:
+            team_id, team_name = _resolve_team(team_resolver, assignee)
         team_id_norm = normalize_team_id(team_id)
         team_name_norm = normalize_team_name(team_name)
 

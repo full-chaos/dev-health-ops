@@ -80,7 +80,6 @@ def bridge_teams_to_clickhouse(org_id: str = "default") -> int:
 
     async def _run() -> None:
         async with ClickHouseStore(_clickhouse_uri()) as store:
-            await store.ensure_tables()
             await store.insert_teams(teams_payload)
 
     asyncio.run(_run())

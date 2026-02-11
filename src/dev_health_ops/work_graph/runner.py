@@ -288,8 +288,8 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     )
     investment_materialize.add_argument(
         "--db",
-        default=os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL"),
-        help="ClickHouse connection string (clickhouse://user:pass@host:port/db).",
+        default=os.getenv("CLICKHOUSE_URI"),
+        help="ClickHouse connection string (clickhouse://user:pass@host:port/db). Env: CLICKHOUSE_URI",
     )
     investment_materialize.add_argument(
         "--from",

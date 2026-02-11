@@ -80,6 +80,7 @@ from .schemas import (
     TeamMembersDiscoverResponse,
     TeamMappingCreate,
     TeamMappingResponse,
+    TeamMappingUpdate,
     TestConnectionRequest,
     TestConnectionResponse,
     UserCreate,
@@ -922,6 +923,80 @@ async def trigger_drift_sync(
 
     sync_team_drift.apply_async(kwargs={"org_id": org_id}, queue="sync")
     return {"status": "dispatched"}
+
+
+@router.get("/teams/{team_id}", response_model=TeamMappingResponse)
+async def get_team(
+    team_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> TeamMappingResponse:
+    svc = TeamMappingService(session, org_id)
+    team = await svc.get(team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+    return TeamMappingResponse(
+        id=str(team.id),
+        team_id=team.team_id,
+        name=team.name,
+        description=team.description,
+        repo_patterns=team.repo_patterns,
+        project_keys=team.project_keys,
+        extra_data=team.extra_data,
+        managed_fields=team.managed_fields,
+        sync_policy=team.sync_policy,
+        flagged_changes=team.flagged_changes,
+        last_drift_sync_at=team.last_drift_sync_at,
+        is_active=team.is_active,
+        created_at=team.created_at,
+        updated_at=team.updated_at,
+    )
+
+
+@router.patch("/teams/{team_id}", response_model=TeamMappingResponse)
+async def update_team(
+    team_id: str,
+    payload: TeamMappingUpdate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_org_id),
+) -> TeamMappingResponse:
+    svc = TeamMappingService(session, org_id)
+    existing = await svc.get(team_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    if payload.name is not None:
+        existing.name = payload.name
+    if payload.description is not None:
+        existing.description = payload.description
+    if payload.repo_patterns is not None:
+        existing.repo_patterns = payload.repo_patterns
+    if payload.project_keys is not None:
+        existing.project_keys = payload.project_keys
+    if payload.extra_data is not None:
+        existing.extra_data = payload.extra_data
+    if payload.managed_fields is not None:
+        existing.managed_fields = payload.managed_fields
+    if payload.sync_policy is not None:
+        existing.sync_policy = payload.sync_policy
+
+    await session.flush()
+    return TeamMappingResponse(
+        id=str(existing.id),
+        team_id=existing.team_id,
+        name=existing.name,
+        description=existing.description,
+        repo_patterns=existing.repo_patterns,
+        project_keys=existing.project_keys,
+        extra_data=existing.extra_data,
+        managed_fields=existing.managed_fields,
+        sync_policy=existing.sync_policy,
+        flagged_changes=existing.flagged_changes,
+        last_drift_sync_at=existing.last_drift_sync_at,
+        is_active=existing.is_active,
+        created_at=existing.created_at,
+        updated_at=existing.updated_at,
+    )
 
 
 @router.get(

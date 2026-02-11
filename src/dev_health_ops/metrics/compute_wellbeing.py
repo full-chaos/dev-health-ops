@@ -74,11 +74,11 @@ def compute_team_wellbeing_metrics_daily(
             continue
         team_id = None
         team_name = None
-        if team_resolver is not None:
-            team_id, team_name = team_resolver.resolve(identity)
-        if (not team_id) and repo_team_resolver is not None:
+        if repo_team_resolver is not None:
             repo_name = (repo_names_by_id or {}).get(_key[0])
             team_id, team_name = repo_team_resolver.resolve(repo_name)
+        if (not team_id) and team_resolver is not None:
+            team_id, team_name = team_resolver.resolve(identity)
         if not team_id:
             team_id = unknown_team_id
             team_name = unknown_team_name

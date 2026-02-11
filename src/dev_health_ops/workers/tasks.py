@@ -658,38 +658,66 @@ def _invalidate_sync_cache(sync_type: str, org_id: str = "default") -> None:
 def run_complexity_job(
     self,
     db_url: Optional[str] = None,
+    day: Optional[str] = None,
+    backfill_days: int = 1,
     repo_id: Optional[str] = None,
-    repo_name: Optional[str] = None,
+    search_pattern: Optional[str] = None,
+    language_globs: Optional[list[str]] = None,
+    exclude_globs: Optional[list[str]] = None,
+    max_files: Optional[int] = None,
 ) -> dict:
     """
-    Analyze code complexity for repositories.
+    Compute code complexity metrics from ClickHouse git_files/git_blame.
 
-    Note: This task requires a repo_path which needs to be discovered.
-    For full complexity analysis, use the CLI directly.
+    Analyzes file contents already synced to the database — no local
+    repository checkout required.
 
     Args:
-        db_url: Database connection string
+        db_url: ClickHouse connection string (defaults to CLICKHOUSE_URI env)
+        day: Target day as ISO string (defaults to today)
+        backfill_days: Number of days to backfill
         repo_id: Optional repository UUID to filter
-        repo_name: Optional repository name to filter
+        search_pattern: Repo name glob pattern (e.g. "org/*")
+        language_globs: Include language globs (e.g. ["*.py", "*.ts"])
+        exclude_globs: Exclude path globs (e.g. ["*/tests/*"])
+        max_files: Limit number of files scanned per repo
 
     Returns:
-        dict with job status
+        dict with job status and summary
     """
+    from dev_health_ops.metrics.job_complexity_db import run_complexity_db_job
+
     db_url = db_url or _get_db_url()
+    target_day = date.fromisoformat(day) if day else date.today()
     parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
 
     logger.info(
-        "Starting complexity analysis task: repo=%s",
-        repo_name or str(parsed_repo_id) or "all",
+        "Starting complexity analysis task: day=%s backfill=%d repo=%s",
+        target_day.isoformat(),
+        backfill_days,
+        search_pattern or str(parsed_repo_id) or "all",
     )
 
-    # Return skipped status since this requires repo_path parameter
-    # In production, this would need to be enhanced to discover repo paths
-    return {
-        "status": "skipped",
-        "reason": "complexity task requires repo_path - use CLI instead",
-        "repo_id": repo_id or "all",
-    }
+    try:
+        result = run_complexity_db_job(
+            repo_id=parsed_repo_id,
+            db_url=db_url,
+            date=target_day,
+            backfill_days=backfill_days,
+            language_globs=language_globs,
+            max_files=max_files,
+            search_pattern=search_pattern,
+            exclude_globs=exclude_globs,
+        )
+        return {
+            "status": "success",
+            "day": target_day.isoformat(),
+            "backfill_days": backfill_days,
+            "exit_code": result,
+        }
+    except Exception as exc:
+        logger.exception("Complexity analysis task failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
 
 @celery_app.task(bind=True, max_retries=3, queue="sync")

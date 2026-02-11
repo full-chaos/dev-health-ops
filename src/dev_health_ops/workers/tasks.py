@@ -915,6 +915,69 @@ def reconcile_team_members(self, org_id: str = "default") -> dict:
         raise self.retry(exc=exc, countdown=300)
 
 
+@celery_app.task(bind=True, max_retries=3, queue="metrics")
+def run_dora_metrics(
+    self,
+    db_url: Optional[str] = None,
+    day: Optional[str] = None,
+    backfill_days: int = 1,
+    repo_id: Optional[str] = None,
+    repo_name: Optional[str] = None,
+    sink: str = "auto",
+    metrics: Optional[str] = None,
+    interval: str = "daily",
+) -> dict:
+    """
+    Compute and persist DORA metrics asynchronously.
+
+    Args:
+            db_url: Database connection string (defaults to DATABASE_URI env)
+            day: Target day as ISO string (defaults to today)
+            backfill_days: Number of days to backfill
+            repo_id: Optional repository UUID to filter
+            repo_name: Optional repository name to filter
+            sink: Sink type (auto|clickhouse|mongo|sqlite|postgres|both)
+            metrics: Specific metrics to compute (optional)
+            interval: Metric interval (daily|weekly|monthly)
+
+    Returns:
+            dict with job status and summary
+    """
+    from dev_health_ops.metrics.job_dora import run_dora_metrics_job
+
+    db_url = db_url or _get_db_url()
+    target_day = date.fromisoformat(day) if day else date.today()
+    parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
+
+    logger.info(
+        "Starting DORA metrics task: day=%s backfill=%d repo=%s",
+        target_day.isoformat(),
+        backfill_days,
+        repo_name or str(parsed_repo_id) or "all",
+    )
+
+    try:
+        run_dora_metrics_job(
+            db_url=db_url,
+            day=target_day,
+            backfill_days=backfill_days,
+            repo_id=parsed_repo_id,
+            repo_name=repo_name,
+            sink=sink,
+            metrics=metrics,
+            interval=interval,
+        )
+
+        return {
+            "status": "success",
+            "day": target_day.isoformat(),
+            "backfill_days": backfill_days,
+        }
+    except Exception as exc:
+        logger.exception("DORA metrics task failed: %s", exc)
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
 @celery_app.task(bind=True)
 def health_check(self) -> dict:
     """Simple health check task to verify worker is running."""

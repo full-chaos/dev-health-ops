@@ -360,7 +360,9 @@ def _fetch_table_presence(client: Any, tables: Iterable[str]) -> Dict[str, bool]
     return {table: table in present for table in table_list}
 
 
-def run_completeness_audit(*, db_url: str, days: int) -> Dict[str, Any]:
+def run_completeness_audit(
+    *, db_url: str, days: int, org_id: str = "default"
+) -> Dict[str, Any]:
     window_start, window_end = build_window(days)
     params = {
         "start": _naive_utc(window_start),
@@ -585,7 +587,11 @@ def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
 
     logger = logging.getLogger(__name__)
     try:
-        report = run_completeness_audit(db_url=ns.db, days=ns.days)
+        report = run_completeness_audit(
+            db_url=ns.db,
+            days=ns.days,
+            org_id=getattr(ns, "org", "default") or "default",
+        )
         if ns.format == "json":
             print(format_completeness_json(report))
         else:

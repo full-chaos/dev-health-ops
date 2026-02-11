@@ -202,11 +202,13 @@ async def run_daily_metrics_job(
     include_commit_metrics: bool = True,
     sink: str = "auto",
     provider: str = "auto",
+    org_id: str = "default",
 ) -> None:
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
 
+    logger.info("Running daily metrics for org_id=%s", org_id)
     backend = detect_db_type(db_url)
     sink = (sink or "auto").strip().lower()
     if sink == "auto":
@@ -485,6 +487,7 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             include_commit_metrics=ns.commit_metrics,
             sink=ns.sink,
             provider=ns.provider,
+            org_id=getattr(ns, "org", "default") or "default",
         )
         return 0
     except Exception as e:

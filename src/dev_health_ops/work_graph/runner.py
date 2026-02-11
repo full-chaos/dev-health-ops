@@ -60,6 +60,9 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
     if ns.repo_id:
         repo_id = uuid.UUID(ns.repo_id)
 
+    org_id = getattr(ns, "org", "default") or "default"
+    logging.info("Building work graph for org_id=%s", org_id)
+
     config = BuildConfig(
         dsn=ns.db,
         from_date=from_date,
@@ -169,6 +172,8 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
     repo_ids = [repo_id for repo_id in (ns.repo_id or []) if repo_id]
     team_ids = [team_id for team_id in (ns.team_id or []) if team_id]
 
+    org_id = getattr(ns, "org", "default") or "default"
+
     config = MaterializeConfig(
         dsn=ns.db,
         from_ts=from_ts,
@@ -179,6 +184,7 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         llm_model=getattr(ns, "model", None),
         team_ids=team_ids or None,
         force=getattr(ns, "force", False),
+        org_id=org_id,
     )
 
     logging.info(f"Materializing investments from {config.from_ts} to {config.to_ts}")
@@ -203,6 +209,7 @@ async def materialize_fixture_investments(
     to_ts: datetime,
     repo_ids: list[str] | None = None,
     team_ids: list[str] | None = None,
+    org_id: str = "default",
 ) -> dict[str, int]:
     """Materialize fixture investments using the mock LLM provider."""
     config = MaterializeConfig(
@@ -215,6 +222,7 @@ async def materialize_fixture_investments(
         llm_model=None,
         team_ids=team_ids,
         force=True,
+        org_id=org_id,
     )
     logging.info(
         "Materializing fixture investments from %s to %s",

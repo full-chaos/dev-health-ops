@@ -5,7 +5,7 @@ import os
 import random
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from dev_health_ops.models.git import get_repo_uuid_from_repo

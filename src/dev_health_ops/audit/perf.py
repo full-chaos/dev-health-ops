@@ -58,6 +58,7 @@ def run_perf_audit(
     threshold_ms: int = DEFAULT_THRESHOLD_MS,
     lookback_minutes: int = DEFAULT_LOOKBACK_MINUTES,
     limit: int = DEFAULT_LIMIT,
+    org_id: str = "default",
 ) -> Dict[str, Any]:
     report: Dict[str, Any] = {
         "status": "unchecked",
@@ -264,6 +265,7 @@ def _cmd_audit_perf(ns: argparse.Namespace) -> int:
             threshold_ms=ns.threshold,
             lookback_minutes=ns.lookback,
             limit=ns.limit,
+            org_id=getattr(ns, "org", "default") or "default",
         )
         print(format_perf_report(report))
         return 0 if report.get("status") == "ok" else 1

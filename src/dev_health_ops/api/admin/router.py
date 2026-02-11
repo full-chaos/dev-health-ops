@@ -402,12 +402,16 @@ async def test_connection(
 
 async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
     import httpx
+    from urllib.parse import urlparse
 
     token = creds.get("token")
     if not token:
         return False, {"error": "No token provided"}
 
     base_url = creds.get("base_url", "https://api.github.com")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https"):
+        return False, {"error": "Invalid URL scheme"}
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{base_url}/user",
@@ -425,12 +429,16 @@ async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
 
 async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
     import httpx
+    from urllib.parse import urlparse
 
     token = creds.get("token")
     if not token:
         return False, {"error": "No token provided"}
 
     base_url = creds.get("url") or creds.get("base_url", "https://gitlab.com/api/v4")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https"):
+        return False, {"error": "Invalid URL scheme"}
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{base_url}/user",
@@ -445,6 +453,7 @@ async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
 
 async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
     import httpx
+    from urllib.parse import urlparse
 
     email = creds.get("email")
     api_token = creds.get("token") or creds.get("api_token")
@@ -454,6 +463,10 @@ async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
         return False, {
             "error": "Missing required credentials (email, api_token, base_url)"
         }
+
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https"):
+        return False, {"error": "Invalid URL scheme"}
 
     import base64
 

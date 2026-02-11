@@ -186,13 +186,14 @@ def _filter_files(
 def run_complexity_db_job(
     *,
     repo_id: Optional[uuid.UUID],
-    db_url: str,
+    db_url: Optional[str] = None,
     date: date,
     backfill_days: int,
     language_globs: Optional[List[str]],
     max_files: Optional[int],
     search_pattern: Optional[str] = None,
     exclude_globs: Optional[List[str]] = None,
+    org_id: str = "default",
 ) -> int:
     """
     Compute complexity metrics from ClickHouse git_files/git_blame contents.
@@ -200,16 +201,17 @@ def run_complexity_db_job(
     Note: For backfill_days > 1, this job reuses the current file snapshot
     across the requested days because historical file snapshots are not stored.
     """
-    db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if not db_url:
+    resolved_db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
+    if not resolved_db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
 
-    backend = detect_db_type(db_url)
+    logger.info("Running complexity metrics for org_id=%s", org_id)
+    backend = detect_db_type(resolved_db_url)
     if backend != "clickhouse":
         logger.error("complexity_db_job supports clickhouse only")
         return 2
 
-    sink = ClickHouseMetricsSink(db_url)
+    sink = ClickHouseMetricsSink(resolved_db_url)
     try:
         sink.ensure_tables()
 
@@ -399,4 +401,5 @@ def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
         max_files=ns.max_files,
         search_pattern=ns.search,
         exclude_globs=ns.exclude,
+        org_id=getattr(ns, "org", "default") or "default",
     )

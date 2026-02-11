@@ -11,7 +11,6 @@ from fastapi import HTTPException, status
 from dev_health_ops.licensing.types import (
     DEFAULT_FEATURES,
     DEFAULT_LIMITS,
-    LicenseLimits,
     LicensePayload,
     LicenseTier,
 )

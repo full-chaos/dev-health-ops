@@ -12,15 +12,11 @@ This ensures webhooks don't timeout during heavy processing.
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
-import os
-import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from .auth import GitHubWebhookBody, GitLabWebhookBody, JiraWebhookBody
 from .models import (
@@ -32,7 +28,6 @@ from .models import (
     map_gitlab_event,
     map_jira_event,
 )
-from dev_health_ops.db import get_postgres_session
 
 logger = logging.getLogger(__name__)
 

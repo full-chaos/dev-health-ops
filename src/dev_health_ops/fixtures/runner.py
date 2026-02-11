@@ -92,6 +92,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data = {"work_items": [], "transitions": []}
 
+    org_id = getattr(ns, "org", "default") or "default"
+    logging.info("Generating fixtures for org_id=%s", org_id)
+
     async def _handler(store):
         if isinstance(store, SQLAlchemyStore):
             await store.ensure_tables()
@@ -402,6 +405,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     db_url=ns.sink,
                     from_ts=config.from_date,
                     to_ts=config.to_date,
+                    org_id=org_id,
                 )
         finally:
             builder.close()

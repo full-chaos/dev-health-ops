@@ -471,6 +471,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--sink",
         choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
         default="auto",
+        help="Sink backend (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
     )
     daily.add_argument("--provider", default="auto")
     daily.set_defaults(func=_cmd_metrics_daily)

@@ -2,10 +2,15 @@
 Sink implementations for writing derived metrics.
 
 Sinks persist derived metrics data to various backends:
-- ClickHouse: append-only analytics store (primary)
-- MongoDB: document store with idempotent upserts
-- SQLite: file-based relational store
-- PostgreSQL: production relational store
+- ClickHouse: append-only analytics store (primary, only supported for analytics)
+- MongoDB: document store with idempotent upserts (DEPRECATED for analytics)
+- SQLite: file-based relational store (DEPRECATED for analytics)
+- PostgreSQL: production relational store (DEPRECATED for analytics)
+
+DEPRECATION NOTICE:
+MongoDB, PostgreSQL, and SQLite are deprecated for analytics use. ClickHouse is
+the only supported analytics backend. Migrate to ClickHouse. See
+docs/architecture/database-architecture.md for migration guidance.
 
 Usage:
     from dev_health_ops.metrics.sinks import create_sink, BaseMetricsSink

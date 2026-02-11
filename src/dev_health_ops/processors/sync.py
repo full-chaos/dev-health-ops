@@ -268,7 +268,7 @@ def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--db-type",
         choices=["postgres", "mongo", "sqlite", "clickhouse"],
-        help="Optional DB backend override.",
+        help="Optional DB backend override (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
     )
     parser.add_argument(
         "--provider",

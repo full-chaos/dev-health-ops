@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter, SankeyContext
 from ..models.schemas import SankeyLink, SankeyNode, SankeyResponse
-from ..queries.client import clickhouse_client, query_dicts
+from ..queries.client import clickhouse_client, query_dicts, require_clickhouse_backend
 from ..queries.sankey import (
     fetch_expense_abandoned,
     fetch_expense_counts,
@@ -238,21 +238,21 @@ async def _build_investment_flow(
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if sink.backend_type == "clickhouse":
-        if not await _tables_present(sink, ["work_unit_investments"]):
-            return [], []
-        if not await _columns_present(
-            sink,
-            "work_unit_investments",
-            [
-                "theme_distribution_json",
-                "effort_value",
-                "from_ts",
-                "to_ts",
-                "repo_id",
-            ],
-        ):
-            return [], []
+    require_clickhouse_backend(sink)
+    if not await _tables_present(sink, ["work_unit_investments"]):
+        return [], []
+    if not await _columns_present(
+        sink,
+        "work_unit_investments",
+        [
+            "theme_distribution_json",
+            "effort_value",
+            "from_ts",
+            "to_ts",
+            "repo_id",
+        ],
+    ):
+        return [], []
 
     repo_filter, repo_params = await _repo_scope_filter(
         sink, filters, repo_column="repo_id"
@@ -297,31 +297,31 @@ async def _build_expense_flow(
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if sink.backend_type == "clickhouse":
-        if not await _tables_present(
-            sink, ["work_item_metrics_daily", "work_item_cycle_times"]
-        ):
-            return [], []
-        if not await _columns_present(
-            sink,
-            "work_item_metrics_daily",
-            [
-                "day",
-                "new_items_count",
-                "new_bugs_count",
-                "items_completed",
-                "bug_completed_ratio",
-                "team_id",
-                "work_scope_id",
-            ],
-        ):
-            return [], []
-        if not await _columns_present(
-            sink,
-            "work_item_cycle_times",
-            ["day", "status", "team_id", "work_scope_id"],
-        ):
-            return [], []
+    require_clickhouse_backend(sink)
+    if not await _tables_present(
+        sink, ["work_item_metrics_daily", "work_item_cycle_times"]
+    ):
+        return [], []
+    if not await _columns_present(
+        sink,
+        "work_item_metrics_daily",
+        [
+            "day",
+            "new_items_count",
+            "new_bugs_count",
+            "items_completed",
+            "bug_completed_ratio",
+            "team_id",
+            "work_scope_id",
+        ],
+    ):
+        return [], []
+    if not await _columns_present(
+        sink,
+        "work_item_cycle_times",
+        ["day", "status", "team_id", "work_scope_id"],
+    ):
+        return [], []
 
     team_filter, team_params = _team_scope_filter(
         filters, team_column="ifNull(nullIf(team_id, ''), 'unassigned')"
@@ -381,15 +381,15 @@ async def _build_state_flow(
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if sink.backend_type == "clickhouse":
-        if not await _tables_present(sink, ["work_item_state_durations_daily"]):
-            return [], []
-        if not await _columns_present(
-            sink,
-            "work_item_state_durations_daily",
-            ["day", "status", "items_touched", "team_id", "work_scope_id"],
-        ):
-            return [], []
+    require_clickhouse_backend(sink)
+    if not await _tables_present(sink, ["work_item_state_durations_daily"]):
+        return [], []
+    if not await _columns_present(
+        sink,
+        "work_item_state_durations_daily",
+        ["day", "status", "items_touched", "team_id", "work_scope_id"],
+    ):
+        return [], []
 
     team_filter, team_params = _team_scope_filter(
         filters, team_column="ifNull(nullIf(team_id, ''), 'unassigned')"
@@ -468,17 +468,17 @@ async def _build_hotspot_flow(
     end_day: date,
     filters: MetricFilter,
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
-    if sink.backend_type == "clickhouse":
-        if not await _tables_present(sink, ["file_metrics_daily", "repos"]):
-            return [], []
-        if not await _columns_present(
-            sink,
-            "file_metrics_daily",
-            ["repo_id", "day", "path", "churn"],
-        ):
-            return [], []
-        if not await _columns_present(sink, "repos", ["id", "repo"]):
-            return [], []
+    require_clickhouse_backend(sink)
+    if not await _tables_present(sink, ["file_metrics_daily", "repos"]):
+        return [], []
+    if not await _columns_present(
+        sink,
+        "file_metrics_daily",
+        ["repo_id", "day", "path", "churn"],
+    ):
+        return [], []
+    if not await _columns_present(sink, "repos", ["id", "repo"]):
+        return [], []
 
     scope_filter, scope_params = await _repo_scope_filter(
         sink, filters, repo_column="metrics.repo_id"

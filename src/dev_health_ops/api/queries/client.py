@@ -53,6 +53,21 @@ async def close_global_client() -> None:
     _SHARED_DSN = None
 
 
+def require_clickhouse_backend(sink: BaseMetricsSink) -> None:
+    """Raise ValueError when the sink is not backed by ClickHouse.
+
+    Call this at the top of any analytics service function that relies on
+    ClickHouse-specific SQL (ARRAY JOIN, JSONExtract, argMax, etc.).
+    """
+    if sink.backend_type != "clickhouse":
+        raise ValueError(
+            "This analytics endpoint requires ClickHouse. "
+            "Configure CLICKHOUSE_URI "
+            "(e.g. clickhouse://user:pass@host:8123/db). "
+            "See docs/architecture/database-architecture.md"
+        )
+
+
 async def query_dicts(
     sink: Any, query: str, params: Dict[str, Any]
 ) -> List[Dict[str, Any]]:

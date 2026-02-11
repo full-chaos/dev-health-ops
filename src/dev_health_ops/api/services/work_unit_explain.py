@@ -21,7 +21,7 @@ from dev_health_ops.llm.explainers.work_unit_explainer import (
     validate_explanation_language,
 )
 from ..models.schemas import EvidenceQuality, WorkUnitExplanation, WorkUnitInvestment
-from dev_health_ops.llm import get_provider
+from dev_health_ops.llm import get_provider, is_llm_available
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,17 @@ async def explain_work_unit(
     Returns:
         Structured WorkUnitExplanation with validated content
     """
+    if not is_llm_available(llm_provider):
+        return WorkUnitExplanation(
+            work_unit_id=investment.work_unit_id,
+            ai_generated=False,
+            summary="",
+            category_rationale={},
+            evidence_highlights=[],
+            uncertainty_disclosure="",
+            evidence_quality_limits="",
+        )
+
     # 1. Extract only allowed inputs
     inputs = extract_allowed_inputs(
         work_unit_id=investment.work_unit_id,

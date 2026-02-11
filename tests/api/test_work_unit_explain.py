@@ -20,7 +20,7 @@ from dev_health_ops.api.models.schemas import (
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
-from dev_health_ops.llm import get_provider
+from dev_health_ops.llm import get_provider, is_llm_available
 from dev_health_ops.llm.providers.mock import MockProvider
 from dev_health_ops.api.services.work_unit_explain import explain_work_unit
 
@@ -191,3 +191,44 @@ async def test_explanation_includes_evidence_quality_limits():
         "moderate" in explanation.evidence_quality_limits.lower()
         or "evidence" in explanation.evidence_quality_limits.lower()
     )
+
+
+def test_is_llm_available_returns_false_for_none():
+    assert is_llm_available("none") is False
+
+
+def test_is_llm_available_returns_true_for_explicit_mock():
+    assert is_llm_available("mock") is True
+
+
+def test_is_llm_available_returns_false_for_auto_without_keys():
+    with patch.dict(os.environ, {}, clear=True):
+        assert is_llm_available("auto") is False
+
+
+def test_is_llm_available_returns_true_for_openai():
+    assert is_llm_available("openai") is True
+
+
+def test_is_llm_available_returns_true_for_auto_with_key():
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True):
+        assert is_llm_available("auto") is True
+
+
+def test_get_provider_none_returns_mock_provider():
+    provider = get_provider("none")
+    assert isinstance(provider, MockProvider)
+
+
+@pytest.mark.asyncio
+async def test_explain_work_unit_returns_blank_when_no_llm():
+    investment = _sample_investment()
+    explanation = await explain_work_unit(investment, llm_provider="none")
+
+    assert explanation.work_unit_id == investment.work_unit_id
+    assert explanation.ai_generated is False
+    assert explanation.summary == ""
+    assert explanation.category_rationale == {}
+    assert explanation.evidence_highlights == []
+    assert explanation.uncertainty_disclosure == ""
+    assert explanation.evidence_quality_limits == ""

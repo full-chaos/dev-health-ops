@@ -208,7 +208,9 @@ class InvestmentMixExplanation(BaseModel):
     confidence: InvestmentConfidence
     what_to_check_next: List[InvestmentActionItem] = Field(default_factory=list)
     anti_claims: List[str] = Field(default_factory=list)
-    status: Optional[Literal["valid", "invalid_json", "invalid_llm_output"]] = None
+    status: Optional[
+        Literal["valid", "invalid_json", "invalid_llm_output", "llm_unavailable"]
+    ] = None
 
 
 class WorkUnitTimeRange(BaseModel):

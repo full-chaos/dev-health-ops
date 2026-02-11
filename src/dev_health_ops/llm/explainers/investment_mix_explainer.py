@@ -45,7 +45,9 @@ class InvestmentMixExplainOutput(TypedDict):
     confidence: Confidence
     what_to_check_next: List[ActionItem]
     anti_claims: List[str]
-    status: Optional[Literal["valid", "invalid_json", "invalid_llm_output"]]
+    status: Optional[
+        Literal["valid", "invalid_json", "invalid_llm_output", "llm_unavailable"]
+    ]
 
 
 _FORBIDDEN_WORDS = (" should ", " should.", " should,", " determined ", " detected ")

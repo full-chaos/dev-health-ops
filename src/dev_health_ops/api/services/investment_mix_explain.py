@@ -24,7 +24,7 @@ from ..models.schemas import (
     InvestmentMixExplanation,
 )
 from .investment import build_investment_response
-from dev_health_ops.llm import get_provider
+from dev_health_ops.llm import get_provider, is_llm_available
 from .work_units import build_work_unit_investments
 from dev_health_ops.api.utils.logging import sanitize_for_log
 
@@ -112,6 +112,22 @@ async def explain_investment_mix(
             safe_resolved_theme,
         )
         theme = theme_of(subcategory)
+
+    if not is_llm_available(llm_provider):
+        return InvestmentMixExplanation(
+            summary="",
+            top_findings=[],
+            confidence=InvestmentConfidence(
+                level="unknown",
+                quality_mean=None,
+                quality_stddev=None,
+                band_mix={},
+                drivers=[],
+            ),
+            what_to_check_next=[],
+            anti_claims=[],
+            status="llm_unavailable",
+        )
 
     # Compute cache key for lookup
     cache_key = _compute_cache_key(filters, theme, subcategory)

@@ -1,3 +1,3 @@
-from .providers import LLMProvider, get_provider
+from .providers import LLMProvider, get_provider, is_llm_available
 
-__all__ = ["LLMProvider", "get_provider"]
+__all__ = ["LLMProvider", "get_provider", "is_llm_available"]

@@ -386,14 +386,14 @@ def compute_daily_metrics(
     ):
         team_id = "unassigned"
         team_name = "Unassigned"
-        if team_resolver is not None:
-            t_id, t_name = team_resolver.resolve(author_identity)
+        if repo_team_resolver is not None:
+            repo_name = (repo_names_by_id or {}).get(repo_id)
+            t_id, t_name = repo_team_resolver.resolve(repo_name)
             if t_id:
                 team_id = t_id
                 team_name = t_name or t_id
-        if (not team_id or team_id == "unassigned") and repo_team_resolver is not None:
-            repo_name = (repo_names_by_id or {}).get(repo_id)
-            t_id, t_name = repo_team_resolver.resolve(repo_name)
+        if (not team_id or team_id == "unassigned") and team_resolver is not None:
+            t_id, t_name = team_resolver.resolve(author_identity)
             if t_id:
                 team_id = t_id
                 team_name = t_name or t_id

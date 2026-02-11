@@ -97,12 +97,14 @@ Goal: understand **boundaries** (ingest → normalize → persist → metricize 
    * UI renders **persisted** data.
    * `dev-health-web` is visualization-only: it must not become the source of truth.
 
-### 2.2 Storage backends (supported)
+### 2.2 Storage backends
 
-* PostgreSQL (SQLAlchemy + Alembic)
-* ClickHouse (analytics store)
-* MongoDB
-* SQLite
+* PostgreSQL (SQLAlchemy + Alembic) — semantic layer only
+* ClickHouse (analytics store) — **required for all analytics features**
+* MongoDB — deprecated for analytics, will be removed
+* SQLite — deprecated for analytics
+
+> **ClickHouse is the only supported analytics backend.** MongoDB, PostgreSQL, and SQLite support for analytics is deprecated.
 
 Backend selection:
 

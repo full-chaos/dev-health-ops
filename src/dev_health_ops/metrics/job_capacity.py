@@ -6,6 +6,7 @@ import logging
 from datetime import date, timedelta
 from typing import Any, List, Optional
 
+from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.metrics.compute_capacity import (
     ForecastResult,
     ThroughputHistory,
@@ -171,9 +172,11 @@ async def run_capacity_forecast(
     simulations: int = 10000,
     all_teams: bool = False,
     persist: bool = True,
+    org_id: str = "default",
 ) -> List[ForecastResult]:
     sink = create_sink(db_url)
     try:
+        logger.info("Running capacity forecast for org_id=%s", org_id)
         results: List[ForecastResult] = []
 
         if all_teams:
@@ -274,6 +277,7 @@ async def _run_cli(args: argparse.Namespace) -> int:
         simulations=args.simulations,
         all_teams=args.all_teams,
         persist=not args.dry_run,
+        org_id=resolve_org_id(args),
     )
 
     if not results:

@@ -7,6 +7,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Optional
 
+from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.connectors import GitLabConnector
 from dev_health_ops.connectors.exceptions import ConnectorException
@@ -71,10 +72,12 @@ def run_dora_metrics_job(
     interval: str = "daily",
     gitlab_url: Optional[str] = None,
     auth: Optional[str] = None,
+    org_id: str = "default",
 ) -> None:
     if not db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
 
+    logger.info("Running DORA metrics for org_id=%s", org_id)
     backend = detect_db_type(db_url)
     sink = (sink or "auto").strip().lower()
     if sink == "auto":
@@ -251,6 +254,7 @@ def _cmd_metrics_dora(ns: argparse.Namespace) -> int:
             interval=ns.interval,
             gitlab_url=ns.gitlab_url,
             auth=ns.auth,
+            org_id=resolve_org_id(ns),
         )
         return 0
     except Exception as e:

@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
 
@@ -379,7 +380,9 @@ def compile_coverage_report(
     return report
 
 
-def run_coverage_audit(*, db_url: str, providers: Sequence[str]) -> Dict[str, Any]:
+def run_coverage_audit(
+    *, db_url: str, providers: Sequence[str], org_id: str = "default"
+) -> Dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[3]
     collector = _collector_check(repo_root)
     config = _config_check(repo_root)
@@ -483,7 +486,9 @@ def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
     logger = logging.getLogger(__name__)
     try:
         providers = parse_provider_list(ns.provider)
-        report = run_coverage_audit(db_url=ns.db, providers=providers)
+        report = run_coverage_audit(
+            db_url=ns.db, providers=providers, org_id=resolve_org_id(ns)
+        )
         if ns.format == "json":
             print(format_coverage_json(report))
         else:

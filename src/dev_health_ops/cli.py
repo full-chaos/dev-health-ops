@@ -30,6 +30,11 @@ from dev_health_ops.audit import completeness, schema, perf, coverage
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def resolve_org_id(ns: argparse.Namespace) -> str:
+    """Return the org_id from the CLI namespace, defaulting to ``"default"``."""
+    return getattr(ns, "org", "default") or "default"
+
+
 def _load_dotenv(path: Path) -> int:
     """
     Load a .env file into process environment (without overriding existing vars).

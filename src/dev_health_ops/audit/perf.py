@@ -4,6 +4,7 @@ import argparse
 import logging
 from typing import Any, Dict, List, Optional
 
+from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.storage import detect_db_type
 
@@ -58,6 +59,7 @@ def run_perf_audit(
     threshold_ms: int = DEFAULT_THRESHOLD_MS,
     lookback_minutes: int = DEFAULT_LOOKBACK_MINUTES,
     limit: int = DEFAULT_LIMIT,
+    org_id: str = "default",
 ) -> Dict[str, Any]:
     report: Dict[str, Any] = {
         "status": "unchecked",
@@ -264,6 +266,7 @@ def _cmd_audit_perf(ns: argparse.Namespace) -> int:
             threshold_ms=ns.threshold,
             lookback_minutes=ns.lookback,
             limit=ns.limit,
+            org_id=resolve_org_id(ns),
         )
         print(format_perf_report(report))
         return 0 if report.get("status") == "ok" else 1

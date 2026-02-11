@@ -61,6 +61,12 @@ beat_schedule = {
         "schedule": crontab(hour=3, minute=0),
         "options": {"queue": "sync"},
     },
+    "run-capacity-forecast": {
+        "task": "dev_health_ops.workers.tasks.run_capacity_forecast_job",
+        "schedule": crontab(hour=4, minute=0, day_of_week="monday"),
+        "kwargs": {"all_teams": True},
+        "options": {"queue": "metrics"},
+    },
 }
 
 # Result settings

@@ -1132,6 +1132,67 @@ def run_investment_materialize(
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
 
 
+@celery_app.task(bind=True, max_retries=2, queue="metrics")
+def run_capacity_forecast_job(
+    self,
+    db_url: Optional[str] = None,
+    team_id: Optional[str] = None,
+    work_scope_id: Optional[str] = None,
+    target_items: Optional[int] = None,
+    target_date: Optional[str] = None,
+    history_days: int = 90,
+    simulations: int = 10000,
+    all_teams: bool = False,
+) -> dict:
+    """
+    Run capacity forecasting job asynchronously.
+
+    Args:
+        db_url: Database connection string (defaults to DATABASE_URI env)
+        team_id: Optional team UUID to forecast
+        work_scope_id: Optional work scope UUID to forecast
+        target_items: Optional target item count for forecast
+        target_date: Optional target date as ISO string
+        history_days: Number of historical days to analyze (default 90)
+        simulations: Number of Monte Carlo simulations (default 10000)
+        all_teams: If True, forecast for all teams
+
+    Returns:
+        dict with job status and forecast count
+    """
+    from dev_health_ops.metrics.job_capacity import run_capacity_forecast
+
+    db_url = db_url or _get_db_url()
+    parsed_target_date = date.fromisoformat(target_date) if target_date else None
+
+    logger.info(
+        "Starting capacity forecast task: team=%s scope=%s all_teams=%s",
+        team_id,
+        work_scope_id,
+        all_teams,
+    )
+
+    try:
+        results = asyncio.run(
+            run_capacity_forecast(
+                db_url=db_url,
+                team_id=team_id,
+                work_scope_id=work_scope_id,
+                target_items=target_items,
+                target_date=parsed_target_date,
+                history_days=history_days,
+                simulations=simulations,
+                all_teams=all_teams,
+                persist=True,
+            )
+        )
+
+        return {"status": "success", "forecasts": len(results)}
+    except Exception as exc:
+        logger.exception("Capacity forecast task failed: %s", exc)
+        raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
+
+
 @celery_app.task(bind=True)
 def health_check(self) -> dict:
     """Simple health check task to verify worker is running."""

@@ -2,8 +2,6 @@
 
 from datetime import datetime, timezone
 
-import pytest
-
 from dev_health_ops.models.work_items import WorkItemStatusTransition
 from dev_health_ops.providers.normalize_common import (
     detect_reopen_events_from_transitions,

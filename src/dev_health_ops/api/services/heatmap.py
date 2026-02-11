@@ -366,7 +366,7 @@ async def build_heatmap_response(
                     week_start = None
                     week_end = None
                 if week_start is not None and week_end is not None:
-                    evidence = await fetch_hotspot_evidence(
+                    _ = await fetch_hotspot_evidence(
                         sink,
                         week_start=week_start,
                         week_end=week_end,

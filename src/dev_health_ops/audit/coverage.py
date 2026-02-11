@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
 
@@ -487,7 +486,9 @@ def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
     try:
         providers = parse_provider_list(ns.provider)
         report = run_coverage_audit(
-            db_url=ns.db, providers=providers, org_id=resolve_org_id(ns)
+            db_url=ns.db,
+            providers=providers,
+            org_id=getattr(ns, "org", "default") or "default",
         )
         if ns.format == "json":
             print(format_coverage_json(report))

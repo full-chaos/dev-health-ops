@@ -5,7 +5,6 @@ import os
 import random
 from datetime import datetime, timedelta, timezone
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
 from dev_health_ops.licensing.gating import LicenseManager
@@ -93,7 +92,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data = {"work_items": [], "transitions": []}
 
-    org_id = resolve_org_id(ns)
+    org_id = getattr(ns, "org", "default") or "default"
     logging.info("Generating fixtures for org_id=%s", org_id)
 
     async def _handler(store):

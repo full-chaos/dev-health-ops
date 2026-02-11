@@ -4,8 +4,6 @@ Ensures basic auth, user/org/membership management remain accessible in communit
 Enterprise features (SSO, audit, IP allowlist, retention) should be gated.
 """
 
-import pytest
-
 from dev_health_ops.licensing import LicenseManager, LicenseTier
 from dev_health_ops.licensing.gating import has_feature
 

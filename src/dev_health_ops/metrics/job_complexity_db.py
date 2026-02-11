@@ -9,7 +9,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.analytics.complexity import ComplexityScanner, FileComplexity
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
@@ -402,5 +401,5 @@ def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
         max_files=ns.max_files,
         search_pattern=ns.search,
         exclude_globs=ns.exclude,
-        org_id=resolve_org_id(ns),
+        org_id=getattr(ns, "org", "default") or "default",
     )

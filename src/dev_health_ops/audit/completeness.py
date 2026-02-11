@@ -5,7 +5,6 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
 REQUIRED_PROVIDERS = ("jira", "github", "gitlab")
@@ -589,7 +588,9 @@ def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
     logger = logging.getLogger(__name__)
     try:
         report = run_completeness_audit(
-            db_url=ns.db, days=ns.days, org_id=resolve_org_id(ns)
+            db_url=ns.db,
+            days=ns.days,
+            org_id=getattr(ns, "org", "default") or "default",
         )
         if ns.format == "json":
             print(format_completeness_json(report))

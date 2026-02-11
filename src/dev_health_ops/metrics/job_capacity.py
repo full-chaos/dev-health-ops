@@ -6,7 +6,6 @@ import logging
 from datetime import date, timedelta
 from typing import Any, List, Optional
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.metrics.compute_capacity import (
     ForecastResult,
     ThroughputHistory,
@@ -277,7 +276,7 @@ async def _run_cli(args: argparse.Namespace) -> int:
         simulations=args.simulations,
         all_teams=args.all_teams,
         persist=not args.dry_run,
-        org_id=resolve_org_id(args),
+        org_id=getattr(args, "org", "default") or "default",
     )
 
     if not results:

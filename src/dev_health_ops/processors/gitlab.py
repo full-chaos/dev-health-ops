@@ -374,7 +374,6 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
         if since is not None and created_at.astimezone(timezone.utc) < since:
             break
 
-        started_at = created_at
         started_at = (
             safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
         )

@@ -10,7 +10,6 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
@@ -488,7 +487,7 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             include_commit_metrics=ns.commit_metrics,
             sink=ns.sink,
             provider=ns.provider,
-            org_id=resolve_org_id(ns),
+            org_id=getattr(ns, "org", "default") or "default",
         )
         return 0
     except Exception as e:

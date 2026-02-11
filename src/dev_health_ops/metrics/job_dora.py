@@ -7,7 +7,6 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Optional
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.connectors import GitLabConnector
 from dev_health_ops.connectors.exceptions import ConnectorException
@@ -254,7 +253,7 @@ def _cmd_metrics_dora(ns: argparse.Namespace) -> int:
             interval=ns.interval,
             gitlab_url=ns.gitlab_url,
             auth=ns.auth,
-            org_id=resolve_org_id(ns),
+            org_id=getattr(ns, "org", "default") or "default",
         )
         return 0
     except Exception as e:

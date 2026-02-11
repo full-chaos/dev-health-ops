@@ -4,7 +4,6 @@ import argparse
 import logging
 from typing import Any, Dict, List, Optional
 
-from dev_health_ops.cli import resolve_org_id
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.storage import detect_db_type
 
@@ -266,7 +265,7 @@ def _cmd_audit_perf(ns: argparse.Namespace) -> int:
             threshold_ms=ns.threshold,
             lookback_minutes=ns.lookback,
             limit=ns.limit,
-            org_id=resolve_org_id(ns),
+            org_id=getattr(ns, "org", "default") or "default",
         )
         print(format_perf_report(report))
         return 0 if report.get("status") == "ok" else 1

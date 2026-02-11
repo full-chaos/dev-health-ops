@@ -11,7 +11,7 @@ from ..models.schemas import (
     InvestmentResponse,
     InvestmentSunburstSlice,
 )
-from ..queries.client import clickhouse_client
+from ..queries.client import clickhouse_client, require_clickhouse_backend
 from ..queries.investment import (
     fetch_investment_breakdown,
     fetch_investment_quality_stats,
@@ -148,28 +148,26 @@ async def build_investment_response(
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
     async with clickhouse_client(db_url) as sink:
-        # Check tables/columns only if it's ClickHouse.
-        # For others, we assume schema parity as per recent implementation.
-        if sink.backend_type == "clickhouse":
-            if not await _tables_present(sink, ["work_unit_investments"]):
-                return InvestmentResponse(
-                    theme_distribution={}, subcategory_distribution={}, edges=[]
-                )
-            if not await _columns_present(
-                sink,
-                "work_unit_investments",
-                [
-                    "from_ts",
-                    "to_ts",
-                    "repo_id",
-                    "effort_value",
-                    "theme_distribution_json",
-                    "subcategory_distribution_json",
-                ],
-            ):
-                return InvestmentResponse(
-                    theme_distribution={}, subcategory_distribution={}, edges=[]
-                )
+        require_clickhouse_backend(sink)
+        if not await _tables_present(sink, ["work_unit_investments"]):
+            return InvestmentResponse(
+                theme_distribution={}, subcategory_distribution={}, edges=[]
+            )
+        if not await _columns_present(
+            sink,
+            "work_unit_investments",
+            [
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "effort_value",
+                "theme_distribution_json",
+                "subcategory_distribution_json",
+            ],
+        ):
+            return InvestmentResponse(
+                theme_distribution={}, subcategory_distribution={}, edges=[]
+            )
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(sink, filters)
@@ -233,21 +231,21 @@ async def build_investment_sunburst(
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
     async with clickhouse_client(db_url) as sink:
-        if sink.backend_type == "clickhouse":
-            if not await _tables_present(sink, ["work_unit_investments"]):
-                return []
-            if not await _columns_present(
-                sink,
-                "work_unit_investments",
-                [
-                    "from_ts",
-                    "to_ts",
-                    "repo_id",
-                    "effort_value",
-                    "subcategory_distribution_json",
-                ],
-            ):
-                return []
+        require_clickhouse_backend(sink)
+        if not await _tables_present(sink, ["work_unit_investments"]):
+            return []
+        if not await _columns_present(
+            sink,
+            "work_unit_investments",
+            [
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "effort_value",
+                "subcategory_distribution_json",
+            ],
+        ):
+            return []
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(sink, filters)

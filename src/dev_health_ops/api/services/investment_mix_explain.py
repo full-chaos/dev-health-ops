@@ -28,6 +28,7 @@ from dev_health_ops.llm import get_provider, is_llm_available
 from .work_units import build_work_unit_investments
 from dev_health_ops.api.utils.logging import sanitize_for_log
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,25 +130,19 @@ async def explain_investment_mix(
             status="llm_unavailable",
         )
 
-    # Compute cache key for lookup
     cache_key = _compute_cache_key(filters, theme, subcategory)
 
-    # Check for cached explanation (unless force_refresh or mock provider)
     if not force_refresh and llm_provider != "mock":
         try:
-            if db_url.startswith("clickhouse://"):
-                sink = ClickHouseMetricsSink(db_url)
-                try:
-                    cached = sink.read_investment_explanation(cache_key)
-                    if cached:
-                        logger.info(
-                            "Cache hit for explanation cache_key=%s", cache_key[:8]
-                        )
-                        # Parse and return the cached explanation
-                        cached_data = json.loads(cached.explanation_json)
-                        return InvestmentMixExplanation(**cached_data)
-                finally:
-                    sink.close()
+            ch_sink = ClickHouseMetricsSink(db_url)
+            try:
+                cached = ch_sink.read_investment_explanation(cache_key)
+                if cached:
+                    logger.info("Cache hit for explanation cache_key=%s", cache_key[:8])
+                    cached_data = json.loads(cached.explanation_json)
+                    return InvestmentMixExplanation(**cached_data)
+            finally:
+                ch_sink.close()
         except Exception as e:
             logger.debug("Cache lookup failed: %s", e)
 
@@ -392,10 +387,9 @@ async def explain_investment_mix(
         status=parsed["status"],
     )
 
-    # Store explanation in cache (only for ClickHouse backends)
-    if db_url.startswith("clickhouse://") and llm_provider != "mock":
+    if llm_provider != "mock":
         try:
-            sink = ClickHouseMetricsSink(db_url)
+            ch_sink = ClickHouseMetricsSink(db_url)
             try:
                 explanation_data = (
                     result.model_dump()
@@ -409,10 +403,10 @@ async def explain_investment_mix(
                     llm_model=llm_model,
                     computed_at=datetime.now(timezone.utc),
                 )
-                sink.write_investment_explanation(record)
+                ch_sink.write_investment_explanation(record)
                 logger.info("Cached explanation cache_key=%s", cache_key[:8])
             finally:
-                sink.close()
+                ch_sink.close()
         except Exception as e:
             logger.debug("Cache storage failed: %s", e)
 

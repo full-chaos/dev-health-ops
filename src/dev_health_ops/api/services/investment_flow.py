@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from ..models.filters import MetricFilter
 from ..models.schemas import SankeyLink, SankeyNode, SankeyResponse
-from ..queries.client import clickhouse_client
+from ..queries.client import clickhouse_client, require_clickhouse_backend
 from ..queries.investment import (
     fetch_investment_repo_team_edges,
     fetch_investment_subcategory_edges,
@@ -258,26 +258,20 @@ async def build_investment_flow_response(
         top_n_repos = max(1, int(top_n_repos or 1))
 
         async with clickhouse_client(db_url) as sink:
-            if sink.backend_type == "clickhouse":
-                if not await _tables_present(sink, ["work_unit_investments"]):
-                    return SankeyResponse(
-                        mode="investment", nodes=[], links=[], unit=None
-                    )
+            require_clickhouse_backend(sink)
+            if not await _tables_present(sink, ["work_unit_investments"]):
+                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
-                required_cols = [
-                    "from_ts",
-                    "to_ts",
-                    "repo_id",
-                    "effort_value",
-                    "subcategory_distribution_json",
-                    "structural_evidence_json",
-                ]
-                if not await _columns_present(
-                    sink, "work_unit_investments", required_cols
-                ):
-                    return SankeyResponse(
-                        mode="investment", nodes=[], links=[], unit=None
-                    )
+            required_cols = [
+                "from_ts",
+                "to_ts",
+                "repo_id",
+                "effort_value",
+                "subcategory_distribution_json",
+                "structural_evidence_json",
+            ]
+            if not await _columns_present(sink, "work_unit_investments", required_cols):
+                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
             scope_filter, scope_params = "", {}
             if filters.scope.level in {"team", "repo"}:
@@ -397,20 +391,19 @@ async def build_investment_flow_response(
         )
 
     async with clickhouse_client(db_url) as sink:
-        if sink.backend_type == "clickhouse":
-            if not await _tables_present(sink, ["work_unit_investments"]):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+        require_clickhouse_backend(sink)
+        if not await _tables_present(sink, ["work_unit_investments"]):
+            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
-            # Check for required columns
-            required_cols = [
-                "from_ts",
-                "to_ts",
-                "repo_id",
-                "effort_value",
-                "subcategory_distribution_json",
-            ]
-            if not await _columns_present(sink, "work_unit_investments", required_cols):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+        required_cols = [
+            "from_ts",
+            "to_ts",
+            "repo_id",
+            "effort_value",
+            "subcategory_distribution_json",
+        ]
+        if not await _columns_present(sink, "work_unit_investments", required_cols):
+            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:
@@ -535,20 +528,20 @@ async def build_investment_repo_team_flow_response(
         theme_filters = [theme]
 
     async with clickhouse_client(db_url) as sink:
-        if sink.backend_type == "clickhouse":
-            if not await _tables_present(sink, ["work_unit_investments"]):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+        require_clickhouse_backend(sink)
+        if not await _tables_present(sink, ["work_unit_investments"]):
+            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
-            required_cols = [
-                "from_ts",
-                "to_ts",
-                "repo_id",
-                "effort_value",
-                "subcategory_distribution_json",
-                "structural_evidence_json",
-            ]
-            if not await _columns_present(sink, "work_unit_investments", required_cols):
-                return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
+        required_cols = [
+            "from_ts",
+            "to_ts",
+            "repo_id",
+            "effort_value",
+            "subcategory_distribution_json",
+            "structural_evidence_json",
+        ]
+        if not await _columns_present(sink, "work_unit_investments", required_cols):
+            return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
         scope_filter, scope_params = "", {}
         if filters.scope.level in {"team", "repo"}:

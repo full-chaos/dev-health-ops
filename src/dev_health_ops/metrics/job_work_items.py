@@ -570,6 +570,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
         "--sink",
         choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
         default="auto",
+        help="Sink backend (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
     )
     wi.add_argument("--repo-id", type=uuid.UUID, help="Filter to specific repo ID.")
     wi.add_argument("--repo-name", help="Filter to specific repo name.")

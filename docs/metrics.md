@@ -5,7 +5,7 @@ This repository computes daily “developer health” metrics from:
 - synced Git facts (`git_commits`, `git_commit_stats`, `git_pull_requests`)
 - optional work tracking data (Jira issues, GitHub issues/Projects v2, GitLab issues)
 
-Derived time series are written to **ClickHouse** (preferred) and/or **MongoDB** (optional) for Grafana.
+Derived time series are written to **ClickHouse** (required) for Grafana. MongoDB, PostgreSQL, and SQLite are deprecated as analytics backends.
 
 All timestamps are treated as **UTC** (ClickHouse stores DateTime in UTC; Mongo stores naive datetimes as UTC by convention).
 

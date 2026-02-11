@@ -7,9 +7,14 @@ Note: Most parts of the application use DATABASE_URI for database configuration.
 
 Supported backends:
 - clickhouse: ClickHouse (default for analytics)
-- mongo: MongoDB
-- sqlite: SQLite (file-based)
-- postgres: PostgreSQL
+- mongo: MongoDB (DEPRECATED for analytics)
+- sqlite: SQLite (DEPRECATED for analytics)
+- postgres: PostgreSQL (DEPRECATED for analytics)
+
+DEPRECATION NOTICE:
+MongoDB, PostgreSQL, and SQLite are deprecated for analytics use. ClickHouse is
+the only supported analytics backend. Migrate to ClickHouse. See
+docs/architecture/database-architecture.md for migration guidance.
 
 Example:
     # Via connection string
@@ -24,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from enum import Enum
 from typing import Optional
 from urllib.parse import urlparse
@@ -118,6 +124,15 @@ def create_sink(dsn: Optional[str] = None) -> BaseMetricsSink:
 
     backend = detect_backend(dsn)
     logger.info("Creating %s sink from DSN", backend.value)
+
+    # Emit deprecation warning for non-ClickHouse analytics backends
+    if backend != SinkBackend.CLICKHOUSE:
+        warnings.warn(
+            f"{backend.value} is deprecated for analytics. Migrate to ClickHouse. "
+            "See docs/architecture/database-architecture.md",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     if backend == SinkBackend.CLICKHOUSE:
         from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink

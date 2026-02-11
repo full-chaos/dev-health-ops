@@ -19,7 +19,7 @@ from ..models.schemas import (
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
-from ..queries.client import clickhouse_client
+from ..queries.client import clickhouse_client, require_clickhouse_backend
 from ..queries.work_unit_investments import (
     fetch_work_unit_investment_quotes,
     fetch_work_unit_investments,
@@ -82,6 +82,7 @@ async def build_segment_investment(
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
 
     async with clickhouse_client(db_url) as sink:
+        require_clickhouse_backend(sink)
         repo_ids = await resolve_repo_filter_ids(sink, filters)
         rows = await fetch_work_unit_investments(
             sink,

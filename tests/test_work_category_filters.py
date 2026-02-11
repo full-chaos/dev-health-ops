@@ -21,6 +21,7 @@ async def _fake_clickhouse_client(_dsn):
     from unittest.mock import MagicMock
 
     mock = MagicMock()
+    mock.backend_type = "clickhouse"
     mock.query.return_value = []
     yield mock
 

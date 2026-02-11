@@ -35,7 +35,9 @@ async def test_build_investment_flow_prefers_team():
             "dev_health_ops.api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
-        patch("dev_health_ops.api.services.investment_flow.clickhouse_client") as mock_client_cm,
+        patch(
+            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
         patch(
             "dev_health_ops.api.services.investment_flow._tables_present",
             return_value=True,
@@ -55,6 +57,7 @@ async def test_build_investment_flow_prefers_team():
     ):
         # Mock the async context manager
         mock_client = MagicMock()
+        mock_client.backend_type = "clickhouse"
         mock_client_cm.return_value.__aenter__.return_value = mock_client
 
         response = await build_investment_flow_response(
@@ -96,7 +99,9 @@ async def test_build_investment_flow_prefers_repo():
             "dev_health_ops.api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
-        patch("dev_health_ops.api.services.investment_flow.clickhouse_client") as mock_client_cm,
+        patch(
+            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
         patch(
             "dev_health_ops.api.services.investment_flow._tables_present",
             return_value=True,
@@ -115,6 +120,7 @@ async def test_build_investment_flow_prefers_repo():
         ),
     ):
         mock_client = MagicMock()
+        mock_client.backend_type = "clickhouse"
         mock_client_cm.return_value.__aenter__.return_value = mock_client
 
         response = await build_investment_flow_response(
@@ -146,7 +152,9 @@ async def test_build_investment_flow_fallbacks():
             "dev_health_ops.api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
-        patch("dev_health_ops.api.services.investment_flow.clickhouse_client") as mock_client_cm,
+        patch(
+            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
         patch(
             "dev_health_ops.api.services.investment_flow._tables_present",
             return_value=True,
@@ -165,6 +173,7 @@ async def test_build_investment_flow_fallbacks():
         ),
     ):
         mock_client = MagicMock()
+        mock_client.backend_type = "clickhouse"
         mock_client_cm.return_value.__aenter__.return_value = mock_client
 
         response = await build_investment_flow_response(
@@ -200,7 +209,9 @@ async def test_build_investment_repo_team_flow_direct_team_when_repo_missing():
             "dev_health_ops.api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
-        patch("dev_health_ops.api.services.investment_flow.clickhouse_client") as mock_client_cm,
+        patch(
+            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
         patch(
             "dev_health_ops.api.services.investment_flow._tables_present",
             return_value=True,
@@ -215,6 +226,7 @@ async def test_build_investment_repo_team_flow_direct_team_when_repo_missing():
         ),
     ):
         mock_client = MagicMock()
+        mock_client.backend_type = "clickhouse"
         mock_client_cm.return_value.__aenter__.return_value = mock_client
 
         response = await build_investment_repo_team_flow_response(
@@ -256,7 +268,9 @@ async def test_build_investment_flow_team_category_repo_mode_rolls_up_repos():
             "dev_health_ops.api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
-        patch("dev_health_ops.api.services.investment_flow.clickhouse_client") as mock_client_cm,
+        patch(
+            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
         patch(
             "dev_health_ops.api.services.investment_flow._tables_present",
             return_value=True,
@@ -275,6 +289,7 @@ async def test_build_investment_flow_team_category_repo_mode_rolls_up_repos():
         ),
     ):
         mock_client = MagicMock()
+        mock_client.backend_type = "clickhouse"
         mock_client_cm.return_value.__aenter__.return_value = mock_client
 
         response = await build_investment_flow_response(
@@ -352,7 +367,9 @@ async def test_build_investment_flow_team_subcategory_repo_mode():
             "dev_health_ops.api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
-        patch("dev_health_ops.api.services.investment_flow.clickhouse_client") as mock_client_cm,
+        patch(
+            "dev_health_ops.api.services.investment_flow.clickhouse_client"
+        ) as mock_client_cm,
         patch(
             "dev_health_ops.api.services.investment_flow._tables_present",
             return_value=True,
@@ -371,6 +388,7 @@ async def test_build_investment_flow_team_subcategory_repo_mode():
         ),
     ):
         mock_client = MagicMock()
+        mock_client.backend_type = "clickhouse"
         mock_client_cm.return_value.__aenter__.return_value = mock_client
 
         response = await build_investment_flow_response(

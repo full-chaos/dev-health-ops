@@ -27,6 +27,32 @@ Dev Health Ops uses a dual-database architecture separating **semantic** (operat
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+## Analytics Backend Requirement
+
+> **ClickHouse is required for all analytics features.** MongoDB, PostgreSQL, and SQLite are deprecated as analytics backends and will be removed in a future release.
+
+Analytics queries use ClickHouse-specific features (ARRAY JOIN, JSONExtract, argMax) that have no equivalent in other backends. Attempting to use a non-ClickHouse backend for analytics endpoints returns a clear validation error (ValueError) directing users to configure `CLICKHOUSE_URI`.
+
+### What requires ClickHouse
+
+| Feature | Requires ClickHouse | Notes |
+|---------|---------------------|-------|
+| Investment breakdown/sunburst | Yes | Uses ARRAY JOIN on distribution JSON |
+| Sankey flow diagrams | Yes | Uses JSONExtract for structural evidence |
+| GraphQL analytics API | Yes | All queries compile to ClickHouse SQL |
+| Work unit detail (investment) | Yes | Uses argMax for deduplication |
+| Metrics daily computation | Yes | Primary sink target |
+| Data sync (git, PRs, work items) | Yes | ClickHouse is the ingest target |
+
+### What does NOT require ClickHouse
+
+| Feature | Backend | Notes |
+|---------|---------|-------|
+| User management | PostgreSQL | Semantic layer |
+| Organization settings | PostgreSQL | Semantic layer |
+| Team configuration | PostgreSQL | Semantic layer |
+| Authentication | PostgreSQL | Semantic layer |
+
 ## Environment Variables
 
 | Variable | Purpose | Example |

@@ -59,6 +59,10 @@ class BaseMetricsSink(ABC):
     (ClickHouse, MongoDB, SQLite, PostgreSQL) implements this interface
     with backend-specific optimizations (e.g., bulk inserts, upserts).
 
+    DEPRECATION NOTICE:
+    ClickHouse is the only supported analytics backend. MongoDB, PostgreSQL, and
+    SQLite support is deprecated and will be removed in a future release.
+
     Lifecycle:
         1. Create sink instance with connection string/config
         2. Call ensure_schema() to create tables/indexes

@@ -109,6 +109,58 @@ def _resolve_env_credentials(provider: str) -> dict[str, str]:
     }
 
 
+_GIT_TARGETS = {"git", "prs"}
+_WORK_ITEM_TARGETS = {"work-items"}
+
+
+def _dispatch_post_sync_tasks(
+    *,
+    provider: str,
+    sync_targets: list[str],
+    org_id: str,
+) -> None:
+    target_set = set(sync_targets)
+    has_git = bool(target_set & _GIT_TARGETS)
+    has_work_items = bool(target_set & _WORK_ITEM_TARGETS)
+    dispatched: list[str] = []
+
+    if has_git:
+        celery_app.send_task(
+            "dev_health_ops.workers.tasks.run_daily_metrics",
+            queue="metrics",
+        )
+        dispatched.append("run_daily_metrics")
+
+        celery_app.send_task(
+            "dev_health_ops.workers.tasks.run_complexity_job",
+            queue="metrics",
+        )
+        dispatched.append("run_complexity_job")
+
+    if has_git and has_work_items:
+        celery_app.send_task(
+            "dev_health_ops.workers.tasks.run_work_graph_build",
+            queue="metrics",
+        )
+        dispatched.append("run_work_graph_build")
+
+    if provider == "gitlab" and has_git:
+        celery_app.send_task(
+            "dev_health_ops.workers.tasks.run_dora_metrics",
+            queue="metrics",
+        )
+        dispatched.append("run_dora_metrics")
+
+    if dispatched:
+        logger.info(
+            "Post-sync dispatch for config org_id=%s provider=%s targets=%s: %s",
+            org_id,
+            provider,
+            sync_targets,
+            dispatched,
+        )
+
+
 @celery_app.task(bind=True, max_retries=3, queue="sync")
 def run_sync_config(
     self,
@@ -363,6 +415,12 @@ def run_sync_config(
                 config.last_sync_stats = result_payload
 
             session.flush()
+
+        _dispatch_post_sync_tasks(
+            provider=provider,
+            sync_targets=sync_targets,
+            org_id=org_id,
+        )
 
         return {
             "status": "success",

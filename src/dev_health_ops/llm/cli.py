@@ -13,7 +13,8 @@ def add_llm_arguments(parser: argparse.ArgumentParser) -> None:
         "-l",
         "--llm-provider",
         default=os.getenv("LLM_PROVIDER", "auto"),
-        help="LLM provider (auto, openai, anthropic, local, mock, etc.)",
+        help="LLM provider (auto, openai, anthropic, local, mock, none). "
+        "Use 'none' to compute distributions without LLM explanations.",
     )
     parser.add_argument(
         "-m",

@@ -31,6 +31,43 @@ class LLMProvider(Protocol):
         raise NotImplementedError()
 
 
+def is_llm_available(name: str = "auto") -> bool:
+    """
+    Check whether a real (non-mock) LLM provider is configured.
+
+    Returns True if a real provider (openai, anthropic, local, ollama, etc.)
+    would be resolved. Returns False if the resolved provider is "mock" or "none".
+    """
+    if name == "none":
+        return False
+    resolved = name
+    if resolved == "auto":
+        env_name = os.getenv("LLM_PROVIDER")
+        if env_name and env_name != "auto":
+            resolved = env_name
+        else:
+            if os.getenv("OPENAI_API_KEY"):
+                resolved = "openai"
+            elif os.getenv("ANTHROPIC_API_KEY"):
+                resolved = "anthropic"
+            elif os.getenv("GEMINI_API_KEY"):
+                resolved = "gemini"
+            elif os.getenv("LOCAL_LLM_BASE_URL"):
+                resolved = "local"
+            elif os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY"):
+                resolved = "qwen"
+            elif os.getenv("OLLAMA_MODEL") or os.getenv("OLLAMA_BASE_URL"):
+                resolved = "ollama"
+            else:
+                resolved = "mock"
+    if resolved == "none":
+        return False
+    if resolved == "mock":
+        # mock is explicitly requested — treat as available for dev/testing
+        return name == "mock"
+    return True
+
+
 def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider:
     """
     Get an LLM provider by name.
@@ -83,6 +120,11 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
 
     if model is None:
         model = os.getenv("LLM_MODEL")
+
+    if name == "none":
+        from .mock import MockProvider
+
+        return MockProvider()
 
     if name == "mock":
         from .mock import MockProvider
@@ -153,4 +195,4 @@ def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider
     raise ValueError(f"Unknown LLM provider: {name}")
 
 
-__all__ = ["LLMProvider", "get_provider"]
+__all__ = ["LLMProvider", "get_provider", "is_llm_available"]

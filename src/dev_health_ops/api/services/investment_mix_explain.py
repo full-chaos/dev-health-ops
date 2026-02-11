@@ -27,7 +27,7 @@ from .investment import build_investment_response
 from dev_health_ops.llm import get_provider, is_llm_available
 from .work_units import build_work_unit_investments
 from dev_health_ops.api.utils.logging import sanitize_for_log
-from ..queries.client import clickhouse_client, require_clickhouse_backend
+
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +129,6 @@ async def explain_investment_mix(
             anti_claims=[],
             status="llm_unavailable",
         )
-
-    async with clickhouse_client(db_url) as sink:
-        require_clickhouse_backend(sink)
 
     cache_key = _compute_cache_key(filters, theme, subcategory)
 

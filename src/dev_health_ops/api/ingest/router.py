@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter
 
+from .auth import IngestAuthContext, IngestIdempotencyKey
 from .schemas import (
     IngestAcceptedResponse,
     IngestCommitsRequest,
@@ -45,7 +46,11 @@ def _write_to_stream(redis_client, stream_name: str, data: dict) -> bool:
 
 
 @router.post("/commits", status_code=202, response_model=IngestAcceptedResponse)
-def ingest_commits(payload: IngestCommitsRequest) -> IngestAcceptedResponse:
+async def ingest_commits(
+    payload: IngestCommitsRequest,
+    auth: IngestAuthContext,
+    idempotency_key: IngestIdempotencyKey,
+) -> IngestAcceptedResponse:
     ingestion_id = str(uuid.uuid4())
     stream_name = f"ingest:{payload.org_id}:commits"
 
@@ -68,7 +73,11 @@ def ingest_commits(payload: IngestCommitsRequest) -> IngestAcceptedResponse:
 
 
 @router.post("/pull-requests", status_code=202, response_model=IngestAcceptedResponse)
-def ingest_pull_requests(payload: IngestPullRequestsRequest) -> IngestAcceptedResponse:
+async def ingest_pull_requests(
+    payload: IngestPullRequestsRequest,
+    auth: IngestAuthContext,
+    idempotency_key: IngestIdempotencyKey,
+) -> IngestAcceptedResponse:
     ingestion_id = str(uuid.uuid4())
     stream_name = f"ingest:{payload.org_id}:pull-requests"
 
@@ -91,7 +100,11 @@ def ingest_pull_requests(payload: IngestPullRequestsRequest) -> IngestAcceptedRe
 
 
 @router.post("/work-items", status_code=202, response_model=IngestAcceptedResponse)
-def ingest_work_items(payload: IngestWorkItemsRequest) -> IngestAcceptedResponse:
+async def ingest_work_items(
+    payload: IngestWorkItemsRequest,
+    auth: IngestAuthContext,
+    idempotency_key: IngestIdempotencyKey,
+) -> IngestAcceptedResponse:
     ingestion_id = str(uuid.uuid4())
     stream_name = f"ingest:{payload.org_id}:work-items"
 
@@ -114,7 +127,11 @@ def ingest_work_items(payload: IngestWorkItemsRequest) -> IngestAcceptedResponse
 
 
 @router.post("/deployments", status_code=202, response_model=IngestAcceptedResponse)
-def ingest_deployments(payload: IngestDeploymentsRequest) -> IngestAcceptedResponse:
+async def ingest_deployments(
+    payload: IngestDeploymentsRequest,
+    auth: IngestAuthContext,
+    idempotency_key: IngestIdempotencyKey,
+) -> IngestAcceptedResponse:
     ingestion_id = str(uuid.uuid4())
     stream_name = f"ingest:{payload.org_id}:deployments"
 
@@ -137,7 +154,11 @@ def ingest_deployments(payload: IngestDeploymentsRequest) -> IngestAcceptedRespo
 
 
 @router.post("/incidents", status_code=202, response_model=IngestAcceptedResponse)
-def ingest_incidents(payload: IngestIncidentsRequest) -> IngestAcceptedResponse:
+async def ingest_incidents(
+    payload: IngestIncidentsRequest,
+    auth: IngestAuthContext,
+    idempotency_key: IngestIdempotencyKey,
+) -> IngestAcceptedResponse:
     ingestion_id = str(uuid.uuid4())
     stream_name = f"ingest:{payload.org_id}:incidents"
 

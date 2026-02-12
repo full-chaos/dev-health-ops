@@ -14,7 +14,6 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     _token_hash,
     create_rate_limit_gate,
 )
-import dev_health_ops.connectors.utils.rate_limit_queue as rate_limit_queue_mod
 
 
 def _make_redis_mock(*, script_load_ok: bool = True) -> MagicMock:

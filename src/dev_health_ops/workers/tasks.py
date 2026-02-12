@@ -185,6 +185,7 @@ def run_sync_config(
     from dev_health_ops.processors.github import process_github_repo
     from dev_health_ops.processors.gitlab import process_gitlab_project
     from dev_health_ops.storage import resolve_db_type, run_with_store
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
     config_uuid = uuid.UUID(config_id)
     db_url = _get_db_url()
@@ -290,6 +291,31 @@ def run_sync_config(
             "triggered_by": triggered_by,
         }
 
+        since_dt: datetime | None = None
+        full_resync = bool(sync_options.get("full_resync"))
+        repo_id_for_watermark: str | None = None
+
+        if provider == "github":
+            _owr = _extract_owner_repo(
+                config_name=config_name, sync_options=sync_options
+            )
+            if _owr:
+                repo_id_for_watermark = f"{_owr[0]}/{_owr[1]}"
+        elif provider == "gitlab":
+            _pid = sync_options.get("project_id")
+            if _pid is not None:
+                repo_id_for_watermark = str(_pid)
+
+        if repo_id_for_watermark and not full_resync:
+            with get_postgres_session_sync() as session:
+                watermarks = [
+                    get_watermark(session, org_id, repo_id_for_watermark, t)
+                    for t in sync_targets
+                ]
+                valid = [w for w in watermarks if w is not None]
+                if valid and len(valid) == len(sync_targets):
+                    since_dt = min(valid)
+
         if provider == "github":
             owner_repo = _extract_owner_repo(
                 config_name=config_name, sync_options=sync_options
@@ -312,6 +338,7 @@ def run_sync_config(
                     owner=owner,
                     repo_name=repo_name,
                     token=token,
+                    since=since_dt,
                     **merged_flags,
                 )
 
@@ -342,6 +369,7 @@ def run_sync_config(
                     project_id=int(project_id),
                     token=token,
                     gitlab_url=gitlab_url,
+                    since=since_dt,
                     **merged_flags,
                 )
 
@@ -419,6 +447,11 @@ def run_sync_config(
                 config.last_sync_stats = result_payload
 
             session.flush()
+
+            if repo_id_for_watermark:
+                for t in sync_targets:
+                    set_watermark(session, org_id, repo_id_for_watermark, t, started_at)
+                session.flush()
 
         _dispatch_post_sync_tasks(
             provider=provider,

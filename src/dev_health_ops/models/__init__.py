@@ -46,6 +46,7 @@ from .sso import (
     SSOProvider,
     SSOProviderStatus,
 )
+from .checkpoints import CheckpointStatus, MetricCheckpoint
 from .ip_allowlist import OrgIPAllowlist
 from .retention import (
     OrgRetentionPolicy,
@@ -57,6 +58,7 @@ __all__ = [
     "AuditLog",
     "AuditResourceType",
     "AuthProvider",
+    "CheckpointStatus",
     "FeatureCategory",
     "FeatureFlag",
     "Base",
@@ -73,6 +75,7 @@ __all__ = [
     "JobStatus",
     "MemberRole",
     "Membership",
+    "MetricCheckpoint",
     "Organization",
     "OrgFeatureOverride",
     "OrgIPAllowlist",

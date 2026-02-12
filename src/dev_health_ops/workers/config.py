@@ -30,8 +30,9 @@ task_max_retries = 3
 task_default_queue = "default"
 task_queues = {
     "default": {},
-    "metrics": {},  # Long-running metrics jobs
-    "sync": {},  # Data sync tasks
+    "metrics": {},
+    "sync": {},
+    "webhooks": {},
 }
 
 # Beat schedule (periodic tasks)
@@ -47,9 +48,9 @@ beat_schedule = {
         "options": {"queue": "default"},
     },
     "run-daily-metrics": {
-        "task": "dev_health_ops.workers.tasks.run_daily_metrics",
+        "task": "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned",
         "schedule": crontab(hour=1, minute=0),
-        "options": {"queue": "metrics"},
+        "options": {"queue": "default"},
     },
     "sync-team-drift": {
         "task": "dev_health_ops.workers.tasks.sync_team_drift",

@@ -86,6 +86,7 @@ from .webhooks import router as webhooks_router
 from .admin import router as admin_router
 from .auth import router as auth_router
 from .billing import router as billing_router
+from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from dev_health_ops.licensing import LicenseManager
 
@@ -324,6 +325,7 @@ app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(licensing_router)
+app.include_router(ingest_router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)

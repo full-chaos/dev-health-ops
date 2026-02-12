@@ -610,3 +610,58 @@ class TeamMapping(Base):
         self.is_active = is_active
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
+
+
+class SyncWatermark(Base):
+    """Per-repo sync watermarks for incremental sync.
+
+    Tracks the last successful sync timestamp for each (org, repo, target)
+    combination, enabling incremental data fetching on subsequent syncs.
+    """
+
+    __tablename__ = "sync_watermarks"
+
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id = Column(Text, nullable=False, default="default")
+    repo_id = Column(
+        Text,
+        nullable=False,
+        comment="owner/repo for GitHub, project_id for GitLab",
+    )
+    target = Column(
+        Text,
+        nullable=False,
+        comment="Sync target: git, prs, cicd, deployments, incidents, work-items",
+    )
+    last_synced_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Timestamp of last successful sync for this target",
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id", "repo_id", "target", name="uq_sync_watermark_org_repo_target"
+        ),
+        Index("ix_sync_watermark_org_repo", "org_id", "repo_id"),
+    )
+
+    def __init__(
+        self,
+        repo_id: str,
+        target: str,
+        org_id: str = "default",
+        last_synced_at: Optional[datetime] = None,
+    ):
+        self.id = uuid.uuid4()
+        self.org_id = org_id
+        self.repo_id = repo_id
+        self.target = target
+        self.last_synced_at = last_synced_at
+        self.updated_at = datetime.now(timezone.utc)

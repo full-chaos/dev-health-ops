@@ -17,6 +17,7 @@ from .settings import (
     Setting,
     SettingCategory,
     SyncConfiguration,
+    SyncWatermark,
     TeamMapping,
 )
 from .teams import JiraProjectOpsTeamLink, Team
@@ -92,6 +93,7 @@ __all__ = [
     "SSOProviderStatus",
     "STANDARD_FEATURES",
     "SyncConfiguration",
+    "SyncWatermark",
     "TeamMapping",
     "TIER_LIMITS",
     "User",

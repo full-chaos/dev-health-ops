@@ -203,6 +203,7 @@ async def run_daily_metrics_job(
     sink: str = "auto",
     provider: str = "auto",
     org_id: str = "default",
+    skip_finalize: bool = False,
 ) -> None:
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not db_url:
@@ -439,22 +440,153 @@ async def run_daily_metrics_job(
             if all_file_metrics:
                 s.write_file_metrics(all_file_metrics)
 
-        ic_metrics = compute_ic_metrics_daily(
-            git_metrics=result.user_metrics,
-            wi_metrics=wi_user_metrics,
-            team_map=load_team_map(),
-        )
-        for s in sinks:
-            s.write_user_metrics(ic_metrics)
+        if not skip_finalize:
+            ic_metrics = compute_ic_metrics_daily(
+                git_metrics=result.user_metrics,
+                wi_metrics=wi_user_metrics,
+                team_map=load_team_map(),
+            )
+            for s in sinks:
+                s.write_user_metrics(ic_metrics)
 
-        rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=d)
-        ic_landscape = compute_ic_landscape_rolling(
-            as_of_day=d,
-            rolling_stats=rolling_stats,
-            team_map=load_team_map(),
+            rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=d)
+            ic_landscape = compute_ic_landscape_rolling(
+                as_of_day=d,
+                rolling_stats=rolling_stats,
+                team_map=load_team_map(),
+            )
+            for s in sinks:
+                s.write_ic_landscape_rolling(ic_landscape)
+
+
+async def run_daily_metrics_finalize(
+    *,
+    db_url: str,
+    day: date,
+    org_id: str = "default",
+    sink: str = "auto",
+) -> None:
+    """Run only the IC finalize logic (IC metrics + landscape rolling).
+
+    This is designed to run AFTER all per-repo batch tasks have persisted
+    their user_metrics for the given *day*.  It loads the already-persisted
+    user_metrics and work-item user metrics from the analytics store, then
+    computes the cross-repo IC aggregates.
+
+    The function sets up its own identity/team resolver since it may execute
+    in a separate Celery worker.
+    """
+    if not db_url:
+        db_url = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL") or ""
+    if not db_url:
+        raise ValueError("Database URI is required.")
+
+    logger.info("Running IC finalize for day=%s org_id=%s", day.isoformat(), org_id)
+    backend = detect_db_type(db_url)
+    sink = (sink or "auto").strip().lower()
+    if sink == "auto":
+        sink = backend
+
+    primary_sink: Any
+    secondary_sink: Optional[Any] = None
+
+    if backend == "clickhouse":
+        primary_sink = ClickHouseMetricsSink(db_url)
+        if sink == "both":
+            secondary_sink = MongoMetricsSink(_secondary_uri_from_env())
+    elif backend == "mongo":
+        primary_sink = MongoMetricsSink(db_url)
+        if sink == "both":
+            secondary_sink = ClickHouseMetricsSink(_secondary_uri_from_env())
+    elif backend == "postgres":
+        primary_sink = PostgresMetricsSink(db_url)
+    else:
+        primary_sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
+
+    sinks_list = [primary_sink] + ([secondary_sink] if secondary_sink else [])
+
+    for s in sinks_list:
+        if hasattr(s, "ensure_tables"):
+            s.ensure_tables()
+        elif hasattr(s, "ensure_indexes"):
+            s.ensure_indexes()
+
+    await init_team_resolver(primary_sink)
+
+    loader = await _get_loader(db_url, backend)
+
+    import dataclasses as _dc
+
+    from dev_health_ops.metrics.loaders.base import clickhouse_query_dicts
+    from dev_health_ops.metrics.schemas import (
+        UserMetricsDailyRecord,
+        WorkItemUserMetricsDailyRecord,
+    )
+
+    git_metrics: List[Any] = []
+    wi_user_metrics: List[Any] = []
+
+    if backend == "clickhouse":
+        from dev_health_ops.api.queries.client import get_global_client
+
+        ch_client = await get_global_client(db_url)
+        um_field_names = {f.name for f in _dc.fields(UserMetricsDailyRecord)}
+        wi_field_names = {f.name for f in _dc.fields(WorkItemUserMetricsDailyRecord)}
+
+        um_rows = clickhouse_query_dicts(
+            ch_client,
+            "SELECT * FROM user_metrics_daily WHERE day = {day:Date}",
+            {"day": day},
         )
-        for s in sinks:
-            s.write_ic_landscape_rolling(ic_landscape)
+        for row in um_rows:
+            try:
+                git_metrics.append(
+                    UserMetricsDailyRecord(
+                        **{k: v for k, v in row.items() if k in um_field_names}
+                    )
+                )
+            except Exception:
+                logger.debug("Skipping malformed user_metrics row: %s", row)
+
+        wi_rows = clickhouse_query_dicts(
+            ch_client,
+            "SELECT * FROM work_item_user_metrics_daily WHERE day = {day:Date}",
+            {"day": day},
+        )
+        for row in wi_rows:
+            try:
+                wi_user_metrics.append(
+                    WorkItemUserMetricsDailyRecord(
+                        **{k: v for k, v in row.items() if k in wi_field_names}
+                    )
+                )
+            except Exception:
+                logger.debug("Skipping malformed wi_user_metrics row: %s", row)
+    else:
+        logger.warning(
+            "Finalize currently optimised for ClickHouse; "
+            "backend=%s may produce empty IC metrics.",
+            backend,
+        )
+
+    ic_metrics = compute_ic_metrics_daily(
+        git_metrics=git_metrics,
+        wi_metrics=wi_user_metrics,
+        team_map=load_team_map(),
+    )
+    for s in sinks_list:
+        s.write_user_metrics(ic_metrics)
+
+    rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=day)
+    ic_landscape = compute_ic_landscape_rolling(
+        as_of_day=day,
+        rolling_stats=rolling_stats,
+        team_map=load_team_map(),
+    )
+    for s in sinks_list:
+        s.write_ic_landscape_rolling(ic_landscape)
+
+    logger.info("IC finalize complete for day=%s", day.isoformat())
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
@@ -476,6 +608,30 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     daily.add_argument("--provider", default="auto")
     daily.set_defaults(func=_cmd_metrics_daily)
 
+    rebuild = subparsers.add_parser(
+        "rebuild",
+        help="Rebuild metrics for specific repos with partitioned finalize.",
+    )
+    rebuild.add_argument(
+        "--day", type=date.fromisoformat, required=True, help="Target date"
+    )
+    rebuild.add_argument("--backfill", type=int, default=1)
+    rebuild.add_argument(
+        "--repo-id",
+        type=uuid.UUID,
+        action="append",
+        dest="repo_ids",
+        default=[],
+        help="Repo UUID (repeatable)",
+    )
+    rebuild.add_argument(
+        "--sink",
+        choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
+        default="auto",
+    )
+    rebuild.add_argument("--provider", default="auto")
+    rebuild.set_defaults(func=_cmd_metrics_rebuild)
+
 
 async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
     try:
@@ -493,4 +649,51 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         logger.error(f"Daily metrics job failed: {e}")
+        return 1
+
+
+async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
+    try:
+        db_url = resolve_sink_uri(ns)
+        org_id = getattr(ns, "org", "default") or "default"
+        repo_ids: List[uuid.UUID] = ns.repo_ids or []
+        days = _date_range(ns.day, ns.backfill)
+
+        for d in days:
+            if repo_ids:
+                for rid in repo_ids:
+                    logger.info("Rebuild batch: day=%s repo_id=%s", d, rid)
+                    await run_daily_metrics_job(
+                        db_url=db_url,
+                        day=d,
+                        backfill_days=1,
+                        repo_id=rid,
+                        sink=ns.sink,
+                        provider=ns.provider,
+                        org_id=org_id,
+                        skip_finalize=True,
+                    )
+            else:
+                logger.info("Rebuild batch: day=%s (all repos)", d)
+                await run_daily_metrics_job(
+                    db_url=db_url,
+                    day=d,
+                    backfill_days=1,
+                    sink=ns.sink,
+                    provider=ns.provider,
+                    org_id=org_id,
+                    skip_finalize=True,
+                )
+
+            logger.info("Rebuild finalize: day=%s", d)
+            await run_daily_metrics_finalize(
+                db_url=db_url,
+                day=d,
+                org_id=org_id,
+                sink=ns.sink,
+            )
+
+        return 0
+    except Exception as e:
+        logger.error("Metrics rebuild failed: %s", e)
         return 1

@@ -71,8 +71,12 @@ class TestBeatScheduleMetrics:
 
         assert "run-daily-metrics" in beat_schedule
         entry = beat_schedule["run-daily-metrics"]
-        assert entry["task"] == "dev_health_ops.workers.tasks.run_daily_metrics"
-        assert entry["options"]["queue"] == "metrics"
+        # gh-422: beat schedule now dispatches partitioned metrics
+        assert (
+            entry["task"]
+            == "dev_health_ops.workers.tasks.dispatch_daily_metrics_partitioned"
+        )
+        assert entry["options"]["queue"] == "default"
 
     def test_beat_schedule_contains_metrics_dispatcher(self):
         from dev_health_ops.workers.config import beat_schedule

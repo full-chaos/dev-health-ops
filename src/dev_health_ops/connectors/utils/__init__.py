@@ -13,6 +13,7 @@ from .rate_limit_queue import (
 )
 from .rest import GitLabRESTClient, RESTClient
 from .retry import RateLimiter, retry_with_backoff
+from .token_pool import TokenPool, create_token_pool
 
 __all__ = [
     "GitHubGraphQLClient",
@@ -29,4 +30,6 @@ __all__ = [
     "match_name_pattern",
     "match_repo_pattern",
     "match_project_pattern",
+    "TokenPool",
+    "create_token_pool",
 ]

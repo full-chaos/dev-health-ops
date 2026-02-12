@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import dev_health_ops.connectors.utils.rate_limit_queue as rate_limit_queue_mod
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     DistributedRateLimitGate,
     RateLimitConfig,

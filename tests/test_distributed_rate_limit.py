@@ -14,6 +14,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     _token_hash,
     create_rate_limit_gate,
 )
+import dev_health_ops.connectors.utils.rate_limit_queue as rate_limit_queue_mod
 
 
 def _make_redis_mock(*, script_load_ok: bool = True) -> MagicMock:
@@ -292,9 +293,7 @@ class TestTTL:
 
 class TestFactory:
     def setup_method(self):
-        import dev_health_ops.connectors.utils.rate_limit_queue as mod
-
-        mod._redis_unavailable_until = 0.0
+        rate_limit_queue_mod._redis_unavailable_until = 0.0
 
     def test_returns_distributed_when_redis_available(self):
         mock_redis = _make_redis_mock()
@@ -320,19 +319,15 @@ class TestFactory:
         assert type(gate) is RateLimitGate
 
     def test_caches_redis_unavailable_for_60s(self):
-        import dev_health_ops.connectors.utils.rate_limit_queue as mod
-
         with patch.dict("os.environ", {"REDIS_URL": "redis://bad:6379"}):
             with patch("redis.from_url", side_effect=ConnectionError("refused")):
                 create_rate_limit_gate("github")
 
-        assert mod._redis_unavailable_until > time.time()
-        assert mod._redis_unavailable_until <= time.time() + 61.0
+        assert rate_limit_queue_mod._redis_unavailable_until > time.time()
+        assert rate_limit_queue_mod._redis_unavailable_until <= time.time() + 61.0
 
     def test_skips_redis_during_cooldown(self):
-        import dev_health_ops.connectors.utils.rate_limit_queue as mod
-
-        mod._redis_unavailable_until = time.time() + 30.0
+        rate_limit_queue_mod._redis_unavailable_until = time.time() + 30.0
 
         with patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
             with patch("redis.from_url") as mock_from_url:

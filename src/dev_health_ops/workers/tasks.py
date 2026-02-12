@@ -2067,6 +2067,15 @@ def run_capacity_forecast_job(
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
 
 
+@celery_app.task(bind=True, queue="ingest")
+def run_ingest_consumer(self, max_iterations: int = 100):
+    """Process buffered ingest stream entries."""
+    from dev_health_ops.api.ingest.consumer import consume_streams
+
+    processed = consume_streams(max_iterations=max_iterations)
+    return {"processed": processed}
+
+
 @celery_app.task(bind=True)
 def health_check(self) -> dict:
     """Simple health check task to verify worker is running."""

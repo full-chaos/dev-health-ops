@@ -42,12 +42,13 @@ if TYPE_CHECKING:
 class ClickHouseStore:
     """Async storage implementation backed by ClickHouse (via clickhouse-connect)."""
 
-    def __init__(self, conn_string: str) -> None:
+    def __init__(self, conn_string: str, settings: dict | None = None) -> None:
         if not conn_string:
             raise ValueError("ClickHouse connection string is required")
         self.conn_string = conn_string
         self.client = None
         self._lock = asyncio.Lock()
+        self._settings = settings or {}
 
     async def __aenter__(self) -> "ClickHouseStore":
         import clickhouse_connect
@@ -161,7 +162,11 @@ class ClickHouseStore:
         matrix = [[row.get(col) for col in columns] for row in rows]
         async with self._lock:
             await asyncio.to_thread(
-                self.client.insert, table, matrix, column_names=columns
+                self.client.insert,
+                table,
+                matrix,
+                column_names=columns,
+                settings=self._settings,
             )
 
     async def _has_any(self, table: str, repo_id: uuid.UUID) -> bool:

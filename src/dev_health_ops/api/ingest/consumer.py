@@ -6,6 +6,7 @@ deserializes them, and persists to the configured storage backend.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -143,6 +144,16 @@ def consume_streams(
                     stream_key,
                     len(entries),
                 )
+                try:
+                    from .persist import persist_items
+
+                    asyncio.run(persist_items(entity_type, items))
+                except Exception:
+                    logger.exception(
+                        "Failed to persist %d items for %s",
+                        len(items),
+                        entity_type,
+                    )
                 total_processed += len(entries)
 
             entry_ids = [eid for eid, _ in entries]

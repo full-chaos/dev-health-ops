@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 
-import fakeredis
 import pytest
+
+fakeredis = pytest.importorskip("fakeredis")
 
 from dev_health_ops.api.ingest.consumer import (
     CONSUMER_GROUP,

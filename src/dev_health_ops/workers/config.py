@@ -33,6 +33,7 @@ task_queues = {
     "metrics": {},
     "sync": {},
     "webhooks": {},
+    "ingest": {},
 }
 
 # Beat schedule (periodic tasks)
@@ -67,6 +68,12 @@ beat_schedule = {
         "schedule": crontab(hour=4, minute=0, day_of_week="monday"),
         "kwargs": {"all_teams": True},
         "options": {"queue": "metrics"},
+    },
+    "process-ingest-streams": {
+        "task": "dev_health_ops.workers.tasks.run_ingest_consumer",
+        "schedule": 30.0,
+        "kwargs": {"max_iterations": 50},
+        "options": {"queue": "ingest"},
     },
 }
 

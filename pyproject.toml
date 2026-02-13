@@ -170,6 +170,7 @@ isort = "*"
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"
+fakeredis = "*"
 
 [tool.poetry.scripts]
 dev-health-ops = "dev_health_ops.cli:main"

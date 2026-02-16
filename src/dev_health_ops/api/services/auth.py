@@ -48,6 +48,7 @@ class AuthenticatedUser:
     is_superuser: bool = False
     username: str | None = None
     full_name: str | None = None
+    impersonated_by: str | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -79,6 +80,7 @@ class AuthService:
         is_superuser: bool = False,
         username: str | None = None,
         full_name: str | None = None,
+        impersonating_user_id: str | None = None,
         expires_delta: timedelta | None = None,
     ) -> str:
         """Create a JWT access token."""
@@ -101,6 +103,8 @@ class AuthService:
             payload["username"] = username
         if full_name:
             payload["full_name"] = full_name
+        if impersonating_user_id:
+            payload["impersonating_user_id"] = impersonating_user_id
 
         return jwt.encode(payload, self.secret_key, algorithm=JWT_ALGORITHM)
 
@@ -187,6 +191,7 @@ class AuthService:
             is_superuser=payload.get("is_superuser", False),
             username=payload.get("username"),
             full_name=payload.get("full_name"),
+            impersonated_by=payload.get("impersonating_user_id"),
         )
 
     def refresh_access_token(

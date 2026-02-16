@@ -84,6 +84,7 @@ from .services.work_unit_explain import explain_work_unit
 from .graphql.app import create_graphql_app
 from .webhooks import router as webhooks_router
 from .admin import router as admin_router
+from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router
 from .billing import router as billing_router
 from .ingest import router as ingest_router
@@ -322,6 +323,7 @@ graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
 app.include_router(webhooks_router)
 app.include_router(admin_router)
+app.include_router(impersonation_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(licensing_router)

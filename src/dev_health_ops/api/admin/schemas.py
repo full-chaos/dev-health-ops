@@ -597,3 +597,17 @@ class RetentionPolicyListResponse(BaseModel):
 class RetentionExecuteResponse(BaseModel):
     deleted_count: int
     error: Optional[str] = None
+
+
+class PlatformStatsResponse(BaseModel):
+    total_organizations: int
+    active_organizations: int
+    total_users: int
+    active_users: int
+    superuser_count: int
+    total_memberships: int
+    tier_distribution: dict[str, int]
+    total_sync_configs: int
+    active_sync_configs: int
+    recent_syncs_success: int
+    recent_syncs_failed: int

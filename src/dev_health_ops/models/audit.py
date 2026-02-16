@@ -84,6 +84,8 @@ class AuditAction(str, Enum):
     API_KEY_REVOKED = "api_key_revoked"
     IP_BLOCKED = "ip_blocked"
     IP_ALLOWED = "ip_allowed"
+    IMPERSONATION_START = "impersonation_start"
+    IMPERSONATION_STOP = "impersonation_stop"
 
     # Settings events
     SETTINGS_UPDATED = "settings_updated"

@@ -9,6 +9,7 @@ from typing import Any, Optional, Sequence
 from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.audit import (
     AuditAction,
     AuditLog,
@@ -56,6 +57,7 @@ class AuditService:
         resource_type: AuditResourceType | str,
         resource_id: str,
         user_id: Optional[uuid.UUID] = None,
+        user: AuthenticatedUser | None = None,
         description: Optional[str] = None,
         changes: Optional[dict[str, Any]] = None,
         ip_address: Optional[str] = None,
@@ -81,6 +83,8 @@ class AuditService:
             req_metadata["request_id"] = request_id
         if extra_metadata:
             req_metadata.update(extra_metadata)
+        if user and user.impersonated_by:
+            req_metadata["impersonated_by"] = user.impersonated_by
 
         audit_log = AuditLog(
             org_id=org_id,

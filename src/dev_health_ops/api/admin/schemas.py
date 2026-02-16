@@ -476,6 +476,36 @@ class AuditLogFilter(BaseModel):
     end_date: Optional[datetime] = None
 
 
+class ImpersonateRequest(BaseModel):
+    target_user_id: str
+
+
+class ImpersonatedUserInfo(BaseModel):
+    id: str
+    email: str
+    role: str
+    org_id: str
+
+
+class ImpersonateResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    impersonated_user: ImpersonatedUserInfo
+
+
+class ImpersonateStopResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class ImpersonateStatusResponse(BaseModel):
+    is_impersonating: bool
+    impersonated_user_id: Optional[str]
+    real_user_id: Optional[str]
+
+
 # ---- IP Allowlist schemas (Enterprise feature: ip_allowlist) ----
 
 

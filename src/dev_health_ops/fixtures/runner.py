@@ -136,11 +136,10 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         user_data = user_generator.generate_users()
 
         if isinstance(store, SQLAlchemyStore) and db_type == "postgres":
-            # Analytics sink IS postgres — reuse the existing store session
             async with store.session_factory() as session:
                 await _seed_auth_data(session, user_data)
-        else:
-            # Analytics sink is not postgres (e.g. ClickHouse) — connect
+        elif not isinstance(store, SQLAlchemyStore):
+            # Analytics sink is not SQLAlchemy (e.g. ClickHouse) — connect
             # to PostgreSQL separately via DATABASE_URI / POSTGRES_URI
             from dev_health_ops.db import get_postgres_uri
 
@@ -165,6 +164,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     "Set DATABASE_URI to seed auth data alongside analytics fixtures."
                 )
                 user_data = None
+        else:
+            user_data = None
 
         if user_data:
             logging.info(

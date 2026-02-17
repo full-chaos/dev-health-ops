@@ -87,6 +87,22 @@ def _build_repo_team_assignments(all_teams, repo_count: int, seed: int | None):
     return [repo_to_teams[idx] for idx in range(repo_count)]
 
 
+async def _seed_auth_data(session, user_data: dict) -> None:
+    """Merge users, organizations, memberships, and licenses into PostgreSQL."""
+    for org in user_data["organizations"]:
+        await session.merge(org)
+    await session.commit()
+    for user in user_data["users"]:
+        await session.merge(user)
+    await session.commit()
+    for membership in user_data["memberships"]:
+        await session.merge(membership)
+    await session.commit()
+    for org_license in user_data.get("licenses", []):
+        await session.merge(org_license)
+    await session.commit()
+
+
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.sink, ns.db_type)
@@ -114,24 +130,46 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             await store.insert_teams(all_teams)
             logging.info("Inserted %d synthetic teams.", len(all_teams))
 
+        # Seed users/orgs/memberships/licenses into PostgreSQL (auth layer).
+        # This must happen regardless of which analytics sink is used.
+        user_generator = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+        user_data = user_generator.generate_users()
+
         if isinstance(store, SQLAlchemyStore) and db_type == "postgres":
-            user_generator = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
-            user_data = user_generator.generate_users()
             async with store.session_factory() as session:
-                for org in user_data["organizations"]:
-                    await session.merge(org)
-                await session.commit()
-                for user in user_data["users"]:
-                    await session.merge(user)
-                await session.commit()
-                for membership in user_data["memberships"]:
-                    await session.merge(membership)
-                await session.commit()
-                for org_license in user_data.get("licenses", []):
-                    await session.merge(org_license)
-                await session.commit()
+                await _seed_auth_data(session, user_data)
+        elif not isinstance(store, SQLAlchemyStore):
+            # Analytics sink is not SQLAlchemy (e.g. ClickHouse) — connect
+            # to PostgreSQL separately via DATABASE_URI / POSTGRES_URI
+            from dev_health_ops.db import get_postgres_uri
+
+            _pg_uri = get_postgres_uri()
+            if _pg_uri:
+                from sqlalchemy.ext.asyncio import (
+                    create_async_engine,
+                    async_sessionmaker,
+                    AsyncSession,
+                )
+
+                _pg_engine = create_async_engine(_pg_uri, pool_pre_ping=True)
+                _pg_sf = async_sessionmaker(
+                    _pg_engine, class_=AsyncSession, expire_on_commit=False
+                )
+                async with _pg_sf() as session:
+                    await _seed_auth_data(session, user_data)
+                await _pg_engine.dispose()
+            else:
+                logging.warning(
+                    "No PostgreSQL URI configured — skipping user/org seeding. "
+                    "Set DATABASE_URI to seed auth data alongside analytics fixtures."
+                )
+                user_data = None
+        else:
+            user_data = None
+
+        if user_data:
             logging.info(
-                "Inserted %d users, %d orgs, %d memberships, %d licenses.",
+                "Seeded %d users, %d orgs, %d memberships, %d licenses into PostgreSQL.",
                 len(user_data["users"]),
                 len(user_data["organizations"]),
                 len(user_data["memberships"]),

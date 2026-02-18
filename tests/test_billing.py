@@ -10,7 +10,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dev_health_ops.api.billing.router import router
+from dev_health_ops.api.billing.router import SignatureVerificationError, router
 from dev_health_ops.api.billing.stripe_client import reset_price_tier_map
 
 
@@ -61,8 +61,6 @@ async def test_webhook_rejects_invalid_signature(client):
             return_value="whsec_test",
         ),
     ):
-        from stripe import SignatureVerificationError
-
         mock_client.return_value.construct_event.side_effect = (
             SignatureVerificationError("bad sig", "sig_header")
         )

@@ -7,7 +7,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from stripe import SignatureVerificationError
+
+try:
+    from stripe import SignatureVerificationError
+except ModuleNotFoundError:
+    class SignatureVerificationError(Exception):
+        """Fallback when Stripe SDK is not installed."""
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser

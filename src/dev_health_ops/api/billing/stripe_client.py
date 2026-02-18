@@ -9,8 +9,15 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
+from typing import Any
 
-from stripe import StripeClient
+try:
+    from stripe import StripeClient
+
+    _STRIPE_INSTALLED = True
+except ModuleNotFoundError:
+    StripeClient = Any  # type: ignore[misc,assignment]
+    _STRIPE_INSTALLED = False
 
 from dev_health_ops.licensing.types import LicenseTier
 
@@ -24,6 +31,8 @@ def get_stripe_client() -> StripeClient:
     Raises ``RuntimeError`` if ``STRIPE_SECRET_KEY`` is not set.
     """
     secret_key = os.getenv("STRIPE_SECRET_KEY")
+    if not _STRIPE_INSTALLED:
+        raise RuntimeError("Stripe SDK is not installed")
     if not secret_key:
         raise RuntimeError("STRIPE_SECRET_KEY environment variable is not set")
     return StripeClient(secret_key)

@@ -182,12 +182,52 @@ class TestCheckOrgFeatureAsync:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_returns_false_when_no_org_license(self):
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
+    async def test_returns_false_when_no_org_license_and_no_org(self):
+        # Both OrgLicense and Organization queries return None
+        mock_result_1 = MagicMock()
+        mock_result_1.scalar_one_or_none.return_value = None
+
+        mock_result_2 = MagicMock()
+        mock_result_2.scalar_one_or_none.return_value = None
 
         mock_session = AsyncMock()
-        mock_session.execute.return_value = mock_result
+        mock_session.execute.side_effect = [mock_result_1, mock_result_2]
+
+        org_id = str(uuid.uuid4())
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"session": mock_session, "org_id": org_id}
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_organization_tier_enterprise(self):
+        # No OrgLicense record, but Organization.tier = "enterprise"
+        mock_license_result = MagicMock()
+        mock_license_result.scalar_one_or_none.return_value = None
+
+        mock_org_result = MagicMock()
+        mock_org_result.scalar_one_or_none.return_value = "enterprise"
+
+        mock_session = AsyncMock()
+        mock_session.execute.side_effect = [mock_license_result, mock_org_result]
+
+        org_id = str(uuid.uuid4())
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"session": mock_session, "org_id": org_id}
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_organization_tier_community(self):
+        # No OrgLicense record, Organization.tier = "community"
+        mock_license_result = MagicMock()
+        mock_license_result.scalar_one_or_none.return_value = None
+
+        mock_org_result = MagicMock()
+        mock_org_result.scalar_one_or_none.return_value = "community"
+
+        mock_session = AsyncMock()
+        mock_session.execute.side_effect = [mock_license_result, mock_org_result]
 
         org_id = str(uuid.uuid4())
         result = await _check_org_feature_async(

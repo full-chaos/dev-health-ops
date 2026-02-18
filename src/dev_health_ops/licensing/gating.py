@@ -414,6 +414,7 @@ class LimitExceededError(Exception):
 async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool:
     # Reads ``session`` (AsyncSession) and ``org_id`` (str) from FastAPI
     # endpoint kwargs to check per-org OrgLicense tier from the database.
+    # Falls back to the Organization.tier column when no OrgLicense record exists.
     session = kwargs.get("session")
     org_id_str = kwargs.get("org_id")
     if not session or not org_id_str or org_id_str == "default":
@@ -422,19 +423,32 @@ async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool
         from sqlalchemy import select as sa_select
 
         from dev_health_ops.models.licensing import OrgLicense
+        from dev_health_ops.models.users import Organization
 
         org_uuid = uuid.UUID(org_id_str)
         result = await session.execute(
             sa_select(OrgLicense).where(OrgLicense.org_id == org_uuid)
         )
         org_license = result.scalar_one_or_none()
-        if not org_license:
+        if org_license:
+            org_tier = LicenseTier(org_license.tier)
+            if DEFAULT_FEATURES.get(org_tier, {}).get(feature, False):
+                return True
+            if org_license.features_override and org_license.features_override.get(
+                feature
+            ):
+                return True
             return False
-        org_tier = LicenseTier(org_license.tier)
-        if DEFAULT_FEATURES.get(org_tier, {}).get(feature, False):
-            return True
-        if org_license.features_override and org_license.features_override.get(feature):
-            return True
+
+        # No OrgLicense record — fall back to Organization.tier column
+        org_result = await session.execute(
+            sa_select(Organization.tier).where(Organization.id == org_uuid)
+        )
+        org_tier_str = org_result.scalar_one_or_none()
+        if org_tier_str:
+            org_tier = LicenseTier(org_tier_str)
+            if DEFAULT_FEATURES.get(org_tier, {}).get(feature, False):
+                return True
     except Exception:
         logger.debug("Per-org feature check failed for feature=%s", feature)
     return False

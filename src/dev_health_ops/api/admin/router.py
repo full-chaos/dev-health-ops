@@ -1346,6 +1346,7 @@ async def update_user(
             avatar_url=payload.avatar_url,
             is_active=payload.is_active,
             is_verified=payload.is_verified,
+            is_superuser=payload.is_superuser,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

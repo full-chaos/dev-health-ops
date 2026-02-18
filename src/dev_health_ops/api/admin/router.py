@@ -1926,7 +1926,6 @@ async def list_audit_logs(
 
 
 @router.get("/platform/audit-logs", response_model=AuditLogListResponse)
-@require_feature("audit_log", required_tier="enterprise")
 async def list_platform_audit_logs(
     session: AsyncSession = Depends(get_session),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),

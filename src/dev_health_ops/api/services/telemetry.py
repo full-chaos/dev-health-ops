@@ -106,7 +106,7 @@ class TelemetryService:
         try:
             return datetime.fromisoformat(normalized)
         except ValueError:
-            logger.warning("Invalid telemetry_last_report_at value for org %s", org_id)
+            logger.warning("Invalid telemetry_last_report_at value for org %r", org_id)
             return None
 
     async def set_opt_in(self, org_id: str, enabled: bool) -> None:
@@ -149,7 +149,7 @@ class TelemetryService:
     ) -> None:
         resolved_org_id = await self._resolve_org_uuid(org_id)
         if resolved_org_id is None:
-            logger.debug("Skipping telemetry audit record; org %s not found", org_id)
+            logger.debug("Skipping telemetry audit record; org %r not found", org_id)
             return
 
         entry = AuditLog(

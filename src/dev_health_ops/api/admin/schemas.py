@@ -477,6 +477,44 @@ class AuditLogFilter(BaseModel):
     end_date: Optional[datetime] = None
 
 
+class FeatureFlagResponse(BaseModel):
+    id: str
+    key: str
+    name: str
+    description: Optional[str]
+    category: str
+    min_tier: str
+    is_enabled: bool
+    is_beta: bool
+    is_deprecated: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FeatureOverrideCreate(BaseModel):
+    feature_id: str
+    is_enabled: bool = True
+    expires_at: Optional[datetime] = None
+    config: Optional[dict[str, Any]] = None
+    reason: Optional[str] = None
+
+
+class FeatureOverrideResponse(BaseModel):
+    id: str
+    org_id: str
+    feature_id: str
+    feature_key: str
+    is_enabled: bool
+    expires_at: Optional[datetime]
+    config: Optional[dict[str, Any]]
+    reason: Optional[str]
+    created_by: Optional[str]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ImpersonateRequest(BaseModel):
     target_user_id: str
 

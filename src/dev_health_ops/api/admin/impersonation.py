@@ -91,8 +91,8 @@ async def start_impersonation(
     current_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> ImpersonateResponse:
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superuser access required")
 
     target_user_uuid = _parse_uuid(payload.target_user_id, "target_user_id")
     current_org_uuid = _parse_uuid(current_user.org_id, "org_id")

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
-
 import pytest
 
 from dev_health_ops.api.graphql.loaders.base import CachedDataLoader, make_cache_key

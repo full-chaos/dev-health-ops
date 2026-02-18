@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from dev_health_ops.work_graph.investment.constants import MIN_EVIDENCE_CHARS
 from dev_health_ops.work_graph.investment.evidence import (
     _ensure_utc,

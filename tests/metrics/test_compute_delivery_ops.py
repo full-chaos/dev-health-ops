@@ -56,7 +56,7 @@ def test_compute_cicd_metrics_daily_groups_by_repo_and_filters_day():
         computed_at=datetime(2026, 2, 18, 13, 0, tzinfo=timezone.utc),
     )
 
-    assert [r.repo_id for r in records] == sorted([repo_a, repo_b], key=lambda x: str(x))
+    assert [r.repo_id for r in records] == sorted([repo_a, repo_b], key=str)
 
     rec_a = next(r for r in records if r.repo_id == repo_a)
     assert rec_a.pipelines_count == 2

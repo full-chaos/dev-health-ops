@@ -107,7 +107,8 @@ def test_restclient_delete_204_returns_empty_dict(monkeypatch):
     monkeypatch.setattr("dev_health_ops.connectors.utils.rest.requests.delete", delete)
 
     client = RESTClient("https://example.test")
-    assert client.delete("items/1") == {}
+    result = client.delete("items/1")
+    assert result == {}
 
 
 def test_restclient_delete_returns_json_dict(monkeypatch):
@@ -118,7 +119,8 @@ def test_restclient_delete_returns_json_dict(monkeypatch):
     )
 
     client = RESTClient("https://example.test")
-    assert client.delete("items/1") == {"deleted": True}
+    result = client.delete("items/1")
+    assert result == {"deleted": True}
 
 
 def test_restclient_delete_404_raises_api_exception(monkeypatch):

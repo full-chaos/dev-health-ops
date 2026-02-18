@@ -74,7 +74,7 @@ async def test_client(monkeypatch):
             email="admin@example.com",
             org_id=str(uuid.uuid4()),
             role="admin",
-            is_superuser=False,
+            is_superuser=True,
         )
     }
 
@@ -98,7 +98,7 @@ async def test_client(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_impersonation_admin_can_impersonate_member(test_client):
+async def test_start_impersonation_superuser_can_impersonate_member(test_client):
     client, session, auth_service, current = test_client
     admin_org_id = uuid.uuid4()
     target_id = uuid.uuid4()
@@ -108,6 +108,7 @@ async def test_start_impersonation_admin_can_impersonate_member(test_client):
         email="admin@example.com",
         org_id=str(admin_org_id),
         role="admin",
+        is_superuser=True,
     )
 
     session.execute.side_effect = [
@@ -132,13 +133,14 @@ async def test_start_impersonation_admin_can_impersonate_member(test_client):
 
 
 @pytest.mark.asyncio
-async def test_start_impersonation_non_admin_forbidden(test_client):
+async def test_start_impersonation_non_superuser_forbidden(test_client):
     client, session, _, current = test_client
     current["user"] = AuthenticatedUser(
         user_id=str(uuid.uuid4()),
-        email="member@example.com",
+        email="admin@example.com",
         org_id=str(uuid.uuid4()),
-        role="member",
+        role="admin",
+        is_superuser=False,
     )
 
     resp = await client.post(
@@ -147,16 +149,23 @@ async def test_start_impersonation_non_admin_forbidden(test_client):
     )
 
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Admin access required"
+    assert resp.json()["detail"] == "Superuser access required"
     session.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_start_impersonation_cannot_impersonate_superuser(test_client):
-    client, session, _, _ = test_client
+    client, session, _, current = test_client
     target_id = uuid.uuid4()
+    current["user"] = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="root@example.com",
+        org_id=current["user"].org_id,
+        role="admin",
+        is_superuser=True,
+    )
     session.execute.side_effect = [
-        _FakeResult(one=_user(target_id, "root@example.com", is_superuser=True)),
+        _FakeResult(one=_user(target_id, "other-root@example.com", is_superuser=True)),
     ]
 
     resp = await client.post(
@@ -170,7 +179,14 @@ async def test_start_impersonation_cannot_impersonate_superuser(test_client):
 
 @pytest.mark.asyncio
 async def test_start_impersonation_target_not_found(test_client):
-    client, session, _, _ = test_client
+    client, session, _, current = test_client
+    current["user"] = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="root@example.com",
+        org_id=current["user"].org_id,
+        role="admin",
+        is_superuser=True,
+    )
     session.execute.side_effect = [_FakeResult(one=None)]
 
     resp = await client.post(
@@ -183,30 +199,24 @@ async def test_start_impersonation_target_not_found(test_client):
 
 
 @pytest.mark.asyncio
-async def test_start_impersonation_cross_org_blocked_for_non_superuser(test_client):
+async def test_start_impersonation_non_superuser_blocked_entirely(test_client):
     client, session, _, current = test_client
-    admin_org_id = uuid.uuid4()
-    target_id = uuid.uuid4()
     current["user"] = AuthenticatedUser(
         user_id=str(uuid.uuid4()),
         email="admin@example.com",
-        org_id=str(admin_org_id),
+        org_id=str(uuid.uuid4()),
         role="admin",
         is_superuser=False,
     )
 
-    session.execute.side_effect = [
-        _FakeResult(one=_user(target_id, "member@example.com")),
-        _FakeResult(one=None),
-    ]
-
     resp = await client.post(
         "/api/v1/admin/impersonate",
-        json={"target_user_id": str(target_id)},
+        json={"target_user_id": str(uuid.uuid4())},
     )
 
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Cross-organization impersonation is not allowed"
+    assert resp.json()["detail"] == "Superuser access required"
+    session.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -340,6 +350,7 @@ async def test_impersonation_token_contains_required_claims(test_client):
         email="admin@example.com",
         org_id=str(org_id),
         role="owner",
+        is_superuser=True,
     )
 
     session.execute.side_effect = [

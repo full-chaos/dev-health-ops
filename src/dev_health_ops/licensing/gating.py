@@ -411,6 +411,35 @@ class LimitExceededError(Exception):
         super().__init__(f"Limit '{limit_name}' exceeded: {current}/{maximum}")
 
 
+async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool:
+    # Reads ``session`` (AsyncSession) and ``org_id`` (str) from FastAPI
+    # endpoint kwargs to check per-org OrgLicense tier from the database.
+    session = kwargs.get("session")
+    org_id_str = kwargs.get("org_id")
+    if not session or not org_id_str or org_id_str == "default":
+        return False
+    try:
+        from sqlalchemy import select as sa_select
+
+        from dev_health_ops.models.licensing import OrgLicense
+
+        org_uuid = uuid.UUID(org_id_str)
+        result = await session.execute(
+            sa_select(OrgLicense).where(OrgLicense.org_id == org_uuid)
+        )
+        org_license = result.scalar_one_or_none()
+        if not org_license:
+            return False
+        org_tier = LicenseTier(org_license.tier)
+        if DEFAULT_FEATURES.get(org_tier, {}).get(feature, False):
+            return True
+        if org_license.features_override and org_license.features_override.get(feature):
+            return True
+    except Exception:
+        logger.debug("Per-org feature check failed for feature=%s", feature)
+    return False
+
+
 def require_feature(
     feature: str,
     *,
@@ -441,7 +470,8 @@ def require_feature(
         @functools.wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             if not has_feature(feature):
-                _deny()
+                if not await _check_org_feature_async(feature, kwargs):
+                    _deny()
             return await func(*args, **kwargs)
 
         import inspect

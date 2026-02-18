@@ -19,6 +19,14 @@ from dev_health_ops.models.users import Membership, Organization, User
 
 logger = logging.getLogger(__name__)
 
+_CONTROL_CHARS = str.maketrans("", "", "\n\r\t\x00\x0b\x0c")
+
+
+def _sanitize(value: str) -> str:
+    """Strip control characters from user-provided values before logging."""
+    return str(value).translate(_CONTROL_CHARS)
+
+
 TELEMETRY_CATEGORY = "telemetry"
 TELEMETRY_OPT_IN_KEY = "telemetry_opt_in"
 TELEMETRY_LAST_REPORT_AT_KEY = "telemetry_last_report_at"
@@ -106,7 +114,9 @@ class TelemetryService:
         try:
             return datetime.fromisoformat(normalized)
         except ValueError:
-            logger.warning("Invalid telemetry_last_report_at value for org %r", org_id)
+            logger.warning(
+                "Invalid telemetry_last_report_at value for org %s", _sanitize(org_id)
+            )
             return None
 
     async def set_opt_in(self, org_id: str, enabled: bool) -> None:
@@ -149,7 +159,9 @@ class TelemetryService:
     ) -> None:
         resolved_org_id = await self._resolve_org_uuid(org_id)
         if resolved_org_id is None:
-            logger.debug("Skipping telemetry audit record; org %r not found", org_id)
+            logger.debug(
+                "Skipping telemetry audit record; org %s not found", _sanitize(org_id)
+            )
             return
 
         entry = AuditLog(

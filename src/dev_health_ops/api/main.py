@@ -89,6 +89,7 @@ from .auth import router as auth_router
 from .billing import router as billing_router
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
+from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.licensing import LicenseManager
 
 HOME_CACHE = create_cache(ttl_seconds=60)
@@ -327,6 +328,7 @@ app.include_router(impersonation_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(licensing_router)
+app.include_router(telemetry_router)
 app.include_router(ingest_router)
 
 

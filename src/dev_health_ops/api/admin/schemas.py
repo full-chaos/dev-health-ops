@@ -372,6 +372,7 @@ class UserUpdate(BaseModel):
     avatar_url: Optional[str] = None
     is_active: Optional[bool] = None
     is_verified: Optional[bool] = None
+    is_superuser: Optional[bool] = None
 
 
 class UserSetPassword(BaseModel):

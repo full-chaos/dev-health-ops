@@ -125,6 +125,7 @@ class UserService:
         avatar_url: str | None = None,
         is_active: bool | None = None,
         is_verified: bool | None = None,
+        is_superuser: bool | None = None,
     ) -> User | None:
         user = await self.get_by_id(user_id)
         if not user:
@@ -151,6 +152,8 @@ class UserService:
             user.is_active = is_active
         if is_verified is not None:
             user.is_verified = is_verified
+        if is_superuser is not None:
+            user.is_superuser = is_superuser
 
         user.updated_at = datetime.now(timezone.utc)
         await self.session.flush()

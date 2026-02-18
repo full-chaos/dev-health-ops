@@ -1,11 +1,12 @@
-"""Tests for JWT-only feature gating.
+"""Tests for feature gating.
 
-Validates that require_feature, has_feature, and get_entitlements all route
-through the global LicenseManager (JWT path) exclusively, with no DB fallback.
+Validates that require_feature routes through the global LicenseManager (JWT
+path) and falls back to per-org OrgLicense checks for async endpoints.
 """
 
 import inspect
-from unittest.mock import patch
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -14,6 +15,7 @@ from dev_health_ops.licensing.gating import (
     LicenseManager,
     LicenseAuditLogger,
     FeatureNotLicensedError,
+    _check_org_feature_async,
     has_feature,
     get_entitlements,
     require_feature,
@@ -140,3 +142,132 @@ class TestRequireFeatureJwtOnly:
             my_endpoint()
         assert exc_info.value.feature == "sso"
         assert exc_info.value.required_tier == "enterprise"
+
+
+class TestCheckOrgFeatureAsync:
+    @pytest.mark.asyncio
+    async def test_returns_true_for_enterprise_org(self):
+        org_license = MagicMock()
+        org_license.tier = "enterprise"
+        org_license.features_override = None
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = org_license
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        org_id = str(uuid.uuid4())
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"session": mock_session, "org_id": org_id}
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_for_community_org(self):
+        org_license = MagicMock()
+        org_license.tier = "community"
+        org_license.features_override = None
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = org_license
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        org_id = str(uuid.uuid4())
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"session": mock_session, "org_id": org_id}
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_org_license(self):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        org_id = str(uuid.uuid4())
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"session": mock_session, "org_id": org_id}
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_session(self):
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"org_id": str(uuid.uuid4())}
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_org_id_is_default(self):
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"session": AsyncMock(), "org_id": "default"}
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_respects_features_override(self):
+        org_license = MagicMock()
+        org_license.tier = "community"
+        org_license.features_override = {"ip_allowlist": True}
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = org_license
+
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        org_id = str(uuid.uuid4())
+        result = await _check_org_feature_async(
+            "ip_allowlist", {"session": mock_session, "org_id": org_id}
+        )
+        assert result is True
+
+
+class TestRequireFeatureOrgFallback:
+    @pytest.mark.asyncio
+    async def test_async_allows_when_org_has_enterprise_license(self):
+        LicenseManager.initialize()
+
+        @require_feature("ip_allowlist", raise_http=True)
+        async def my_endpoint(session=None, org_id=None):
+            return "allowed"
+
+        with patch(
+            "dev_health_ops.licensing.gating._check_org_feature_async",
+            return_value=True,
+        ):
+            result = await my_endpoint(session="mock", org_id="some-org")
+        assert result == "allowed"
+
+    @pytest.mark.asyncio
+    async def test_async_denies_when_org_has_no_license(self):
+        LicenseManager.initialize()
+
+        @require_feature("ip_allowlist", raise_http=True)
+        async def my_endpoint(session=None, org_id=None):
+            return "allowed"
+
+        with patch(
+            "dev_health_ops.licensing.gating._check_org_feature_async",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await my_endpoint(session="mock", org_id="some-org")
+            assert exc_info.value.status_code == 402
+            assert exc_info.value.detail["feature"] == "ip_allowlist"
+
+    def test_sync_does_not_check_org(self):
+        LicenseManager.initialize()
+
+        @require_feature("ip_allowlist", raise_http=True)
+        def my_endpoint(session=None, org_id=None):
+            return "allowed"
+
+        with pytest.raises(HTTPException) as exc_info:
+            my_endpoint(session="mock", org_id="some-org")
+        assert exc_info.value.status_code == 402

@@ -374,12 +374,37 @@ async def refresh_token(payload: TokenRefreshRequest) -> TokenRefreshResponse:
     if not refresh_payload:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
+    user_id = refresh_payload["sub"]
+    org_id = refresh_payload.get("org_id", "")
+
+    async with get_postgres_session() as db:
+        user_result = await db.execute(
+            select(User).where(User.id == uuid_mod.UUID(user_id))
+        )
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+
+        role = "member"
+        if org_id:
+            membership_result = await db.execute(
+                select(Membership).where(
+                    Membership.user_id == user.id,
+                    Membership.org_id == uuid_mod.UUID(org_id),
+                )
+            )
+            membership = membership_result.scalar_one_or_none()
+            if membership:
+                role = str(membership.role)
+
     new_access_token = auth_service.create_access_token(
-        user_id=refresh_payload["sub"],
-        email=refresh_payload.get("email", ""),
-        org_id=refresh_payload.get("org_id", ""),
-        role=refresh_payload.get("role", "member"),
-        is_superuser=refresh_payload.get("is_superuser", False),
+        user_id=user_id,
+        email=str(user.email),
+        org_id=org_id,
+        role=role,
+        is_superuser=bool(user.is_superuser),
+        username=str(user.username) if user.username else None,
+        full_name=str(user.full_name) if user.full_name else None,
     )
 
     return TokenRefreshResponse(

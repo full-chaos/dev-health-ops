@@ -58,7 +58,7 @@ jobs:
       - name: Run live-e2e tier
         env:
           DISABLE_DOTENV: "1"
-          DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
+          DATABASE_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           LIVE_E2E_FIXTURE_SEED: "20260219"

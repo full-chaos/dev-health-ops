@@ -14,11 +14,12 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 ## Read-first (in order)
 1. **Product intent and guardrails**: `docs/product/prd.md`, `docs/product/concepts.md`
 2. **Pipeline boundaries**: `docs/architecture/data-pipeline.md`
-3. **Investment model (canonical)**: `docs/user-guide/investment-view.md`, `docs/product/investment-taxonomy.md`
-4. **LLM contract (compute-time only)**: `docs/llm/categorization-contract.md`
-5. **Views and interpretation**: `docs/user-guide/views-index.md`, `docs/visualizations/patterns.md`
-6. **API surface**: `docs/api/graphql-overview.md`, `docs/api/view-mapping.md`
-7. **How to run it**: `docs/ops/cli-reference.md`
+3. **Dual database contract (semantic vs analytics)**: `docs/architecture/database-architecture.md`, `docs/ops/cli-reference.md`
+4. **Investment model (canonical)**: `docs/user-guide/investment-view.md`, `docs/product/investment-taxonomy.md`
+5. **LLM contract (compute-time only)**: `docs/llm/categorization-contract.md`
+6. **Views and interpretation**: `docs/user-guide/views-index.md`, `docs/visualizations/patterns.md`
+7. **API surface**: `docs/api/graphql-overview.md`, `docs/api/view-mapping.md`
+8. **How to run it**: `README.md` (test tiers), `ci/run_tests.sh`, `ci/run_live_backend_e2e.sh`
 
 ## Non-negotiables (summary)
 - **WorkUnits are evidence containers, not categories.**
@@ -108,8 +109,9 @@ Goal: understand **boundaries** (ingest → normalize → persist → metricize 
 
 Backend selection:
 
-* CLI `--db` flag or `DATABASE_URI`
-* Secondary sink via `SECONDARY_DATABASE_URI` when using `sink='both'`.
+* Semantic DB: CLI `--db` or `POSTGRES_URI` (legacy fallback: `DATABASE_URI`).
+* Analytics DB: CLI `--analytics-db` or `CLICKHOUSE_URI`.
+* Secondary sink: `SECONDARY_DATABASE_URI` when using `sink='both'`.
 
 ---
 
@@ -220,25 +222,25 @@ Explanation format:
 
 * Git data (local):
 
-  * `dev-hops sync git --provider local --db "$DATABASE_URI" --repo-path /path/to/repo`
+  * `CLICKHOUSE_URI=clickhouse://... dev-hops sync git --provider local --repo-path /path/to/repo`
 
 * Work items:
 
-  * `dev-hops sync work-items --provider <jira|github|gitlab|synthetic|all> -s "org/*" --db "$DATABASE_URI"`
+  * `CLICKHOUSE_URI=clickhouse://... dev-hops sync work-items --provider <jira|github|gitlab|synthetic|all> -s "org/*"`
 
 * Teams:
 
-  * `dev-hops sync teams --provider <config|jira|jira-ops|synthetic|ms-teams|github|gitlab> --db "$DATABASE_URI"`
+  * `POSTGRES_URI=postgresql+asyncpg://... dev-hops sync teams --provider <config|jira|jira-ops|synthetic|ms-teams|github|gitlab>`
 
 ### 6.2 Generate synthetic data
 
-* `dev-hops fixtures generate --db "$DATABASE_URI" --days 30`
+* `CLICKHOUSE_URI=clickhouse://... dev-hops fixtures generate --sink "$CLICKHOUSE_URI" --days 30`
 
 ### 6.3 Compute metrics
 
 * Daily rollups:
 
-  * `dev-hops metrics daily --db "$DATABASE_URI"`
+  * `CLICKHOUSE_URI=clickhouse://... dev-hops metrics daily`
 
 ---
 

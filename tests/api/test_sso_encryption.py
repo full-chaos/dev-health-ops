@@ -27,7 +27,7 @@ def test_encrypt_produces_unique_ciphertext():
 
 def test_decrypt_secret_helper_fallback():
     """The _decrypt_secret helper falls back to raw value for pre-encryption data."""
-    from dev_health_ops.api.auth.router import _decrypt_secret
+    from dev_health_ops.api.auth.sso.router import _decrypt_secret
 
     # Encrypted value round-trips
     encrypted = encrypt_value("real-secret")

@@ -35,6 +35,7 @@ from dev_health_ops.api.auth.schemas import (
     SSOProviderUpdate,
 )
 from dev_health_ops.api.services.audit import AuditService
+from dev_health_ops.api.services.settings import decrypt_value
 from dev_health_ops.api.services.sso import SSOProcessingError, SSOService
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import require_feature
@@ -43,6 +44,17 @@ from dev_health_ops.models.sso import SSOProvider
 from dev_health_ops.models.users import User, Membership
 
 logger = logging.getLogger(__name__)
+
+
+def _decrypt_secret(encrypted_secrets: dict, key: str, default: str = "") -> str:
+    """Decrypt a value from the encrypted_secrets dict, with fallback for legacy plaintext."""
+    raw = (encrypted_secrets or {}).get(key, default)
+    if not raw:
+        return default
+    try:
+        return decrypt_value(raw)
+    except Exception:
+        return raw  # fallback for pre-encryption values
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -1293,7 +1305,6 @@ async def initiate_oauth_auth(
             raise HTTPException(status_code=400, detail="OAuth provider is not active")
 
         oauth_config = provider.get_oauth_config()
-        secrets = provider.encrypted_secrets or {}
 
         # Use stored redirect_uri if available, otherwise generate from provider.id
         redirect_uri = oauth_config.get("redirect_uri")
@@ -1302,7 +1313,7 @@ async def initiate_oauth_auth(
 
         config = OAuthConfig(
             client_id=oauth_config["client_id"],
-            client_secret=secrets.get("client_secret", ""),
+            client_secret=_decrypt_secret(provider.encrypted_secrets, "client_secret"),
             redirect_uri=redirect_uri,
             scopes=oauth_config.get("scopes", []),
         )
@@ -1358,7 +1369,6 @@ async def oauth_callback(
             raise HTTPException(status_code=400, detail="OAuth provider is not active")
 
         oauth_config = provider.get_oauth_config()
-        secrets = provider.encrypted_secrets or {}
 
         redirect_uri = oauth_config.get("redirect_uri")
         if not redirect_uri:
@@ -1366,7 +1376,7 @@ async def oauth_callback(
 
         config = OAuthConfig(
             client_id=oauth_config["client_id"],
-            client_secret=secrets.get("client_secret", ""),
+            client_secret=_decrypt_secret(provider.encrypted_secrets, "client_secret"),
             redirect_uri=redirect_uri,
             scopes=oauth_config.get("scopes", []),
         )
@@ -1575,7 +1585,6 @@ async def initiate_oauth_by_type(
             )
 
         oauth_config = provider.get_oauth_config()
-        secrets = provider.encrypted_secrets or {}
 
         # Use stored redirect_uri if available, otherwise generate from provider.id
         final_redirect_uri = oauth_config.get("redirect_uri")
@@ -1584,7 +1593,7 @@ async def initiate_oauth_by_type(
 
         config = OAuthConfig(
             client_id=oauth_config["client_id"],
-            client_secret=secrets.get("client_secret", ""),
+            client_secret=_decrypt_secret(provider.encrypted_secrets, "client_secret"),
             redirect_uri=final_redirect_uri,
             scopes=oauth_config.get("scopes", []),
         )

@@ -105,6 +105,7 @@ class TokenRefreshResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+    user: "UserInfo | None" = None
 
 
 class TokenValidateRequest(BaseModel):
@@ -411,6 +412,13 @@ async def refresh_token(payload: TokenRefreshRequest) -> TokenRefreshResponse:
         access_token=new_access_token,
         token_type="bearer",
         expires_in=3600,
+        user=UserInfo(
+            id=user_id,
+            email=str(user.email),
+            org_id=org_id,
+            role=role,
+            is_superuser=bool(user.is_superuser),
+        ),
     )
 
 

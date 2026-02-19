@@ -21,16 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Skip if no tokens
-        run: |
-          if [ -z "$GITHUB_TOKEN" ] && [ -z "$GITLAB_TOKEN" ]; then
-            echo "No tokens found — skipping integration tests"
-            exit 0
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -48,9 +38,8 @@ jobs:
           GITLAB_URL: ${{ secrets.GITLAB_URL }}
           SKIP_INTEGRATION_TESTS: ${{ secrets.SKIP_INTEGRATION_TESTS }}
         run: |
-          # Run only the explicit integration tests
-          pytest tests/test_connectors_integration.py -q || true
-          pytest tests/test_private_repo_access.py -q || true
+          chmod +x ci/run_tests.sh
+          ./ci/run_tests.sh integration
 
       - name: Upload integration test logs
         if: always()

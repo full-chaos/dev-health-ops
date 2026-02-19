@@ -37,6 +37,29 @@ dev-hops --help
 
 _Note: In the documentation below, you can replace `dev-hops` with `dev-hops` if you have installed the package._
 
+## Test tiers (Phase 0 contract)
+
+Use the canonical tier commands locally:
+
+```bash
+make test:unit
+make test:integration
+make test:e2e
+make test:ci
+```
+
+All commands route to one entrypoint:
+
+```bash
+./ci/run_tests.sh <unit|integration|e2e|ci>
+```
+
+Notes:
+
+- `integration` is token-aware. It uses `GITHUB_TOKEN`/`GITLAB_TOKEN` (or `GH_TOKEN`/`GL_TOKEN`) when available, and skips cleanly when not provided.
+- `ci` always blocks on `flake8` + coverage-gated unit tests (`COVERAGE_THRESHOLD`, default `50`), then optional integration/e2e tiers.
+- `black`, `isort`, and `mypy` run as advisory checks by default. Set `STRICT_QUALITY_GATES=1` to make them blocking.
+
 ## Private Repository Support ✅
 
 **Both GitHub and GitLab connectors fully support private repositories!** When provided with tokens that have appropriate permissions, you can access and sync data from private repositories just as easily as public ones.

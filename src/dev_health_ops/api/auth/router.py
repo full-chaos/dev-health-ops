@@ -425,6 +425,8 @@ try:
     from .sso import sso_router
 
     router.include_router(sso_router)
-except ImportError:
-    pass
+except ImportError as exc:
+    # SSO module is optional (e.g., only available in enterprise deployments);
+    # if it's not installed, we skip registering SSO routes.
+    logger.info("SSO router not loaded because optional 'sso' module is missing: %s", exc)
 

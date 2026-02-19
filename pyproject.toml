@@ -69,6 +69,10 @@ dev = [
   "pytest-asyncio",
   "pytest-cov",
 ]
+enterprise-sso = [
+  "defusedxml>=0.7.0",
+  "signxml>=3.0.0",
+]
 
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"
@@ -171,6 +175,13 @@ pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"
 fakeredis = "*"
+
+[tool.poetry.group.enterprise-sso]
+optional = true
+
+[tool.poetry.group.enterprise-sso.dependencies]
+defusedxml = ">=0.7.0"
+signxml = ">=3.0.0"
 
 [tool.poetry.scripts]
 dev-health-ops = "dev_health_ops.cli:main"

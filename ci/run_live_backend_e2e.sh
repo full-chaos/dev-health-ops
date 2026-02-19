@@ -62,9 +62,9 @@ require_cmd curl
 CLICKHOUSE_URI_DEFAULT="clickhouse://ch:ch@127.0.0.1:8123/default"
 POSTGRES_URI_DEFAULT="postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/test_db"
 
-CLICKHOUSE_URI="${CLICKHOUSE_URI:-${DATABASE_URI:-${CLICKHOUSE_URI_DEFAULT}}}"
+CLICKHOUSE_URI="${CLICKHOUSE_URI:-${CLICKHOUSE_URI_DEFAULT}}"
 POSTGRES_URI="${POSTGRES_URI:-${POSTGRES_URI_DEFAULT}}"
-DATABASE_URI="${CLICKHOUSE_URI}"
+DATABASE_URI="${POSTGRES_URI}"
 
 API_HOST="${LIVE_E2E_API_HOST:-127.0.0.1}"
 API_PORT="${LIVE_E2E_API_PORT:-18080}"
@@ -177,7 +177,7 @@ echo "==> starting API at ${BASE_URL}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
   export POSTGRES_URI="${POSTGRES_URI}"
   exec_dev_hops \
-    --db "${CLICKHOUSE_URI}" \
+    --db "${POSTGRES_URI}" \
     --analytics-db "${CLICKHOUSE_URI}" \
     api --host "${API_HOST}" --port "${API_PORT}"
 ) >"${API_LOG_FILE}" 2>&1 &
@@ -210,7 +210,7 @@ import pathlib
 import sys
 
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
-assert payload.get("backend") == "clickhouse", payload
+assert payload.get("backend") == "postgres", payload
 assert payload.get("limits", {}).get("max_days") == 365, payload
 assert payload.get("limits", {}).get("max_repos") == 1000, payload
 supported = payload.get("supported_endpoints", [])

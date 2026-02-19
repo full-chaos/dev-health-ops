@@ -57,7 +57,8 @@ All commands route to one entrypoint:
 Notes:
 
 - `integration` is token-aware. It uses `GITHUB_TOKEN`/`GITLAB_TOKEN` (or `GH_TOKEN`/`GL_TOKEN`) when available, and skips cleanly when not provided.
-- `ci` is blocking by default: format checks, import checks, lint/type checks, and coverage-gated unit tests (`COVERAGE_THRESHOLD`, default `50`), then optional integration/e2e tiers.
+- `ci` always blocks on `flake8` + coverage-gated unit tests (`COVERAGE_THRESHOLD`, default `50`), then optional integration/e2e tiers.
+- `black`, `isort`, and `mypy` run as advisory checks by default. Set `STRICT_QUALITY_GATES=1` to make them blocking.
 
 ## Private Repository Support ✅
 

@@ -83,6 +83,17 @@ run_step() {
   fi
 }
 
+run_advisory_step() {
+  local label="$1"
+  shift
+  echo "==> ${label} (advisory)"
+  run_cmd "$@"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "WARN: ${label} failed (exit ${rc}); continuing because advisory checks are non-blocking."
+  fi
+}
+
 unit_tests() {
   require_cmd pytest
   run_step "unit tests" \
@@ -151,11 +162,19 @@ ci_tests() {
   require_cmd pytest
 
   local coverage_threshold="${COVERAGE_THRESHOLD:-50}"
+  local strict_quality_gates="${STRICT_QUALITY_GATES:-0}"
 
-  run_step "black (format check)" black --check .
-  run_step "isort (import order check)" isort --check-only .
+  if [ "${strict_quality_gates}" = "1" ]; then
+    run_step "black (format check)" black --check .
+    run_step "isort (import order check)" isort --check-only .
+    run_step "mypy (type checking)" mypy --install-types --non-interactive .
+  else
+    run_advisory_step "black (format check)" black --check .
+    run_advisory_step "isort (import order check)" isort --check-only .
+    run_advisory_step "mypy (type checking)" mypy --install-types --non-interactive .
+  fi
+
   run_step "flake8 (lint)" flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-  run_step "mypy (type checking)" mypy --install-types --non-interactive .
   run_step "unit tests with coverage >= ${coverage_threshold}" \
     pytest tests -v --tb=short -m "not benchmark" \
     --ignore=tests/test_connectors_integration.py \

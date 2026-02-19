@@ -23,6 +23,7 @@ from dev_health_ops.models.sso import (
     SSOProviderStatus,
 )
 from dev_health_ops.models.users import AuthProvider, Membership, User
+from dev_health_ops.api.services.settings import decrypt_value, encrypt_value
 from dev_health_ops.api.utils.logging import sanitize_for_log
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,12 @@ class SSOService:
 
         if is_default:
             await self._clear_default_provider(org_id, protocol_str)
+
+        if encrypted_secrets:
+            encrypted_secrets = {
+                k: encrypt_value(v) if isinstance(v, str) else v
+                for k, v in encrypted_secrets.items()
+            }
 
         provider = SSOProvider(
             org_id=org_id,
@@ -234,6 +241,10 @@ class SSOService:
         if config is not None:
             provider.config = config
         if encrypted_secrets is not None:
+            encrypted_secrets = {
+                k: encrypt_value(v) if isinstance(v, str) else v
+                for k, v in encrypted_secrets.items()
+            }
             provider.encrypted_secrets = encrypted_secrets
         if status is not None:
             provider.status = status
@@ -844,8 +855,12 @@ class SSOService:
             "client_id": config.get("client_id"),
         }
 
-        client_secret = secrets.get("client_secret")
-        if client_secret:
+        raw_secret = secrets.get("client_secret")
+        if raw_secret:
+            try:
+                client_secret = decrypt_value(raw_secret)
+            except Exception:
+                client_secret = raw_secret  # fallback for pre-encryption values
             payload["client_secret"] = client_secret
         if code_verifier:
             payload["code_verifier"] = code_verifier

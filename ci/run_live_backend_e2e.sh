@@ -95,14 +95,41 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+generate_auth_token() {
+  run_python - <<'PY'
+import hashlib, jwt, uuid
+from datetime import datetime, timedelta, timezone
+import os
+enc_key = os.getenv("SETTINGS_ENCRYPTION_KEY", "dev-key-not-for-prod")
+secret = hashlib.sha256(enc_key.encode()).hexdigest()
+payload = {
+    "sub": str(uuid.uuid4()),
+    "email": "e2e@test.local",
+    "org_id": str(uuid.uuid4()),
+    "role": "admin",
+    "is_superuser": False,
+    "type": "access",
+    "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    "iat": datetime.now(timezone.utc),
+    "jti": str(uuid.uuid4()),
+}
+print(jwt.encode(payload, secret, algorithm="HS256"))
+PY
+}
+
 fetch_json() {
   local path="$1"
   local out_file="$2"
   local expected_status="$3"
+  local extra_headers=()
+  if [ -n "${AUTH_TOKEN:-}" ]; then
+    extra_headers+=(-H "Authorization: Bearer ${AUTH_TOKEN}")
+  fi
   local status
   status="$(
     curl -sS -o "${out_file}" -w "%{http_code}" \
       -H "Accept: application/json" \
+      "${extra_headers[@]}" \
       "${BASE_URL}${path}"
   )"
   if [ "${status}" != "${expected_status}" ]; then
@@ -185,6 +212,9 @@ API_PID="$!"
 
 echo "==> waiting for readiness"
 wait_for_ready
+
+echo "==> generating auth token for authenticated endpoints"
+AUTH_TOKEN="$(generate_auth_token)"
 
 echo "==> validating /health"
 HEALTH_FILE="${TMP_DIR}/health.json"

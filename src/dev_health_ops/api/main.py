@@ -8,7 +8,7 @@ from typing import List, Literal, cast
 from urllib.parse import urlparse
 
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
@@ -86,6 +86,8 @@ from .webhooks import router as webhooks_router
 from .admin import router as admin_router
 from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router
+from .auth.router import get_current_user
+from .services.auth import AuthenticatedUser
 from .billing import router as billing_router
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
@@ -441,7 +443,7 @@ async def meta() -> MetaResponse | JSONResponse:
 
 
 @app.post("/api/v1/home", response_model=HomeResponse)
-async def home_post(payload: HomeRequest) -> HomeResponse:
+async def home_post(payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> HomeResponse:
     try:
         return await build_home_response(
             db_url=_analytics_db_url(),
@@ -461,6 +463,7 @@ async def home(
     compare_days: int = 14,
     start_date: date | None = None,
     end_date: date | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HomeResponse:
     try:
         filters = _filters_from_query(
@@ -479,7 +482,7 @@ async def home(
 
 
 @app.post("/api/v1/explain", response_model=ExplainResponse)
-async def explain_post(payload: ExplainRequest) -> ExplainResponse:
+async def explain_post(payload: ExplainRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> ExplainResponse:
     try:
         return await build_explain_response(
             db_url=_analytics_db_url(),
@@ -501,6 +504,7 @@ async def explain(
     compare_days: int = 14,
     start_date: date | None = None,
     end_date: date | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ExplainResponse:
     try:
         filters = _filters_from_query(
@@ -532,6 +536,7 @@ async def heatmap(
     x: str = "",
     y: str = "",
     limit: int = 50,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HeatmapResponse:
     _reject_comparative_params(request)
     try:
@@ -555,7 +560,7 @@ async def heatmap(
 
 
 @app.post("/api/v1/work-units", response_model=list[WorkUnitInvestment])
-async def work_units_post(payload: WorkUnitRequest) -> List[WorkUnitInvestment]:
+async def work_units_post(payload: WorkUnitRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> List[WorkUnitInvestment]:
     try:
         include_textual = (
             True if payload.include_textual is None else payload.include_textual
@@ -595,6 +600,7 @@ async def work_units(
     end_date: date | None = None,
     limit: int = 200,
     include_textual: bool = True,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[WorkUnitInvestment]:
     try:
         filters = _filters_from_query(
@@ -640,6 +646,7 @@ async def work_unit_explain_endpoint(
     end_date: date | None = None,
     llm_provider: str = "auto",
     llm_model: str | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> WorkUnitExplanation | StreamingResponse:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
@@ -712,6 +719,7 @@ async def flame(
     request: Request,
     entity_type: str,
     entity_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> FlameResponse:
     _reject_comparative_params(request)
     try:
@@ -739,6 +747,7 @@ async def flame_aggregated(
     work_scope_id: str = "",
     limit: int = 500,
     min_value: int = 1,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> AggregatedFlameResponse:
     """
     Get an aggregated flame graph for cycle breakdown or code hotspots.
@@ -804,6 +813,7 @@ async def quadrant(
     start_date: date | None = None,
     end_date: date | None = None,
     bucket: str = "week",
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> QuadrantResponse:
     _reject_comparative_params(request)
     try:
@@ -824,7 +834,7 @@ async def quadrant(
 
 
 @app.post("/api/v1/drilldown/prs", response_model=DrilldownResponse)
-async def drilldown_prs_post(payload: DrilldownRequest) -> DrilldownResponse:
+async def drilldown_prs_post(payload: DrilldownRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
@@ -852,6 +862,7 @@ async def drilldown_prs(
     range_days: int = 14,
     start_date: date | None = None,
     end_date: date | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
     try:
         filters = _filters_from_query(
@@ -877,7 +888,7 @@ async def drilldown_prs(
 
 
 @app.post("/api/v1/drilldown/issues", response_model=DrilldownResponse)
-async def drilldown_issues_post(payload: DrilldownRequest) -> DrilldownResponse:
+async def drilldown_issues_post(payload: DrilldownRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
@@ -905,6 +916,7 @@ async def drilldown_issues(
     range_days: int = 14,
     start_date: date | None = None,
     end_date: date | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
     try:
         filters = _filters_from_query(
@@ -934,6 +946,7 @@ async def people_search(
     request: Request,
     q: str = "",
     limit: int = 20,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[PersonSearchResult]:
     _reject_comparative_params(request)
     try:
@@ -952,6 +965,7 @@ async def people_summary(
     request: Request,
     range_days: int = 14,
     compare_days: int = 14,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonSummaryResponse:
     _reject_comparative_params(request)
     try:
@@ -974,6 +988,7 @@ async def people_metric(
     request: Request,
     range_days: int = 14,
     compare_days: int = 14,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonMetricResponse:
     _reject_comparative_params(request)
     try:
@@ -1006,6 +1021,7 @@ async def people_drilldown_prs(
     range_days: int = 14,
     limit: int = 50,
     cursor: datetime | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonDrilldownResponse:
     _reject_comparative_params(request)
     try:
@@ -1032,6 +1048,7 @@ async def people_drilldown_issues(
     range_days: int = 14,
     limit: int = 50,
     cursor: datetime | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> PersonDrilldownResponse:
     _reject_comparative_params(request)
     try:
@@ -1057,6 +1074,7 @@ async def opportunities(
     compare_days: int = 14,
     start_date: date | None = None,
     end_date: date | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> OpportunitiesResponse:
     try:
         filters = _filters_from_query(
@@ -1075,7 +1093,7 @@ async def opportunities(
 
 
 @app.post("/api/v1/opportunities", response_model=OpportunitiesResponse)
-async def opportunities_post(payload: HomeRequest) -> OpportunitiesResponse:
+async def opportunities_post(payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> OpportunitiesResponse:
     try:
         return await build_opportunities_response(
             db_url=_analytics_db_url(),
@@ -1094,6 +1112,7 @@ async def investment(
     range_days: int = 30,
     start_date: date | None = None,
     end_date: date | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> InvestmentResponse:
     try:
         filters = _filters_from_query(
@@ -1110,7 +1129,7 @@ async def investment(
 
 
 @app.post("/api/v1/investment", response_model=InvestmentResponse)
-async def investment_post(payload: HomeRequest) -> InvestmentResponse:
+async def investment_post(payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> InvestmentResponse:
     try:
         return await build_investment_response(
             db_url=_analytics_db_url(), filters=payload.filters
@@ -1131,6 +1150,7 @@ async def investment_sunburst(
     start_date: date | None = None,
     end_date: date | None = None,
     limit: int = 500,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[InvestmentSunburstSlice]:
     try:
         filters = _filters_from_query(
@@ -1154,6 +1174,7 @@ async def investment_explain(
     payload: InvestmentExplainRequest,
     llm_provider: str = "auto",
     force_refresh: bool = False,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ):
     try:
         logger.info("Generating streaming investment explanation")
@@ -1181,7 +1202,7 @@ async def investment_explain(
 
 
 @app.post("/api/v1/investment/flow", response_model=SankeyResponse)
-async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
+async def investment_flow(payload: InvestmentFlowRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> SankeyResponse:
     try:
         return await build_investment_flow_response(
             db_url=_analytics_db_url(),
@@ -1199,7 +1220,7 @@ async def investment_flow(payload: InvestmentFlowRequest) -> SankeyResponse:
 
 
 @app.post("/api/v1/investment/flow/repo-team", response_model=SankeyResponse)
-async def investment_flow_repo_team(payload: InvestmentFlowRequest) -> SankeyResponse:
+async def investment_flow_repo_team(payload: InvestmentFlowRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> SankeyResponse:
     try:
         return await build_investment_repo_team_flow_response(
             db_url=_analytics_db_url(),
@@ -1222,6 +1243,7 @@ async def sankey_get(
     end_date: date | None = None,
     window_start: date | None = None,
     window_end: date | None = None,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SankeyResponse:
     try:
         filters = _filters_from_query(
@@ -1243,7 +1265,7 @@ async def sankey_get(
 
 
 @app.post("/api/v1/sankey", response_model=SankeyResponse)
-async def sankey_post(payload: SankeyRequest) -> SankeyResponse:
+async def sankey_post(payload: SankeyRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> SankeyResponse:
     try:
         return await build_sankey_response(
             db_url=_analytics_db_url(),
@@ -1261,7 +1283,7 @@ async def sankey_post(payload: SankeyRequest) -> SankeyResponse:
 
 
 @app.get("/api/v1/filters/options", response_model=FilterOptionsResponse)
-async def filter_options() -> FilterOptionsResponse:
+async def filter_options(current_user: AuthenticatedUser = Depends(get_current_user)) -> FilterOptionsResponse:
     try:
         async with clickhouse_client(_analytics_db_url()) as sink:
             options = await fetch_filter_options(sink)

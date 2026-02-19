@@ -20,6 +20,7 @@ from dev_health_ops.models.users import User, Membership
 
 logger = logging.getLogger(__name__)
 
+
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
@@ -429,4 +430,3 @@ except ImportError as exc:
     # SSO module is optional (e.g., only available in enterprise deployments);
     # if it's not installed, we skip registering SSO routes.
     logger.info("SSO router not loaded because optional 'sso' module is missing: %s", exc)
-

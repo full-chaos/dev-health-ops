@@ -4,11 +4,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dev_health_ops.api.main import app
+from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.models.schemas import (
     QuadrantAxes,
     QuadrantAxis,
     QuadrantPoint,
     QuadrantResponse,
+)
+
+_FAKE_USER = AuthenticatedUser(
+    user_id="test-user", email="test@example.com",
+    org_id="test-org", role="admin",
 )
 
 
@@ -20,7 +27,9 @@ def _validate(model, payload):
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 def test_quadrant_endpoint_schema(client, monkeypatch):

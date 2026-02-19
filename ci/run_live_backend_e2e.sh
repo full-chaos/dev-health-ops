@@ -176,7 +176,10 @@ echo "==> starting API at ${BASE_URL}"
   export DATABASE_URI="${DATABASE_URI}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
   export POSTGRES_URI="${POSTGRES_URI}"
-  exec_dev_hops api --host "${API_HOST}" --port "${API_PORT}"
+  exec_dev_hops \
+    --db "${CLICKHOUSE_URI}" \
+    --analytics-db "${CLICKHOUSE_URI}" \
+    api --host "${API_HOST}" --port "${API_PORT}"
 ) >"${API_LOG_FILE}" 2>&1 &
 API_PID="$!"
 

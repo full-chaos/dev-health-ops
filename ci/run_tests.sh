@@ -14,6 +14,7 @@ Tiers:
   unit         Run unit test suite (excludes integration test files)
   integration  Run integration tests (skips when tokens are not set)
   e2e          Run end-to-end tests if present
+  live-e2e     Run live backend e2e harness against local services
   ci           Run blocking quality gates + coverage-gated unit tests + optional integration/e2e
 EOF
 }
@@ -154,6 +155,10 @@ e2e_tests() {
   fi
 }
 
+live_e2e_tests() {
+  run_step "live backend e2e" bash ./ci/run_live_backend_e2e.sh
+}
+
 ci_tests() {
   require_cmd black
   require_cmd isort
@@ -193,6 +198,9 @@ case "$TIER" in
     ;;
   e2e)
     e2e_tests
+    ;;
+  live-e2e)
+    live_e2e_tests
     ;;
   ci)
     ci_tests

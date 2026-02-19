@@ -37,7 +37,7 @@ dev-hops --help
 
 _Note: In the documentation below, you can replace `dev-hops` with `dev-hops` if you have installed the package._
 
-## Test tiers (Phase 0 contract)
+## Test tiers (Phase 2 contract)
 
 Use the canonical tier commands locally:
 
@@ -45,18 +45,21 @@ Use the canonical tier commands locally:
 make test:unit
 make test:integration
 make test:e2e
+make test:live-e2e
 make test:ci
 ```
 
 All commands route to one entrypoint:
 
 ```bash
-./ci/run_tests.sh <unit|integration|e2e|ci>
+./ci/run_tests.sh <unit|integration|e2e|live-e2e|ci>
 ```
 
 Notes:
 
 - `integration` is token-aware. It uses `GITHUB_TOKEN`/`GITLAB_TOKEN` (or `GH_TOKEN`/`GL_TOKEN`) when available, and skips cleanly when not provided.
+- `live-e2e` runs a live backend harness (`ci/run_live_backend_e2e.sh`): deterministic fixture generation into ClickHouse (`--with-metrics --with-work-graph`), API boot + readiness, then concrete assertions for `/health`, `/api/v1/meta`, and `/api/v1/home` via `curl` + Python checks.
+- `live-e2e` expects local services reachable via `CLICKHOUSE_URI` and `POSTGRES_URI` (defaults target localhost service containers).
 - `ci` always blocks on `flake8` + coverage-gated unit tests (`COVERAGE_THRESHOLD`, default `50`), then optional integration/e2e tiers.
 - `black`, `isort`, and `mypy` run as advisory checks by default. Set `STRICT_QUALITY_GATES=1` to make them blocking.
 

@@ -1,0 +1,31 @@
+name: Governance Gate
+
+on:
+  pull_request:
+    branches: [ "**" ]
+    types: [ opened, edited, synchronize, reopened, ready_for_review ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Enforce governance policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 ci/check_governance_gate.py \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA"

@@ -62,6 +62,9 @@ Notes:
 - `live-e2e` expects local services reachable via `CLICKHOUSE_URI` and `POSTGRES_URI` (defaults target localhost service containers).
 - `ci` always blocks on `flake8` + coverage-gated unit tests (`COVERAGE_THRESHOLD`, default `50`), then optional integration/e2e tiers.
 - `black`, `isort`, and `mypy` run as advisory checks by default. Set `STRICT_QUALITY_GATES=1` to make them blocking.
+- pytest tiers emit diagnostics by default (`-ra` summary + `--durations`, configurable via `PYTEST_DURATIONS`).
+- JUnit XML paths are stable: `test-results/junit/unit.xml`, `test-results/junit/integration.xml`, and `test-results/junit/e2e.xml` (overridable via `TEST_RESULTS_DIR`/`JUNIT_XML_*` env vars).
+- Set `PYTEST_SINGLE_RETRY=1` to enable a single retry for failing pytest tiers.
 
 ## Private Repository Support ✅
 

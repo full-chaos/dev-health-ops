@@ -16,6 +16,11 @@ Tiers:
   e2e          Run end-to-end tests if present
   live-e2e     Run live backend e2e harness against local services
   ci           Run blocking quality gates + coverage-gated unit tests + optional integration/e2e
+
+Environment:
+  PYTEST_SINGLE_RETRY=1  Retry a failing pytest tier once
+  PYTEST_DURATIONS=25    Emit the slowest N test durations in output
+  TEST_RESULTS_DIR=...   Base directory for junit outputs (default: ./test-results)
 EOF
 }
 
@@ -30,6 +35,18 @@ cd "$ROOT_DIR" || exit "$EXIT_FAILURE"
 
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 export PYTHONHASHSEED="${PYTHONHASHSEED:-0}"
+
+TEST_RESULTS_DIR="${TEST_RESULTS_DIR:-${ROOT_DIR}/test-results}"
+JUNIT_RESULTS_DIR="${JUNIT_RESULTS_DIR:-${TEST_RESULTS_DIR}/junit}"
+mkdir -p "${JUNIT_RESULTS_DIR}"
+
+JUNIT_XML_UNIT="${JUNIT_XML_UNIT:-${JUNIT_RESULTS_DIR}/unit.xml}"
+JUNIT_XML_INTEGRATION="${JUNIT_XML_INTEGRATION:-${JUNIT_RESULTS_DIR}/integration.xml}"
+JUNIT_XML_E2E="${JUNIT_XML_E2E:-${JUNIT_RESULTS_DIR}/e2e.xml}"
+
+PYTEST_SINGLE_RETRY="${PYTEST_SINGLE_RETRY:-0}"
+PYTEST_DURATIONS="${PYTEST_DURATIONS:-25}"
+PYTEST_DIAGNOSTIC_OPTS=(-ra "--durations=${PYTEST_DURATIONS}")
 
 HAS_POETRY=0
 HAS_UV=0
@@ -84,6 +101,38 @@ run_step() {
   fi
 }
 
+run_pytest_step() {
+  local label="$1"
+  local junit_xml="$2"
+  shift 2
+
+  local max_attempts=1
+  if [ "${PYTEST_SINGLE_RETRY}" = "1" ]; then
+    max_attempts=2
+  fi
+
+  local attempt=1
+  local rc=0
+  while [ "${attempt}" -le "${max_attempts}" ]; do
+    echo "==> ${label} (attempt ${attempt}/${max_attempts})"
+    run_cmd pytest "$@" "${PYTEST_DIAGNOSTIC_OPTS[@]}" --junitxml="${junit_xml}"
+    rc=$?
+    if [ "${rc}" -eq 0 ]; then
+      echo "JUnit XML: ${junit_xml}"
+      return 0
+    fi
+
+    if [ "${attempt}" -lt "${max_attempts}" ]; then
+      echo "WARN: ${label} failed (exit ${rc}); retrying once because PYTEST_SINGLE_RETRY=1."
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  echo "ERROR: ${label} failed (exit ${rc})"
+  echo "JUnit XML (may be partial): ${junit_xml}"
+  exit "$EXIT_FAILURE"
+}
+
 run_advisory_step() {
   local label="$1"
   shift
@@ -95,10 +144,17 @@ run_advisory_step() {
   fi
 }
 
+emit_junit_paths() {
+  echo "JUnit XML paths:"
+  echo "  unit: ${JUNIT_XML_UNIT}"
+  echo "  integration: ${JUNIT_XML_INTEGRATION}"
+  echo "  e2e: ${JUNIT_XML_E2E}"
+}
+
 unit_tests() {
   require_cmd pytest
-  run_step "unit tests" \
-    pytest tests -v --tb=short -m "not benchmark" \
+  run_pytest_step "unit tests" "${JUNIT_XML_UNIT}" \
+    tests -v --tb=short -m "not benchmark" \
     --ignore=tests/test_connectors_integration.py \
     --ignore=tests/test_private_repo_access.py
 }
@@ -128,8 +184,8 @@ integration_tests() {
     return 0
   fi
 
-  run_step "integration tests" \
-    pytest tests/test_connectors_integration.py tests/test_private_repo_access.py -q
+  run_pytest_step "integration tests" "${JUNIT_XML_INTEGRATION}" \
+    tests/test_connectors_integration.py tests/test_private_repo_access.py -q
 }
 
 e2e_tests() {
@@ -149,9 +205,9 @@ e2e_tests() {
   fi
 
   if [ -d "tests/e2e" ]; then
-    run_step "e2e tests" pytest tests/e2e -v --tb=short
+    run_pytest_step "e2e tests" "${JUNIT_XML_E2E}" tests/e2e -v --tb=short
   else
-    run_step "e2e tests" pytest tests -v --tb=short -k "e2e"
+    run_pytest_step "e2e tests" "${JUNIT_XML_E2E}" tests -v --tb=short -k "e2e"
   fi
 }
 
@@ -180,14 +236,16 @@ ci_tests() {
   fi
 
   run_step "flake8 (lint)" flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-  run_step "unit tests with coverage >= ${coverage_threshold}" \
-    pytest tests -v --tb=short -m "not benchmark" \
+  run_pytest_step "unit tests with coverage >= ${coverage_threshold}" "${JUNIT_XML_UNIT}" \
+    tests -v --tb=short -m "not benchmark" \
     --ignore=tests/test_connectors_integration.py \
     --ignore=tests/test_private_repo_access.py \
     --cov=. --cov-report=xml --cov-report=term-missing --cov-fail-under="${coverage_threshold}"
   integration_tests
   e2e_tests
 }
+
+emit_junit_paths
 
 case "$TIER" in
   unit)

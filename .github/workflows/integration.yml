@@ -39,12 +39,26 @@ jobs:
           SKIP_INTEGRATION_TESTS: ${{ secrets.SKIP_INTEGRATION_TESTS }}
         run: |
           chmod +x ci/run_tests.sh
-          ./ci/run_tests.sh integration
+          mkdir -p test-results/logs
+          set -o pipefail
+          ./ci/run_tests.sh integration 2>&1 | tee test-results/logs/integration.log
 
-      - name: Upload integration test logs
+      - name: Upload integration junit report
         if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: integration-junit
+          path: test-results/junit/integration.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload integration logs on failure
+        if: failure()
         uses: actions/upload-artifact@v6
         with:
           name: integration-logs
           path: |
+            test-results/logs/*.log
             **/pytest.log
+          if-no-files-found: ignore
+          retention-days: 14

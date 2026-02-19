@@ -65,11 +65,33 @@ jobs:
           COVERAGE_THRESHOLD: "50"
         run: |
           chmod +x ci/run_tests.sh
+          mkdir -p test-results/logs
+          set -o pipefail
           if [ "${{ matrix.python-version }}" = "3.11" ]; then
-            ./ci/run_tests.sh ci
+            ./ci/run_tests.sh ci 2>&1 | tee test-results/logs/ci-${{ matrix.python-version }}.log
           else
-            ./ci/run_tests.sh unit
+            ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}.log
           fi
+
+      - name: Upload junit test reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: junit-${{ matrix.python-version }}
+          path: test-results/junit/*.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload pytest logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pytest-logs-${{ matrix.python-version }}
+          path: |
+            test-results/logs/*.log
+            **/pytest.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload coverage reports
         if: matrix.python-version == '3.11'

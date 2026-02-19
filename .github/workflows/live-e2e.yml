@@ -1,0 +1,76 @@
+name: Live Backend E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        env:
+          CLICKHOUSE_DB: default
+          CLICKHOUSE_USER: ch
+          CLICKHOUSE_PASSWORD: ch
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run live-e2e tier
+        env:
+          DISABLE_DOTENV: "1"
+          DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
+          CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
+          POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          LIVE_E2E_FIXTURE_SEED: "20260219"
+          LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
+        run: |
+          chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh
+          ./ci/run_tests.sh live-e2e
+
+      - name: Upload live-e2e API logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: live-e2e-api-logs
+          path: live-e2e-api.log
+          if-no-files-found: ignore

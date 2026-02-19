@@ -30,6 +30,7 @@ nav:
   - CLI:
       - Overview: cli.md
       - Reference: ops/cli-reference.md
+      - Testing Governance: ops/testing-governance.md
   - Connectors:
       - Usage: CONNECTOR_USAGE.md
       - Private Repos: PRIVATE_REPO_TESTING.md

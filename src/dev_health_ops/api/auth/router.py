@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid as uuid_mod
 from typing import Annotated
 
@@ -16,7 +17,7 @@ from dev_health_ops.api.services.auth import (
 )
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.db import get_postgres_session
-from dev_health_ops.models.users import User, Membership
+from dev_health_ops.models.users import Membership, Organization, User
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class LoginResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int
+    needs_onboarding: bool = False
     user: "UserInfo"
 
 
@@ -69,9 +71,25 @@ class UserInfo(BaseModel):
     email: str
     username: str | None = None
     full_name: str | None = None
-    org_id: str
+    org_id: str | None = None
     role: str
     is_superuser: bool = False
+
+
+class OnboardRequest(BaseModel):
+    action: str
+    org_name: str | None = None
+    invite_code: str | None = None
+
+
+class OnboardResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    org_id: str
+    org_name: str
+    role: str
 
 
 class TokenRefreshRequest(BaseModel):
@@ -304,18 +322,21 @@ async def login(payload: LoginRequest) -> LoginResponse:
             )
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        if not user.is_active:
+        if user.is_active is not True:
             raise HTTPException(status_code=401, detail="Account is disabled")
 
         # Verify password
-        if not user.password_hash:
+        password_hash = (
+            str(user.password_hash) if user.password_hash is not None else ""
+        )
+        if not password_hash:
             raise HTTPException(
                 status_code=401,
                 detail="Password login not available for this account",
             )
 
         if not bcrypt.checkpw(
-            payload.password.encode("utf-8"), user.password_hash.encode("utf-8")
+            payload.password.encode("utf-8"), password_hash.encode("utf-8")
         ):
             logger.warning(
                 "Invalid password for user: %s", sanitize_for_log(payload.email)
@@ -332,26 +353,32 @@ async def login(payload: LoginRequest) -> LoginResponse:
         membership_result = await db.execute(membership_stmt)
         membership = membership_result.scalar_one_or_none()
 
-        if not membership:
-            raise HTTPException(
-                status_code=401,
-                detail="User is not a member of any organization",
+        needs_onboarding = membership is None
+
+        if payload.org_id and not membership:
+            any_membership_result = await db.execute(
+                select(Membership.id).where(Membership.user_id == user.id)
             )
+            if any_membership_result.first() is not None:
+                raise HTTPException(
+                    status_code=401,
+                    detail="User is not a member of the selected organization",
+                )
 
         # Update last login
-        user.last_login_at = datetime.now(timezone.utc)
+        setattr(user, "last_login_at", datetime.now(timezone.utc))
         await db.commit()
 
         # Create tokens
         auth_service = get_auth_service()
         token_pair = auth_service.create_token_pair(
             user_id=str(user.id),
-            email=user.email,
-            org_id=str(membership.org_id),
-            role=membership.role,
-            is_superuser=user.is_superuser,
-            username=user.username,
-            full_name=user.full_name,
+            email=str(user.email),
+            org_id=str(membership.org_id) if membership else "",
+            role=str(membership.role) if membership else "member",
+            is_superuser=bool(user.is_superuser),
+            username=str(user.username) if user.username is not None else None,
+            full_name=str(user.full_name) if user.full_name is not None else None,
         )
 
         return LoginResponse(
@@ -359,15 +386,102 @@ async def login(payload: LoginRequest) -> LoginResponse:
             refresh_token=token_pair.refresh_token,
             token_type=token_pair.token_type,
             expires_in=token_pair.expires_in,
+            needs_onboarding=needs_onboarding,
             user=UserInfo(
                 id=str(user.id),
-                email=user.email,
-                username=user.username,
-                full_name=user.full_name,
-                org_id=str(membership.org_id),
-                role=membership.role,
-                is_superuser=user.is_superuser,
+                email=str(user.email),
+                username=str(user.username) if user.username is not None else None,
+                full_name=str(user.full_name) if user.full_name is not None else None,
+                org_id=str(membership.org_id) if membership else None,
+                role=str(membership.role) if membership else "member",
+                is_superuser=bool(user.is_superuser),
             ),
+        )
+
+
+def _slugify_org_name(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug[:50] or "my-organization"
+
+
+@router.post("/onboard", response_model=OnboardResponse)
+async def onboard(
+    payload: OnboardRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> OnboardResponse:
+    from datetime import datetime, timezone
+
+    async with get_postgres_session() as db:
+        try:
+            user_uuid = uuid_mod.UUID(user.user_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=401, detail="Invalid user identity"
+            ) from exc
+
+        user_result = await db.execute(select(User).where(User.id == user_uuid))
+        db_user = user_result.scalar_one_or_none()
+        if not db_user:
+            raise HTTPException(status_code=401, detail="User not found")
+
+        membership_result = await db.execute(
+            select(Membership.id).where(Membership.user_id == db_user.id)
+        )
+        if membership_result.first() is not None:
+            raise HTTPException(status_code=400, detail="Already onboarded")
+
+        if payload.action == "join_org":
+            raise HTTPException(
+                status_code=501,
+                detail="Invite-based joining not yet implemented",
+            )
+
+        if payload.action != "create_org":
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid action. Use 'create_org' or 'join_org'",
+            )
+
+        org_name = payload.org_name or "My Organization"
+        org_slug = f"{_slugify_org_name(org_name)}-{str(db_user.id)[:8]}"
+
+        org = Organization(
+            slug=org_slug,
+            name=org_name,
+            tier="community",
+            is_active=True,
+        )
+        db.add(org)
+        await db.flush()
+
+        membership = Membership(
+            user_id=db_user.id,
+            org_id=org.id,
+            role="owner",
+            joined_at=datetime.now(timezone.utc),
+        )
+        db.add(membership)
+        await db.commit()
+
+        auth_service = get_auth_service()
+        token_pair = auth_service.create_token_pair(
+            user_id=str(db_user.id),
+            email=str(db_user.email),
+            org_id=str(org.id),
+            role="owner",
+            is_superuser=bool(db_user.is_superuser),
+            username=str(db_user.username) if db_user.username is not None else None,
+            full_name=str(db_user.full_name) if db_user.full_name is not None else None,
+        )
+
+        return OnboardResponse(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+            token_type=token_pair.token_type,
+            expires_in=token_pair.expires_in,
+            org_id=str(org.id),
+            org_name=str(org.name),
+            role="owner",
         )
 
 

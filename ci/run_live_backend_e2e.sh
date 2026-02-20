@@ -111,22 +111,25 @@ if pg_uri:
     from dev_health_ops.models.git import Base
     import dev_health_ops.models.users  # register models
     Base.metadata.create_all(engine, checkfirst=True)
+    now = datetime.now(timezone.utc).isoformat()
     with engine.begin() as conn:
         conn.execute(text(
-            "INSERT INTO organizations (id, slug, name, tier, is_active)"
-            " VALUES (:id, :slug, :name, :tier, true)"
+            "INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)"
+            " VALUES (:id, :slug, :name, :settings, :tier, true, :now, :now)"
             " ON CONFLICT (id) DO NOTHING"
-        ), {"id": str(org_id), "slug": "e2e-org", "name": "E2E Org", "tier": "enterprise"})
+        ), {"id": str(org_id), "slug": "e2e-org", "name": "E2E Org",
+            "settings": "{}", "tier": "enterprise", "now": now})
         conn.execute(text(
-            "INSERT INTO users (id, email, is_active, is_superuser, auth_provider)"
-            " VALUES (:id, :email, true, false, 'local')"
+            "INSERT INTO users (id, email, is_active, is_verified, is_superuser, auth_provider, created_at, updated_at)"
+            " VALUES (:id, :email, true, false, false, 'local', :now, :now)"
             " ON CONFLICT (id) DO NOTHING"
-        ), {"id": str(user_id), "email": "e2e@test.local"})
+        ), {"id": str(user_id), "email": "e2e@test.local", "now": now})
         conn.execute(text(
-            "INSERT INTO memberships (user_id, org_id, role)"
-            " VALUES (:uid, :oid, :role)"
+            "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"
+            " VALUES (:mid, :uid, :oid, :role, :now, :now)"
             " ON CONFLICT DO NOTHING"
-        ), {"uid": str(user_id), "oid": str(org_id), "role": "admin"})
+        ), {"mid": str(uuid.uuid4()), "uid": str(user_id), "oid": str(org_id),
+            "role": "admin", "now": now})
     engine.dispose()
 
 enc_key = os.getenv("SETTINGS_ENCRYPTION_KEY", "dev-key-not-for-prod")

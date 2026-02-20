@@ -97,15 +97,47 @@ trap cleanup EXIT INT TERM
 
 generate_auth_token() {
   run_python - <<'PY'
-import hashlib, jwt, uuid
+import hashlib, jwt, uuid, os
 from datetime import datetime, timedelta, timezone
-import os
+
+user_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+org_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
+
+pg_uri = os.getenv("POSTGRES_URI", os.getenv("DATABASE_URI", ""))
+if pg_uri:
+    sync_uri = pg_uri.replace("+asyncpg", "", 1)
+    from sqlalchemy import create_engine, text
+    engine = create_engine(sync_uri)
+    from dev_health_ops.models.git import Base
+    import dev_health_ops.models.users  # register models
+    Base.metadata.create_all(engine, checkfirst=True)
+    now = datetime.now(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)"
+            " VALUES (:id, :slug, :name, :settings, :tier, true, :now, :now)"
+            " ON CONFLICT (id) DO NOTHING"
+        ), {"id": str(org_id), "slug": "e2e-org", "name": "E2E Org",
+            "settings": "{}", "tier": "enterprise", "now": now})
+        conn.execute(text(
+            "INSERT INTO users (id, email, is_active, is_verified, is_superuser, auth_provider, created_at, updated_at)"
+            " VALUES (:id, :email, true, false, false, 'local', :now, :now)"
+            " ON CONFLICT (id) DO NOTHING"
+        ), {"id": str(user_id), "email": "e2e@test.local", "now": now})
+        conn.execute(text(
+            "INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at)"
+            " VALUES (:mid, :uid, :oid, :role, :now, :now)"
+            " ON CONFLICT DO NOTHING"
+        ), {"mid": str(uuid.uuid4()), "uid": str(user_id), "oid": str(org_id),
+            "role": "admin", "now": now})
+    engine.dispose()
+
 enc_key = os.getenv("SETTINGS_ENCRYPTION_KEY", "dev-key-not-for-prod")
 secret = hashlib.sha256(enc_key.encode()).hexdigest()
 payload = {
-    "sub": str(uuid.uuid4()),
+    "sub": str(user_id),
     "email": "e2e@test.local",
-    "org_id": str(uuid.uuid4()),
+    "org_id": str(org_id),
     "role": "admin",
     "is_superuser": False,
     "type": "access",

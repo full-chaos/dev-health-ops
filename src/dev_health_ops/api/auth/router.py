@@ -117,7 +117,7 @@ class MeResponse(BaseModel):
 async def get_current_user(
     authorization: Annotated[str | None, Header()] = None,
 ) -> AuthenticatedUser:
-    """FastAPI dependency to get authenticated user from JWT.
+    """FastAPI dependency: validates JWT then verifies user exists + is_active in DB.
 
     Raises HTTPException 401 if not authenticated.
     """
@@ -146,15 +146,47 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Verify user still exists and is active in the database
+    try:
+        user_uuid = uuid_mod.UUID(user.user_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid user identity",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    async with get_postgres_session() as db:
+        result = await db.execute(
+            select(User.id, User.is_active).where(User.id == user_uuid)
+        )
+        db_user = result.one_or_none()
+
+    if not db_user:
+        logger.warning("JWT valid but user not found in DB: %s", user.user_id)
+        raise HTTPException(
+            status_code=401,
+            detail="User no longer exists",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not db_user.is_active:
+        logger.warning("JWT valid but user is deactivated: %s", user.user_id)
+        raise HTTPException(
+            status_code=401,
+            detail="Account is disabled",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 
 async def get_current_user_optional(
     authorization: Annotated[str | None, Header()] = None,
 ) -> AuthenticatedUser | None:
-    """FastAPI dependency to optionally get authenticated user.
+    """Optionally get authenticated user. Returns None if not authenticated.
 
-    Returns None if not authenticated (does not raise).
+    When a token IS present, verifies user exists + is_active in DB.
     """
     if not authorization:
         return None
@@ -164,7 +196,25 @@ async def get_current_user_optional(
         return None
 
     auth_service = get_auth_service()
-    return auth_service.get_authenticated_user(token)
+    user = auth_service.get_authenticated_user(token)
+    if not user:
+        return None
+
+    try:
+        user_uuid = uuid_mod.UUID(user.user_id)
+    except ValueError:
+        return None
+
+    async with get_postgres_session() as db:
+        result = await db.execute(
+            select(User.id, User.is_active).where(User.id == user_uuid)
+        )
+        db_user = result.one_or_none()
+
+    if not db_user or not db_user.is_active:
+        return None
+
+    return user
 
 
 # --- Endpoints ---
@@ -407,6 +457,20 @@ async def validate_token(payload: TokenValidateRequest) -> TokenValidateResponse
     if not user:
         return TokenValidateResponse(valid=False)
 
+    try:
+        user_uuid = uuid_mod.UUID(user.user_id)
+    except ValueError:
+        return TokenValidateResponse(valid=False)
+
+    async with get_postgres_session() as db:
+        result = await db.execute(
+            select(User.id, User.is_active).where(User.id == user_uuid)
+        )
+        db_user = result.one_or_none()
+
+    if not db_user or not db_user.is_active:
+        return TokenValidateResponse(valid=False)
+
     return TokenValidateResponse(
         valid=True,
         user_id=user.user_id,
@@ -429,4 +493,6 @@ try:
 except ImportError as exc:
     # SSO module is optional (e.g., only available in enterprise deployments);
     # if it's not installed, we skip registering SSO routes.
-    logger.info("SSO router not loaded because optional 'sso' module is missing: %s", exc)
+    logger.info(
+        "SSO router not loaded because optional 'sso' module is missing: %s", exc
+    )

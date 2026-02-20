@@ -97,15 +97,44 @@ trap cleanup EXIT INT TERM
 
 generate_auth_token() {
   run_python - <<'PY'
-import hashlib, jwt, uuid
+import hashlib, jwt, uuid, os
 from datetime import datetime, timedelta, timezone
-import os
+
+user_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+org_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
+
+pg_uri = os.getenv("POSTGRES_URI", os.getenv("DATABASE_URI", ""))
+if pg_uri:
+    sync_uri = pg_uri.replace("+asyncpg", "", 1)
+    from sqlalchemy import create_engine, text
+    engine = create_engine(sync_uri)
+    from dev_health_ops.models.git import Base
+    import dev_health_ops.models.users  # register models
+    Base.metadata.create_all(engine, checkfirst=True)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO organizations (id, slug, name, tier, is_active)"
+            " VALUES (:id, :slug, :name, :tier, true)"
+            " ON CONFLICT (id) DO NOTHING"
+        ), {"id": str(org_id), "slug": "e2e-org", "name": "E2E Org", "tier": "enterprise"})
+        conn.execute(text(
+            "INSERT INTO users (id, email, is_active, is_superuser, auth_provider)"
+            " VALUES (:id, :email, true, false, 'local')"
+            " ON CONFLICT (id) DO NOTHING"
+        ), {"id": str(user_id), "email": "e2e@test.local"})
+        conn.execute(text(
+            "INSERT INTO memberships (user_id, org_id, role)"
+            " VALUES (:uid, :oid, :role)"
+            " ON CONFLICT DO NOTHING"
+        ), {"uid": str(user_id), "oid": str(org_id), "role": "admin"})
+    engine.dispose()
+
 enc_key = os.getenv("SETTINGS_ENCRYPTION_KEY", "dev-key-not-for-prod")
 secret = hashlib.sha256(enc_key.encode()).hexdigest()
 payload = {
-    "sub": str(uuid.uuid4()),
+    "sub": str(user_id),
     "email": "e2e@test.local",
-    "org_id": str(uuid.uuid4()),
+    "org_id": str(org_id),
     "role": "admin",
     "is_superuser": False,
     "type": "access",

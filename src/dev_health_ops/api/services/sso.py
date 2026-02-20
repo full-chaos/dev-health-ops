@@ -588,7 +588,7 @@ class SSOService:
         name: str | None,
         provider_id: uuid.UUID,
         external_id: str | None = None,
-    ) -> tuple[User, Membership, SSOProvider]:
+    ) -> tuple[User, Membership | None, SSOProvider]:
         provider = await self.get_provider(org_id, provider_id)
         if not provider:
             raise SSOProcessingError("SSO provider not found")
@@ -617,18 +617,10 @@ class SSOService:
             )
             self.session.add(user)
             await self.session.flush()
-
-            membership = Membership(
-                user_id=user.id,
-                org_id=provider.org_id,
-                role=provider.default_role,
-                joined_at=datetime.now(timezone.utc),
-            )
-            self.session.add(membership)
-            await self.session.flush()
+            membership = None
 
             logger.info(
-                "Auto-provisioned user %s via %s provider %s",
+                "Auto-provisioned user %s via %s provider %s; onboarding required",
                 sanitize_for_log(email),
                 provider.protocol,
                 provider.name,
@@ -646,20 +638,13 @@ class SSOService:
             )
             membership_result = await self.session.execute(membership_stmt)
             membership = membership_result.scalar_one_or_none()
-
             if not membership:
-                if not provider.auto_provision_users:
-                    raise SSOProcessingError(
-                        "User is not a member of this organization"
-                    )
-                membership = Membership(
-                    user_id=user.id,
-                    org_id=provider.org_id,
-                    role=provider.default_role,
-                    joined_at=datetime.now(timezone.utc),
+                logger.info(
+                    "User %s authenticated via %s provider %s without membership; onboarding required",
+                    sanitize_for_log(email),
+                    provider.protocol,
+                    provider.name,
                 )
-                self.session.add(membership)
-                await self.session.flush()
 
         user.last_login_at = datetime.now(timezone.utc)
         return user, membership, provider

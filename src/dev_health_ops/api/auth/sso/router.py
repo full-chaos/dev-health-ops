@@ -3,6 +3,7 @@
 Extracted from the main auth router. All endpoints are gated behind
 the ``sso`` enterprise feature via ``@require_feature``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -520,11 +521,13 @@ async def saml_acs_callback(
         await db.commit()
 
         auth_service = get_auth_service()
+        org_id = str(membership.org_id) if membership else ""
+        role = str(membership.role) if membership else "member"
         token_pair = auth_service.create_token_pair(
             user_id=str(user.id),
             email=str(user.email),
-            org_id=str(membership.org_id),
-            role=str(membership.role),
+            org_id=org_id,
+            role=role,
             is_superuser=bool(user.is_superuser),
             username=str(user.username) if user.username else None,
             full_name=str(user.full_name) if user.full_name else None,
@@ -537,8 +540,8 @@ async def saml_acs_callback(
             expires_in=token_pair.expires_in,
             user_id=str(user.id),
             email=str(user.email),
-            org_id=str(membership.org_id),
-            role=str(membership.role),
+            org_id=org_id,
+            role=role,
         )
 
 
@@ -705,11 +708,13 @@ async def oidc_callback(
         await db.commit()
 
         auth_service = get_auth_service()
+        org_id = str(membership.org_id) if membership else ""
+        role = str(membership.role) if membership else "member"
         token_pair = auth_service.create_token_pair(
             user_id=str(user.id),
             email=str(user.email),
-            org_id=str(membership.org_id),
-            role=str(membership.role),
+            org_id=org_id,
+            role=role,
             is_superuser=bool(user.is_superuser),
             username=str(user.username) if user.username else None,
             full_name=str(user.full_name) if user.full_name else None,
@@ -722,15 +727,17 @@ async def oidc_callback(
             expires_in=token_pair.expires_in,
             user_id=str(user.id),
             email=str(user.email),
-            org_id=str(membership.org_id),
-            role=str(membership.role),
+            org_id=org_id,
+            role=role,
         )
 
 
 # --- OAuth Flow Endpoints ---
 
 
-@sso_router.post("/oauth/providers", response_model=SSOProviderResponse, status_code=201)
+@sso_router.post(
+    "/oauth/providers", response_model=SSOProviderResponse, status_code=201
+)
 @require_feature("sso", required_tier="enterprise")
 async def create_oauth_provider(
     payload: OAuthProviderCreate,
@@ -1058,17 +1065,8 @@ async def oauth_callback(
             db.add(user)
             await db.flush()
 
-            membership = Membership(
-                user_id=user.id,
-                org_id=provider.org_id,
-                role=provider.default_role,
-                joined_at=datetime.now(timezone.utc),
-            )
-            db.add(membership)
-            await db.flush()
-
             logger.info(
-                "Auto-provisioned user %s via OAuth provider %s",
+                "Auto-provisioned user %s via OAuth provider %s; onboarding required",
                 sanitize_for_log(user_info.email),
                 provider.name,
             )
@@ -1092,20 +1090,11 @@ async def oauth_callback(
         membership = membership_result.scalar_one_or_none()
 
         if not membership:
-            if not provider.auto_provision_users:
-                raise HTTPException(
-                    status_code=403,
-                    detail="User is not a member of this organization",
-                )
-
-            membership = Membership(
-                user_id=user.id,
-                org_id=provider.org_id,
-                role=provider.default_role,
-                joined_at=datetime.now(timezone.utc),
+            logger.info(
+                "OAuth user %s authenticated without membership in org %s; onboarding required",
+                sanitize_for_log(user_info.email),
+                provider.org_id,
             )
-            db.add(membership)
-            await db.flush()
 
         sso_service = SSOService(db)
         await sso_service.record_login(
@@ -1116,11 +1105,13 @@ async def oauth_callback(
         await db.commit()
 
         auth_service = get_auth_service()
+        org_id = str(membership.org_id) if membership else ""
+        role = str(membership.role) if membership else "member"
         token_pair = auth_service.create_token_pair(
             user_id=str(user.id),
             email=str(user.email),
-            org_id=str(membership.org_id),
-            role=str(membership.role),
+            org_id=org_id,
+            role=role,
             is_superuser=bool(user.is_superuser),
             username=str(user.username) if user.username else None,
             full_name=str(user.full_name) if user.full_name else None,
@@ -1133,8 +1124,8 @@ async def oauth_callback(
             expires_in=token_pair.expires_in,
             user_id=str(user.id),
             email=str(user.email),
-            org_id=str(membership.org_id),
-            role=str(membership.role),
+            org_id=org_id,
+            role=role,
         )
 
 

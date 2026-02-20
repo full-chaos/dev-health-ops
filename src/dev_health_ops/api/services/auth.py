@@ -75,7 +75,7 @@ class AuthService:
         self,
         user_id: str,
         email: str,
-        org_id: str,
+        org_id: str = "",
         role: str = "member",
         is_superuser: bool = False,
         username: str | None = None,
@@ -111,7 +111,7 @@ class AuthService:
     def create_refresh_token(
         self,
         user_id: str,
-        org_id: str,
+        org_id: str = "",
         expires_delta: timedelta | None = None,
     ) -> str:
         """Create a JWT refresh token."""
@@ -134,7 +134,7 @@ class AuthService:
         self,
         user_id: str,
         email: str,
-        org_id: str,
+        org_id: str = "",
         role: str = "member",
         is_superuser: bool = False,
         username: str | None = None,

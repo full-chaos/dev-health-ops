@@ -54,9 +54,6 @@ async def test_get_current_user_rejects_nonexistent_user(auth_service):
 
     session = _mock_session(_FakeResult(row=None))
 
-    async def _fake_postgres_session():
-        yield session
-
     from contextlib import asynccontextmanager
 
     @asynccontextmanager

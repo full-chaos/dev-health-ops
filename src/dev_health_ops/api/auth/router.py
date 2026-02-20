@@ -8,7 +8,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.services.auth import (
     AuthenticatedUser,

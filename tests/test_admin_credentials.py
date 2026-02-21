@@ -11,9 +11,11 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dev_health_ops.api.admin.router import router, get_session, get_org_id
+from dev_health_ops.api.admin.middleware import get_admin_org_id, require_admin
+from dev_health_ops.api.admin.router import get_session, router
+from dev_health_ops.api.services.auth import AuthenticatedUser
 
-HEADERS = {"X-Org-Id": "test-org"}
+HEADERS = {}
 
 
 def _build_app() -> FastAPI:
@@ -31,7 +33,13 @@ def app():
         yield session
 
     app.dependency_overrides[get_session] = _override_get_session
-    app.dependency_overrides[get_org_id] = lambda: "test-org"
+    app.dependency_overrides[get_admin_org_id] = lambda: "test-org"
+    app.dependency_overrides[require_admin] = lambda: AuthenticatedUser(
+        user_id="test-user",
+        email="test@example.com",
+        org_id="test-org",
+        role="owner",
+    )
     yield app
     app.dependency_overrides.clear()
 

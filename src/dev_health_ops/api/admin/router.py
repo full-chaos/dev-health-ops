@@ -26,6 +26,7 @@ from dev_health_ops.api.services.settings import (
     TeamMembershipService,
     TeamMappingService,
 )
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.users import (
     MembershipService,
     OrganizationService,
@@ -42,6 +43,11 @@ from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.users import Membership, Organization, User
 
+from dev_health_ops.api.admin.middleware import (
+    get_admin_org_id,
+    require_admin,
+    require_superuser,
+)
 from .schemas import (
     AuditLogListResponse,
     AuditLogResponse,
@@ -112,7 +118,11 @@ PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
     "linear": ["work-items"],
 }
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/api/v1/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -120,14 +130,43 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-def get_org_id(x_org_id: Annotated[str, Header(alias="X-Org-Id")] = "default") -> str:
-    return x_org_id
-
-
 def get_user_id(
     x_user_id: Annotated[Optional[str], Header(alias="X-User-Id")] = None,
 ) -> Optional[str]:
     return x_user_id
+
+
+async def _ensure_user_in_scope(
+    session: AsyncSession,
+    user: User,
+    org_id: str,
+    current_user: AuthenticatedUser,
+) -> None:
+    if current_user.is_superuser:
+        return
+    membership_result = await session.execute(
+        select(Membership.id).where(
+            Membership.org_id == uuid.UUID(org_id),
+            Membership.user_id == user.id,
+        )
+    )
+    if membership_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+
+async def _ensure_org_admin_access(
+    session: AsyncSession,
+    org_id: str,
+    current_user: AuthenticatedUser,
+) -> None:
+    if current_user.is_superuser:
+        return
+    membership_svc = MembershipService(session)
+    membership = await membership_svc.get_membership(org_id, current_user.user_id)
+    if membership is None or membership.role not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=403, detail="Admin access required for organization"
+        )
 
 
 @router.get("/settings/categories")
@@ -139,7 +178,7 @@ async def list_setting_categories() -> list[str]:
 async def list_settings_by_category(
     category: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> SettingsListResponse:
     svc = SettingsService(session, org_id)
     settings = await svc.list_by_category(category)
@@ -154,7 +193,7 @@ async def get_setting(
     category: str,
     key: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> SettingResponse:
     svc = SettingsService(session, org_id)
     value = await svc.get(key, category)
@@ -171,7 +210,7 @@ async def set_setting(
     key: str,
     payload: SettingUpdate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> SettingResponse:
     svc = SettingsService(session, org_id)
     setting = await svc.set(
@@ -194,7 +233,7 @@ async def set_setting(
 async def create_setting(
     payload: SettingCreate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> SettingResponse:
     svc = SettingsService(session, org_id)
     setting = await svc.set(
@@ -218,7 +257,7 @@ async def delete_setting(
     category: str,
     key: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> dict:
     svc = SettingsService(session, org_id)
     deleted = await svc.delete(key, category)
@@ -232,7 +271,7 @@ async def list_credentials(
     provider: str | None = None,
     active_only: bool = False,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> list[IntegrationCredentialResponse]:
     svc = IntegrationCredentialsService(session, org_id)
     if provider:
@@ -263,7 +302,7 @@ async def get_credential(
     provider: str,
     name: str = "default",
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
     svc = IntegrationCredentialsService(session, org_id)
     cred = await svc.get(provider, name)
@@ -287,7 +326,7 @@ async def get_credential(
 async def create_credential(
     payload: IntegrationCredentialCreate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
     svc = IntegrationCredentialsService(session, org_id)
     cred = await svc.set(
@@ -318,7 +357,7 @@ async def update_credential(
     name: str,
     payload: IntegrationCredentialUpdate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> IntegrationCredentialResponse:
     svc = IntegrationCredentialsService(session, org_id)
     existing = await svc.get(provider, name)
@@ -361,7 +400,7 @@ async def delete_credential(
     provider: str,
     name: str = "default",
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> dict:
     svc = IntegrationCredentialsService(session, org_id)
     deleted = await svc.delete(provider, name)
@@ -374,7 +413,7 @@ async def delete_credential(
 async def test_connection(
     payload: TestConnectionRequest,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> TestConnectionResponse:
     svc = IntegrationCredentialsService(session, org_id)
 
@@ -529,7 +568,7 @@ async def get_provider_sync_targets() -> dict[str, list[str]]:
 async def list_sync_configs(
     active_only: bool = False,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> list[SyncConfigResponse]:
     svc = SyncConfigurationService(session, org_id)
     configs = await svc.list_all(active_only=active_only)
@@ -540,7 +579,7 @@ async def list_sync_configs(
 async def create_sync_config(
     payload: SyncConfigCreate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
     svc = SyncConfigurationService(session, org_id)
     config = await svc.create(
@@ -574,7 +613,7 @@ def _sync_config_to_response(c) -> SyncConfigResponse:
 async def get_sync_config(
     config_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
     svc = SyncConfigurationService(session, org_id)
     config = await svc.get_by_id(config_id)
@@ -588,7 +627,7 @@ async def update_sync_config(
     config_id: str,
     payload: SyncConfigUpdate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
     svc = SyncConfigurationService(session, org_id)
     config = await svc.get_by_id(config_id)
@@ -608,7 +647,7 @@ async def update_sync_config(
 async def delete_sync_config(
     config_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> None:
     svc = SyncConfigurationService(session, org_id)
     config = await svc.get_by_id(config_id)
@@ -621,7 +660,7 @@ async def delete_sync_config(
 async def trigger_sync_config(
     config_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> dict:
     svc = SyncConfigurationService(session, org_id)
     config = await svc.get_by_id(config_id)
@@ -649,7 +688,7 @@ async def trigger_sync_config(
 async def list_sync_config_jobs(
     config_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> list[JobRunResponse]:
     svc = SyncConfigurationService(session, org_id)
     existing = await svc.get_by_id(config_id)
@@ -696,7 +735,7 @@ async def list_sync_config_jobs(
 async def list_identities(
     active_only: bool = True,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> list[IdentityMappingResponse]:
     svc = IdentityMappingService(session, org_id)
     mappings = await svc.list_all(active_only=active_only)
@@ -720,7 +759,7 @@ async def list_identities(
 async def create_or_update_identity(
     payload: IdentityMappingCreate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> IdentityMappingResponse:
     svc = IdentityMappingService(session, org_id)
     mapping = await svc.create_or_update(
@@ -747,7 +786,7 @@ async def create_or_update_identity(
 async def list_teams(
     active_only: bool = True,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> list[TeamMappingResponse]:
     svc = TeamMappingService(session, org_id)
     teams = await svc.list_all(active_only=active_only)
@@ -776,7 +815,7 @@ async def list_teams(
 async def create_or_update_team(
     payload: TeamMappingCreate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> TeamMappingResponse:
     from dev_health_ops.workers.tasks import sync_teams_to_analytics
 
@@ -813,7 +852,7 @@ async def create_or_update_team(
 async def delete_team(
     team_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> dict:
     svc = TeamMappingService(session, org_id)
     deleted = await svc.delete(team_id)
@@ -826,7 +865,7 @@ async def delete_team(
 async def discover_teams(
     provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> TeamDiscoverResponse:
     creds_svc = IntegrationCredentialsService(session, org_id)
     credential = await creds_svc.get(provider, "default")
@@ -885,7 +924,7 @@ async def discover_teams(
 async def import_teams(
     payload: TeamImportRequest,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> TeamImportResponse:
     from dev_health_ops.workers.tasks import sync_teams_to_analytics
 
@@ -899,7 +938,7 @@ async def import_teams(
 @router.get("/teams/pending-changes")
 async def get_pending_changes(
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ):
     from dev_health_ops.api.services.settings import TeamDriftSyncService
 
@@ -914,7 +953,7 @@ async def approve_team_changes(
     change_indices: list[int] | None = None,
     approve_all: bool = False,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ):
     from dev_health_ops.api.services.settings import TeamDriftSyncService
     from dev_health_ops.workers.tasks import sync_teams_to_analytics
@@ -935,7 +974,7 @@ async def dismiss_team_changes(
     change_indices: list[int] | None = None,
     dismiss_all: bool = False,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ):
     from dev_health_ops.api.services.settings import TeamDriftSyncService
 
@@ -951,7 +990,7 @@ async def dismiss_team_changes(
 @router.post("/teams/trigger-drift-sync")
 async def trigger_drift_sync(
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ):
     from dev_health_ops.workers.tasks import sync_team_drift
 
@@ -963,7 +1002,7 @@ async def trigger_drift_sync(
 async def get_team(
     team_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> TeamMappingResponse:
     svc = TeamMappingService(session, org_id)
     team = await svc.get(team_id)
@@ -992,7 +1031,7 @@ async def update_team(
     team_id: str,
     payload: TeamMappingUpdate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> TeamMappingResponse:
     svc = TeamMappingService(session, org_id)
     existing = await svc.get(team_id)
@@ -1041,7 +1080,7 @@ async def discover_team_members(
     team_id: str,
     provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> TeamMembersDiscoverResponse:
     team_svc = TeamMappingService(session, org_id)
     team = await team_svc.get(team_id)
@@ -1127,7 +1166,7 @@ async def confirm_team_members(
     team_id: str,
     payload: ConfirmMembersRequest,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> ConfirmMembersResponse:
     from dev_health_ops.workers.tasks import sync_teams_to_analytics
 
@@ -1156,7 +1195,7 @@ async def infer_team_members_from_jira_activity(
     team_id: str,
     window_days: int = Query(90, ge=1, le=365),
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> JiraActivityInferenceResponse:
     team_svc = TeamMappingService(session, org_id)
     team = await team_svc.get(team_id)
@@ -1229,7 +1268,7 @@ async def confirm_inferred_team_members(
     team_id: str,
     payload: ConfirmInferredMembersRequest,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> ConfirmInferredMembersResponse:
     from dev_health_ops.workers.tasks import sync_teams_to_analytics
 
@@ -1253,9 +1292,12 @@ async def list_users(
     offset: int = 0,
     active_only: bool = True,
     session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
 ) -> list[UserResponse]:
     svc = UserService(session)
-    users = await svc.list_all(limit=limit, offset=offset, active_only=active_only)
+    users = await svc.list_by_org(
+        org_id, limit=limit, offset=offset, active_only=active_only
+    )
     return [
         UserResponse(
             id=str(u.id),
@@ -1279,11 +1321,14 @@ async def list_users(
 async def get_user(
     user_id: str,
     session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> UserResponse:
     svc = UserService(session)
     user = await svc.get_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    await _ensure_user_in_scope(session, user, org_id, current_user)
     return UserResponse(
         id=str(user.id),
         email=user.email,
@@ -1340,8 +1385,14 @@ async def update_user(
     user_id: str,
     payload: UserUpdate,
     session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> UserResponse:
     svc = UserService(session)
+    existing_user = await svc.get_by_id(user_id)
+    if not existing_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await _ensure_user_in_scope(session, existing_user, org_id, current_user)
     try:
         user = await svc.update(
             user_id=user_id,
@@ -1378,8 +1429,14 @@ async def set_user_password(
     user_id: str,
     payload: UserSetPassword,
     session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
     svc = UserService(session)
+    user = await svc.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await _ensure_user_in_scope(session, user, org_id, current_user)
     try:
         success = await svc.set_password(user_id, payload.password)
     except ValueError as e:
@@ -1393,8 +1450,14 @@ async def set_user_password(
 async def delete_user(
     user_id: str,
     session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
     svc = UserService(session)
+    user = await svc.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await _ensure_user_in_scope(session, user, org_id, current_user)
     deleted = await svc.delete(user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1407,6 +1470,7 @@ async def list_organizations(
     offset: int = 0,
     active_only: bool = True,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> list[OrganizationResponse]:
     svc = OrganizationService(session)
     orgs = await svc.list_all(limit=limit, offset=offset, active_only=active_only)
@@ -1452,6 +1516,7 @@ async def get_organization(
 async def create_organization(
     payload: OrganizationCreate,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> OrganizationResponse:
     svc = OrganizationService(session)
     org = await svc.create(
@@ -1480,6 +1545,7 @@ async def update_organization(
     org_id: str,
     payload: OrganizationUpdate,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> OrganizationResponse:
     svc = OrganizationService(session)
     org = await svc.update(
@@ -1509,6 +1575,7 @@ async def update_organization(
 async def delete_organization(
     org_id: str,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> dict:
     svc = OrganizationService(session)
     deleted = await svc.delete(org_id)
@@ -1520,6 +1587,7 @@ async def delete_organization(
 @router.get("/platform/stats", response_model=PlatformStatsResponse)
 async def platform_stats(
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> PlatformStatsResponse:
     total_organizations = (
         await session.execute(select(func.count()).select_from(Organization))
@@ -1611,6 +1679,7 @@ async def platform_stats(
 @router.get("/feature-flags", response_model=list[FeatureFlagResponse])
 async def list_feature_flags(
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> list[FeatureFlagResponse]:
     stmt = select(FeatureFlag).order_by(FeatureFlag.key.asc())
     result = await session.execute(stmt)
@@ -1638,6 +1707,7 @@ async def list_feature_flags(
 async def list_feature_overrides(
     org_id: str,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> list[FeatureOverrideResponse]:
     org_uuid = uuid.UUID(org_id)
     stmt = (
@@ -1674,6 +1744,7 @@ async def create_feature_override(
     org_id: str,
     payload: FeatureOverrideCreate,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> FeatureOverrideResponse:
     org_uuid = uuid.UUID(org_id)
     feature_uuid = uuid.UUID(payload.feature_id)
@@ -1725,6 +1796,7 @@ async def delete_feature_override(
     org_id: str,
     override_id: str,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> None:
     result = await session.execute(
         select(OrgFeatureOverride).where(
@@ -1745,7 +1817,9 @@ async def list_members(
     org_id: str,
     role: str | None = None,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> list[MembershipResponse]:
+    await _ensure_org_admin_access(session, org_id, current_user)
     svc = MembershipService(session)
     members = await svc.list_members(org_id, role=role)
     return [
@@ -1770,7 +1844,9 @@ async def add_member(
     org_id: str,
     payload: MembershipCreate,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> MembershipResponse:
+    await _ensure_org_admin_access(session, org_id, current_user)
     svc = MembershipService(session)
     try:
         membership = await svc.add_member(
@@ -1801,7 +1877,9 @@ async def update_member_role(
     user_id: str,
     payload: MembershipUpdateRole,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> MembershipResponse:
+    await _ensure_org_admin_access(session, org_id, current_user)
     svc = MembershipService(session)
     try:
         membership = await svc.update_role(org_id, user_id, payload.role)
@@ -1828,7 +1906,9 @@ async def remove_member(
     org_id: str,
     user_id: str,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
+    await _ensure_org_admin_access(session, org_id, current_user)
     svc = MembershipService(session)
     try:
         deleted = await svc.remove_member(org_id, user_id)
@@ -1845,7 +1925,9 @@ async def transfer_ownership(
     from_user_id: str,
     payload: OwnershipTransfer,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
+    await _ensure_org_admin_access(session, org_id, current_user)
     svc = MembershipService(session)
     try:
         await svc.transfer_ownership(org_id, from_user_id, payload.new_owner_user_id)
@@ -1861,7 +1943,7 @@ async def transfer_ownership(
 @require_feature("audit_log", required_tier="enterprise")
 async def list_audit_logs(
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
     action: Optional[str] = Query(None, description="Filter by action type"),
     resource_type: Optional[str] = Query(None, description="Filter by resource type"),
@@ -1928,6 +2010,7 @@ async def list_audit_logs(
 @router.get("/platform/audit-logs", response_model=AuditLogListResponse)
 async def list_platform_audit_logs(
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
     action: Optional[str] = Query(None, description="Filter by action type"),
     resource_type: Optional[str] = Query(None, description="Filter by resource type"),
@@ -2005,7 +2088,7 @@ async def list_platform_audit_logs(
 async def get_audit_log(
     log_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> AuditLogResponse:
     """Get a specific audit log entry by ID.
 
@@ -2046,7 +2129,7 @@ async def get_resource_audit_history(
     resource_type: str,
     resource_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
     limit: int = Query(50, ge=1, le=500, description="Maximum number of results"),
 ) -> list[AuditLogResponse]:
     """Get audit history for a specific resource.
@@ -2086,7 +2169,7 @@ async def get_resource_audit_history(
 async def get_user_audit_activity(
     user_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
     limit: int = Query(50, ge=1, le=500, description="Maximum number of results"),
 ) -> list[AuditLogResponse]:
     """Get audit log activity for a specific user.
@@ -2124,7 +2207,7 @@ async def get_user_audit_activity(
 @require_feature("ip_allowlist", required_tier="enterprise")
 async def list_ip_allowlist_entries(
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
     active_only: bool = Query(False, description="Filter to active entries only"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -2162,7 +2245,7 @@ async def list_ip_allowlist_entries(
 async def create_ip_allowlist_entry(
     payload: IPAllowlistCreate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
     user_id: Optional[str] = Depends(get_user_id),
 ) -> IPAllowlistResponse:
     svc = IPAllowlistService(session)
@@ -2194,7 +2277,7 @@ async def create_ip_allowlist_entry(
 async def get_ip_allowlist_entry(
     entry_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> IPAllowlistResponse:
     svc = IPAllowlistService(session)
     entry = await svc.get_entry(
@@ -2222,7 +2305,7 @@ async def update_ip_allowlist_entry(
     entry_id: str,
     payload: IPAllowlistUpdate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> IPAllowlistResponse:
     svc = IPAllowlistService(session)
     try:
@@ -2256,7 +2339,7 @@ async def update_ip_allowlist_entry(
 async def delete_ip_allowlist_entry(
     entry_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> dict:
     svc = IPAllowlistService(session)
     deleted = await svc.delete_entry(
@@ -2273,7 +2356,7 @@ async def delete_ip_allowlist_entry(
 async def check_ip_allowed(
     payload: IPCheckRequest,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> IPCheckResponse:
     svc = IPAllowlistService(session)
     allowed = await svc.check_ip_allowed(
@@ -2290,7 +2373,7 @@ async def check_ip_allowed(
 @require_feature("retention_policies", required_tier="enterprise")
 async def list_retention_policies(
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
     active_only: bool = Query(False, description="Filter to active policies only"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -2339,7 +2422,7 @@ async def list_retention_resource_types() -> list[str]:
 async def create_retention_policy(
     payload: RetentionPolicyCreate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
     user_id: Optional[str] = Depends(get_user_id),
 ) -> RetentionPolicyResponse:
     svc = RetentionService(session)
@@ -2374,7 +2457,7 @@ async def create_retention_policy(
 async def get_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> RetentionPolicyResponse:
     svc = RetentionService(session)
     policy = await svc.get_policy(
@@ -2405,7 +2488,7 @@ async def update_retention_policy(
     policy_id: str,
     payload: RetentionPolicyUpdate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> RetentionPolicyResponse:
     svc = RetentionService(session)
     try:
@@ -2441,7 +2524,7 @@ async def update_retention_policy(
 async def delete_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> dict:
     svc = RetentionService(session)
     deleted = await svc.delete_policy(
@@ -2460,7 +2543,7 @@ async def delete_retention_policy(
 async def execute_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_org_id),
+    org_id: str = Depends(get_admin_org_id),
 ) -> RetentionExecuteResponse:
     svc = RetentionService(session)
     deleted_count, error = await svc.execute_policy(

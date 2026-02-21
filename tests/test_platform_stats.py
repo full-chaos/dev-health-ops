@@ -9,8 +9,14 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.admin.middleware import (
+    get_admin_org_id,
+    require_admin,
+    require_superuser,
+)
 from dev_health_ops.api.admin.router import get_session
 from dev_health_ops.api.main import app
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
 from dev_health_ops.models.users import Membership, Organization, User
@@ -49,6 +55,20 @@ async def client(session_maker):
             yield session
 
     app.dependency_overrides[get_session] = _override_get_session
+    app.dependency_overrides[get_admin_org_id] = lambda: "test-org"
+    app.dependency_overrides[require_admin] = lambda: AuthenticatedUser(
+        user_id="test-user",
+        email="test@example.com",
+        org_id="test-org",
+        role="owner",
+    )
+    app.dependency_overrides[require_superuser] = lambda: AuthenticatedUser(
+        user_id="test-superuser",
+        email="super@example.com",
+        org_id="test-org",
+        role="owner",
+        is_superuser=True,
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as async_client:

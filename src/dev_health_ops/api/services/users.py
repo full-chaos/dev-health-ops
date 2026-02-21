@@ -73,6 +73,22 @@ class UserService:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_org(
+        self, org_id: str, limit: int = 100, offset: int = 0, active_only: bool = True
+    ) -> list[User]:
+        stmt = (
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(Membership.org_id == uuid.UUID(org_id))
+            .order_by(User.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        if active_only:
+            stmt = stmt.where(User.is_active.is_(True))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def create(
         self,
         email: str,

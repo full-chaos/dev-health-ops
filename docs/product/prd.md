@@ -63,4 +63,4 @@ This system is explicitly designed to avoid turning metrics into scorecards.
 ## References
 - `dev-health-ops/AGENTS.md` (repo rules)
 - `docs/90-appendix/agent-instructions/*` (deep dives)
-- GitHub Project: https://github.com/orgs/full-chaos/projects/1
+- Linear project: track active work in the corresponding Linear project/cycle

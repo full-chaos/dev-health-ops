@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "filepath=\"$TOOL_INPUT_FILE_PATH\"; if [[ \"$filepath\" == *.py ]]; then cd /Users/chris/projects/full-chaos/dev-health-ops && ruff check --fix --quiet \"$filepath\" 2>/dev/null; ruff format --quiet \"$filepath\" 2>/dev/null; fi; true"
+      }
+    ]
+  }
+}

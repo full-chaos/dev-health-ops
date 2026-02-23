@@ -262,6 +262,13 @@ Explanation format:
 * Add/adjust tests under `tests/` for behavior changes.
 * If DB models change: include Alembic migrations (Postgres).
 
+### 7.1a Visual evidence for cross-repo frontend impact
+
+If a `dev-health-ops` change affects `dev-health-web` rendering (e.g., API shape changes, new/modified GraphQL fields, metric schema changes), screenshot evidence from the web frontend **must** be included in the PR.
+
+* Use the **Playwright MCP** (`playwright` skill) in the `dev-health-web` repo to capture affected pages after the dev server is running.
+* Attach screenshots to the GitHub PR body and the linked Linear issue/task.
+* **When to skip:** Changes that have no impact on rendered frontend output (add `SCREENSHOT-WAIVER: <reason>` to PR body).
 ### 7.2 Correct boundaries
 
 * Connectors fetch. Processors normalize. Metrics compute. Sinks persist.

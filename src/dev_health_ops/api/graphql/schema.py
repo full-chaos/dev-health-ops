@@ -67,7 +67,10 @@ class Query:
             CatalogResult with dimensions, measures, limits, and optional values.
         """
         context = get_context(info)
-        # Override org_id from argument (the schema requires it)
+        if context.org_id and context.org_id != org_id:
+            from .errors import AuthorizationError
+
+            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
         context.org_id = org_id
         return await resolve_catalog(context, dimension, filters=filters)
 
@@ -89,7 +92,10 @@ class Query:
             AnalyticsResult with all query results.
         """
         context = get_context(info)
-        # Override org_id from argument (the schema requires it)
+        if context.org_id and context.org_id != org_id:
+            from .errors import AuthorizationError
+
+            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
         context.org_id = org_id
         return await resolve_analytics(context, batch)
 
@@ -114,6 +120,10 @@ class Query:
         from .models.outputs import Freshness, MetricDelta, HomeResult as HR
 
         context = get_context(info)
+        if context.org_id and context.org_id != org_id:
+            from .errors import AuthorizationError
+
+            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
         context.org_id = org_id
         data = await resolve_home(context, filters)
 
@@ -206,6 +216,10 @@ class Query:
         from .resolvers.work_graph import resolve_work_graph_edges
 
         context = get_context(info)
+        if context.org_id and context.org_id != org_id:
+            from .errors import AuthorizationError
+
+            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
         context.org_id = org_id
         return await resolve_work_graph_edges(context, filters)
 
@@ -219,6 +233,10 @@ class Query:
         from .resolvers.capacity import resolve_capacity_forecast
 
         context = get_context(info)
+        if context.org_id and context.org_id != org_id:
+            from .errors import AuthorizationError
+
+            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
         context.org_id = org_id
         return await resolve_capacity_forecast(context, input)
 
@@ -232,6 +250,10 @@ class Query:
         from .resolvers.capacity import resolve_capacity_forecasts
 
         context = get_context(info)
+        if context.org_id and context.org_id != org_id:
+            from .errors import AuthorizationError
+
+            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
         context.org_id = org_id
         return await resolve_capacity_forecasts(context, filters)
 

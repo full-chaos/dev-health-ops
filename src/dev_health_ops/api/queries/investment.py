@@ -14,12 +14,14 @@ async def fetch_investment_breakdown(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
@@ -36,6 +38,7 @@ async def fetch_investment_breakdown(
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
         GROUP BY subcategory, theme
@@ -51,11 +54,13 @@ async def fetch_investment_edges(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     theme_filter = ""
-    params = {"start_ts": start_ts, "end_ts": end_ts}
+    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         theme_filter = " AND theme_kv.1 IN %(themes)s"
         params["themes"] = themes
@@ -69,6 +74,7 @@ async def fetch_investment_edges(
         ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {theme_filter}
         GROUP BY source, target
@@ -84,12 +90,14 @@ async def fetch_investment_subcategory_edges(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
@@ -107,6 +115,7 @@ async def fetch_investment_subcategory_edges(
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
         GROUP BY source, target
@@ -122,12 +131,14 @@ async def fetch_investment_team_edges(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
@@ -151,6 +162,7 @@ async def fetch_investment_team_edges(
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
         GROUP BY source, target
@@ -166,12 +178,14 @@ async def fetch_investment_repo_team_edges(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
@@ -201,6 +215,7 @@ async def fetch_investment_repo_team_edges(
                 ) AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
+                  AND work_unit_investments.org_id = %(org_id)s
                 {scope_filter}
                 GROUP BY work_unit_id, team
             )
@@ -217,6 +232,7 @@ async def fetch_investment_repo_team_edges(
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
         GROUP BY subcategory, repo, team
@@ -232,12 +248,14 @@ async def fetch_investment_team_category_repo_edges(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
@@ -267,6 +285,7 @@ async def fetch_investment_team_category_repo_edges(
                 ) AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
+                  AND work_unit_investments.org_id = %(org_id)s
                 {scope_filter}
                 GROUP BY work_unit_id, team
             )
@@ -283,6 +302,7 @@ async def fetch_investment_team_category_repo_edges(
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
         GROUP BY team, category, repo
@@ -298,12 +318,14 @@ async def fetch_investment_team_subcategory_repo_edges(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
@@ -333,6 +355,7 @@ async def fetch_investment_team_subcategory_repo_edges(
                 ) AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
+                  AND work_unit_investments.org_id = %(org_id)s
                 {scope_filter}
                 GROUP BY work_unit_id, team
             )
@@ -349,6 +372,7 @@ async def fetch_investment_team_subcategory_repo_edges(
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
         GROUP BY team, subcategory, repo
@@ -364,12 +388,14 @@ async def fetch_investment_unassigned_counts(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> Dict[str, int]:
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append(
             "arrayExists(k -> splitByChar('.', k)[1] IN %(themes)s, mapKeys(CAST(subcategory_distribution_json AS Map(String, Float32))))"
@@ -403,6 +429,7 @@ async def fetch_investment_unassigned_counts(
                 ) AS t ON t.work_item_id = issue_id
                 WHERE work_unit_investments.from_ts < %(end_ts)s
                   AND work_unit_investments.to_ts >= %(start_ts)s
+                  AND work_unit_investments.org_id = %(org_id)s
                 {scope_filter}
                 {category_filter}
                 GROUP BY work_unit_id, team
@@ -419,6 +446,7 @@ async def fetch_investment_unassigned_counts(
         LEFT JOIN unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
     """
@@ -439,6 +467,7 @@ async def fetch_investment_sunburst(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
     limit: int = 500,
@@ -450,6 +479,7 @@ async def fetch_investment_sunburst(
         "limit": limit,
     }
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append("splitByChar('.', subcategory_kv.1)[1] IN %(themes)s")
         params["themes"] = themes
@@ -468,6 +498,7 @@ async def fetch_investment_sunburst(
         ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
         GROUP BY theme, subcategory, scope
@@ -484,6 +515,7 @@ async def fetch_investment_quality_stats(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
     themes: Optional[List[str]] = None,
     subcategories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -491,6 +523,7 @@ async def fetch_investment_quality_stats(
     filters: List[str] = []
     params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     if themes:
         filters.append(
             "hasAny(mapKeys(CAST(theme_distribution_json AS Map(String, Float32))), %(themes)s)"
@@ -516,6 +549,7 @@ async def fetch_investment_quality_stats(
         FROM work_unit_investments
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
         {category_filter}
     """

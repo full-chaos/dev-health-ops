@@ -101,6 +101,7 @@ async def build_explain_response(
     metric: str,
     filters: MetricFilter,
     cache: TTLCache,
+    org_id: str = "",
 ) -> ExplainResponse:
     cache_key = filter_cache_key("explain", filters, extra={"metric": metric})
     cached = cache.get(cache_key)
@@ -124,6 +125,7 @@ async def build_explain_response(
             scope_filter=scope_filter,
             scope_params=scope_params,
             aggregator=config["aggregator"],
+            org_id=org_id,
         )
         previous_value = await fetch_metric_value(
             sink,
@@ -134,6 +136,7 @@ async def build_explain_response(
             scope_filter=scope_filter,
             scope_params=scope_params,
             aggregator=config["aggregator"],
+            org_id=org_id,
         )
 
         current_value = safe_float(current_value)

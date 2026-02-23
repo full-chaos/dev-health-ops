@@ -437,6 +437,7 @@ async def build_person_summary_response(
     person_id: str,
     range_days: int,
     compare_days: int,
+    org_id: str = "",
 ) -> PersonSummaryResponse:
     start_day, end_day, compare_start, compare_end = _time_window(
         range_days, compare_days
@@ -452,8 +453,13 @@ async def build_person_summary_response(
 
         identity_inputs = _identity_inputs(identity, alias_list)
         person = _person_model(identity, alias_list)
-        last_ingested = await fetch_last_ingested_at(sink)
-        coverage = await fetch_coverage(sink, start_day=start_day, end_day=end_day)
+        last_ingested = await fetch_last_ingested_at(sink, org_id=org_id)
+        coverage = await fetch_coverage(
+            sink,
+            start_day=start_day,
+            end_day=end_day,
+            org_id=org_id,
+        )
         sources = {
             "github": "ok" if last_ingested else "down",
             "gitlab": "ok" if last_ingested else "down",

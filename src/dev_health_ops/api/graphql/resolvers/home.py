@@ -41,8 +41,11 @@ async def resolve_home(
             max(ingested_at) as last_ingested_at
         FROM investment_metrics_daily
         WHERE day >= today() - 30
+          AND org_id = %(org_id)s
     """
-    freshness_rows = await query_dicts(client, freshness_sql, {})
+    freshness_rows = await query_dicts(
+        client, freshness_sql, {"org_id": context.org_id}
+    )
     last_ingested = None
     if freshness_rows and freshness_rows[0].get("last_ingested_at"):
         last_ingested = freshness_rows[0]["last_ingested_at"]
@@ -57,8 +60,9 @@ async def resolve_home(
         FROM work_unit_investments
         WHERE from_ts >= today() - 30
         AND from_ts < today()
+        AND org_id = %(org_id)s
     """
-    delta_rows = await query_dicts(client, deltas_sql, {})
+    delta_rows = await query_dicts(client, deltas_sql, {"org_id": context.org_id})
 
     deltas = []
     for row in delta_rows:

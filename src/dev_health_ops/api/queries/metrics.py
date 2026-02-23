@@ -20,6 +20,7 @@ async def fetch_metric_series(
     scope_filter: str,
     scope_params: Dict[str, Any],
     aggregator: str,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -28,11 +29,13 @@ async def fetch_metric_series(
         FROM {table}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {scope_filter}
+          AND org_id = %(org_id)s
         GROUP BY day
         ORDER BY day
     """
     params = _date_params(start_day, end_day)
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(client, query, params)
 
 
@@ -46,6 +49,7 @@ async def fetch_metric_value(
     scope_filter: str,
     scope_params: Dict[str, Any],
     aggregator: str,
+    org_id: str = "",
 ) -> float:
     query = f"""
         SELECT
@@ -53,9 +57,11 @@ async def fetch_metric_value(
         FROM {table}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {scope_filter}
+          AND org_id = %(org_id)s
     """
     params = _date_params(start_day, end_day)
     params.update(scope_params)
+    params["org_id"] = org_id
     rows = await query_dicts(client, query, params)
     if not rows:
         return 0.0
@@ -70,6 +76,7 @@ async def fetch_blocked_hours(
     end_day: date,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
 ) -> Tuple[float, List[Dict[str, Any]]]:
     query = f"""
         SELECT
@@ -79,11 +86,13 @@ async def fetch_blocked_hours(
         WHERE day >= %(start_day)s AND day < %(end_day)s
           AND status = 'blocked'
         {scope_filter}
+          AND org_id = %(org_id)s
         GROUP BY day
         ORDER BY day
     """
     params = _date_params(start_day, end_day)
     params.update(scope_params)
+    params["org_id"] = org_id
     rows = await query_dicts(client, query, params)
     total = sum(float(row.get("value") or 0.0) for row in rows)
     return total, rows

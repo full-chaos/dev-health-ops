@@ -160,6 +160,7 @@ async def _metric_deltas(
     end_day: date,
     compare_start: date,
     compare_end: date,
+    org_id: str = "",
 ) -> List[MetricDelta]:
     deltas: List[MetricDelta] = []
 
@@ -175,6 +176,7 @@ async def _metric_deltas(
                 end_day=end_day,
                 scope_filter=scope_filter,
                 scope_params=scope_params,
+                org_id=org_id,
             )
             previous_value, _ = await fetch_blocked_hours(
                 sink,
@@ -182,6 +184,7 @@ async def _metric_deltas(
                 end_day=compare_end,
                 scope_filter=scope_filter,
                 scope_params=scope_params,
+                org_id=org_id,
             )
             current_value = safe_float(current_value)
             previous_value = safe_float(previous_value)
@@ -196,6 +199,7 @@ async def _metric_deltas(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
                 aggregator=metric["aggregator"],
+                org_id=org_id,
             )
             previous_value = await fetch_metric_value(
                 sink,
@@ -206,6 +210,7 @@ async def _metric_deltas(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
                 aggregator=metric["aggregator"],
+                org_id=org_id,
             )
             current_value = safe_float(current_value)
             previous_value = safe_float(previous_value)
@@ -218,6 +223,7 @@ async def _metric_deltas(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
                 aggregator=metric["aggregator"],
+                org_id=org_id,
             )
             spark = _spark_points(series, metric["transform"])
 
@@ -254,6 +260,7 @@ async def build_home_response(
     db_url: str,
     filters: MetricFilter,
     cache: TTLCache,
+    org_id: str = "",
 ) -> HomeResponse:
     cache_key = filter_cache_key("home", filters)
     cached = cache.get(cache_key)
@@ -263,8 +270,13 @@ async def build_home_response(
     start_day, end_day, compare_start, compare_end = time_window(filters)
 
     async with clickhouse_client(db_url) as sink:
-        last_ingested = await fetch_last_ingested_at(sink)
-        coverage = await fetch_coverage(sink, start_day=start_day, end_day=end_day)
+        last_ingested = await fetch_last_ingested_at(sink, org_id=org_id)
+        coverage = await fetch_coverage(
+            sink,
+            start_day=start_day,
+            end_day=end_day,
+            org_id=org_id,
+        )
         deltas = await _metric_deltas(
             sink,
             filters,
@@ -272,6 +284,7 @@ async def build_home_response(
             end_day,
             compare_start,
             compare_end,
+            org_id=org_id,
         )
 
         sources = {

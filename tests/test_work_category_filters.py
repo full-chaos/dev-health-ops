@@ -48,6 +48,7 @@ async def test_investment_response_applies_work_category_filter(monkeypatch):
         scope_params,
         themes=None,
         subcategories=None,
+        org_id="",
     ):
         captured["breakdown"] = {
             "scope_filter": scope_filter,
@@ -191,6 +192,7 @@ async def test_investment_response_without_work_category_filter(monkeypatch):
         scope_params,
         themes=None,
         subcategories=None,
+        org_id="",
     ):
         captured["breakdown"] = {
             "scope_filter": scope_filter,

@@ -82,7 +82,7 @@ async def get_context(request: Request) -> GraphQLContext:
     cache = _get_cache()
 
     context = build_context(
-        org_id=org_id or "placeholder",
+        org_id=org_id or "",
         db_url=db_url,
         persisted_query_id=persisted_query_id,
         client=client,

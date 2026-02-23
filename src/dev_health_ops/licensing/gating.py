@@ -417,7 +417,7 @@ async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool
     # Falls back to the Organization.tier column when no OrgLicense record exists.
     session = kwargs.get("session")
     org_id_str = kwargs.get("org_id")
-    if not session or not org_id_str or org_id_str == "default":
+    if not session or not org_id_str:
         return False
     try:
         from sqlalchemy import select as sa_select

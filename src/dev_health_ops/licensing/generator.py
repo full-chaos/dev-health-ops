@@ -119,7 +119,7 @@ def sign_payload(private_key_b64: str, payload: LicensePayload) -> str:
 
 def generate_test_license(
     *,
-    org_id: str = "default-org",
+    org_id: str,
     tier: LicenseTier | str = LicenseTier.ENTERPRISE,
     duration_days: int = 3650,
     org_name: str = "Default Organization",

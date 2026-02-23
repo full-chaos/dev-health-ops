@@ -138,7 +138,7 @@ async def run_with_store(
     db_url: str,
     db_type: str,
     handler: Callable,
-    org_id: str = "default",
+    org_id: str | None,
 ) -> None:
     """
     Helper to create a store and run a handler within its context.

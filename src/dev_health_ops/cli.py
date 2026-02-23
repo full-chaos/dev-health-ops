@@ -30,14 +30,14 @@ from dev_health_ops.audit import completeness, schema, perf, coverage
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def resolve_org_id(ns: argparse.Namespace) -> str:
-    """Return the org_id from the CLI namespace, defaulting to ``"default"``.
+def resolve_org_id(ns: argparse.Namespace) -> str | None:
+    """Return the org_id from the CLI namespace, or ``None``.
 
     NOTE: This is plumbing only — run functions accept org_id but don't yet
     filter queries by it. Query-level scoping (``WHERE org_id = …``) is a
     follow-up tracked per-function.
     """
-    return getattr(ns, "org", "default") or "default"
+    return getattr(ns, "org", None) or None
 
 
 def _load_dotenv(path: Path) -> int:
@@ -68,6 +68,28 @@ def _load_dotenv(path: Path) -> int:
     return loaded
 
 
+def _resolve_first_org_id(db_url: str | None) -> str | None:
+    if not db_url:
+        return None
+    db_url_sync = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    try:
+        from sqlalchemy import create_engine, text
+
+        engine = create_engine(db_url_sync)
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT id FROM organizations ORDER BY created_at ASC LIMIT 1")
+                ).first()
+                if row is None:
+                    return None
+                return str(row[0])
+        finally:
+            engine.dispose()
+    except Exception:
+        return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dev-health-ops",
@@ -91,8 +113,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--org",
-        default=os.getenv("ORG_ID", "default"),
-        help="Organization ID for multi-tenant scoping. Env: ORG_ID. Defaults to 'default'.",
+        default=os.getenv("ORG_ID"),
+        help="Organization ID for multi-tenant scoping. Env: ORG_ID. If omitted, resolve from DB.",
     )
     from dev_health_ops.llm.cli import add_llm_arguments
 
@@ -165,6 +187,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser = build_parser()
     ns = parser.parse_args(argv)
+
+    if getattr(ns, "org", None) is None:
+        ns.org = _resolve_first_org_id(getattr(ns, "db", None))
 
     level_name = str(getattr(ns, "log_level", "") or "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)

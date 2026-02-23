@@ -357,7 +357,7 @@ def _build_sql_migration_hints(
     return {"tables": table_hints, "columns": column_hints}
 
 
-def run_schema_audit(*, db_url: str, org_id: str = "default") -> Dict[str, Any]:
+def run_schema_audit(*, db_url: str, org_id: str | None = None) -> Dict[str, Any]:
     base_report = {
         "status": "unchecked",
         "checked": False,
@@ -544,7 +544,7 @@ def _cmd_audit_schema(ns: argparse.Namespace) -> int:
     try:
         report = run_schema_audit(
             db_url=resolve_sink_uri(ns),
-            org_id=getattr(ns, "org", "default") or "default",
+            org_id=getattr(ns, "org", None) or None,
         )
         print(format_schema_report(report))
         return 0 if report.get("status") == "ok" else 1

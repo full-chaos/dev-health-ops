@@ -59,13 +59,17 @@ VALID_INCIDENT = {
 async def test_ingest_commits_happy_path(client):
     resp = await client.post(
         "/api/v1/ingest/commits",
-        json={"repo_url": "https://github.com/org/repo", "items": [VALID_COMMIT]},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [VALID_COMMIT],
+        },
     )
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "accepted"
     assert body["items_received"] == 1
-    assert body["stream"] == "ingest:default:commits"
+    assert body["stream"] == "ingest:test-org:commits"
     assert "ingestion_id" in body
 
 
@@ -73,7 +77,11 @@ async def test_ingest_commits_happy_path(client):
 async def test_ingest_commits_empty_items(client):
     resp = await client.post(
         "/api/v1/ingest/commits",
-        json={"repo_url": "https://github.com/org/repo", "items": []},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [],
+        },
     )
     assert resp.status_code == 422
 
@@ -88,7 +96,11 @@ async def test_ingest_commits_missing_required_field(client):
     }
     resp = await client.post(
         "/api/v1/ingest/commits",
-        json={"repo_url": "https://github.com/org/repo", "items": [bad_commit]},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [bad_commit],
+        },
     )
     assert resp.status_code == 422
 
@@ -97,13 +109,17 @@ async def test_ingest_commits_missing_required_field(client):
 async def test_ingest_pull_requests_happy_path(client):
     resp = await client.post(
         "/api/v1/ingest/pull-requests",
-        json={"repo_url": "https://github.com/org/repo", "items": [VALID_PR]},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [VALID_PR],
+        },
     )
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "accepted"
     assert body["items_received"] == 1
-    assert body["stream"] == "ingest:default:pull-requests"
+    assert body["stream"] == "ingest:test-org:pull-requests"
 
 
 @pytest.mark.asyncio
@@ -121,7 +137,11 @@ async def test_ingest_pull_requests_with_reviews(client):
     }
     resp = await client.post(
         "/api/v1/ingest/pull-requests",
-        json={"repo_url": "https://github.com/org/repo", "items": [pr_with_reviews]},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [pr_with_reviews],
+        },
     )
     assert resp.status_code == 202
     assert resp.json()["items_received"] == 1
@@ -131,13 +151,13 @@ async def test_ingest_pull_requests_with_reviews(client):
 async def test_ingest_work_items_happy_path(client):
     resp = await client.post(
         "/api/v1/ingest/work-items",
-        json={"items": [VALID_WORK_ITEM]},
+        json={"org_id": "test-org", "items": [VALID_WORK_ITEM]},
     )
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "accepted"
     assert body["items_received"] == 1
-    assert body["stream"] == "ingest:default:work-items"
+    assert body["stream"] == "ingest:test-org:work-items"
 
 
 @pytest.mark.asyncio
@@ -154,26 +174,34 @@ async def test_ingest_work_items_no_repo_url_needed(client):
 async def test_ingest_deployments_happy_path(client):
     resp = await client.post(
         "/api/v1/ingest/deployments",
-        json={"repo_url": "https://github.com/org/repo", "items": [VALID_DEPLOYMENT]},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [VALID_DEPLOYMENT],
+        },
     )
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "accepted"
     assert body["items_received"] == 1
-    assert body["stream"] == "ingest:default:deployments"
+    assert body["stream"] == "ingest:test-org:deployments"
 
 
 @pytest.mark.asyncio
 async def test_ingest_incidents_happy_path(client):
     resp = await client.post(
         "/api/v1/ingest/incidents",
-        json={"repo_url": "https://github.com/org/repo", "items": [VALID_INCIDENT]},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [VALID_INCIDENT],
+        },
     )
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "accepted"
     assert body["items_received"] == 1
-    assert body["stream"] == "ingest:default:incidents"
+    assert body["stream"] == "ingest:test-org:incidents"
 
 
 @pytest.mark.asyncio
@@ -198,7 +226,11 @@ async def test_ingest_multiple_items(client):
     ]
     resp = await client.post(
         "/api/v1/ingest/commits",
-        json={"repo_url": "https://github.com/org/repo", "items": commits},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": commits,
+        },
     )
     assert resp.status_code == 202
     assert resp.json()["items_received"] == 5
@@ -208,7 +240,11 @@ async def test_ingest_multiple_items(client):
 async def test_ingest_incidents_empty_items(client):
     resp = await client.post(
         "/api/v1/ingest/incidents",
-        json={"repo_url": "https://github.com/org/repo", "items": []},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [],
+        },
     )
     assert resp.status_code == 422
 
@@ -218,6 +254,10 @@ async def test_ingest_deployments_missing_required_field(client):
     bad_deployment = {"status": "success", "environment": "prod"}
     resp = await client.post(
         "/api/v1/ingest/deployments",
-        json={"repo_url": "https://github.com/org/repo", "items": [bad_deployment]},
+        json={
+            "org_id": "test-org",
+            "repo_url": "https://github.com/org/repo",
+            "items": [bad_deployment],
+        },
     )
     assert resp.status_code == 422

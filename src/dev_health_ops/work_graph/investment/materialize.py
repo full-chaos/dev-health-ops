@@ -61,7 +61,7 @@ class MaterializeConfig:
     force: bool = False
     team_ids: Optional[List[str]] = None
     llm_concurrency: int = 5
-    org_id: str = "default"
+    org_id: str | None = None
 
 
 def _build_components(

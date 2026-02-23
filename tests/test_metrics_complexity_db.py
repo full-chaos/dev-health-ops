@@ -88,6 +88,7 @@ def test_complexity_db_job_scans_contents_without_gitpython(monkeypatch):
         backfill_days=1,
         language_globs=None,
         max_files=None,
+        org_id="test-org",
     )
 
     assert rc == 0
@@ -139,6 +140,7 @@ def test_complexity_db_job_falls_back_to_blame(monkeypatch):
         backfill_days=1,
         language_globs=None,
         max_files=None,
+        org_id="test-org",
     )
 
     assert rc == 0

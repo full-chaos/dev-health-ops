@@ -1027,7 +1027,7 @@ class TestTestKeypairAndGenerateTestLicense:
     def test_generate_test_license_round_trip(self):
         from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
 
-        license_str = generate_test_license()
+        license_str = generate_test_license(org_id="default-org")
         validator = LicenseValidator(TEST_KEYPAIR.public_key)
         result = validator.validate(license_str)
 
@@ -1052,7 +1052,7 @@ class TestTestKeypairAndGenerateTestLicense:
     def test_generate_test_license_custom_tier(self):
         from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
 
-        license_str = generate_test_license(tier=LicenseTier.TEAM)
+        license_str = generate_test_license(org_id="test-org", tier=LicenseTier.TEAM)
         validator = LicenseValidator(TEST_KEYPAIR.public_key)
         result = validator.validate(license_str)
 
@@ -1063,7 +1063,9 @@ class TestTestKeypairAndGenerateTestLicense:
         from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
 
         now = int(time.time())
-        license_str = generate_test_license(duration_days=30, issued_at=now)
+        license_str = generate_test_license(
+            org_id="test-org", duration_days=30, issued_at=now
+        )
         validator = LicenseValidator(TEST_KEYPAIR.public_key)
         result = validator.validate(license_str)
 
@@ -1075,7 +1077,7 @@ class TestTestKeypairAndGenerateTestLicense:
         from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
 
         now = int(time.time())
-        license_str = generate_test_license(issued_at=now)
+        license_str = generate_test_license(org_id="test-org", issued_at=now)
         validator = LicenseValidator(TEST_KEYPAIR.public_key)
         result = validator.validate(license_str)
 

@@ -129,6 +129,7 @@ class TestRunDailyMetricsBatch:
                 repo_ids=[str(repo_id)],
                 day="2025-01-15",
                 db_url="clickhouse://fake",
+                org_id="test-org",
             )
         finally:
             task.pop_request()
@@ -140,7 +141,7 @@ class TestRunDailyMetricsBatch:
             date(2025, 1, 15), time.min, tzinfo=timezone.utc
         )
         cp = get_checkpoint(
-            db_session, "default", repo_id, "daily_batch", checkpoint_day
+            db_session, "test-org", repo_id, "daily_batch", checkpoint_day
         )
         assert cp is not None
         assert cp.status == CheckpointStatus.COMPLETED
@@ -163,6 +164,7 @@ class TestRunDailyMetricsBatch:
                 repo_ids=[str(repo_id)],
                 day="2025-01-15",
                 db_url="clickhouse://fake",
+                org_id="test-org",
             )
         finally:
             task.pop_request()
@@ -174,7 +176,7 @@ class TestRunDailyMetricsBatch:
             date(2025, 1, 15), time.min, tzinfo=timezone.utc
         )
         cp = get_checkpoint(
-            db_session, "default", repo_id, "daily_batch", checkpoint_day
+            db_session, "test-org", repo_id, "daily_batch", checkpoint_day
         )
         assert cp is not None
         assert cp.status == CheckpointStatus.FAILED
@@ -194,7 +196,7 @@ class TestRunDailyMetricsBatch:
             date(2025, 1, 15), time.min, tzinfo=timezone.utc
         )
         cp = mark_running(
-            db_session, "default", repo_id, "daily_batch", checkpoint_day, "old-worker"
+            db_session, "test-org", repo_id, "daily_batch", checkpoint_day, "old-worker"
         )
         mark_completed(db_session, cp.id)
 
@@ -205,6 +207,7 @@ class TestRunDailyMetricsBatch:
                 repo_ids=[str(repo_id)],
                 day="2025-01-15",
                 db_url="clickhouse://fake",
+                org_id="test-org",
             )
         finally:
             task.pop_request()
@@ -232,19 +235,20 @@ class TestRunDailyMetricsFinalizeTask:
                 batch_results=[{"day": "2025-01-15", "results": {}}],
                 day="2025-01-15",
                 db_url="clickhouse://fake",
+                org_id="test-org",
             )
         finally:
             task.pop_request()
 
         assert result["status"] == "success"
         mock_asyncio_run.assert_called_once()
-        mock_invalidate.assert_called_once_with("2025-01-15", "default")
+        mock_invalidate.assert_called_once_with("2025-01-15", "test-org")
 
         checkpoint_day = datetime.combine(
             date(2025, 1, 15), time.min, tzinfo=timezone.utc
         )
         cp = get_checkpoint(
-            db_session, "default", None, "daily_finalize", checkpoint_day
+            db_session, "test-org", None, "daily_finalize", checkpoint_day
         )
         assert cp is not None
         assert cp.status == CheckpointStatus.COMPLETED
@@ -270,6 +274,7 @@ class TestRunDailyMetricsFinalizeTask:
                     batch_results=[],
                     day="2025-01-15",
                     db_url="clickhouse://fake",
+                    org_id="test-org",
                 )
         finally:
             task.retry = original_retry
@@ -279,7 +284,7 @@ class TestRunDailyMetricsFinalizeTask:
             date(2025, 1, 15), time.min, tzinfo=timezone.utc
         )
         cp = get_checkpoint(
-            db_session, "default", None, "daily_finalize", checkpoint_day
+            db_session, "test-org", None, "daily_finalize", checkpoint_day
         )
         assert cp is not None
         assert cp.status == CheckpointStatus.FAILED

@@ -92,6 +92,7 @@ class SQLAlchemyStore(
             Column("priority_raw", String),
             Column("service_class", String),
             Column("due_at", DateTime(timezone=True)),
+            Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )
         self._work_item_transitions_table = Table(
@@ -106,6 +107,7 @@ class SQLAlchemyStore(
             Column("from_status_raw", String),
             Column("to_status_raw", String),
             Column("actor", String),
+            Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )
         self._work_item_dependencies_table = Table(
@@ -115,6 +117,7 @@ class SQLAlchemyStore(
             Column("target_work_item_id", String, primary_key=True),
             Column("relationship_type", String, primary_key=True),
             Column("relationship_type_raw", String),
+            Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )
         self._work_graph_issue_pr_table = Table(
@@ -126,6 +129,7 @@ class SQLAlchemyStore(
             Column("confidence", Float),
             Column("provenance", String),
             Column("evidence", String),
+            Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )
         self._work_graph_pr_commit_table = Table(
@@ -137,6 +141,7 @@ class SQLAlchemyStore(
             Column("confidence", Float),
             Column("provenance", String),
             Column("evidence", String),
+            Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )
 

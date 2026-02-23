@@ -169,7 +169,7 @@ def _dispatch_post_sync_tasks(
 def run_sync_config(
     self,
     config_id: str,
-    org_id: str = "default",
+    org_id: str,
     triggered_by: str = "manual",
 ) -> dict:
     from dev_health_ops.db import get_postgres_session_sync
@@ -342,7 +342,7 @@ def run_sync_config(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _github_handler))
+            asyncio.run(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
             result_payload.update(
                 {
                     "owner": owner,
@@ -373,7 +373,7 @@ def run_sync_config(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _gitlab_handler))
+            asyncio.run(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
             result_payload.update(
                 {
                     "project_id": int(project_id),
@@ -684,7 +684,7 @@ def _batch_sync_callback(
 def dispatch_batch_sync(
     self,
     config_id: str,
-    org_id: str = "default",
+    org_id: str,
     triggered_by: str = "schedule",
 ) -> dict:
     """Fan out a batch-eligible SyncConfiguration into per-repo Celery tasks.
@@ -913,7 +913,7 @@ def _run_sync_for_repo(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _github_handler))
+            asyncio.run(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
             result_payload.update({"owner": owner, "repo": repo_name})
 
         elif provider == "gitlab":
@@ -940,7 +940,7 @@ def _run_sync_for_repo(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _gitlab_handler))
+            asyncio.run(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
             result_payload.update(
                 {"project_id": int(project_id), "gitlab_url": gitlab_url}
             )
@@ -1171,7 +1171,7 @@ def run_daily_metrics(
             )
         )
         # Invalidate GraphQL cache after successful metrics update
-        _invalidate_metrics_cache(target_day.isoformat())
+        _invalidate_metrics_cache(target_day.isoformat(), "")
 
         return {
             "status": "success",
@@ -1187,13 +1187,13 @@ def run_daily_metrics(
 @celery_app.task(bind=True, queue="default")
 def dispatch_daily_metrics_partitioned(
     self,
+    org_id: str | None = None,
     db_url: Optional[str] = None,
     day: Optional[str] = None,
     backfill_days: int = 1,
     batch_size: int = 5,
     sink: str = "auto",
     provider: str = "auto",
-    org_id: str = "default",
 ) -> dict:
     """Orchestrator: discover repos, partition into batches, fan out via chord.
 
@@ -1287,10 +1287,10 @@ def run_daily_metrics_batch(
     self,
     repo_ids: list[str],
     day: str,
+    org_id: str | None = None,
     db_url: Optional[str] = None,
     sink: str = "auto",
     provider: str = "auto",
-    org_id: str = "default",
 ) -> dict:
     """Worker: compute daily metrics for a batch of repos (single day).
 
@@ -1398,9 +1398,9 @@ def run_daily_metrics_finalize_task(
     self,
     batch_results: list,
     day: str,
+    org_id: str | None = None,
     db_url: Optional[str] = None,
     sink: str = "auto",
-    org_id: str = "default",
 ) -> dict:
     """Chord callback: finalize daily metrics after all batches complete.
 
@@ -1486,7 +1486,7 @@ def run_daily_metrics_finalize_task(
         raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
 
 
-def _invalidate_metrics_cache(day: str, org_id: str = "default") -> None:
+def _invalidate_metrics_cache(day: str, org_id: str) -> None:
     """Invalidate GraphQL caches after metrics update."""
     try:
         from dev_health_ops.api.graphql.cache_invalidation import (
@@ -1501,7 +1501,7 @@ def _invalidate_metrics_cache(day: str, org_id: str = "default") -> None:
         logger.warning("Cache invalidation failed (non-fatal): %s", e)
 
 
-def _invalidate_sync_cache(sync_type: str, org_id: str = "default") -> None:
+def _invalidate_sync_cache(sync_type: str, org_id: str) -> None:
     """Invalidate GraphQL caches after data sync."""
     try:
         from dev_health_ops.api.graphql.cache_invalidation import (
@@ -1623,7 +1623,7 @@ def run_work_items_sync(
         )
 
         # Invalidate GraphQL cache after successful sync
-        _invalidate_sync_cache(provider)
+        _invalidate_sync_cache(provider, "")
 
         return {
             "status": "success",
@@ -1636,7 +1636,7 @@ def run_work_items_sync(
 
 
 @celery_app.task(bind=True, max_retries=2, queue="sync")
-def sync_team_drift(self, org_id: str = "default") -> dict:
+def sync_team_drift(self, org_id: str | None = None) -> dict:
 
     from dev_health_ops.api.services.settings import (
         IntegrationCredentialsService,
@@ -1717,7 +1717,7 @@ def sync_team_drift(self, org_id: str = "default") -> dict:
 
 
 @celery_app.task(bind=True, max_retries=2, queue="sync")
-def reconcile_team_members(self, org_id: str = "default") -> dict:
+def reconcile_team_members(self, org_id: str | None = None) -> dict:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import IdentityMapping
 
@@ -1778,7 +1778,7 @@ def reconcile_team_members(self, org_id: str = "default") -> dict:
 
 
 @celery_app.task(bind=True, max_retries=2, queue="metrics")
-def sync_teams_to_analytics(self, org_id: str = "default") -> dict:
+def sync_teams_to_analytics(self, org_id: str | None = None) -> dict:
     from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
 
     try:
@@ -2147,7 +2147,7 @@ def process_webhook_event(
             logger.warning("Unknown webhook provider: %s", provider)
             return {"status": "error", "reason": f"unknown_provider: {provider}"}
 
-        _invalidate_sync_cache(provider, org_id or "default")
+        _invalidate_sync_cache(provider, org_id)
 
         return {
             "status": "success",
@@ -2288,7 +2288,7 @@ def _process_github_event(
 
     # Execute sync
     try:
-        asyncio.run(run_with_store(db_url, db_type, _sync_handler))
+        asyncio.run(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
         return {"processed": True, "repo": f"{owner}/{repo}", "event": event_type}
     except Exception as e:
         logger.error("Failed to process GitHub webhook %s: %s", event_type, e)
@@ -2366,7 +2366,7 @@ def _process_gitlab_event(
             )
 
     try:
-        asyncio.run(run_with_store(db_url, db_type, _sync_handler))
+        asyncio.run(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
         return {"processed": True, "project_id": project_id, "event": event_type}
     except Exception as e:
         logger.error("Failed to process GitLab webhook %s: %s", event_type, e)

@@ -105,7 +105,7 @@ class IngestIncident(BaseModel):
 class IngestBatchRequest(BaseModel):
     """Common base for all ingest requests."""
 
-    org_id: str = "default"
+    org_id: str
     repo_url: str  # Used to derive deterministic repo_id for git-related entities
 
 
@@ -118,7 +118,7 @@ class IngestPullRequestsRequest(IngestBatchRequest):
 
 
 class IngestWorkItemsRequest(BaseModel):
-    org_id: str = "default"
+    org_id: str
     items: list[IngestWorkItem] = Field(..., min_length=1, max_length=1000)
     # No repo_url — work items are project-scoped, not repo-scoped
 

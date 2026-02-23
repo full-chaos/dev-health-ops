@@ -21,6 +21,7 @@ async def test_fixtures_generation_smoke_sqlite(tmp_path):
     ns = argparse.Namespace(
         sink=db_uri,
         db_type="sqlite",
+        org_id="test-org",
         repo_name="test/repo",
         repo_count=1,
         days=2,
@@ -52,6 +53,7 @@ async def test_fixtures_generation_minimal_no_metrics(tmp_path):
     ns = argparse.Namespace(
         sink=db_uri,
         db_type="sqlite",
+        org_id="test-org",
         repo_name="test/minimal",
         repo_count=1,
         days=1,
@@ -86,6 +88,7 @@ async def test_fixtures_generation_ensures_tables(tmp_path, monkeypatch):
     ns = argparse.Namespace(
         sink=db_uri,
         db_type="sqlite",
+        org_id="test-org",
         repo_name="test/ensure",
         repo_count=1,
         days=1,
@@ -138,6 +141,7 @@ async def test_fixtures_generation_initializes_license_manager(tmp_path):
     ns = argparse.Namespace(
         sink=db_uri,
         db_type="sqlite",
+        org_id="test-org",
         repo_name="test/license-check",
         repo_count=1,
         days=1,

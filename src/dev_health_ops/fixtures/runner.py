@@ -108,7 +108,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data = {"work_items": [], "transitions": []}
 
-    org_id = getattr(ns, "org", "default") or "default"
+    org_id = getattr(ns, "org_id", None) or ""
     logging.info("Generating fixtures for org_id=%s", org_id)
 
     async def _handler(store):
@@ -376,7 +376,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     if comp_data["dailies"]:
                         sink.write_repo_complexity_daily(comp_data["dailies"])
 
-    await run_with_store(ns.sink, db_type, _handler)
+    await run_with_store(ns.sink, db_type, _handler, org_id=org_id)
 
     if ns.with_metrics:
         await run_daily_metrics_job(
@@ -384,6 +384,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             day=now.date(),
             backfill_days=ns.days,
             provider="auto",
+            org_id=org_id,
         )
 
         if fixture_data["work_items"] and fixture_data["transitions"]:

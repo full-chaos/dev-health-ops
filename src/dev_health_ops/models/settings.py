@@ -73,7 +73,7 @@ class Setting(Base):
     """Key-value store for application settings.
 
     Settings are scoped to an organization (org_id) for multi-tenancy.
-    For single-tenant deployments, org_id can be a default value like 'default'.
+    For single-tenant deployments, org_id identifies the tenant organization.
 
     Sensitive values should be stored encrypted (is_encrypted=True).
     """
@@ -81,7 +81,7 @@ class Setting(Base):
     __tablename__ = "settings"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default", index=True)
+    org_id = Column(Text, nullable=False, index=True, server_default="")
     category = Column(Text, nullable=False, index=True)
     key = Column(Text, nullable=False)
     value = Column(Text, nullable=True, comment="Setting value (may be encrypted)")
@@ -111,7 +111,7 @@ class Setting(Base):
         key: str,
         category: str = SettingCategory.GENERAL.value,
         value: Optional[str] = None,
-        org_id: str = "default",
+        org_id: str | None = None,
         is_encrypted: bool = False,
         description: Optional[str] = None,
     ):
@@ -136,7 +136,7 @@ class IntegrationCredential(Base):
     __tablename__ = "integration_credentials"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default", index=True)
+    org_id = Column(Text, nullable=False, index=True, server_default="")
     provider = Column(Text, nullable=False, index=True)
     name = Column(Text, nullable=False, comment="Display name for this credential set")
     is_active = Column(Boolean, nullable=False, default=True)
@@ -181,7 +181,7 @@ class IntegrationCredential(Base):
         self,
         provider: str,
         name: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         credentials_encrypted: Optional[str] = None,
         config: Optional[dict] = None,
         is_active: bool = True,
@@ -207,7 +207,7 @@ class SyncConfiguration(Base):
     __tablename__ = "sync_configurations"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default", index=True)
+    org_id = Column(Text, nullable=False, index=True, server_default="")
     name = Column(Text, nullable=False, comment="Display name for this sync config")
     provider = Column(Text, nullable=False, index=True)
 
@@ -263,7 +263,7 @@ class SyncConfiguration(Base):
         self,
         name: str,
         provider: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         credential_id: Optional[uuid.UUID] = None,
         sync_targets: Optional[list] = None,
         sync_options: Optional[dict] = None,
@@ -291,7 +291,7 @@ class ScheduledJob(Base):
     __tablename__ = "scheduled_jobs"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default", index=True)
+    org_id = Column(Text, nullable=False, index=True, server_default="")
     name = Column(Text, nullable=False, comment="Display name for this job")
     job_type = Column(
         Text, nullable=False, index=True, comment="Type of job (sync, metrics, etc.)"
@@ -352,7 +352,7 @@ class ScheduledJob(Base):
         name: str,
         job_type: str,
         schedule_cron: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         job_config: Optional[dict] = None,
         sync_config_id: Optional[uuid.UUID] = None,
         tz: str = "UTC",
@@ -441,7 +441,7 @@ class IdentityMapping(Base):
     __tablename__ = "identity_mappings"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default", index=True)
+    org_id = Column(Text, nullable=False, index=True, server_default="")
 
     canonical_id = Column(
         Text,
@@ -488,7 +488,7 @@ class IdentityMapping(Base):
     def __init__(
         self,
         canonical_id: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         display_name: Optional[str] = None,
         email: Optional[str] = None,
         provider_identities: Optional[dict] = None,
@@ -516,7 +516,7 @@ class TeamMapping(Base):
     __tablename__ = "team_mappings"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default", index=True)
+    org_id = Column(Text, nullable=False, index=True, server_default="")
 
     team_id = Column(Text, nullable=False, comment="Unique team identifier (slug)")
     name = Column(Text, nullable=False, comment="Team display name")
@@ -586,7 +586,7 @@ class TeamMapping(Base):
         self,
         team_id: str,
         name: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         description: Optional[str] = None,
         repo_patterns: Optional[list] = None,
         project_keys: Optional[list] = None,
@@ -622,7 +622,7 @@ class SyncWatermark(Base):
     __tablename__ = "sync_watermarks"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default")
+    org_id = Column(Text, nullable=False, server_default="")
     repo_id = Column(
         Text,
         nullable=False,
@@ -656,7 +656,7 @@ class SyncWatermark(Base):
         self,
         repo_id: str,
         target: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         last_synced_at: Optional[datetime] = None,
     ):
         self.id = uuid.uuid4()

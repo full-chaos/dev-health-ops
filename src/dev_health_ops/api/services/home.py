@@ -258,7 +258,7 @@ async def build_home_response(
     cache_key = filter_cache_key("home", filters)
     cached = cache.get(cache_key)
     if cached is not None:
-        return cached
+        return HomeResponse.model_validate(cached)
 
     start_day, end_day, compare_start, compare_end = time_window(filters)
 
@@ -403,7 +403,7 @@ async def build_home_response(
             events=events,
         )
 
-    cache.set(cache_key, response)
+    cache.set(cache_key, response.model_dump(mode="json"))
     return response
 
 

@@ -217,13 +217,13 @@ PY
 echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
 (
   export DISABLE_DOTENV=1
+  export ORG_ID="${E2E_ORG_ID}"
   unset POSTGRES_URI
   unset DATABASE_URI
   unset DATABASE_URL
   run_dev_hops fixtures generate \
     --sink "${CLICKHOUSE_URI}" \
     --db-type clickhouse \
-    --org "${E2E_ORG_ID}" \
     --repo-name "${FIXTURE_REPO_NAME}" \
     --days "${FIXTURE_DAYS}" \
     --commits-per-day "${FIXTURE_COMMITS_PER_DAY}" \

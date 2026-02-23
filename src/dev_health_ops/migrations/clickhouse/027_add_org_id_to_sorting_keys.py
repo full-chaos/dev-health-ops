@@ -197,6 +197,32 @@ def _replace_table_name(ddl: str, old_name: str, new_name: str) -> str:
     return result
 
 
+
+# Some ClickHouse versions omit ALTER-added columns from SHOW CREATE TABLE output.
+# org_id must be present in the column definitions for ORDER BY to reference it.
+_ORG_ID_COL_RE = re.compile(r"`?org_id`?\s+String", re.IGNORECASE)
+
+
+def _ensure_org_id_in_ddl(ddl: str) -> str:
+    """Inject org_id column into DDL if SHOW CREATE TABLE omitted it."""
+    if _ORG_ID_COL_RE.search(ddl):
+        return ddl
+    result = re.sub(
+        r"(\n\)\s*\n)",
+        ",\n    `org_id` String DEFAULT 'default'\n)\n",
+        ddl,
+        count=1,
+    )
+    if result == ddl:
+        result = re.sub(
+            r"\)\s*ENGINE",
+            ",\n    `org_id` String DEFAULT 'default'\n)\nENGINE",
+            ddl,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return result
+
 def _table_exists(client, table: str) -> bool:
     try:
         res = client.query(
@@ -227,9 +253,8 @@ def _rebuild_table(client, table: str, new_order_by: str) -> None:
         log.warning(f"  {table}: table does not exist, skipping")
         return
 
-
     res = client.query(f"SHOW CREATE TABLE `{table}`")
-    ddl = res.result_rows[0][0]
+    ddl = _ensure_org_id_in_ddl(res.result_rows[0][0])
 
 
     if _has_org_id_first_in_order_by(ddl):
@@ -304,8 +329,8 @@ def upgrade(client):
             # Clean up shadow table on failure
             try:
                 client.command(f"DROP TABLE IF EXISTS `{table}_new`")
-            except Exception:
-                pass
+            except Exception as cleanup_err:
+                log.warning(f"  {table}: shadow table cleanup failed: {cleanup_err}")
             raise
 
     # ------------------------------------------------------------------

@@ -108,7 +108,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data = {"work_items": [], "transitions": []}
 
-    org_id = getattr(ns, "org_id", None) or ""
+    org_id = getattr(ns, "org", None) or ""
     logging.info("Generating fixtures for org_id=%s", org_id)
 
     async def _handler(store):

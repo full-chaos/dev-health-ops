@@ -408,6 +408,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 sink = None
 
             if sink:
+                # Propagate org_id to sink for auto-injection into metric records.
+                sink.org_id = org_id  # type: ignore[attr-defined]
                 team_resolver = load_team_resolver()
                 computed_at = now
                 end_day = now.date()

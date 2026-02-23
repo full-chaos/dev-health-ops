@@ -51,7 +51,7 @@ class CredentialResolutionError(Exception):
         self,
         provider: str,
         message: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         credential_name: str = "default",
     ):
         self.provider = provider
@@ -64,7 +64,7 @@ class CredentialResolver:
     def __init__(
         self,
         session: AsyncSession,
-        org_id: str = "default",
+        org_id: str,
         allow_env_fallback: bool = True,
     ):
         self.session = session
@@ -202,7 +202,7 @@ class CredentialResolver:
 
 def resolve_credentials_sync(
     provider: str,
-    org_id: str = "default",
+    org_id: str | None = None,
     credential_name: str = "default",
     db_url: Optional[str] = None,
     allow_env_fallback: bool = True,
@@ -222,6 +222,14 @@ def resolve_credentials_sync(
                 f"No database URL configured and no {provider} environment credentials found. "
                 "Set DATABASE_URI or configure provider-specific environment variables."
             ),
+            org_id=org_id,
+            credential_name=credential_name,
+        )
+
+    if not org_id:
+        raise CredentialResolutionError(
+            provider=provider,
+            message="Organization ID is required for database credential resolution.",
             org_id=org_id,
             credential_name=credential_name,
         )

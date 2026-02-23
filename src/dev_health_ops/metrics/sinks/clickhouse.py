@@ -10,16 +10,6 @@ import clickhouse_connect
 import logging
 import asyncio
 
-DEFAULT_BATCH_SIZE = 10000
-
-T = TypeVar("T")
-
-
-def _chunked(seq: Sequence[T], size: int) -> Iterator[Sequence[T]]:
-    for i in range(0, len(seq), size):
-        yield seq[i : i + size]
-
-
 from dev_health_ops.metrics.schemas import (
     CapacityForecastRecord,
     CommitMetricsRecord,
@@ -59,7 +49,16 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
+DEFAULT_BATCH_SIZE = 10000
+
+T = TypeVar("T")
+
 logger = logging.getLogger(__name__)
+
+
+def _chunked(seq: Sequence[T], size: int) -> Iterator[Sequence[T]]:
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
 
 
 def _dt_to_clickhouse_datetime(value: Optional[datetime]) -> Optional[datetime]:
@@ -165,7 +164,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         _dt_to_clickhouse_datetime(
                             team.get("updated_at", datetime.now(timezone.utc))
                         ),
-                        team.get("org_id", "default"),
+                        team["org_id"],
                     ]
                 )
             else:
@@ -184,7 +183,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         _dt_to_clickhouse_datetime(
                             getattr(team, "updated_at", datetime.now(timezone.utc))
                         ),
-                        getattr(team, "org_id", "default"),
+                        team.org_id,
                     ]
                 )
         await asyncio.to_thread(
@@ -1021,7 +1020,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
                         "event_ts": _dt_to_clickhouse_datetime(r.event_ts),
                         "day": r.day,
-                        "org_id": getattr(r, "org_id", "default"),
+                        "org_id": r.org_id,
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]
@@ -1052,7 +1051,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "provenance": r.provenance,
                         "evidence": r.evidence,
                         "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-                        "org_id": getattr(r, "org_id", "default"),
+                        "org_id": r.org_id,
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]
@@ -1085,7 +1084,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "provenance": r.provenance,
                         "evidence": r.evidence,
                         "last_synced": _dt_to_clickhouse_datetime(r.last_synced),
-                        "org_id": getattr(r, "org_id", "default"),
+                        "org_id": r.org_id,
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]
@@ -1147,7 +1146,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                     "epic_id": str(get("epic_id") or ""),
                     "url": str(get("url") or ""),
                     "last_synced": _dt_to_clickhouse_datetime(synced_at),
-                    "org_id": get("org_id", "default"),
+                    "org_id": item["org_id"] if is_dict else item.org_id,
                 }
             )
 
@@ -1220,7 +1219,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                     "to_status_raw": str(get("to_status_raw") or ""),
                     "actor": str(get("actor") or ""),
                     "last_synced": _dt_to_clickhouse_datetime(synced_at),
-                    "org_id": get("org_id", "default"),
+                    "org_id": item["org_id"] if is_dict else item.org_id,
                 }
             )
 
@@ -1432,7 +1431,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                         "throughput_stddev": r.throughput_stddev,
                         "insufficient_history": 1 if r.insufficient_history else 0,
                         "high_variance": 1 if r.high_variance else 0,
-                        "org_id": getattr(r, "org_id", "default"),
+                        "org_id": r.org_id,
                     }
                 )
             matrix = [[row[col] for col in column_names] for row in data]

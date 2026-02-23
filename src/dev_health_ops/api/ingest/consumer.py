@@ -39,7 +39,7 @@ def _process_entries(entries: list, entity_type: str) -> list[dict]:
             payload = json.loads(data.get("payload", "{}"))
             batch_items = payload.get("items", [])
             for item in batch_items:
-                item["_org_id"] = payload.get("org_id", "default")
+                item["_org_id"] = payload.get("org_id", "")
                 item["_repo_url"] = payload.get("repo_url", "")
                 item["_ingestion_id"] = data.get("ingestion_id", "")
             items.extend(batch_items)

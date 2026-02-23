@@ -12,6 +12,7 @@ class Team(Base):
     __tablename__ = "teams"
 
     id = Column(Text, primary_key=True, comment="Unique team identifier (slug)")
+    org_id = Column(Text, nullable=False, index=True, server_default="")
     team_uuid = Column(
         GUID, unique=True, default=uuid.uuid4, comment="Internal unique identifier"
     )

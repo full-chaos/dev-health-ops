@@ -76,6 +76,7 @@ def test_ingest_commits_route_is_wired_through_main_app(monkeypatch):
         response = client.post(
             "/api/v1/ingest/commits",
             json={
+                "org_id": "test-org",
                 "repo_url": "https://github.com/org/repo",
                 "items": [
                     {
@@ -93,5 +94,5 @@ def test_ingest_commits_route_is_wired_through_main_app(monkeypatch):
     body = response.json()
     assert body["status"] == "accepted"
     assert body["items_received"] == 1
-    assert body["stream"] == "ingest:default:commits"
+    assert body["stream"] == "ingest:test-org:commits"
     assert body["ingestion_id"]

@@ -600,7 +600,7 @@ class TestCredentialResolutionError:
             message="Test",
         )
 
-        assert error.org_id == "default"
+        assert error.org_id is None
         assert error.credential_name == "default"
 
 

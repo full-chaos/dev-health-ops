@@ -117,7 +117,7 @@ def decrypt_value(ciphertext: str) -> str:
 class SettingsService:
     """Service for managing settings with encryption support."""
 
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -239,7 +239,7 @@ class SettingsService:
 class IntegrationCredentialsService:
     """Service for managing integration credentials with encryption."""
 
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -366,7 +366,7 @@ class IntegrationCredentialsService:
 class SyncConfigurationService:
     """Service for managing sync configurations."""
 
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -463,7 +463,7 @@ class SyncConfigurationService:
 class IdentityMappingService:
     """Service for managing identity mappings."""
 
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -564,7 +564,7 @@ class IdentityMappingService:
 class TeamMappingService:
     """Service for managing team mappings."""
 
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -638,7 +638,7 @@ class TeamMappingService:
 class TeamDiscoveryService:
     """Service for discovering teams from external providers."""
 
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -842,7 +842,7 @@ class TeamDiscoveryService:
 class TeamDriftSyncService:
     """Compares discovered teams against stored TeamMappings and flags/merges changes."""
 
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -1077,7 +1077,7 @@ class TeamDriftSyncService:
 
 
 class TeamMembershipService:
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 
@@ -1326,7 +1326,7 @@ class TeamMembershipService:
 
 
 class JiraActivityInferenceService:
-    def __init__(self, session: AsyncSession, org_id: str = "default"):
+    def __init__(self, session: AsyncSession, org_id: str):
         self.session = session
         self.org_id = org_id
 

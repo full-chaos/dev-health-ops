@@ -9,9 +9,11 @@ from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 from dev_health_ops.metrics.loaders.sqlalchemy import SqlAlchemyDataLoader
 from dev_health_ops.metrics.schemas import UserMetricsDailyRecord
 from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
-from dev_health_ops.models.atlassian_ops import (AtlassianOpsAlert,
-                                                 AtlassianOpsIncident,
-                                                 AtlassianOpsSchedule)
+from dev_health_ops.models.atlassian_ops import (
+    AtlassianOpsAlert,
+    AtlassianOpsIncident,
+    AtlassianOpsSchedule,
+)
 from dev_health_ops.storage import SQLAlchemyStore
 
 
@@ -63,7 +65,12 @@ async def test_job_daily_rolling_ic_landscape(tmp_path):
     sink.close()
 
     await run_daily_metrics_job(
-        db_url=db_url, day=today, backfill_days=1, provider="none", sink="sqlite"
+        db_url=db_url,
+        day=today,
+        backfill_days=1,
+        provider="none",
+        sink="sqlite",
+        org_id="test-org",
     )
 
     sink = SQLiteMetricsSink(db_url)

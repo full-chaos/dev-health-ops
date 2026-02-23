@@ -14,6 +14,7 @@ from dev_health_ops.api.main import app
 
 ENDPOINT = "/api/v1/ingest/commits"
 VALID_PAYLOAD = {
+    "org_id": "test-org",
     "repo_url": "https://github.com/org/repo",
     "items": [
         {

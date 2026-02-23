@@ -361,7 +361,7 @@ def _fetch_table_presence(client: Any, tables: Iterable[str]) -> Dict[str, bool]
 
 
 def run_completeness_audit(
-    *, db_url: str, days: int, org_id: str = "default"
+    *, db_url: str, days: int, org_id: str | None
 ) -> Dict[str, Any]:
     window_start, window_end = build_window(days)
     params = {
@@ -590,7 +590,7 @@ def _cmd_audit_completeness(ns: argparse.Namespace) -> int:
         report = run_completeness_audit(
             db_url=ns.db,
             days=ns.days,
-            org_id=getattr(ns, "org", "default") or "default",
+            org_id=getattr(ns, "org", None),
         )
         if ns.format == "json":
             print(format_completeness_json(report))

@@ -20,7 +20,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-def get_org_id(x_org_id: Annotated[str, Header(alias="X-Org-Id")] = "default") -> str:
+def get_org_id(x_org_id: Annotated[str, Header(alias="X-Org-Id")]) -> str:
     return x_org_id
 
 

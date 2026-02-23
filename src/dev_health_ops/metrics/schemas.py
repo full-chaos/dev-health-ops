@@ -94,7 +94,7 @@ class CommitMetricsRecord:
     files_changed: int
     size_bucket: str  # small|medium|large
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -146,7 +146,7 @@ class UserMetricsDailyRecord:
     delivery_units: int = 0
     cycle_p50_hours: float = 0.0
     cycle_p90_hours: float = 0.0
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -165,7 +165,7 @@ class ICLandscapeRollingRecord:
     cycle_p50_30d_hours: float
     wip_max_30d: int
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -209,7 +209,7 @@ class RepoMetricsDailyRecord:
     # DORA proxies.
     mttr_hours: Optional[float] = None
     change_failure_rate: float = 0.0
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -222,7 +222,7 @@ class FileMetricsRecord:
     commits_count: int
     hotspot_score: float
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -236,7 +236,7 @@ class TeamMetricsDailyRecord:
     after_hours_commit_ratio: float
     weekend_commit_ratio: float
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -259,7 +259,7 @@ class WorkItemCycleTimeRecord:
     wait_time_hours: Optional[float]
     flow_efficiency: Optional[float]
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -290,7 +290,7 @@ class WorkItemMetricsDailyRecord:
     defect_intro_rate: float = 0.0
     wip_congestion_ratio: float = 0.0
     predictability_score: float = 0.0
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -307,7 +307,7 @@ class WorkItemUserMetricsDailyRecord:
     cycle_time_p50_hours: Optional[float]
     cycle_time_p90_hours: Optional[float]
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -322,7 +322,7 @@ class WorkItemStateDurationDailyRecord:
     items_touched: int
     computed_at: datetime
     avg_wip: float = 0.0
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -333,7 +333,7 @@ class ReviewEdgeDailyRecord:
     author: str
     reviews_count: int
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -346,7 +346,7 @@ class CICDMetricsDailyRecord:
     p90_duration_minutes: Optional[float]
     avg_queue_minutes: Optional[float]
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -358,7 +358,7 @@ class DeployMetricsDailyRecord:
     deploy_time_p50_hours: Optional[float]
     lead_time_p50_hours: Optional[float]
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -369,7 +369,7 @@ class IncidentMetricsDailyRecord:
     mttr_p50_hours: Optional[float]
     mttr_p90_hours: Optional[float]
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -379,7 +379,7 @@ class DORAMetricsRecord:
     metric_name: str
     value: float
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -396,7 +396,7 @@ class FileComplexitySnapshot:
     high_complexity_functions: int
     very_high_complexity_functions: int
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -409,7 +409,7 @@ class RepoComplexityDaily:
     high_complexity_functions: int
     very_high_complexity_functions: int
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -424,7 +424,7 @@ class FileHotspotDaily:
     blame_concentration: Optional[float]
     risk_score: float
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -439,7 +439,7 @@ class InvestmentClassificationRecord:
     confidence: float
     rule_id: str
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -455,7 +455,7 @@ class InvestmentMetricsRecord:
     churn_loc: int
     cycle_p50_hours: float
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -472,7 +472,7 @@ class IssueTypeMetricsRecord:
     cycle_p90_hours: float
     lead_p50_hours: float
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -492,7 +492,7 @@ class WorkGraphEdgeRecord:
     last_synced: datetime
     event_ts: datetime
     day: date
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -504,7 +504,7 @@ class WorkGraphIssuePRRecord:
     provenance: str
     evidence: str
     last_synced: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -516,7 +516,7 @@ class WorkGraphPRCommitRecord:
     provenance: str
     evidence: str
     last_synced: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -541,7 +541,7 @@ class WorkUnitInvestmentRecord:
     categorization_input_hash: str
     categorization_run_id: str
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -552,7 +552,7 @@ class WorkUnitInvestmentEvidenceQuoteRecord:
     source_id: str
     computed_at: datetime
     categorization_run_id: str
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -564,7 +564,7 @@ class InvestmentExplanationRecord:
     llm_provider: str
     llm_model: Optional[str]
     computed_at: datetime
-    org_id: str = "default"
+    org_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -612,4 +612,4 @@ class CapacityForecastRecord:
     throughput_stddev: float
     insufficient_history: bool = False
     high_variance: bool = False
-    org_id: str = "default"
+    org_id: str = ""

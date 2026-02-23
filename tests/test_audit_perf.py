@@ -2,7 +2,7 @@ from dev_health_ops.audit.perf import format_perf_report, run_perf_audit
 
 
 def test_perf_audit_unsupported_backend() -> None:
-    report = run_perf_audit("sqlite:///tmp/test.db")
+    report = run_perf_audit("sqlite:///tmp/test.db", org_id=None)
     assert report["status"] == "unchecked"
     assert report["db_error"] == "unsupported backend: sqlite"
 

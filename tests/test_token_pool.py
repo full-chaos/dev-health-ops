@@ -263,7 +263,7 @@ class TestFactory:
         with patch.dict("os.environ", {}, clear=True):
             pool = create_token_pool("github")
 
-        assert pool._org_id == "default"
+        assert pool._org_id is None
 
 
 class TestLuaScript:

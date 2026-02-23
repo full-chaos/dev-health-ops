@@ -47,6 +47,7 @@ def test_run_dora_metrics_job_writes_sqlite(monkeypatch, tmp_path):
         repo_id=repo_id,
         repo_name="group/project",
         auth="token",
+        org_id="test-org",
     )
 
     engine = create_engine(db_url)

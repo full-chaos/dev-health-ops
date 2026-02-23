@@ -154,9 +154,7 @@ class TelemetryService:
             logger.warning("Telemetry report send failed: %s", exc)
             return None
 
-    async def record_heartbeat(
-        self, data: dict[str, Any], org_id: str = "default"
-    ) -> None:
+    async def record_heartbeat(self, data: dict[str, Any], org_id: str) -> None:
         resolved_org_id = await self._resolve_org_uuid(org_id)
         if resolved_org_id is None:
             logger.debug(
@@ -189,7 +187,7 @@ class TelemetryService:
         if slug_match is not None:
             return slug_match
 
-        if org_id == "default":
+        if not org_id:
             first_org = await self.session.execute(select(Organization.id).limit(1))
             return first_org.scalar_one_or_none()
 

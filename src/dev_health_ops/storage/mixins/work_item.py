@@ -18,6 +18,7 @@ class WorkItemMixin:
                         "target_work_item_id": item.get("target_work_item_id"),
                         "relationship_type": item.get("relationship_type"),
                         "relationship_type_raw": item.get("relationship_type_raw"),
+                        "org_id": str(item.get("org_id") or ""),
                         "last_synced": item.get("last_synced") or synced_at_default,
                     }
                 )
@@ -28,6 +29,7 @@ class WorkItemMixin:
                         "target_work_item_id": getattr(item, "target_work_item_id"),
                         "relationship_type": getattr(item, "relationship_type"),
                         "relationship_type_raw": getattr(item, "relationship_type_raw"),
+                        "org_id": str(getattr(item, "org_id", "") or ""),
                         "last_synced": getattr(item, "last_synced", None)
                         or synced_at_default,
                     }
@@ -54,6 +56,7 @@ class WorkItemMixin:
                 {
                     **r,
                     "repo_id": str(r["repo_id"]),
+                    "org_id": str(r.get("org_id") or ""),
                     "last_synced": r.get("last_synced") or synced_at_default,
                 }
             )
@@ -74,6 +77,7 @@ class WorkItemMixin:
                 {
                     **r,
                     "repo_id": str(r["repo_id"]),
+                    "org_id": str(r.get("org_id") or ""),
                     "last_synced": r.get("last_synced") or synced_at_default,
                 }
             )
@@ -132,6 +136,7 @@ class WorkItemMixin:
                     "priority_raw": str(get("priority_raw") or ""),
                     "service_class": str(get("service_class") or ""),
                     "due_at": get("due_at"),
+                    "org_id": str(get("org_id") or ""),
                     "last_synced": get("last_synced") or synced_at_default,
                 }
             )
@@ -167,6 +172,7 @@ class WorkItemMixin:
                 "priority_raw",
                 "service_class",
                 "due_at",
+                "org_id",
                 "last_synced",
             ],
         )
@@ -199,6 +205,7 @@ class WorkItemMixin:
                     "from_status_raw": str(get("from_status_raw") or ""),
                     "to_status_raw": str(get("to_status_raw") or ""),
                     "actor": str(get("actor") or ""),
+                    "org_id": str(get("org_id") or ""),
                     "last_synced": get("last_synced") or synced_at_default,
                 }
             )
@@ -215,6 +222,7 @@ class WorkItemMixin:
                 "from_status_raw",
                 "to_status_raw",
                 "actor",
+                "org_id",
                 "last_synced",
             ],
         )

@@ -42,7 +42,7 @@ def _clickhouse_uri() -> str:
     return uri
 
 
-def bridge_teams_to_clickhouse(org_id: str = "default") -> int:
+def bridge_teams_to_clickhouse(org_id: str | None = None) -> int:
     teams_payload: List[dict[str, Any]] = []
 
     with get_postgres_session_sync() as session:

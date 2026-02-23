@@ -380,7 +380,7 @@ def compile_coverage_report(
 
 
 def run_coverage_audit(
-    *, db_url: str, providers: Sequence[str], org_id: str = "default"
+    *, db_url: str, providers: Sequence[str], org_id: str | None
 ) -> Dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[3]
     collector = _collector_check(repo_root)
@@ -488,7 +488,7 @@ def _cmd_audit_coverage(ns: argparse.Namespace) -> int:
         report = run_coverage_audit(
             db_url=ns.db,
             providers=providers,
-            org_id=getattr(ns, "org", "default") or "default",
+            org_id=getattr(ns, "org", None),
         )
         if ns.format == "json":
             print(format_coverage_json(report))

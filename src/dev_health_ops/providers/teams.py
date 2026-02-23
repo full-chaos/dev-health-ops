@@ -509,7 +509,9 @@ def sync_teams(ns: argparse.Namespace) -> int:
             )
         logging.info(f"Synced {len(teams_data)} teams to DB.")
 
-    asyncio.run(run_with_store(db_uri, db_type, _handler))
+    asyncio.run(
+        run_with_store(db_uri, db_type, _handler, org_id=getattr(ns, "org", None))
+    )
 
     _bridge_teams_to_postgres(teams_data, ns)
     return 0
@@ -524,7 +526,7 @@ def _bridge_teams_to_postgres(teams_data: List, ns: argparse.Namespace) -> None:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import TeamMapping
 
-    org_id = getattr(ns, "org", "default")
+    org_id = getattr(ns, "org", None)
 
     try:
         with get_postgres_session_sync() as session:

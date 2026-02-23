@@ -155,7 +155,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               mttr_hours REAL,
               change_failure_rate REAL NOT NULL DEFAULT 0.0,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, org_id)
             )
             """,
@@ -190,7 +190,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               active_hours REAL NOT NULL DEFAULT 0.0,
               weekend_days INTEGER NOT NULL DEFAULT 0,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, author_email, day, org_id)
             )
             """,
@@ -204,7 +204,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               files_changed INTEGER NOT NULL,
               size_bucket TEXT NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, author_email, commit_hash, org_id)
             )
             """,
@@ -216,7 +216,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               description TEXT,
               members TEXT, -- JSON array of member identities
               updated_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (id, org_id)
             )
             """,
@@ -231,7 +231,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               after_hours_commit_ratio REAL NOT NULL,
               weekend_commit_ratio REAL NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (team_id, day, org_id)
             )
             """,
@@ -245,7 +245,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               commits_count INTEGER NOT NULL,
               hotspot_score REAL NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, path, org_id)
             )
             """,
@@ -276,7 +276,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               wip_congestion_ratio REAL NOT NULL DEFAULT 0.0,
               predictability_score REAL NOT NULL DEFAULT 0.0,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (provider, day, team_id, work_scope_id, org_id)
             )
             """,
@@ -294,7 +294,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cycle_time_p50_hours REAL,
               cycle_time_p90_hours REAL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (provider, work_scope_id, user_identity, day, org_id)
             )
             """,
@@ -318,7 +318,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               wait_time_hours REAL,
               flow_efficiency REAL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (provider, work_item_id, org_id)
             )
             """,
@@ -334,7 +334,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               items_touched INTEGER NOT NULL,
               avg_wip REAL NOT NULL DEFAULT 0.0,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (provider, work_scope_id, team_id, status, day, org_id)
             )
             """,
@@ -346,7 +346,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               author TEXT NOT NULL,
               reviews_count INTEGER NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, reviewer, author, day, org_id)
             )
             """,
@@ -360,7 +360,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               p90_duration_minutes REAL,
               avg_queue_minutes REAL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, org_id)
             )
             """,
@@ -373,7 +373,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               deploy_time_p50_hours REAL,
               lead_time_p50_hours REAL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, org_id)
             )
             """,
@@ -385,7 +385,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               mttr_p50_hours REAL,
               mttr_p90_hours REAL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, org_id)
             )
             """,
@@ -396,7 +396,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               metric_name TEXT NOT NULL,
               value REAL NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, metric_name, org_id)
             )
             """,
@@ -416,7 +416,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cycle_p50_30d_hours REAL NOT NULL DEFAULT 0.0,
               wip_max_30d INTEGER NOT NULL DEFAULT 0,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, map_name, as_of_day, identity_id, org_id)
             )
             """,
@@ -434,7 +434,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               high_complexity_functions INTEGER NOT NULL,
               very_high_complexity_functions INTEGER NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, as_of_day, file_path, org_id)
             )
             """,
@@ -448,7 +448,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               high_complexity_functions INTEGER NOT NULL,
               very_high_complexity_functions INTEGER NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, org_id)
             )
             """,
@@ -464,7 +464,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               blame_concentration REAL,
               risk_score REAL NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, day, file_path, org_id)
             )
             """,
@@ -480,7 +480,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               confidence REAL NOT NULL,
               rule_id TEXT NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (provider, artifact_type, artifact_id, day, org_id)
             )
             """,
@@ -497,7 +497,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               churn_loc INTEGER NOT NULL,
               cycle_p50_hours REAL NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (day, investment_area, team_id, project_stream, org_id)
             )
             """,
@@ -515,7 +515,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               cycle_p90_hours REAL NOT NULL,
               lead_p50_hours REAL NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (day, provider, team_id, issue_type_norm, org_id)
             )
             """,
@@ -526,7 +526,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               llm_provider TEXT NOT NULL,
               llm_model TEXT,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default'
+              org_id TEXT NOT NULL
             )
             """,
             """
@@ -551,7 +551,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               categorization_input_hash TEXT NOT NULL,
               categorization_run_id TEXT NOT NULL,
               computed_at TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (work_unit_id, categorization_run_id, org_id)
             )
             """,
@@ -563,7 +563,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               source_id TEXT NOT NULL,
               computed_at TEXT NOT NULL,
               categorization_run_id TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (work_unit_id, source_type, source_id, categorization_run_id, org_id)
             )
             """,
@@ -584,7 +584,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               last_synced TEXT NOT NULL,
               event_ts TEXT NOT NULL,
               day TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default'
+              org_id TEXT NOT NULL
             )
             """,
             """
@@ -596,7 +596,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               provenance TEXT NOT NULL,
               evidence TEXT,
               last_synced TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, work_item_id, pr_number, org_id)
             )
             """,
@@ -609,7 +609,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               provenance TEXT NOT NULL,
               evidence TEXT,
               last_synced TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (repo_id, pr_number, commit_hash, org_id)
             )
             """,
@@ -642,7 +642,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               priority_raw TEXT,
               service_class TEXT,
               due_at TEXT,
-              org_id TEXT NOT NULL DEFAULT 'default'
+              org_id TEXT NOT NULL
             )
             """,
             """
@@ -655,7 +655,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               from_status TEXT NOT NULL,
               to_status TEXT NOT NULL,
               actor TEXT,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (work_item_id, occurred_at, to_status, org_id)
             )
             """,
@@ -666,7 +666,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               relationship_type TEXT NOT NULL,
               relationship_type_raw TEXT NOT NULL,
               last_synced TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (source_work_item_id, target_work_item_id, relationship_type, org_id)
             )
             """,
@@ -680,7 +680,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               to_status_raw TEXT,
               actor TEXT,
               last_synced TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (work_item_id, occurred_at, org_id)
             )
             """,
@@ -693,7 +693,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               actor TEXT,
               body_length INTEGER NOT NULL,
               last_synced TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (work_item_id, occurred_at, interaction_type, org_id)
             )
             """,
@@ -707,7 +707,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               ended_at TEXT,
               completed_at TEXT,
               last_synced TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (provider, sprint_id, org_id)
             )
             """,
@@ -722,7 +722,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
               last_synced TEXT NOT NULL,
-              org_id TEXT NOT NULL DEFAULT 'default',
+              org_id TEXT NOT NULL,
               PRIMARY KEY (provider, worklog_id, org_id)
             )
             """,
@@ -765,101 +765,101 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 conn.execute(text(stmt))
 
             for table, col, type_ in [
-                ("repo_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("user_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("commit_metrics", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("teams", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("team_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("file_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("repo_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("user_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("commit_metrics", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("teams", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("team_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("file_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
                 (
                     "work_item_metrics_daily",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "work_item_user_metrics_daily",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
-                ("work_item_cycle_times", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("work_item_cycle_times", "org_id", "TEXT NOT NULL DEFAULT ''"),
                 (
                     "work_item_state_durations_daily",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
-                ("review_edges_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("cicd_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("deploy_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("incident_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("dora_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("review_edges_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("cicd_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("deploy_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("incident_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("dora_metrics_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
                 (
                     "ic_landscape_rolling_30d",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "file_complexity_snapshots",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
-                ("repo_complexity_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("file_hotspot_daily", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("repo_complexity_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("file_hotspot_daily", "org_id", "TEXT NOT NULL DEFAULT ''"),
                 (
                     "investment_classifications_daily",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "investment_metrics_daily",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "issue_type_metrics_daily",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "investment_explanations",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "work_unit_investments",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "work_unit_investment_quotes",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
-                ("work_graph_edges", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("work_graph_issue_pr", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("work_graph_pr_commit", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("work_items", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("work_graph_edges", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("work_graph_issue_pr", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("work_graph_pr_commit", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("work_items", "org_id", "TEXT NOT NULL DEFAULT ''"),
                 (
                     "work_item_transitions",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "work_item_dependencies",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "work_item_reopen_events",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
                 (
                     "work_item_interactions",
                     "org_id",
-                    "TEXT NOT NULL DEFAULT 'default'",
+                    "TEXT NOT NULL DEFAULT ''",
                 ),
-                ("sprints", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
-                ("worklogs", "org_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("sprints", "org_id", "TEXT NOT NULL DEFAULT ''"),
+                ("worklogs", "org_id", "TEXT NOT NULL DEFAULT ''"),
             ]:
                 if not self._table_has_column(conn, table, col):
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {type_}"))
@@ -1306,7 +1306,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "commits_count": int(data["commits_count"]),
             "hotspot_score": float(data["hotspot_score"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _repo_row(self, row: RepoMetricsDailyRecord) -> dict:
@@ -1347,7 +1347,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "mttr_hours": data.get("mttr_hours"),
             "change_failure_rate": float(data.get("change_failure_rate", 0.0) or 0.0),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _user_row(self, row: UserMetricsDailyRecord) -> dict:
@@ -1391,7 +1391,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "cycle_p50_hours": float(data.get("cycle_p50_hours", 0.0) or 0.0),
             "cycle_p90_hours": float(data.get("cycle_p90_hours", 0.0) or 0.0),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _review_edge_row(self, row: ReviewEdgeDailyRecord) -> dict:
@@ -1403,7 +1403,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "author": str(data["author"]),
             "reviews_count": int(data["reviews_count"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _cicd_row(self, row: CICDMetricsDailyRecord) -> dict:
@@ -1417,7 +1417,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "p90_duration_minutes": data.get("p90_duration_minutes"),
             "avg_queue_minutes": data.get("avg_queue_minutes"),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _deploy_row(self, row: DeployMetricsDailyRecord) -> dict:
@@ -1430,7 +1430,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "deploy_time_p50_hours": data.get("deploy_time_p50_hours"),
             "lead_time_p50_hours": data.get("lead_time_p50_hours"),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _incident_row(self, row: IncidentMetricsDailyRecord) -> dict:
@@ -1442,7 +1442,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "mttr_p50_hours": data.get("mttr_p50_hours"),
             "mttr_p90_hours": data.get("mttr_p90_hours"),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _dora_row(self, row: DORAMetricsRecord) -> dict:
@@ -1453,7 +1453,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "metric_name": str(data["metric_name"]),
             "value": float(data["value"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def write_ic_landscape_rolling(
@@ -1503,7 +1503,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                     "cycle_p50_30d_hours": float(data["cycle_p50_30d_hours"]),
                     "wip_max_30d": int(data["wip_max_30d"]),
                     "computed_at": _dt_to_iso(data["computed_at"]),
-                    "org_id": str(data.get("org_id", "default") or "default"),
+                    "org_id": str(data["org_id"]),
                 }
             )
         with self.engine.begin() as conn:
@@ -1841,7 +1841,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "files_changed": int(data["files_changed"]),
             "size_bucket": str(data["size_bucket"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def write_work_item_state_durations(
@@ -2099,7 +2099,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 data["very_high_complexity_functions"]
             ),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _repo_complexity_row(self, row: RepoComplexityDaily) -> dict:
@@ -2115,7 +2115,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 data["very_high_complexity_functions"]
             ),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def _hotspot_row(self, row: FileHotspotDaily) -> dict:
@@ -2131,7 +2131,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "blame_concentration": data.get("blame_concentration"),
             "risk_score": float(data["risk_score"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     # -------------------------------------------------------------------------
@@ -2181,7 +2181,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "confidence": float(data["confidence"]),
             "rule_id": str(data["rule_id"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def write_investment_metrics(self, rows: Sequence[InvestmentMetricsRecord]) -> None:
@@ -2227,7 +2227,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "churn_loc": int(data["churn_loc"]),
             "cycle_p50_hours": float(data["cycle_p50_hours"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def write_issue_type_metrics(self, rows: Sequence[IssueTypeMetricsRecord]) -> None:
@@ -2275,7 +2275,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             "cycle_p90_hours": float(data["cycle_p90_hours"]),
             "lead_p50_hours": float(data["lead_p50_hours"]),
             "computed_at": _dt_to_iso(data["computed_at"]),
-            "org_id": str(data.get("org_id", "default") or "default"),
+            "org_id": str(data["org_id"]),
         }
 
     def write_work_unit_investments(
@@ -2828,7 +2828,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                     team.get("description") if isinstance(team, dict) else None
                 )
                 t_org = getattr(team, "org_id", None) or (
-                    team.get("org_id") if isinstance(team, dict) else "default"
+                    team["org_id"] if isinstance(team, dict) else None
                 )
                 t_updated = getattr(team, "updated_at", None) or (
                     team.get("updated_at")
@@ -2856,6 +2856,6 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                         "updated": _dt_to_iso(t_updated)
                         if isinstance(t_updated, datetime)
                         else str(t_updated),
-                        "org_id": str(t_org or "default"),
+                        "org_id": t_org,
                     },
                 )

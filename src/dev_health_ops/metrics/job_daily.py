@@ -202,7 +202,7 @@ async def run_daily_metrics_job(
     include_commit_metrics: bool = True,
     sink: str = "auto",
     provider: str = "auto",
-    org_id: str = "default",
+    org_id: str,
     skip_finalize: bool = False,
 ) -> None:
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -463,7 +463,7 @@ async def run_daily_metrics_finalize(
     *,
     db_url: str,
     day: date,
-    org_id: str = "default",
+    org_id: str,
     sink: str = "auto",
 ) -> None:
     """Run only the IC finalize logic (IC metrics + landscape rolling).
@@ -644,7 +644,7 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             include_commit_metrics=ns.commit_metrics,
             sink=ns.sink,
             provider=ns.provider,
-            org_id=getattr(ns, "org", "default") or "default",
+            org_id=getattr(ns, "org", None),
         )
         return 0
     except Exception as e:
@@ -655,7 +655,7 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
 async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
     try:
         db_url = resolve_sink_uri(ns)
-        org_id = getattr(ns, "org", "default") or "default"
+        org_id = getattr(ns, "org", None)
         repo_ids: List[uuid.UUID] = ns.repo_ids or []
         days = _date_range(ns.day, ns.backfill)
 

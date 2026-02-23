@@ -101,12 +101,12 @@ def test_dataclass_has_org_id_field(cls):
 @pytest.mark.parametrize(
     "cls", ALL_SCHEMA_CLASSES + ALL_WORK_ITEM_CLASSES, ids=lambda c: c.__name__
 )
-def test_dataclass_org_id_defaults_to_default(cls):
-    """org_id must default to 'default' so existing code keeps working."""
+def test_dataclass_org_id_defaults_to_empty_string(cls):
+    """org_id must default to '' so existing code keeps working."""
     for f in fields(cls):
         if f.name == "org_id":
-            assert f.default == "default", (
-                f"{cls.__name__}.org_id default is {f.default!r}, expected 'default'"
+            assert f.default == "", (
+                f"{cls.__name__}.org_id default is {f.default!r}, expected ''"
             )
             break
 
@@ -130,7 +130,7 @@ def test_repo_metrics_asdict_contains_org_id():
     )
     d = asdict(row)
     assert "org_id" in d
-    assert d["org_id"] == "default"
+    assert d["org_id"] == ""
 
 
 def test_repo_metrics_custom_org_id():
@@ -159,7 +159,9 @@ def test_clickhouse_sink_write_repo_metrics_includes_org_id():
     """write_repo_metrics must pass org_id column to _insert_rows."""
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-    with patch.object(ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None):
+    with patch.object(
+        ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None
+    ):
         sink = ClickHouseMetricsSink("clickhouse://dummy")
         sink.client = MagicMock()
 
@@ -191,7 +193,9 @@ def test_clickhouse_sink_write_work_graph_edges_includes_org_id():
     """Pattern B: write_work_graph_edges must include org_id in both column_names and data."""
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-    with patch.object(ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None):
+    with patch.object(
+        ClickHouseMetricsSink, "__init__", lambda self, dsn, client=None: None
+    ):
         sink = ClickHouseMetricsSink("clickhouse://dummy")
         sink.client = MagicMock()
 
@@ -286,7 +290,7 @@ def test_sqlite_sink_writes_org_id(tmp_path):
 
 
 def test_sqlite_sink_org_id_defaults(tmp_path):
-    """When org_id is not explicitly set, it should default to 'default'."""
+    """When org_id is not explicitly set, it should default to ''."""
     from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 
     db_path = tmp_path / "test.db"
@@ -314,7 +318,7 @@ def test_sqlite_sink_org_id_defaults(tmp_path):
             ).fetchone()
 
         assert result is not None
-        assert result[0] == "default"
+        assert result[0] == ""
     finally:
         sink.close()
 

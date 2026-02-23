@@ -56,7 +56,7 @@ class TokenPool:
     def __init__(
         self,
         provider: str,
-        org_id: str = "default",
+        org_id: str | None = None,
         redis_url: str | None = None,
         key_prefix: str = "token_pool",
         *,
@@ -231,7 +231,7 @@ class TokenPool:
 
 def create_token_pool(
     provider: str,
-    org_id: str = "default",
+    org_id: str | None = None,
 ) -> TokenPool:
     """Create a :class:`TokenPool` using ``REDIS_URL`` from the environment."""
     redis_url = os.getenv("REDIS_URL") or None

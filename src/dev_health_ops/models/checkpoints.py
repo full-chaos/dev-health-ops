@@ -47,7 +47,7 @@ class MetricCheckpoint(Base):
     __tablename__ = "metric_checkpoints"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, default="default")
+    org_id = Column(Text, nullable=False)
     repo_id = Column(GUID, nullable=True)
     metric_type = Column(
         Text,

@@ -17,8 +17,9 @@ ALTER statement). This migration uses the shadow table pattern (Altinity pattern
 Materialized views from migration 026 are dropped before rebuilding their target
 tables, then recreated with org_id in the SELECT/GROUP BY.
 
-The 3 AggregatingMergeTree rollup tables (from migration 026) were created after
-migration 024, so they don't have org_id yet — it's added via ALTER before rebuild.
+The 3 AggregatingMergeTree rollup tables (from migration 026) and 13 raw data
+tables (git_files, git_commits, etc.) were missed by migration 024 — org_id is
+added via ALTER before rebuild.
 
 Idempotent: tables already having org_id first in ORDER BY are skipped.
 """
@@ -91,8 +92,25 @@ TABLES = {
     "deployment_daily_rollup": "(org_id, repo_id, day)",
 }
 
-# Tables created in migration 026 (after 024) that still need the org_id column.
+# Tables that need org_id column added before rebuild.
+# Migration 024 added org_id to most tables, but missed raw data tables
+# (git_files, git_commits, etc.) and the 3 rollup tables from migration 026.
 TABLES_NEEDING_ORG_ID_COLUMN = [
+    # Raw data tables missed by migration 024
+    "git_files",
+    "git_commits",
+    "git_commit_stats",
+    "git_blame",
+    "git_pull_requests",
+    "git_pull_request_reviews",
+    "ci_pipeline_runs",
+    "deployments",
+    "incidents",
+    "atlassian_ops_incidents",
+    "atlassian_ops_alerts",
+    "atlassian_ops_schedules",
+    "jira_project_ops_team_links",
+    # AggregatingMergeTree tables from migration 026 (created after 024)
     "commit_daily_rollup",
     "ci_daily_rollup",
     "deployment_daily_rollup",
@@ -302,9 +320,9 @@ def upgrade(client):
         client.command(f"DROP VIEW IF EXISTS `{mv}`")
 
     # ------------------------------------------------------------------
-    # Step 2: Add org_id column to rollup tables that missed migration 024
+    # Step 2: Add org_id column to tables that missed migration 024
     # ------------------------------------------------------------------
-    log.info("Step 2/4: Adding org_id column to rollup tables (from migration 026)")
+    log.info("Step 2/4: Adding org_id column to tables that need it")
     for table in TABLES_NEEDING_ORG_ID_COLUMN:
         if not _table_exists(client, table):
             log.warning(f"  {table}: does not exist, skipping column add")

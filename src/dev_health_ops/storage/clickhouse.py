@@ -159,6 +159,12 @@ class ClickHouseStore:
         if not rows:
             return
         assert self.client is not None
+        # Auto-inject org_id from store context when not already provided.
+        org_id = getattr(self, "org_id", None) or ""
+        if "org_id" not in columns and org_id:
+            columns = [*columns, "org_id"]
+            for row in rows:
+                row.setdefault("org_id", org_id)
         matrix = [[row.get(col) for col in columns] for row in rows]
         async with self._lock:
             await asyncio.to_thread(

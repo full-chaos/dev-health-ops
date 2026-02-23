@@ -988,7 +988,7 @@ class ClickHouseStore:
                         "is_active": int(item.get("is_active", 1)),
                         "updated_at": self._normalize_datetime(item.get("updated_at")),
                         "last_synced": synced_at,
-                        "org_id": item.get("org_id", ""),
+                        "org_id": item.get("org_id") or "",
                     }
                 )
             else:
@@ -1006,7 +1006,7 @@ class ClickHouseStore:
                             getattr(item, "updated_at")
                         ),
                         "last_synced": synced_at,
-                        "org_id": getattr(item, "org_id", ""),
+                        "org_id": getattr(item, "org_id", None) or "",
                     }
                 )
 

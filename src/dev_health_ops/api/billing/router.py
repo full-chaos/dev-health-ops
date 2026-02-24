@@ -35,14 +35,16 @@ from .stripe_client import (
     get_tier_price_id,
     get_webhook_secret,
 )
+from .invoice_routes import router as invoice_router
+from .invoice_service import InvoiceService
 from .refund_routes import router as refund_router
 from .refund_service import refund_service
-from dev_health_ops.db import get_postgres_session
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 router.include_router(invoice_router)
+router.include_router(refund_router)
 invoice_service = InvoiceService()
 
 

@@ -19,7 +19,21 @@ async def resolve_repo_id(
 ) -> Optional[str]:
     repo_uuid = parse_uuid(repo_ref)
     if repo_uuid:
-        return str(repo_uuid)
+        query = """
+            SELECT id
+            FROM repos
+            WHERE id = %(repo_id)s
+              AND org_id = %(org_id)s
+            LIMIT 1
+        """
+        rows = await query_dicts(
+            sink,
+            query,
+            {"repo_id": str(repo_uuid), "org_id": org_id},
+        )
+        if not rows:
+            return None
+        return str(rows[0]["id"])
     query = """
         SELECT id
         FROM repos
@@ -27,8 +41,7 @@ async def resolve_repo_id(
           AND org_id = %(org_id)s
         LIMIT 1
     """
-    params = {"repo_name": repo_ref}
-    params["org_id"] = org_id
+    params = {"repo_name": repo_ref, "org_id": org_id}
     rows = await query_dicts(sink, query, params)
     if not rows:
         return None
@@ -44,7 +57,9 @@ async def resolve_repo_ids(
             continue
         repo_uuid = parse_uuid(repo_ref)
         if repo_uuid:
-            resolved.append(str(repo_uuid))
+            verified_repo_id = await resolve_repo_id(sink, repo_ref, org_id=org_id)
+            if verified_repo_id:
+                resolved.append(verified_repo_id)
             continue
         repo_id = await resolve_repo_id(sink, repo_ref, org_id=org_id)
         if repo_id:
@@ -67,8 +82,7 @@ async def resolve_repo_ids_for_teams(
         WHERE team_id IN %(team_ids)s
           AND org_id = %(org_id)s
     """
-    params = {"team_ids": team_list}
-    params["org_id"] = org_id
+    params = {"team_ids": team_list, "org_id": org_id}
     rows = await query_dicts(sink, query, params)
     return [str(row.get("id")) for row in rows if row.get("id")]
 

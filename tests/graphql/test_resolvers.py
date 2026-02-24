@@ -9,6 +9,14 @@ import pytest
 
 from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.errors import AuthorizationError, CostLimitExceededError
+from dev_health_ops.api.graphql.models.inputs import (
+    AnalyticsRequestInput,
+    DateRangeInput,
+    DimensionInput,
+    MeasureInput,
+    SankeyRequestInput,
+)
+from dev_health_ops.api.graphql.resolvers.analytics import resolve_analytics
 from dev_health_ops.api.graphql.resolvers.catalog import resolve_catalog
 
 
@@ -234,3 +242,50 @@ class TestAuthzFunctions:
 
         with pytest.raises(AuthorizationError):
             enforce_org_scope("", {})
+
+
+class TestResolveAnalytics:
+    @pytest.mark.asyncio
+    async def test_sankey_coverage_query_scopes_by_org_id(self, monkeypatch):
+        captured_sql: list[str] = []
+        captured_params: list[dict[str, Any]] = []
+
+        async def fake_query_dicts(_client, sql, params):
+            captured_sql.append(sql)
+            captured_params.append(params)
+            return [{"total": 10, "assigned_team": 5, "assigned_repo": 4}]
+
+        def fake_compile_sankey(_request, _org_id, _timeout, filters=None):
+            return [], []
+
+        monkeypatch.setattr(
+            "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.api.graphql.resolvers.analytics.compile_sankey",
+            fake_compile_sankey,
+        )
+
+        context = GraphQLContext(
+            org_id="tenant-123",
+            db_url="clickhouse://localhost:8123/default",
+            client=MockClient(),
+        )
+        batch = AnalyticsRequestInput(
+            timeseries=[],
+            breakdowns=[],
+            sankey=SankeyRequestInput(
+                path=[DimensionInput.TEAM, DimensionInput.REPO],
+                measure=MeasureInput.COUNT,
+                date_range=DateRangeInput(
+                    start_date=date(2025, 1, 1),
+                    end_date=date(2025, 1, 31),
+                ),
+            ),
+        )
+
+        await resolve_analytics(context, batch)
+
+        assert len(captured_sql) == 1
+        assert "AND org_id = %(org_id)s" in captured_sql[0]
+        assert captured_params[0]["org_id"] == "tenant-123"

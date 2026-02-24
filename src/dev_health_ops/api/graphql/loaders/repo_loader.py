@@ -45,7 +45,9 @@ class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="repo")
+        super().__init__(
+            org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="repo"
+        )
         self._client = client
         self._org_id = org_id
 
@@ -73,8 +75,9 @@ class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
                 language
             FROM repos
             WHERE id IN %(repo_ids)s
+              AND org_id = %(org_id)s
         """
-        params = {"repo_ids": list(keys)}
+        params = {"repo_ids": list(keys), "org_id": self._org_id}
 
         try:
             rows = await query_dicts(self._client, sql, params)
@@ -122,7 +125,9 @@ class RepoByNameLoader(CachedDataLoader[str, Optional[RepoData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="repo_name")
+        super().__init__(
+            org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="repo_name"
+        )
         self._client = client
         self._org_id = org_id
 
@@ -150,8 +155,9 @@ class RepoByNameLoader(CachedDataLoader[str, Optional[RepoData]]):
                 language
             FROM repos
             WHERE lower(name) IN %(repo_names)s
+              AND org_id = %(org_id)s
         """
-        params = {"repo_names": [k.lower() for k in keys]}
+        params = {"repo_names": [k.lower() for k in keys], "org_id": self._org_id}
 
         try:
             rows = await query_dicts(self._client, sql, params)

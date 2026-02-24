@@ -40,24 +40,20 @@ def _get_cache() -> Optional[Any]:
 async def get_context(request: Request) -> GraphQLContext:
     """
     Build GraphQL context from FastAPI request.
-
-    Extracts org_id from headers or query params, sets up DB connection,
-    and initializes DataLoaders for the request.
+    org_id is resolved by OrgIdMiddleware (X-Org-Id header → JWT fallback)
+    and stored in a contextvar.  Query params are checked as a last resort
+    for backwards compatibility (e.g. GraphiQL playground).
     """
     logger.debug("Entering get_context")
-
     from dev_health_ops.api.services.auth import (
         extract_token_from_header,
         get_auth_service,
+        get_current_org_id,
     )
 
-    org_id = request.headers.get("X-Org-Id", "")
-    if not org_id:
-        org_id = request.query_params.get("org_id", "")
-
+    org_id = get_current_org_id() or request.query_params.get("org_id", "") or ""
     db_url = os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
     persisted_query_id = request.headers.get("X-Persisted-Query-Id")
-
     user = None
     auth_header = request.headers.get("Authorization")
     if auth_header:
@@ -65,31 +61,24 @@ async def get_context(request: Request) -> GraphQLContext:
         if token:
             auth_service = get_auth_service()
             user = auth_service.get_authenticated_user(token)
-            if user and user.org_id and not org_id:
-                org_id = user.org_id
             logger.debug("Authenticated user: %s", user.email if user else None)
-
     client = None
     try:
         from dev_health_ops.api.queries.client import get_global_client
         import asyncio
-
         logger.debug("Getting ClickHouse client for %s", db_url)
         client = await asyncio.wait_for(get_global_client(db_url), timeout=5.0)
     except Exception as e:
         logger.warning("Failed to get ClickHouse client: %s", e)
-
     cache = _get_cache()
-
     context = build_context(
-        org_id=org_id or "",
+        org_id=org_id,
         db_url=db_url,
         persisted_query_id=persisted_query_id,
         client=client,
         cache=cache,
         user=user,
     )
-
     return context
 
 

@@ -93,6 +93,7 @@ from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.licensing import LicenseManager
+from dev_health_ops.api.middleware import OrgIdMiddleware
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
@@ -321,6 +322,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(OrgIdMiddleware)
 
 graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")

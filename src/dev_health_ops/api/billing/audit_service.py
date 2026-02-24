@@ -31,22 +31,23 @@ class BillingAuditService:
         reconciliation_status: str | None = None,
     ) -> BillingAuditLog | None:
         try:
-            entry = BillingAuditLog(
-                org_id=org_id,
-                actor_id=actor_id,
-                action=action,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                description=description,
-                stripe_event_id=stripe_event_id,
-                local_state=local_state,
-                stripe_state=stripe_state,
-                reconciliation_status=reconciliation_status,
-                created_at=datetime.now(timezone.utc),
-            )
-            self.db.add(entry)
-            await self.db.flush()
-            return entry
+            async with self.db.begin_nested():
+                entry = BillingAuditLog(
+                    org_id=org_id,
+                    actor_id=actor_id,
+                    action=action,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    description=description,
+                    stripe_event_id=stripe_event_id,
+                    local_state=local_state,
+                    stripe_state=stripe_state,
+                    reconciliation_status=reconciliation_status,
+                    created_at=datetime.now(timezone.utc),
+                )
+                self.db.add(entry)
+                await self.db.flush()
+                return entry
         except Exception:
             logger.exception("Failed to write audit log")
             return None

@@ -15,6 +15,22 @@ from dev_health_ops.models.billing_audit import BillingAuditLog
 logger = logging.getLogger(__name__)
 
 
+TABLE_CONFIG: dict[str, dict[str, str]] = {
+    "subscriptions": {
+        "table": "subscriptions",
+        "stripe_id_col": "stripe_subscription_id",
+    },
+    "invoices": {"table": "invoices", "stripe_id_col": "stripe_invoice_id"},
+    "refunds": {"table": "refunds", "stripe_id_col": "stripe_refund_id"},
+    "billing_subscriptions": {
+        "table": "subscriptions",
+        "stripe_id_col": "stripe_subscription_id",
+    },
+    "billing_invoices": {"table": "invoices", "stripe_id_col": "stripe_invoice_id"},
+    "billing_refunds": {"table": "refunds", "stripe_id_col": "stripe_refund_id"},
+}
+
+
 @dataclass
 class ReconciliationMismatch:
     resource_type: str
@@ -65,7 +81,7 @@ class ReconciliationService:
         self, org_id: uuid.UUID | None = None
     ) -> ReconciliationReport:
         started_at = datetime.now(timezone.utc)
-        local_rows = await self._fetch_local_rows("billing_subscriptions", org_id)
+        local_rows = await self._fetch_local_rows("subscriptions", org_id)
         stripe_rows = await self._fetch_stripe_rows("subscriptions", org_id)
         report = self._compare("subscription", local_rows, stripe_rows)
         report.started_at = started_at
@@ -80,7 +96,7 @@ class ReconciliationService:
         since: datetime | None = None,
     ) -> ReconciliationReport:
         started_at = datetime.now(timezone.utc)
-        local_rows = await self._fetch_local_rows("billing_invoices", org_id, since)
+        local_rows = await self._fetch_local_rows("invoices", org_id, since)
         stripe_rows = await self._fetch_stripe_rows("invoices", org_id, since)
         report = self._compare("invoice", local_rows, stripe_rows)
         report.started_at = started_at
@@ -97,7 +113,7 @@ class ReconciliationService:
 
         subscriptions = await self.reconcile_subscriptions(org_id=org_id)
         invoices = await self.reconcile_invoices(org_id=org_id)
-        refunds_local = await self._fetch_local_rows("billing_refunds", org_id)
+        refunds_local = await self._fetch_local_rows("refunds", org_id)
         refunds_stripe = await self._fetch_stripe_rows("refunds", org_id)
         refunds = self._compare("refund", refunds_local, refunds_stripe)
 
@@ -156,7 +172,17 @@ class ReconciliationService:
         org_id: uuid.UUID | None = None,
         since: datetime | None = None,
     ) -> list[dict[str, Any]]:
-        query = f"SELECT id, stripe_id, status, updated_at, org_id FROM {table_name}"
+        config = TABLE_CONFIG.get(table_name)
+        if config is None:
+            logger.warning("Unsupported reconciliation table: %s", table_name)
+            return []
+
+        actual_table = config["table"]
+        stripe_id_col = config["stripe_id_col"]
+        query = (
+            f"SELECT id, {stripe_id_col} as stripe_id, status, updated_at, org_id "
+            f"FROM {actual_table}"
+        )
         params: dict[str, Any] = {}
         where = []
         if org_id is not None:
@@ -172,7 +198,7 @@ class ReconciliationService:
             result = await self.db.execute(text(query), params)
             return [dict(row._mapping) for row in result]
         except Exception:
-            logger.exception("Failed loading local billing rows from %s", table_name)
+            logger.exception("Failed loading local billing rows from %s", actual_table)
             return []
 
     async def _fetch_stripe_rows(
@@ -181,14 +207,52 @@ class ReconciliationService:
         org_id: uuid.UUID | None = None,
         since: datetime | None = None,
     ) -> list[dict[str, Any]]:
-        method = getattr(self.stripe_client, f"list_{resource}", None)
-        if method is None:
-            return []
         try:
-            payload = await method(org_id=str(org_id) if org_id else None, since=since)
-            if not isinstance(payload, list):
-                return []
-            return [item for item in payload if isinstance(item, dict)]
+            payload = None
+
+            if hasattr(self.stripe_client, resource):
+                resource_client = getattr(self.stripe_client, resource)
+                if hasattr(resource_client, "list"):
+                    payload = resource_client.list(limit=100)
+
+            if payload is None:
+                import stripe
+
+                if resource == "subscriptions":
+                    payload = stripe.Subscription.list(limit=100)
+                elif resource == "invoices":
+                    payload = stripe.Invoice.list(limit=100)
+                elif resource == "refunds":
+                    payload = stripe.Refund.list(limit=100)
+                else:
+                    return []
+
+            if hasattr(payload, "auto_paging_iter"):
+                iterator = payload.auto_paging_iter()
+            elif hasattr(payload, "data"):
+                iterator = getattr(payload, "data") or []
+            elif isinstance(payload, dict):
+                iterator = payload.get("data", [])
+            elif isinstance(payload, list):
+                iterator = payload
+            else:
+                iterator = []
+
+            rows: list[dict[str, Any]] = []
+            for item in iterator:
+                item_id = (
+                    item.get("id")
+                    if isinstance(item, dict)
+                    else getattr(item, "id", None)
+                )
+                status = (
+                    item.get("status")
+                    if isinstance(item, dict)
+                    else getattr(item, "status", None)
+                )
+                if item_id:
+                    rows.append({"id": str(item_id), "status": status})
+            return rows
         except Exception:
             logger.exception("Failed loading stripe billing rows for %s", resource)
             return []
@@ -266,6 +330,22 @@ class ReconciliationService:
     ) -> None:
         if org_id is None:
             return
+
+        for mismatch in report.mismatches:
+            await self.audit_service.log(
+                org_id=org_id,
+                action="reconciliation.mismatch_found",
+                resource_type=mismatch.resource_type,
+                resource_id=mismatch.resource_id,
+                description=(
+                    f"Mismatch on {mismatch.field}: "
+                    f"local={mismatch.local_value}, stripe={mismatch.stripe_value}"
+                ),
+                reconciliation_status="mismatch",
+                local_state={"field": mismatch.field, "value": mismatch.local_value},
+                stripe_state={"field": mismatch.field, "value": mismatch.stripe_value},
+            )
+
         status = "matched"
         action = "reconciliation.completed"
         if report.mismatches or report.missing_local or report.missing_stripe:

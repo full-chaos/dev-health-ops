@@ -279,6 +279,24 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 )
                 fixture_data["transitions"].extend(transitions)
 
+            # Reopen events (derived from transitions)
+            reopen_events = generator.generate_work_item_reopen_events(transitions)
+            if hasattr(store, "insert_work_item_reopen_events"):
+                await _insert_batches(
+                    store.insert_work_item_reopen_events,
+                    reopen_events,
+                    allow_parallel=allow_parallel_inserts,
+                )
+
+            # Interactions
+            interactions = generator.generate_work_item_interactions(work_items)
+            if hasattr(store, "insert_work_item_interactions"):
+                await _insert_batches(
+                    store.insert_work_item_interactions,
+                    interactions,
+                    allow_parallel=allow_parallel_inserts,
+                )
+
             dependencies = generator.generate_work_item_dependencies(work_items)
             if hasattr(store, "insert_work_item_dependencies"):
                 await _insert_batches(
@@ -410,6 +428,53 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             if sink:
                 # Propagate org_id to sink for auto-injection into metric records.
                 sink.org_id = org_id  # type: ignore[attr-defined]
+
+                # Generate and write worklogs
+                all_worklogs = []
+                wl_gen = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+                all_worklogs.extend(wl_gen.generate_worklogs(fixture_data["work_items"]))
+                if hasattr(sink, 'write_worklogs') and all_worklogs:
+                    sink.write_worklogs(all_worklogs)
+                    logging.info("Wrote %d worklogs.", len(all_worklogs))
+
+                # Generate and write sprints
+                sprint_gen = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+                sprints = sprint_gen.generate_sprints(days=ns.days)
+                if hasattr(sink, "write_sprints") and sprints:
+                    sink.write_sprints(sprints)
+                    logging.info("Wrote %d sprints.", len(sprints))
+
+                # Write DORA metrics, investment classifications, investment metrics,
+                # and file hotspot daily records for each repo.
+                for i in range(repo_count):
+                    r_name = base_name if repo_count == 1 else f"{base_name}-{i + 1}"
+                    seed_value = (int(ns.seed) + i) if ns.seed is not None else None
+                    metric_gen = SyntheticDataGenerator(repo_name=r_name, seed=seed_value)
+
+                    dora_records = metric_gen.generate_dora_metrics(days=ns.days)
+                    if hasattr(sink, "write_dora_metrics") and dora_records:
+                        sink.write_dora_metrics(dora_records)
+
+                    inv_class = metric_gen.generate_investment_classifications(
+                        fixture_data["work_items"], days=ns.days
+                    )
+                    if hasattr(sink, "write_investment_classifications") and inv_class:
+                        sink.write_investment_classifications(inv_class)
+
+                    inv_metrics = metric_gen.generate_investment_metrics(days=ns.days)
+                    if hasattr(sink, "write_investment_metrics") and inv_metrics:
+                        sink.write_investment_metrics(inv_metrics)
+
+                    hotspot_records = metric_gen.generate_file_hotspot_daily(days=ns.days)
+                    if hasattr(sink, "write_file_hotspot_daily") and hotspot_records:
+                        sink.write_file_hotspot_daily(hotspot_records)
+
+                logging.info(
+                    "Wrote DORA, investment classifications, investment metrics, "
+                    "and file hotspot daily records for %d repos.",
+                    repo_count,
+                )
+
                 team_resolver = load_team_resolver()
                 computed_at = now
                 end_day = now.date()

@@ -17,8 +17,12 @@ from dev_health_ops.models.git import (
 from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemDependency,
+    WorkItemInteractionEvent,
+    WorkItemReopenEvent,
     WorkItemStatusTransition,
     WorkItemType,
+    Sprint,
+    Worklog,
 )
 from dev_health_ops.models.teams import Team
 from dev_health_ops.metrics.schemas import (
@@ -1357,6 +1361,39 @@ class SyntheticDataGenerator:
 
         return dependencies
 
+    def generate_worklogs(self, work_items: List[WorkItem]) -> List[Worklog]:
+        now = datetime.now(timezone.utc)
+        worklogs: List[Worklog] = []
+        for work_item in work_items:
+            if not work_item.started_at:
+                continue
+            if random.random() > 0.4:
+                continue
+            count = random.randint(1, 3)
+            end_bound = work_item.completed_at or now
+            if end_bound <= work_item.started_at:
+                end_bound = work_item.started_at + timedelta(hours=1)
+            for i in range(count):
+                span = (end_bound - work_item.started_at).total_seconds()
+                offset = random.uniform(0, max(span, 1))
+                started_at = work_item.started_at + timedelta(seconds=offset)
+                time_spent = random.randint(900, 28800)
+                created_at = started_at + timedelta(seconds=random.randint(1, 300))
+                _, author_email = random.choice(self.repo_authors)
+                worklogs.append(
+                    Worklog(
+                        work_item_id=work_item.work_item_id,
+                        provider=work_item.provider,
+                        worklog_id=f"wl-{work_item.work_item_id}-{i}",
+                        author=author_email,
+                        started_at=started_at,
+                        time_spent_seconds=time_spent,
+                        created_at=created_at,
+                        updated_at=created_at,
+                    )
+                )
+        return worklogs
+
     def generate_pr_commits(
         self,
         prs: List[GitPullRequest],
@@ -1527,6 +1564,153 @@ class SyntheticDataGenerator:
             )
         return records
 
+    def generate_dora_metrics(self, days: int = 30) -> List[Any]:
+        """Generate synthetic DORA metrics records."""
+        from dev_health_ops.metrics.schemas import DORAMetricsRecord
+
+        records = []
+        end_date = datetime.now(timezone.utc).date()
+        computed_at = datetime.now(timezone.utc)
+
+        metric_names = [
+            "deployment_frequency",
+            "lead_time_for_changes",
+            "change_failure_rate",
+            "time_to_restore_service",
+        ]
+
+        for i in range(days):
+            day = end_date - timedelta(days=i)
+            for metric_name in metric_names:
+                if metric_name == "deployment_frequency":
+                    value = random.uniform(0.5, 3.0)  # deploys per day
+                elif metric_name == "lead_time_for_changes":
+                    value = random.uniform(2.0, 72.0)  # hours
+                elif metric_name == "change_failure_rate":
+                    value = random.uniform(0.05, 0.25)  # ratio
+                else:  # time_to_restore_service
+                    value = random.uniform(0.5, 8.0)  # hours
+
+                records.append(
+                    DORAMetricsRecord(
+                        repo_id=self.repo_id,
+                        day=day,
+                        metric_name=metric_name,
+                        value=value,
+                        computed_at=computed_at,
+                    )
+                )
+        return records
+
+    def generate_investment_classifications(
+        self, work_items: List[WorkItem], days: int = 30
+    ) -> List[Any]:
+        """Generate investment classification records from work items."""
+        from dev_health_ops.metrics.schemas import InvestmentClassificationRecord
+
+        records = []
+        computed_at = datetime.now(timezone.utc)
+
+        for item in work_items:
+            if item.type == "epic":
+                continue
+            # Use the first label as investment_area (items already have category labels)
+            investment_area = item.labels[0] if item.labels else "product"
+            project_stream = item.labels[1] if len(item.labels) > 1 else None
+            day = item.created_at.date()
+
+            records.append(
+                InvestmentClassificationRecord(
+                    repo_id=self.repo_id,
+                    day=day,
+                    artifact_type="work_item",
+                    artifact_id=item.work_item_id,
+                    provider=item.provider,
+                    investment_area=investment_area,
+                    project_stream=project_stream,
+                    confidence=random.uniform(0.7, 1.0),
+                    rule_id="synthetic-label-match",
+                    computed_at=computed_at,
+                )
+            )
+        return records
+
+    def generate_investment_metrics(self, days: int = 30) -> List[Any]:
+        """Generate investment metrics daily rollup records."""
+        from dev_health_ops.metrics.schemas import InvestmentMetricsRecord
+
+        records = []
+        end_date = datetime.now(timezone.utc).date()
+        computed_at = datetime.now(timezone.utc)
+
+        investment_areas = ["product", "security", "infra", "quality", "docs", "data"]
+
+        teams_to_use = []
+        if self.assigned_teams is None:
+            teams_to_use = [("alpha", "Alpha Team")]
+        elif self.assigned_teams:
+            teams_to_use = [(t.id, t.name) for t in self.assigned_teams]
+        else:
+            teams_to_use = [("unassigned", "Unassigned")]
+
+        for i in range(days):
+            day = end_date - timedelta(days=i)
+            for team_id, _ in teams_to_use:
+                for area in investment_areas:
+                    records.append(
+                        InvestmentMetricsRecord(
+                            repo_id=self.repo_id,
+                            day=day,
+                            team_id=team_id,
+                            investment_area=area,
+                            project_stream=None,
+                            delivery_units=random.randint(0, 5),
+                            work_items_completed=random.randint(0, 3),
+                            prs_merged=random.randint(0, 2),
+                            churn_loc=random.randint(0, 500),
+                            cycle_p50_hours=random.uniform(12.0, 72.0),
+                            computed_at=computed_at,
+                        )
+                    )
+        return records
+
+    def generate_file_hotspot_daily(self, days: int = 30) -> List[Any]:
+        """Generate file hotspot daily records using synthetic complexity and churn data."""
+        from dev_health_ops.metrics.schemas import FileHotspotDaily
+
+        records = []
+        end_date = datetime.now(timezone.utc)
+        computed_at = datetime.now(timezone.utc)
+
+        for i in range(days):
+            day = (end_date - timedelta(days=i)).date()
+            for file_path in self.files:
+                churn_loc = random.randint(10, 500)
+                churn_commits = random.randint(1, 20)
+                cc_total = random.randint(5, 100)
+                funcs = random.randint(3, 30)
+                cc_avg = cc_total / funcs if funcs else 0.0
+                blame_conc = random.uniform(0.3, 1.0)
+
+                # risk = normalized(churn) + normalized(complexity)
+                risk_score = random.uniform(-1.0, 3.0)
+
+                records.append(
+                    FileHotspotDaily(
+                        repo_id=self.repo_id,
+                        day=day,
+                        file_path=file_path,
+                        churn_loc_30d=churn_loc,
+                        churn_commits_30d=churn_commits,
+                        cyclomatic_total=cc_total,
+                        cyclomatic_avg=cc_avg,
+                        blame_concentration=blame_conc,
+                        risk_score=risk_score,
+                        computed_at=computed_at,
+                    )
+                )
+        return records
+
     def generate_file_metrics(self) -> List[FileMetricsRecord]:
         records = []
         computed_at = datetime.now(timezone.utc)
@@ -1653,3 +1837,199 @@ class SyntheticDataGenerator:
             "licenses": licenses,
             "default_password": default_password,
         }
+
+    def generate_work_item_reopen_events(
+        self, transitions: List[WorkItemStatusTransition]
+    ) -> List[WorkItemReopenEvent]:
+        """Extract reopen events from transitions where from_status is 'done' and
+        to_status is not 'done' or 'canceled'.
+
+        Also synthetically generates reopen events for ~10% of completed work items
+        that do not already have a reopen transition.
+        """
+        reopen_events = []
+        last_synced = datetime.now(timezone.utc)
+        reopened_item_ids: set = set()
+
+        for t in transitions:
+            if t.from_status == "done" and t.to_status not in ("done", "canceled"):
+                reopen_events.append(
+                    WorkItemReopenEvent(
+                        work_item_id=t.work_item_id,
+                        occurred_at=t.occurred_at,
+                        from_status=t.from_status,
+                        to_status=t.to_status,
+                        from_status_raw=t.from_status_raw,
+                        to_status_raw=t.to_status_raw,
+                        actor=getattr(t, "actor", None),
+                        last_synced=last_synced,
+                    )
+                )
+                reopened_item_ids.add(t.work_item_id)
+
+        # Collect completed items not already reopened, then add ~10% more
+        done_transitions_by_item: dict = {}
+        for t in transitions:
+            if t.to_status == "done":
+                done_transitions_by_item[t.work_item_id] = t
+
+        candidates = [
+            t for item_id, t in done_transitions_by_item.items()
+            if item_id not in reopened_item_ids
+        ]
+        num_extra = max(0, int(len(candidates) * 0.1))
+        if num_extra > 0 and candidates:
+            extra = random.sample(candidates, min(num_extra, len(candidates)))
+            for done_t in extra:
+                # Reopen occurs 1-7 days after completion
+                reopen_at = done_t.occurred_at + timedelta(
+                    days=random.randint(1, 7), hours=random.randint(0, 23)
+                )
+                actor_name, actor_email = random.choice(self.repo_authors)
+                reopen_events.append(
+                    WorkItemReopenEvent(
+                        work_item_id=done_t.work_item_id,
+                        occurred_at=reopen_at,
+                        from_status="done",
+                        to_status="in_progress",
+                        from_status_raw="done",
+                        to_status_raw="in_progress",
+                        actor=actor_email,
+                        last_synced=last_synced,
+                    )
+                )
+
+        return reopen_events
+
+    def generate_work_item_interactions(
+        self, work_items: List[WorkItem]
+    ) -> List[WorkItemInteractionEvent]:
+        """Generate 0-5 comment interaction events per work item."""
+        interactions = []
+        last_synced = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        for item in work_items:
+            num_interactions = random.randint(0, 5)
+            if num_interactions == 0:
+                continue
+
+            end_time = item.completed_at or now
+            if end_time <= item.created_at:
+                end_time = item.created_at + timedelta(hours=1)
+
+            duration_seconds = int((end_time - item.created_at).total_seconds())
+
+            for _ in range(num_interactions):
+                offset_seconds = (
+                    random.randint(0, duration_seconds) if duration_seconds > 0 else 0
+                )
+                occurred_at = item.created_at + timedelta(seconds=offset_seconds)
+                actor_name, actor_email = random.choice(self.repo_authors)
+
+                interactions.append(
+                    WorkItemInteractionEvent(
+                        work_item_id=item.work_item_id,
+                        provider=item.provider,
+                        interaction_type="comment",
+                        occurred_at=occurred_at,
+                        actor=actor_email,
+                        body_length=random.randint(20, 500),
+                        last_synced=last_synced,
+                    )
+                )
+
+        return interactions
+
+    def generate_sprints(self, days: int = 30) -> List[Sprint]:
+        """Generate 2-week sprints covering the time window."""
+        sprints = []
+        last_synced = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        sprint_duration = timedelta(days=14)
+        # Start far enough back to cover the full window
+        window_start = now - timedelta(days=days)
+
+        # Align sprint start to the earliest 2-week boundary before window_start
+        sprint_start = window_start - timedelta(
+            days=window_start.weekday()
+        )  # align to Monday
+
+        # Generate enough sprints to cover window + a couple future sprints
+        sprint_index = 1
+        current_start = sprint_start
+        while current_start < now + timedelta(days=28):
+            sprint_end = current_start + sprint_duration
+
+            if sprint_end < now:
+                state = "closed"
+                completed_at = sprint_end
+            elif current_start <= now < sprint_end:
+                state = "active"
+                completed_at = None
+            else:
+                state = "future"
+                completed_at = None
+
+            sprints.append(
+                Sprint(
+                    provider=self.provider,
+                    sprint_id=f"sprint-{sprint_index}",
+                    name=f"Sprint {sprint_index}",
+                    state=state,
+                    started_at=current_start,
+                    ended_at=sprint_end,
+                    completed_at=completed_at,
+                    last_synced=last_synced,
+                )
+            )
+
+            current_start = sprint_end
+            sprint_index += 1
+
+        return sprints
+
+    def assign_sprints_to_work_items(
+        self, work_items: List[WorkItem], sprints: List[Sprint]
+    ) -> List[WorkItem]:
+        """Assign sprint_id/sprint_name to ~60% of non-epic work items.
+
+        For each eligible work item, picks the sprint whose time window contains
+        the item's created_at, falling back to any closed/active sprint.
+        """
+        import dataclasses
+
+        if not sprints:
+            return work_items
+
+        closed_or_active = [s for s in sprints if s.state in ("closed", "active")]
+        if not closed_or_active:
+            closed_or_active = list(sprints)
+
+        result = []
+        for item in work_items:
+            if item.type == "epic" or random.random() > 0.6:
+                result.append(item)
+                continue
+
+            # Find the sprint that contains the item's created_at
+            chosen_sprint = None
+            for s in sprints:
+                if s.started_at and s.ended_at:
+                    if s.started_at <= item.created_at <= s.ended_at:
+                        chosen_sprint = s
+                        break
+
+            if chosen_sprint is None:
+                chosen_sprint = random.choice(closed_or_active)
+
+            result.append(
+                dataclasses.replace(
+                    item,
+                    sprint_id=chosen_sprint.sprint_id,
+                    sprint_name=chosen_sprint.name,
+                )
+            )
+
+        return result

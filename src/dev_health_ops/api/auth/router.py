@@ -14,6 +14,7 @@ from dev_health_ops.api.services.auth import (
     AuthenticatedUser,
     get_auth_service,
     extract_token_from_header,
+    set_current_org_id,
 )
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.db import get_postgres_session
@@ -196,6 +197,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    set_current_org_id(user.org_id)
     return user
 
 
@@ -232,6 +234,7 @@ async def get_current_user_optional(
     if not db_user or not db_user.is_active:
         return None
 
+    set_current_org_id(user.org_id)
     return user
 
 

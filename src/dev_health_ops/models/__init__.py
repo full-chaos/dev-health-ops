@@ -61,6 +61,7 @@ from .billing import (
     PlanFeatureBundle,
 )
 from .subscriptions import Subscription, SubscriptionEvent
+from .invoices import Invoice, InvoiceLineItem
 
 __all__ = [
     "AuditAction",
@@ -83,6 +84,8 @@ __all__ = [
     "IdentityMapping",
     "IntegrationCredential",
     "IntegrationProvider",
+    "Invoice",
+    "InvoiceLineItem",
     "JobRun",
     "JobRunStatus",
     "JobStatus",

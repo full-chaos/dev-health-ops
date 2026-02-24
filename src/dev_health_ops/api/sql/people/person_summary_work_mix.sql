@@ -5,5 +5,6 @@ SELECT
 FROM work_item_cycle_times
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND assignee IN %(identities)s
+  AND org_id = %(org_id)s
 GROUP BY key, name
 ORDER BY value DESC

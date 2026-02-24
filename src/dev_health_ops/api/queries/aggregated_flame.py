@@ -16,6 +16,7 @@ async def fetch_cycle_breakdown(
     team_id: Optional[str] = None,
     provider: Optional[str] = None,
     work_scope_id: Optional[str] = None,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     """
     Fetch aggregated state durations for cycle-time breakdown.
@@ -26,8 +27,9 @@ async def fetch_cycle_breakdown(
         "start_day": start_day,
         "end_day": end_day,
     }
+    params["org_id"] = org_id
 
-    filters = ["day >= %(start_day)s", "day < %(end_day)s"]
+    filters = ["day >= %(start_day)s", "day < %(end_day)s", "org_id = %(org_id)s"]
     if team_id:
         filters.append("team_id = %(team_id)s")
         params["team_id"] = team_id
@@ -61,6 +63,7 @@ async def fetch_code_hotspots(
     repo_id: Optional[str] = None,
     limit: int = 500,
     min_churn: int = 1,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     """
     Fetch aggregated file churn for code hotspot flame.
@@ -73,8 +76,9 @@ async def fetch_code_hotspots(
         "limit": limit,
         "min_churn": min_churn,
     }
+    params["org_id"] = org_id
 
-    filters = ["day >= %(start_day)s", "day < %(end_day)s"]
+    filters = ["day >= %(start_day)s", "day < %(end_day)s", "org_id = %(org_id)s"]
     if repo_id:
         filters.append("repo_id = %(repo_id)s")
         params["repo_id"] = repo_id
@@ -100,18 +104,21 @@ async def fetch_repo_names(
     client: Any,
     *,
     repo_ids: List[str],
+    org_id: str = "",
 ) -> Dict[str, str]:
     """Fetch repo names for given repo IDs."""
     if not repo_ids:
         return {}
 
     params = {"repo_ids": repo_ids}
+    params["org_id"] = org_id
     query = """
         SELECT
             toString(id) AS repo_id,
             repo AS repo_name
         FROM repos
         WHERE id IN %(repo_ids)s
+          AND org_id = %(org_id)s
     """
     rows = await query_dicts(client, query, params)
     return {row["repo_id"]: row["repo_name"] for row in rows}
@@ -127,6 +134,7 @@ async def fetch_throughput(
     provider: Optional[str] = None,
     work_scope_id: Optional[str] = None,
     limit: int = 500,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     """
     Fetch throughput data for work items completed in window.
@@ -139,8 +147,9 @@ async def fetch_throughput(
         "end_day": end_day,
         "limit": limit,
     }
+    params["org_id"] = org_id
 
-    filters = ["day >= %(start_day)s", "day < %(end_day)s"]
+    filters = ["day >= %(start_day)s", "day < %(end_day)s", "org_id = %(org_id)s"]
     if team_id:
         filters.append("team_id = %(team_id)s")
         params["team_id"] = team_id
@@ -179,6 +188,7 @@ async def fetch_throughput_by_type(
     team_id: Optional[str] = None,
     repo_id: Optional[str] = None,
     limit: int = 500,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     """
     Fetch throughput by work item type from work_item_cycle_times.
@@ -188,12 +198,14 @@ async def fetch_throughput_by_type(
         "end_day": end_day,
         "limit": limit,
     }
+    params["org_id"] = org_id
 
     # Filter by completed_at date range, not day column
     filters = [
         "completed_at >= toDateTime(%(start_day)s)",
         "completed_at < toDateTime(%(end_day)s)",
         "completed_at IS NOT NULL",
+        "org_id = %(org_id)s",
     ]
     if team_id:
         filters.append("team_id = %(team_id)s")
@@ -224,6 +236,7 @@ async def fetch_cycle_milestones(
     team_id: Optional[str] = None,
     provider: Optional[str] = None,
     work_scope_id: Optional[str] = None,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     """
     Fetch aggregated cycle time by milestone as a fallback.
@@ -233,8 +246,9 @@ async def fetch_cycle_milestones(
         "start_day": start_day,
         "end_day": end_day,
     }
+    params["org_id"] = org_id
 
-    filters = ["day >= %(start_day)s", "day < %(end_day)s"]
+    filters = ["day >= %(start_day)s", "day < %(end_day)s", "org_id = %(org_id)s"]
     if team_id:
         filters.append("team_id = %(team_id)s")
         params["team_id"] = team_id

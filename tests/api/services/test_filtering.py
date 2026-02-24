@@ -88,7 +88,7 @@ async def test_scope_filter_for_metric_team(monkeypatch):
 async def test_scope_filter_for_metric_repo_uses_resolved_repo_ids(monkeypatch):
     filters = MetricFilter()
 
-    async def fake_resolve_repo_filter_ids(_sink, _filters):
+    async def fake_resolve_repo_filter_ids(_sink, _filters, *, org_id=""):
         return ["r1", "r2"]
 
     def fake_build_scope_filter_multi(scope, ids, team_column, repo_column):

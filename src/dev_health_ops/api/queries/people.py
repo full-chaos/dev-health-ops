@@ -17,9 +17,10 @@ async def search_people(
     *,
     query: str,
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     sql = load_sql("people/people_search.sql")
-    params = {"query": query, "limit": limit}
+    params = {"query": query, "limit": limit, "org_id": org_id}
     return await query_dicts(sink, sql, params)
 
 
@@ -27,9 +28,10 @@ async def resolve_person_identity(
     sink: BaseMetricsSink,
     *,
     person_id: str,
+    org_id: str = "",
 ) -> Optional[str]:
     sql = load_sql("people/person_lookup.sql")
-    rows = await query_dicts(sink, sql, {"person_id": person_id})
+    rows = await query_dicts(sink, sql, {"person_id": person_id, "org_id": org_id})
     if not rows:
         return None
     return str(rows[0].get("identity_id") or "") or None
@@ -39,9 +41,14 @@ async def fetch_identity_coverage(
     sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
+    org_id: str = "",
 ) -> int:
     sql = load_sql("people/person_identity_coverage.sql")
-    rows = await query_dicts(sink, sql, {"identities": _sql_params(identities)})
+    rows = await query_dicts(
+        sink,
+        sql,
+        {"identities": _sql_params(identities), "org_id": org_id},
+    )
     if not rows:
         return 0
     return int(rows[0].get("sources") or 0)
@@ -51,9 +58,14 @@ async def fetch_person_team_id(
     sink: BaseMetricsSink,
     *,
     identities: Iterable[str],
+    org_id: str = "",
 ) -> Optional[str]:
     sql = load_sql("people/person_team.sql")
-    rows = await query_dicts(sink, sql, {"identities": _sql_params(identities)})
+    rows = await query_dicts(
+        sink,
+        sql,
+        {"identities": _sql_params(identities), "org_id": org_id},
+    )
     if not rows:
         return None
     return str(rows[0].get("team_id") or "") or None
@@ -70,6 +82,7 @@ async def fetch_person_metric_value(
     start_day: date,
     end_day: date,
     extra_where: str = "",
+    org_id: str = "",
 ) -> float:
     template = load_sql("people/person_summary_deltas.sql")
     sql = template.format(
@@ -83,6 +96,7 @@ async def fetch_person_metric_value(
         "start_day": start_day,
         "end_day": end_day,
         "identities": _sql_params(identities),
+        "org_id": org_id,
     }
     rows = await query_dicts(sink, sql, params)
     if not rows:
@@ -101,6 +115,7 @@ async def fetch_person_metric_series(
     start_day: date,
     end_day: date,
     extra_where: str = "",
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     template = load_sql("people/person_metric_timeseries.sql")
     sql = template.format(
@@ -114,6 +129,7 @@ async def fetch_person_metric_series(
         "start_day": start_day,
         "end_day": end_day,
         "identities": _sql_params(identities),
+        "org_id": org_id,
     }
     return await query_dicts(sink, sql, params)
 
@@ -132,6 +148,7 @@ async def fetch_person_breakdown(
     end_day: date,
     extra_where: str = "",
     limit: int = 12,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     template = load_sql("people/person_metric_breakdowns.sql")
     sql = template.format(
@@ -148,6 +165,7 @@ async def fetch_person_breakdown(
         "end_day": end_day,
         "identities": _sql_params(identities),
         "limit": limit,
+        "org_id": org_id,
     }
     return await query_dicts(sink, sql, params)
 
@@ -158,12 +176,14 @@ async def fetch_person_work_mix(
     identities: Iterable[str],
     start_day: date,
     end_day: date,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     sql = load_sql("people/person_summary_work_mix.sql")
     params = {
         "start_day": start_day,
         "end_day": end_day,
         "identities": _sql_params(identities),
+        "org_id": org_id,
     }
     return await query_dicts(sink, sql, params)
 
@@ -174,12 +194,14 @@ async def fetch_person_flow_breakdown(
     identities: Iterable[str],
     start_day: date,
     end_day: date,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     sql = load_sql("people/person_summary_flow_breakdown.sql")
     params = {
         "start_day": start_day,
         "end_day": end_day,
         "identities": _sql_params(identities),
+        "org_id": org_id,
     }
     return await query_dicts(sink, sql, params)
 
@@ -190,12 +212,14 @@ async def fetch_person_collaboration(
     identities: Iterable[str],
     start_day: date,
     end_day: date,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     sql = load_sql("people/person_summary_collaboration.sql")
     params = {
         "start_day": start_day,
         "end_day": end_day,
         "identities": _sql_params(identities),
+        "org_id": org_id,
     }
     return await query_dicts(sink, sql, params)
 
@@ -233,6 +257,7 @@ async def fetch_person_issues(
     end_day: date,
     limit: int,
     cursor: Optional[datetime] = None,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     template = load_sql("people/person_drilldown_issues.sql")
     cursor_filter = ""
@@ -244,6 +269,7 @@ async def fetch_person_issues(
         "end_day": end_day,
         "identities": _sql_params(identities),
         "limit": limit,
+        "org_id": org_id,
     }
     if cursor is not None:
         params["cursor"] = cursor

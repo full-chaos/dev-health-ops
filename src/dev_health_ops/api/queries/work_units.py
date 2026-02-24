@@ -11,9 +11,11 @@ async def fetch_work_graph_edges(
     repo_id: Optional[str] = None,
     repo_ids: Optional[List[str]] = None,
     limit: int = 50000,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {"limit": int(limit)}
-    filters = []
+    filters = ["org_id = %(org_id)s"]
+    params["org_id"] = org_id
     if repo_ids:
         filters.append("repo_id IN %(repo_ids)s")
         params["repo_ids"] = repo_ids
@@ -46,11 +48,12 @@ async def fetch_work_items(
     client: Any,
     *,
     work_item_ids: Iterable[str],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return []
-    params = {"work_item_ids": ids}
+    params: Dict[str, Any] = {"work_item_ids": ids, "org_id": org_id}
     query = """
         SELECT
             work_item_id,
@@ -64,6 +67,7 @@ async def fetch_work_items(
             completed_at
         FROM work_items
         WHERE work_item_id IN %(work_item_ids)s
+          AND org_id = %(org_id)s
     """
     return await query_dicts(client, query, params)
 
@@ -72,17 +76,19 @@ async def fetch_work_item_active_hours(
     client: Any,
     *,
     work_item_ids: Iterable[str],
+    org_id: str = "",
 ) -> Dict[str, float]:
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return {}
-    params = {"work_item_ids": ids}
+    params: Dict[str, Any] = {"work_item_ids": ids, "org_id": org_id}
     query = """
         SELECT
             work_item_id,
             argMax(active_time_hours, computed_at) AS active_time_hours
         FROM work_item_cycle_times
         WHERE work_item_id IN %(work_item_ids)s
+          AND org_id = %(org_id)s
         GROUP BY work_item_id
     """
     rows = await query_dicts(client, query, params)
@@ -96,12 +102,13 @@ async def fetch_pull_requests(
     client: Any,
     *,
     repo_numbers: Dict[str, List[int]],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for repo_id, numbers in repo_numbers.items():
         if not numbers:
             continue
-        params = {"repo_id": repo_id, "numbers": numbers}
+        params = {"repo_id": repo_id, "numbers": numbers, "org_id": org_id}
         query = """
             SELECT
                 toString(repo_id) AS repo_id,
@@ -114,8 +121,10 @@ async def fetch_pull_requests(
                 additions,
                 deletions
             FROM git_pull_requests
+            INNER JOIN repos ON toString(repos.id) = toString(git_pull_requests.repo_id)
             WHERE repo_id = %(repo_id)s
               AND number IN %(numbers)s
+              AND repos.org_id = %(org_id)s
         """
         rows.extend(await query_dicts(client, query, params))
     return rows
@@ -125,12 +134,13 @@ async def fetch_commits(
     client: Any,
     *,
     repo_commits: Dict[str, List[str]],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for repo_id, hashes in repo_commits.items():
         if not hashes:
             continue
-        params = {"repo_id": repo_id, "hashes": hashes}
+        params = {"repo_id": repo_id, "hashes": hashes, "org_id": org_id}
         query = """
             SELECT
                 toString(repo_id) AS repo_id,
@@ -139,8 +149,10 @@ async def fetch_commits(
                 author_when,
                 committer_when
             FROM git_commits
+            INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
             WHERE repo_id = %(repo_id)s
               AND hash IN %(hashes)s
+              AND repos.org_id = %(org_id)s
         """
         rows.extend(await query_dicts(client, query, params))
     return rows
@@ -150,19 +162,22 @@ async def fetch_commit_churn(
     client: Any,
     *,
     repo_commits: Dict[str, List[str]],
+    org_id: str = "",
 ) -> Dict[str, float]:
     churn: Dict[str, float] = {}
     for repo_id, hashes in repo_commits.items():
         if not hashes:
             continue
-        params = {"repo_id": repo_id, "hashes": hashes}
+        params = {"repo_id": repo_id, "hashes": hashes, "org_id": org_id}
         query = """
             SELECT
                 commit_hash,
                 sum(additions) + sum(deletions) AS churn_loc
             FROM git_commit_stats
+            INNER JOIN repos ON toString(repos.id) = toString(git_commit_stats.repo_id)
             WHERE repo_id = %(repo_id)s
               AND commit_hash IN %(hashes)s
+              AND repos.org_id = %(org_id)s
             GROUP BY commit_hash
         """
         rows = await query_dicts(client, query, params)

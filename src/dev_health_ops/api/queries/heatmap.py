@@ -14,6 +14,7 @@ async def fetch_review_wait_density(
     end_ts: datetime,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -21,14 +22,17 @@ async def fetch_review_wait_density(
             toHour(created_at) AS hour,
             sum(dateDiff('minute', created_at, first_review_at)) / 60.0 AS value
         FROM git_pull_requests
+        INNER JOIN repos ON toString(repos.id) = toString(git_pull_requests.repo_id)
         WHERE created_at >= %(start_ts)s
           AND created_at < %(end_ts)s
           AND first_review_at IS NOT NULL
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         GROUP BY weekday, hour
     """
     params = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -42,6 +46,7 @@ async def fetch_review_wait_evidence(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -51,11 +56,13 @@ async def fetch_review_wait_evidence(
             created_at,
             first_review_at
         FROM git_pull_requests
+        INNER JOIN repos ON toString(repos.id) = toString(git_pull_requests.repo_id)
         WHERE created_at >= %(start_ts)s
           AND created_at < %(end_ts)s
           AND first_review_at IS NOT NULL
           AND toDayOfWeek(created_at) = %(weekday)s
           AND toHour(created_at) = %(hour)s
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         ORDER BY created_at DESC
         LIMIT %(limit)s
@@ -68,6 +75,7 @@ async def fetch_review_wait_evidence(
         "limit": limit,
     }
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -79,6 +87,7 @@ async def fetch_repo_touchpoints(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     top_query = f"""
         SELECT
@@ -88,6 +97,7 @@ async def fetch_repo_touchpoints(
         INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         GROUP BY repos.repo
         ORDER BY total DESC
@@ -95,6 +105,7 @@ async def fetch_repo_touchpoints(
     """
     params = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params.update(scope_params)
+    params["org_id"] = org_id
     top_rows = await query_dicts(sink, top_query, params)
     repos = [str(row.get("repo")) for row in top_rows if row.get("repo")]
     if not repos:
@@ -110,6 +121,7 @@ async def fetch_repo_touchpoints(
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
           AND repos.repo IN %(repos)s
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         GROUP BY day, repo
         ORDER BY day
@@ -120,6 +132,7 @@ async def fetch_repo_touchpoints(
         "repos": repos,
     }
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -131,6 +144,7 @@ async def fetch_hotspot_risk(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     top_query = f"""
         SELECT
@@ -140,6 +154,8 @@ async def fetch_hotspot_risk(
         INNER JOIN repos ON toString(repos.id) = toString(file_metrics_daily.repo_id)
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
+          AND file_metrics_daily.org_id = %(org_id)s
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         GROUP BY file_key
         ORDER BY total DESC
@@ -147,6 +163,7 @@ async def fetch_hotspot_risk(
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}
     params.update(scope_params)
+    params["org_id"] = org_id
     top_rows = await query_dicts(sink, top_query, params)
     files = [str(row.get("file_key")) for row in top_rows if row.get("file_key")]
     if not files:
@@ -162,6 +179,8 @@ async def fetch_hotspot_risk(
         WHERE day >= %(start_day)s
           AND day < %(end_day)s
           AND concat(repos.repo, ':', path) IN %(files)s
+          AND file_metrics_daily.org_id = %(org_id)s
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         GROUP BY week, file_key
         ORDER BY week
@@ -172,6 +191,7 @@ async def fetch_hotspot_risk(
         "files": files,
     }
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -184,6 +204,7 @@ async def fetch_hotspot_evidence(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -199,6 +220,8 @@ async def fetch_hotspot_evidence(
         WHERE day >= %(week_start)s
           AND day < %(week_end)s
           AND concat(repos.repo, ':', path) = %(file_key)s
+          AND file_metrics_daily.org_id = %(org_id)s
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         ORDER BY day
         LIMIT %(limit)s
@@ -210,6 +233,7 @@ async def fetch_hotspot_evidence(
         "limit": limit,
     }
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -219,6 +243,7 @@ async def fetch_individual_active_hours(
     start_ts: datetime,
     end_ts: datetime,
     identities: Sequence[str],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     if not identities:
         return []
@@ -228,12 +253,19 @@ async def fetch_individual_active_hours(
             toHour(author_when) AS hour,
             count() AS value
         FROM git_commits
+        INNER JOIN repos ON toString(repos.id) = toString(git_commits.repo_id)
         WHERE author_when >= %(start_ts)s
           AND author_when < %(end_ts)s
           AND (author_email IN %(identities)s OR author_name IN %(identities)s)
+          AND repos.org_id = %(org_id)s
         GROUP BY weekday, hour
     """
-    params = {"start_ts": start_ts, "end_ts": end_ts, "identities": list(identities)}
+    params = {
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "identities": list(identities),
+        "org_id": org_id,
+    }
     return await query_dicts(sink, query, params)
 
 
@@ -246,6 +278,7 @@ async def fetch_individual_active_evidence(
     hour: int,
     identities: Sequence[str],
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     if not identities:
         return []
@@ -264,6 +297,7 @@ async def fetch_individual_active_evidence(
           AND toDayOfWeek(author_when) = %(weekday)s
           AND toHour(author_when) = %(hour)s
           AND (author_email IN %(identities)s OR author_name IN %(identities)s)
+          AND repos.org_id = %(org_id)s
         ORDER BY author_when DESC
         LIMIT %(limit)s
     """
@@ -274,5 +308,6 @@ async def fetch_individual_active_evidence(
         "hour": hour,
         "identities": list(identities),
         "limit": limit,
+        "org_id": org_id,
     }
     return await query_dicts(sink, query, params)

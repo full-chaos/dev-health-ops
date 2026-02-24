@@ -179,9 +179,10 @@ async def _columns_present(
 async def _repo_scope_filter(
     sink: BaseMetricsSink,
     filters: MetricFilter,
+    org_id: str = "",
     repo_column: str = "repo_id",
 ) -> Tuple[str, Dict[str, Any]]:
-    repo_ids = await resolve_repo_filter_ids(sink, filters)
+    repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
     if not repo_ids:
         return "", {}
     return build_scope_filter_multi("repo", repo_ids, repo_column=repo_column)
@@ -237,6 +238,7 @@ async def _build_investment_flow(
     start_day: date,
     end_day: date,
     filters: MetricFilter,
+    org_id: str = "",
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(sink, ["work_unit_investments"]):
@@ -255,7 +257,10 @@ async def _build_investment_flow(
         return [], []
 
     repo_filter, repo_params = await _repo_scope_filter(
-        sink, filters, repo_column="repo_id"
+        sink,
+        filters,
+        org_id=org_id,
+        repo_column="repo_id",
     )
     theme_filters = _category_theme_filters(filters)
     category_filter = " AND theme_kv.1 IN %(themes)s" if theme_filters else ""
@@ -272,6 +277,7 @@ async def _build_investment_flow(
         scope_filter=scope_filter,
         scope_params=scope_params,
         limit=MAX_INVESTMENT_ITEMS,
+        org_id=org_id,
     )
     nodes: Dict[str, SankeyNode] = {}
     edges: Dict[Tuple[str, str], float] = {}
@@ -296,6 +302,7 @@ async def _build_expense_flow(
     start_day: date,
     end_day: date,
     filters: MetricFilter,
+    org_id: str = "",
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(
@@ -337,6 +344,7 @@ async def _build_expense_flow(
         end_day=end_day,
         scope_filter=scope_filter,
         scope_params=scope_params,
+        org_id=org_id,
     )
     if not rows:
         return [], []
@@ -350,6 +358,7 @@ async def _build_expense_flow(
         end_day=end_day,
         scope_filter=scope_filter,
         scope_params=scope_params,
+        org_id=org_id,
     )
     canceled_items = 0.0
     if abandoned_rows:
@@ -380,6 +389,7 @@ async def _build_state_flow(
     start_day: date,
     end_day: date,
     filters: MetricFilter,
+    org_id: str = "",
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(sink, ["work_item_state_durations_daily"]):
@@ -405,6 +415,7 @@ async def _build_state_flow(
         end_day=end_day,
         scope_filter=scope_filter,
         scope_params=scope_params,
+        org_id=org_id,
     )
     nodes: Dict[str, SankeyNode] = {}
     edges: Dict[Tuple[str, str], float] = {}
@@ -467,6 +478,7 @@ async def _build_hotspot_flow(
     start_day: date,
     end_day: date,
     filters: MetricFilter,
+    org_id: str = "",
 ) -> Tuple[List[SankeyNode], List[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(sink, ["file_metrics_daily", "repos"]):
@@ -481,7 +493,10 @@ async def _build_hotspot_flow(
         return [], []
 
     scope_filter, scope_params = await _repo_scope_filter(
-        sink, filters, repo_column="metrics.repo_id"
+        sink,
+        filters,
+        org_id=org_id,
+        repo_column="metrics.repo_id",
     )
     rows = await fetch_hotspot_rows(
         sink,
@@ -490,6 +505,7 @@ async def _build_hotspot_flow(
         scope_filter=scope_filter,
         scope_params=scope_params,
         limit=MAX_HOTSPOT_ROWS,
+        org_id=org_id,
     )
     nodes: Dict[str, SankeyNode] = {}
     edges: Dict[Tuple[str, str], float] = {}
@@ -522,6 +538,7 @@ async def build_sankey_response(
     db_url: str,
     mode: str,
     filters: MetricFilter,
+    org_id: str = "",
     context: Optional[SankeyContext] = None,
     window_start: Optional[date] = None,
     window_end: Optional[date] = None,
@@ -542,6 +559,7 @@ async def build_sankey_response(
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
+                org_id=org_id,
             )
         elif mode == "expense":
             nodes, links = await _build_expense_flow(
@@ -549,6 +567,7 @@ async def build_sankey_response(
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
+                org_id=org_id,
             )
         elif mode == "state":
             nodes, links = await _build_state_flow(
@@ -556,6 +575,7 @@ async def build_sankey_response(
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
+                org_id=org_id,
             )
         elif mode == "hotspot":
             nodes, links = await _build_hotspot_flow(
@@ -563,6 +583,7 @@ async def build_sankey_response(
                 start_day=start_day,
                 end_day=end_day,
                 filters=resolved_filters,
+                org_id=org_id,
             )
         else:
             nodes, links = [], []

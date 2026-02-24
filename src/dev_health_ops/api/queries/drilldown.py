@@ -14,6 +14,7 @@ async def fetch_pull_requests(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int = 50,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -27,7 +28,9 @@ async def fetch_pull_requests(
             if(first_review_at IS NULL, NULL,
                dateDiff('hour', created_at, first_review_at)) AS review_latency_hours
         FROM git_pull_requests
+        INNER JOIN repos ON toString(repos.id) = toString(git_pull_requests.repo_id)
         WHERE created_at >= %(start_ts)s AND created_at < %(end_ts)s
+          AND repos.org_id = %(org_id)s
         {scope_filter}
         ORDER BY created_at DESC
         LIMIT %(limit)s
@@ -38,6 +41,7 @@ async def fetch_pull_requests(
         "limit": limit,
     }
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(client, query, params)
 
 
@@ -49,6 +53,7 @@ async def fetch_issues(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int = 50,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -62,10 +67,12 @@ async def fetch_issues(
             completed_at
         FROM work_item_cycle_times
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
         {scope_filter}
         ORDER BY completed_at DESC
         LIMIT %(limit)s
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(client, query, params)

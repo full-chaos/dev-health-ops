@@ -136,6 +136,7 @@ async def build_work_unit_investments(
     *,
     db_url: str,
     filters: MetricFilter,
+    org_id: str = "",
     limit: int = 200,
     include_text: bool = True,
     work_unit_id: Optional[str] = None,
@@ -150,7 +151,7 @@ async def build_work_unit_investments(
 
     async with clickhouse_client(db_url) as sink:
         require_clickhouse_backend(sink)
-        repo_ids = await resolve_repo_filter_ids(sink, filters)
+        repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
         rows = await fetch_work_unit_investments(
             sink,
             start_ts=start_ts,
@@ -158,6 +159,7 @@ async def build_work_unit_investments(
             repo_ids=repo_ids or None,
             limit=max(1, int(limit)),
             work_unit_id=work_unit_id,
+            org_id=org_id,
         )
 
         if not rows:
@@ -189,19 +191,27 @@ async def build_work_unit_investments(
                 if row.get("work_unit_id") and row.get("categorization_run_id")
             ]
             quote_rows = await fetch_work_unit_investment_quotes(
-                sink, unit_runs=unit_runs
+                sink,
+                unit_runs=unit_runs,
+                org_id=org_id,
             )
 
         repo_id_values = [
             str(row.get("repo_id") or "") for row in rows if row.get("repo_id")
         ]
-        repo_scopes = await fetch_repo_scopes(sink, repo_ids=repo_id_values)
+        repo_scopes = await fetch_repo_scopes(
+            sink,
+            repo_ids=repo_id_values,
+            org_id=org_id,
+        )
 
         issue_ids: List[str] = []
         for row in rows:
             issue_ids.extend(_extract_issue_ids(row.get("structural_evidence_json")))
         team_assignments = await fetch_work_item_team_assignments(
-            sink, work_item_ids=issue_ids
+            sink,
+            work_item_ids=issue_ids,
+            org_id=org_id,
         )
 
     quotes_by_unit: Dict[str, List[Dict[str, object]]] = {}

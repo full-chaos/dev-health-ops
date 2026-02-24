@@ -10,6 +10,7 @@ SELECT
 FROM work_item_cycle_times
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND assignee IN %(identities)s
+  AND org_id = %(org_id)s
   {cursor_filter}
 ORDER BY completed_at DESC
 LIMIT %(limit)s

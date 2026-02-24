@@ -48,7 +48,7 @@ def time_window(filters: MetricFilter) -> Tuple[date, date, date, date]:
 
 
 async def resolve_repo_filter_ids(
-    sink: BaseMetricsSink, filters: MetricFilter
+    sink: BaseMetricsSink, filters: MetricFilter, org_id: str = ""
 ) -> List[str]:
     repo_refs: List[str] = []
     if filters.scope.level == "repo":
@@ -56,9 +56,13 @@ async def resolve_repo_filter_ids(
     if filters.what.repos:
         repo_refs.extend(filters.what.repos)
     if filters.scope.level == "team" and filters.scope.ids:
-        team_repo_ids = await resolve_repo_ids_for_teams(sink, filters.scope.ids)
+        team_repo_ids = await resolve_repo_ids_for_teams(
+            sink,
+            filters.scope.ids,
+            org_id=org_id,
+        )
         repo_refs.extend(team_repo_ids)
-    return await resolve_repo_ids(sink, repo_refs)
+    return await resolve_repo_ids(sink, repo_refs, org_id=org_id)
 
 
 def work_category_filter(
@@ -82,6 +86,7 @@ async def scope_filter_for_metric(
     *,
     metric_scope: str,
     filters: MetricFilter,
+    org_id: str = "",
     team_column: str = "team_id",
     repo_column: str = "repo_id",
 ) -> Tuple[str, Dict[str, Any]]:
@@ -90,7 +95,7 @@ async def scope_filter_for_metric(
             "team", filters.scope.ids, team_column=team_column, repo_column=repo_column
         )
     if metric_scope == "repo":
-        repo_ids = await resolve_repo_filter_ids(sink, filters)
+        repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
         return build_scope_filter_multi(
             "repo", repo_ids, team_column=team_column, repo_column=repo_column
         )

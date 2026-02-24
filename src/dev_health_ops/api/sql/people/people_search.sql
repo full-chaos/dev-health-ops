@@ -4,6 +4,7 @@ WITH identities AS (
         max(day) AS last_seen
     FROM user_metrics_daily
     WHERE identity_id != ''
+      AND org_id = %(org_id)s
     GROUP BY identity_id
 
     UNION ALL
@@ -13,6 +14,7 @@ WITH identities AS (
         max(day) AS last_seen
     FROM work_item_user_metrics_daily
     WHERE user_identity != ''
+      AND org_id = %(org_id)s
     GROUP BY user_identity
 )
 SELECT

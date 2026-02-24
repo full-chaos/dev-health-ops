@@ -230,6 +230,7 @@ async def _resolve_identity_variants(
 async def build_heatmap_response(
     *,
     db_url: str,
+    org_id: str = "",
     type: str,
     metric: str,
     scope_type: str,
@@ -298,6 +299,7 @@ async def build_heatmap_response(
                 sink,
                 metric_scope="repo",
                 filters=filters,
+                org_id=org_id,
                 team_column="team_id",
                 repo_column="repo_id",
             )
@@ -307,6 +309,7 @@ async def build_heatmap_response(
                 end_ts=end_ts,
                 scope_filter=scope_filter,
                 scope_params=scope_params,
+                org_id=org_id,
             )
             if x and y:
                 try:
@@ -325,12 +328,14 @@ async def build_heatmap_response(
                         scope_filter=scope_filter,
                         scope_params=scope_params,
                         limit=min(max(limit, 1), 200),
+                        org_id=org_id,
                     )
         elif definition.metric == "repo_touchpoints":
             scope_filter, scope_params = await scope_filter_for_metric(
                 sink,
                 metric_scope="repo",
                 filters=filters,
+                org_id=org_id,
                 team_column="team_id",
                 repo_column="repo_id",
             )
@@ -341,12 +346,14 @@ async def build_heatmap_response(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
                 limit=20,
+                org_id=org_id,
             )
         elif definition.metric == "hotspot_risk":
             scope_filter, scope_params = await scope_filter_for_metric(
                 sink,
                 metric_scope="repo",
                 filters=filters,
+                org_id=org_id,
                 team_column="team_id",
                 repo_column="repo_id",
             )
@@ -357,6 +364,7 @@ async def build_heatmap_response(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
                 limit=20,
+                org_id=org_id,
             )
             if x and y:
                 try:
@@ -374,6 +382,7 @@ async def build_heatmap_response(
                         scope_filter=scope_filter,
                         scope_params=scope_params,
                         limit=min(max(limit, 1), 200),
+                        org_id=org_id,
                     )
         elif definition.metric == "active_hours":
             rows = await fetch_individual_active_hours(
@@ -381,6 +390,7 @@ async def build_heatmap_response(
                 start_ts=start_ts,
                 end_ts=end_ts,
                 identities=identities,
+                org_id=org_id,
             )
             if x and y:
                 try:
@@ -398,6 +408,7 @@ async def build_heatmap_response(
                         hour=hour,
                         identities=identities,
                         limit=min(max(limit, 1), 200),
+                        org_id=org_id,
                     )
         else:
             rows = []

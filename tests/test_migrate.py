@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -60,6 +60,8 @@ class TestMakeAlembicConfig:
         assert cfg.get_main_option("sqlalchemy.url") == url
 
     def test_falls_back_to_env(self, monkeypatch):
+        monkeypatch.delenv("POSTGRES_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.setenv("DATABASE_URI", "postgresql+asyncpg://env@host/db")
         cfg = _make_alembic_config(db_url=None)
         assert "env@host" in cfg.get_main_option("sqlalchemy.url")
@@ -158,6 +160,8 @@ class TestCommandDispatch:
 
     @patch("dev_health_ops.migrate.command")
     def test_upgrade_without_db_falls_back_to_env(self, mock_cmd, monkeypatch):
+        monkeypatch.delenv("POSTGRES_URI", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.setenv("DATABASE_URI", "postgresql+asyncpg://env@host/db")
         ns = SimpleNamespace(db=None, revision="head")
         _run_upgrade(ns)

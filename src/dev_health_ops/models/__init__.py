@@ -53,13 +53,7 @@ from .retention import (
     OrgRetentionPolicy,
     RetentionResourceType,
 )
-from .billing import (
-    BillingInterval,
-    BillingPlan,
-    BillingPrice,
-    FeatureBundle,
-    PlanFeatureBundle,
-)
+from .subscriptions import Subscription, SubscriptionEvent
 
 __all__ = [
     "AuditAction",
@@ -96,6 +90,8 @@ __all__ = [
     "PlanFeatureBundle",
     "Repo",
     "RetentionResourceType",
+    "Subscription",
+    "SubscriptionEvent",
     "ScheduledJob",
     "Setting",
     "SettingCategory",

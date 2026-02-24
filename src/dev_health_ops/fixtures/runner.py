@@ -431,14 +431,14 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
                 # Generate and write worklogs
                 all_worklogs = []
-                wl_gen = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+                wl_gen = SyntheticDataGenerator(repo_name=ns.repo_name, seed=ns.seed)
                 all_worklogs.extend(wl_gen.generate_worklogs(fixture_data["work_items"]))
                 if hasattr(sink, 'write_worklogs') and all_worklogs:
                     sink.write_worklogs(all_worklogs)
                     logging.info("Wrote %d worklogs.", len(all_worklogs))
 
                 # Generate and write sprints
-                sprint_gen = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
+                sprint_gen = SyntheticDataGenerator(repo_name=ns.repo_name, seed=ns.seed)
                 sprints = sprint_gen.generate_sprints(days=ns.days)
                 if hasattr(sink, "write_sprints") and sprints:
                     sink.write_sprints(sprints)
@@ -446,8 +446,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
                 # Write DORA metrics, investment classifications, investment metrics,
                 # and file hotspot daily records for each repo.
-                for i in range(repo_count):
-                    r_name = base_name if repo_count == 1 else f"{base_name}-{i + 1}"
+                _repo_count = max(1, ns.repo_count)
+                for i in range(_repo_count):
+                    r_name = ns.repo_name if _repo_count == 1 else f"{ns.repo_name}-{i + 1}"
                     seed_value = (int(ns.seed) + i) if ns.seed is not None else None
                     metric_gen = SyntheticDataGenerator(repo_name=r_name, seed=seed_value)
 
@@ -472,7 +473,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 logging.info(
                     "Wrote DORA, investment classifications, investment metrics, "
                     "and file hotspot daily records for %d repos.",
-                    repo_count,
+                    _repo_count,
                 )
 
                 team_resolver = load_team_resolver()

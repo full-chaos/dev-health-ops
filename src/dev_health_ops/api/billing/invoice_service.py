@@ -190,7 +190,8 @@ class InvoiceService:
             payment_intent, "amount_received", invoice.amount_paid
         )
         invoice.amount_remaining = 0
-        invoice.paid_at = datetime.now(timezone.utc)
+        if invoice.paid_at is None:
+            invoice.paid_at = datetime.now(timezone.utc)
         invoice.updated_at = datetime.now(timezone.utc)
         await db.flush()
         return invoice

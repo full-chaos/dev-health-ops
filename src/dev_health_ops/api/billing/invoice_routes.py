@@ -176,8 +176,11 @@ async def void_invoice(
     invoice = await invoice_service.get_invoice(session, invoice_uuid, org_uuid)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    if invoice.status == "paid":
-        raise HTTPException(status_code=400, detail="Paid invoices cannot be voided")
+    if invoice.status != "open":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only open invoices can be voided (current status: {invoice.status})",
+        )
 
     try:
         stripe_client = get_stripe_client()

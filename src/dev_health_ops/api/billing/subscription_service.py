@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 import importlib
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Select, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+logger = logging.getLogger(__name__)
 
 
 class SubscriptionService:
@@ -104,23 +109,30 @@ class SubscriptionService:
         metadata = self._as_dict(getattr(stripe_sub, "metadata", {}))
         org_id_value = metadata.get("org_id")
         if not org_id_value:
+            logger.warning(
+                "Subscription event %s has no org_id in metadata, skipping", event_id
+            )
             return
 
         org_id = uuid.UUID(str(org_id_value))
         previous_status = await self._get_previous_status(getattr(stripe_sub, "id", ""))
         subscription = await self.upsert_from_stripe(stripe_sub, org_id)
 
-        self.db.add(
-            self._subscription_event_cls()(
-                subscription_id=subscription.id,
-                stripe_event_id=event_id,
-                event_type=event_type,
-                previous_status=previous_status,
-                new_status=subscription.status,
-                payload=self._serialize_payload(event),
+        try:
+            self.db.add(
+                self._subscription_event_cls()(
+                    subscription_id=subscription.id,
+                    stripe_event_id=event_id,
+                    event_type=event_type,
+                    previous_status=previous_status,
+                    new_status=subscription.status,
+                    payload=self._serialize_payload(event),
+                )
             )
-        )
-        await self.db.flush()
+            await self.db.flush()
+        except IntegrityError:
+            await self.db.rollback()
+            return
 
     async def get_for_org(self, org_id: uuid.UUID) -> Any | None:
         subscription_cls = self._subscription_cls()
@@ -206,7 +218,7 @@ class SubscriptionService:
         if stripe_price_id:
             price = await self._lookup_billing_price(stripe_price_id)
             if price is not None:
-                return price.id, price.billing_plan_id
+                return price.id, price.plan_id
 
         if existing is not None:
             return existing.billing_price_id, existing.billing_plan_id

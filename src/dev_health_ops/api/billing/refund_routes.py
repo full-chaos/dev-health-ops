@@ -113,6 +113,9 @@ async def list_refunds(
     limit: int = 20,
     offset: int = 0,
 ) -> RefundListResponse:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
     try:
         org_id = uuid.UUID(user.org_id)
     except ValueError as exc:
@@ -141,6 +144,9 @@ async def get_refund(
     refund_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> RefundResponse:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
     try:
         parsed_refund_id = uuid.UUID(refund_id)
         org_id = uuid.UUID(user.org_id)

@@ -255,9 +255,9 @@ class RefundService:
             ).lower()
             refund.status = str(_obj_get(stripe_refund, "status") or refund.status)
             refund.reason = _obj_get(stripe_refund, "reason", refund.reason)
-            refund.description = _obj_get(
-                stripe_refund, "description", refund.description
-            )
+            stripe_description = _obj_get(stripe_refund, "description")
+            if stripe_description and not refund.description:
+                refund.description = stripe_description
             refund.failure_reason = _obj_get(
                 stripe_refund, "failure_reason", refund.failure_reason
             )

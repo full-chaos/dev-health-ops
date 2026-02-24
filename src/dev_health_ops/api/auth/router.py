@@ -197,7 +197,6 @@ async def get_current_user(
         )
 
     return user
-    return user
 
 
 async def get_current_user_optional(
@@ -233,7 +232,6 @@ async def get_current_user_optional(
     if not db_user or not db_user.is_active:
         return None
 
-    return user
     return user
 
 

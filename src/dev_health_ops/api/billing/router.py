@@ -35,8 +35,9 @@ from .stripe_client import (
     get_tier_price_id,
     get_webhook_secret,
 )
-from .invoice_routes import router as invoice_router
-from .invoice_service import InvoiceService
+from .refund_routes import router as refund_router
+from .refund_service import refund_service
+from dev_health_ops.db import get_postgres_session
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,11 @@ async def stripe_webhook(request: Request) -> dict:
     elif event_type == "customer.subscription.deleted":
         await _process_subscription_event(event)
         await _handle_subscription_deleted(data_object)
+    elif event_type == "invoice.payment_failed":
+        _handle_payment_failed(data_object)
+    elif event_type in ("charge.refunded", "charge.refund.updated"):
+        async with get_postgres_session() as db:
+            await refund_service.process_webhook(db=db, event=event)
     else:
         logger.debug("Unhandled Stripe event: %s", event_type)
 
@@ -528,8 +534,4 @@ async def get_org_entitlements(org_id: str) -> EntitlementResponse:
     return EntitlementResponse(**entitlements)
 
 
-router.include_router(
-    getattr(
-        importlib.import_module("dev_health_ops.api.billing.subscriptions"), "router"
-    )
-)
+router.include_router(refund_router)

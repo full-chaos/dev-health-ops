@@ -1616,7 +1616,7 @@ class SyntheticDataGenerator:
                 continue
             # Use the first label as investment_area (items already have category labels)
             investment_area = item.labels[0] if item.labels else "product"
-            project_stream = item.labels[1] if len(item.labels) > 1 else None
+            project_stream = item.labels[1] if len(item.labels) > 1 else ""
             day = item.created_at.date()
 
             records.append(
@@ -1663,7 +1663,7 @@ class SyntheticDataGenerator:
                             day=day,
                             team_id=team_id,
                             investment_area=area,
-                            project_stream=None,
+                            project_stream="",
                             delivery_units=random.randint(0, 5),
                             work_items_completed=random.randint(0, 3),
                             prs_merged=random.randint(0, 2),

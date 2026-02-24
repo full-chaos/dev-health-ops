@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Dict, List
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.api.services.auth import get_current_org_id
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,13 @@ async def query_dicts(
         raise RuntimeError(
             f"Invalid ClickHouse client: {type(sink).__name__} (no 'query' method)"
         )
+
+    # Auto-inject org_id from request context (set by get_current_user).
+    # This ensures every ClickHouse query is tenant-scoped without manual threading.
+    _org_id = get_current_org_id()
+    if _org_id is not None:
+        params = dict(params) if params else {}
+        params["org_id"] = _org_id
 
     safe_query = sanitize_for_log(query)
     safe_params = {

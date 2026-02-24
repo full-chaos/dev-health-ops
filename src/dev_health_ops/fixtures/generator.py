@@ -1780,6 +1780,7 @@ class SyntheticDataGenerator:
 
             memberships.append(
                 Membership(
+                    id=uuid.uuid5(admin_user.id, str(admin_org.id)),
                     user_id=admin_user.id,
                     org_id=admin_org.id,
                     role="owner",
@@ -1823,6 +1824,7 @@ class SyntheticDataGenerator:
             if default_org_id:
                 memberships.append(
                     Membership(
+                        id=uuid.uuid5(user_id, str(default_org_id)),
                         user_id=user_id,
                         org_id=default_org_id,
                         role="member",

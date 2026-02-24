@@ -45,7 +45,7 @@ class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(cache=cache, cache_ttl=cache_ttl, cache_prefix="repo")
+        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="repo")
         self._client = client
         self._org_id = org_id
 
@@ -122,7 +122,7 @@ class RepoByNameLoader(CachedDataLoader[str, Optional[RepoData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(cache=cache, cache_ttl=cache_ttl, cache_prefix="repo_name")
+        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="repo_name")
         self._client = client
         self._org_id = org_id
 

@@ -93,6 +93,7 @@ from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.licensing import LicenseManager
+from dev_health_ops.api.middleware import OrgIdMiddleware
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
@@ -321,6 +322,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(OrgIdMiddleware)
 
 graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
@@ -550,6 +552,7 @@ async def heatmap(
     try:
         return await build_heatmap_response(
             db_url=_analytics_db_url(),
+            org_id=current_user.org_id,
             type=type,
             metric=metric,
             scope_type=scope_type,
@@ -591,6 +594,7 @@ async def work_units_post(
         result = await build_work_unit_investments(
             db_url=_analytics_db_url(),
             filters=payload.filters,
+            org_id=current_user.org_id,
             limit=payload.limit or 200,
             include_text=include_textual,
         )
@@ -632,6 +636,7 @@ async def work_units(
         result = await build_work_unit_investments(
             db_url=_analytics_db_url(),
             filters=filters,
+            org_id=current_user.org_id,
             limit=limit,
             include_text=include_textual,
         )
@@ -688,6 +693,7 @@ async def work_unit_explain_endpoint(
         investments = await build_work_unit_investments(
             db_url=_analytics_db_url(),
             filters=filters,
+            org_id=current_user.org_id,
             limit=1,
             include_text=True,
             work_unit_id=work_unit_id,
@@ -738,6 +744,7 @@ async def flame(
             db_url=_analytics_db_url(),
             entity_type=entity_type,
             entity_id=entity_id,
+            org_id=current_user.org_id,
         )
     except HTTPException:
         raise
@@ -798,6 +805,7 @@ async def flame_aggregated(
     try:
         return await build_aggregated_flame_response(
             db_url=_analytics_db_url(),
+            org_id=current_user.org_id,
             mode=mode,  # type: ignore
             start_day=start_day,
             end_day=end_day,
@@ -830,6 +838,7 @@ async def quadrant(
     try:
         return await build_quadrant_response(
             db_url=_analytics_db_url(),
+            org_id=current_user.org_id,
             type=type,
             scope_type=scope_type,
             scope_id=scope_id,
@@ -853,7 +862,10 @@ async def drilldown_prs_post(
         start_day, end_day, _, _ = time_window(payload.filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                sink, metric_scope="repo", filters=payload.filters
+                sink,
+                metric_scope="repo",
+                filters=payload.filters,
+                org_id=current_user.org_id,
             )
             items = await fetch_pull_requests(
                 sink,
@@ -862,6 +874,7 @@ async def drilldown_prs_post(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
                 limit=payload.limit or 50,
+                org_id=current_user.org_id,
             )
         return DrilldownResponse(items=items)
     except Exception as exc:
@@ -885,7 +898,10 @@ async def drilldown_prs(
         start_day, end_day, _, _ = time_window(filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                sink, metric_scope="repo", filters=filters
+                sink,
+                metric_scope="repo",
+                filters=filters,
+                org_id=current_user.org_id,
             )
             items = await fetch_pull_requests(
                 sink,
@@ -893,6 +909,7 @@ async def drilldown_prs(
                 end_day=end_day,
                 scope_filter=scope_filter,
                 scope_params=scope_params,
+                org_id=current_user.org_id,
             )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -910,7 +927,10 @@ async def drilldown_issues_post(
         start_day, end_day, _, _ = time_window(payload.filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                sink, metric_scope="team", filters=payload.filters
+                sink,
+                metric_scope="team",
+                filters=payload.filters,
+                org_id=current_user.org_id,
             )
             items = await fetch_issues(
                 sink,
@@ -919,6 +939,7 @@ async def drilldown_issues_post(
                 scope_filter=scope_filter,
                 scope_params=scope_params,
                 limit=payload.limit or 50,
+                org_id=current_user.org_id,
             )
         return DrilldownResponse(items=items)
     except Exception as exc:
@@ -942,7 +963,10 @@ async def drilldown_issues(
         start_day, end_day, _, _ = time_window(filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
             scope_filter, scope_params = await scope_filter_for_metric(
-                sink, metric_scope="team", filters=filters
+                sink,
+                metric_scope="team",
+                filters=filters,
+                org_id=current_user.org_id,
             )
             items = await fetch_issues(
                 sink,
@@ -950,6 +974,7 @@ async def drilldown_issues(
                 end_day=end_day,
                 scope_filter=scope_filter,
                 scope_params=scope_params,
+                org_id=current_user.org_id,
             )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -971,6 +996,7 @@ async def people_search(
             db_url=_analytics_db_url(),
             query=q,
             limit=_bounded_limit_param(limit, 50),
+            org_id=current_user.org_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -1016,6 +1042,7 @@ async def people_metric(
             metric=metric,
             range_days=range_days,
             compare_days=compare_days,
+            org_id=current_user.org_id,
         )
     except ValueError as exc:
         detail = (
@@ -1049,6 +1076,7 @@ async def people_drilldown_prs(
             range_days=range_days,
             limit=_bounded_limit_param(limit, 200),
             cursor=cursor,
+            org_id=current_user.org_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Person not found") from exc
@@ -1076,6 +1104,7 @@ async def people_drilldown_issues(
             range_days=range_days,
             limit=_bounded_limit_param(limit, 200),
             cursor=cursor,
+            org_id=current_user.org_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Person not found") from exc
@@ -1291,6 +1320,7 @@ async def sankey_get(
             db_url=_analytics_db_url(),
             mode=mode,
             filters=filters,
+            org_id=current_user.org_id,
             window_start=window_start,
             window_end=window_end,
         )
@@ -1311,6 +1341,7 @@ async def sankey_post(
             db_url=_analytics_db_url(),
             mode=payload.mode,
             filters=payload.filters,
+            org_id=current_user.org_id,
             context=payload.context,
             window_start=payload.window_start,
             window_end=payload.window_end,
@@ -1328,7 +1359,7 @@ async def filter_options(
 ) -> FilterOptionsResponse:
     try:
         async with clickhouse_client(_analytics_db_url()) as sink:
-            options = await fetch_filter_options(sink)
+            options = await fetch_filter_options(sink, org_id=current_user.org_id)
         return FilterOptionsResponse(**options)
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc

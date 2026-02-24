@@ -27,6 +27,7 @@ async def fetch_quadrant_metric(
     where_clause: str = "",
     scope_filter: str = "",
     scope_params: Dict[str, Any] | None = None,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     bucket_expr = _bucket_expr(bucket)
     join_sql = f"\n{join_clause}" if join_clause else ""
@@ -42,6 +43,7 @@ async def fetch_quadrant_metric(
         {join_sql}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {where_sql}
+          AND org_id = %(org_id)s
         {scope_sql}
         GROUP BY bucket, entity_id, entity_label
         ORDER BY bucket
@@ -49,4 +51,5 @@ async def fetch_quadrant_metric(
     params: Dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     if scope_params:
         params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)

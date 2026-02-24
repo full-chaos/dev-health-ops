@@ -5,6 +5,7 @@ SELECT
 FROM user_metrics_daily
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND identity_id IN %(identities)s
+  AND org_id = %(org_id)s
 
 UNION ALL
 
@@ -15,6 +16,7 @@ SELECT
 FROM user_metrics_daily
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND identity_id IN %(identities)s
+  AND org_id = %(org_id)s
 
 UNION ALL
 
@@ -25,6 +27,7 @@ SELECT
 FROM user_metrics_daily
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND identity_id IN %(identities)s
+  AND org_id = %(org_id)s
 
 UNION ALL
 
@@ -35,6 +38,7 @@ SELECT
 FROM user_metrics_daily
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND identity_id IN %(identities)s
+  AND org_id = %(org_id)s
 
 UNION ALL
 
@@ -45,6 +49,7 @@ SELECT
 FROM work_item_user_metrics_daily
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND user_identity IN %(identities)s
+  AND org_id = %(org_id)s
 
 UNION ALL
 
@@ -55,3 +60,4 @@ SELECT
 FROM work_item_user_metrics_daily
 WHERE day >= %(start_day)s AND day < %(end_day)s
   AND user_identity IN %(identities)s
+  AND org_id = %(org_id)s

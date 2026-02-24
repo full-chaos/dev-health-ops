@@ -262,7 +262,7 @@ async def build_home_response(
     cache: TTLCache,
     org_id: str = "",
 ) -> HomeResponse:
-    cache_key = filter_cache_key("home", filters)
+    cache_key = filter_cache_key("home", org_id, filters)
     cached = cache.get(cache_key)
     if cached is not None:
         return HomeResponse.model_validate(cached)

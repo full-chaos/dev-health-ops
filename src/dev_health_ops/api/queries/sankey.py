@@ -15,6 +15,7 @@ async def fetch_investment_flow_items(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -25,6 +26,7 @@ async def fetch_investment_flow_items(
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s
+          AND work_unit_investments.org_id = %(org_id)s
             {scope_filter}
         GROUP BY source, target
         ORDER BY value DESC
@@ -32,6 +34,7 @@ async def fetch_investment_flow_items(
     """
     params = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -42,6 +45,7 @@ async def fetch_expense_counts(
     end_day: date,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -50,10 +54,12 @@ async def fetch_expense_counts(
             sum(items_completed * bug_completed_ratio) AS bug_completed_estimate
         FROM work_item_metrics_daily
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
             {scope_filter}
     """
     params = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -64,16 +70,19 @@ async def fetch_expense_abandoned(
     end_day: date,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
             countIf(status = 'canceled') AS canceled_items
         FROM work_item_cycle_times
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
             {scope_filter}
     """
     params = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -84,6 +93,7 @@ async def fetch_state_status_counts(
     end_day: date,
     scope_filter: str,
     scope_params: Dict[str, Any],
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -91,12 +101,14 @@ async def fetch_state_status_counts(
             sum(items_touched) AS items_touched
         FROM work_item_state_durations_daily
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
             {scope_filter}
         GROUP BY status
         ORDER BY items_touched DESC
     """
     params = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)
 
 
@@ -108,6 +120,7 @@ async def fetch_hotspot_rows(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         WITH
@@ -118,6 +131,7 @@ async def fetch_hotspot_rows(
                     FROM file_metrics_daily AS metrics
                     INNER JOIN repos AS r ON r.id = metrics.repo_id
                     WHERE metrics.day >= %(start_day)s AND metrics.day < %(end_day)s
+                        AND metrics.org_id = %(org_id)s
                         {scope_filter}
                     GROUP BY r.repo, metrics.path
                 )
@@ -129,6 +143,7 @@ async def fetch_hotspot_rows(
                     FROM file_metrics_daily AS metrics
                     INNER JOIN repos AS r ON r.id = metrics.repo_id
                     WHERE metrics.day >= %(start_day)s AND metrics.day < %(end_day)s
+                        AND metrics.org_id = %(org_id)s
                         {scope_filter}
                     GROUP BY r.repo, metrics.path
                 )
@@ -153,7 +168,8 @@ async def fetch_hotspot_rows(
         INNER JOIN repos AS r
             ON r.id = metrics.repo_id
         WHERE metrics.day >= %(start_day)s AND metrics.day < %(end_day)s
-            AND metrics.path != ''
+          AND metrics.path != ''
+          AND metrics.org_id = %(org_id)s
             {scope_filter}
         GROUP BY repo, directory, file_path
         ORDER BY churn DESC
@@ -161,4 +177,5 @@ async def fetch_hotspot_rows(
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(sink, query, params)

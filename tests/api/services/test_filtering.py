@@ -10,9 +10,16 @@ from dev_health_ops.api.services import filtering as filtering_mod
 
 def test_filter_cache_key_is_stable_for_equivalent_filters():
     filters = MetricFilter()
-    key_a = filtering_mod.filter_cache_key("home", filters, extra={"scope": "org"})
-    key_b = filtering_mod.filter_cache_key("home", filters, extra={"scope": "org"})
+    key_a = filtering_mod.filter_cache_key("home", "org-1", filters, extra={"scope": "org"})
+    key_b = filtering_mod.filter_cache_key("home", "org-1", filters, extra={"scope": "org"})
     assert key_a == key_b
+
+
+def test_filter_cache_key_differs_by_org_id():
+    filters = MetricFilter()
+    key_org_a = filtering_mod.filter_cache_key("home", "org-a", filters)
+    key_org_b = filtering_mod.filter_cache_key("home", "org-b", filters)
+    assert key_org_a != key_org_b, "Cache keys for different org_ids must differ"
 
 
 def test_time_window_uses_explicit_start_and_end():
@@ -81,7 +88,7 @@ async def test_scope_filter_for_metric_team(monkeypatch):
 async def test_scope_filter_for_metric_repo_uses_resolved_repo_ids(monkeypatch):
     filters = MetricFilter()
 
-    async def fake_resolve_repo_filter_ids(_sink, _filters):
+    async def fake_resolve_repo_filter_ids(_sink, _filters, *, org_id=""):
         return ["r1", "r2"]
 
     def fake_build_scope_filter_multi(scope, ids, team_column, repo_column):

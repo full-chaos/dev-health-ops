@@ -17,6 +17,7 @@ async def fetch_metric_contributors(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int = 6,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         SELECT
@@ -24,6 +25,7 @@ async def fetch_metric_contributors(
             avg({column}) AS value
         FROM {table}
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
         {scope_filter}
         GROUP BY {group_by}
         ORDER BY value DESC
@@ -31,6 +33,7 @@ async def fetch_metric_contributors(
     """
     params = {"start_day": start_day, "end_day": end_day, "limit": limit}
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(client, query, params)
 
 
@@ -47,6 +50,7 @@ async def fetch_metric_driver_delta(
     scope_filter: str,
     scope_params: Dict[str, Any],
     limit: int = 3,
+    org_id: str = "",
 ) -> List[Dict[str, Any]]:
     query = f"""
         WITH
@@ -54,6 +58,7 @@ async def fetch_metric_driver_delta(
                 SELECT {group_by} AS id, avg({column}) AS value
                 FROM {table}
                 WHERE day >= %(start_day)s AND day < %(end_day)s
+                  AND org_id = %(org_id)s
                 {scope_filter}
                 GROUP BY {group_by}
             ),
@@ -61,6 +66,7 @@ async def fetch_metric_driver_delta(
                 SELECT {group_by} AS id, avg({column}) AS value
                 FROM {table}
                 WHERE day >= %(compare_start)s AND day < %(compare_end)s
+                  AND org_id = %(org_id)s
                 {scope_filter}
                 GROUP BY {group_by}
             )
@@ -81,4 +87,5 @@ async def fetch_metric_driver_delta(
         "limit": limit,
     }
     params.update(scope_params)
+    params["org_id"] = org_id
     return await query_dicts(client, query, params)

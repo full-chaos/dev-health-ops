@@ -5,6 +5,7 @@ for the GraphQL API and REST endpoints.
 """
 
 from __future__ import annotations
+import contextvars
 
 import hashlib
 import logging
@@ -19,6 +20,24 @@ from jwt.exceptions import InvalidTokenError
 
 
 logger = logging.getLogger(__name__)
+
+
+# Per-request org_id context — set by get_current_user, read by query_dicts.
+# This ensures every ClickHouse query is automatically scoped to the
+# authenticated user's organization without manual parameter threading.
+_current_org_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_org_id", default=None
+)
+
+
+def set_current_org_id(org_id: str) -> contextvars.Token[str | None]:
+    """Set the org_id for the current request context."""
+    return _current_org_id.set(org_id)
+
+
+def get_current_org_id() -> str | None:
+    """Get the org_id for the current request context, or None if unset."""
+    return _current_org_id.get(None)
 
 # JWT configuration
 JWT_ALGORITHM = "HS256"

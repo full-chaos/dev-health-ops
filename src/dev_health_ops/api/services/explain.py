@@ -103,7 +103,7 @@ async def build_explain_response(
     cache: TTLCache,
     org_id: str = "",
 ) -> ExplainResponse:
-    cache_key = filter_cache_key("explain", filters, extra={"metric": metric})
+    cache_key = filter_cache_key("explain", org_id, filters, extra={"metric": metric})
     cached = cache.get(cache_key)
     if cached is not None:
         return cached

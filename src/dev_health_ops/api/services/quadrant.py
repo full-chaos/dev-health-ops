@@ -427,6 +427,7 @@ def _trajectory(
 async def build_quadrant_response(
     *,
     db_url: str,
+    org_id: str = "",
     type: str,
     scope_type: str,
     scope_id: str,
@@ -497,6 +498,7 @@ async def build_quadrant_response(
             where_clause=x_spec.where_clause,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
         )
         y_rows = await fetch_quadrant_metric(
             sink,
@@ -511,6 +513,7 @@ async def build_quadrant_response(
             where_clause=y_spec.where_clause,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
         )
 
     x_map: Dict[tuple[str, date], Dict[str, Any]] = {}

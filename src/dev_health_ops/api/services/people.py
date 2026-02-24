@@ -260,8 +260,9 @@ async def _resolve_identity_context(
     *,
     person_id: str,
     aliases: Dict[str, List[str]],
+    org_id: str = "",
 ) -> Tuple[str, List[str]]:
-    identity = await resolve_person_identity(sink, person_id=person_id)
+    identity = await resolve_person_identity(sink, person_id=person_id, org_id=org_id)
     reverse = build_reverse_alias_map(aliases)
 
     if identity:
@@ -383,6 +384,7 @@ async def search_people_response(
     db_url: str,
     query: str,
     limit: int,
+    org_id: str = "",
 ) -> List[PersonSearchResult]:
     trimmed = (query or "").strip()
     if not trimmed:
@@ -397,6 +399,7 @@ async def search_people_response(
             sink,
             query=f"%{trimmed.lower()}%",
             limit=limit,
+            org_id=org_id,
         )
 
     results: List[PersonSearchResult] = []
@@ -446,7 +449,10 @@ async def build_person_summary_response(
 
     async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            sink, person_id=person_id, aliases=aliases
+            sink,
+            person_id=person_id,
+            aliases=aliases,
+            org_id=org_id,
         )
         if not identity:
             raise ValueError("person not found")
@@ -468,7 +474,9 @@ async def build_person_summary_response(
         }
 
         coverage_sources = await fetch_identity_coverage(
-            sink, identities=identity_inputs
+            sink,
+            identities=identity_inputs,
+            org_id=org_id,
         )
         identity_coverage_pct = safe_float(safe_float(coverage_sources) / 2.0 * 100.0)
 
@@ -484,6 +492,7 @@ async def build_person_summary_response(
                 start_day=start_day,
                 end_day=end_day,
                 extra_where=metric["extra_where"],
+                org_id=org_id,
             )
             previous_value = await fetch_person_metric_value(
                 sink,
@@ -495,6 +504,7 @@ async def build_person_summary_response(
                 start_day=compare_start,
                 end_day=compare_end,
                 extra_where=metric["extra_where"],
+                org_id=org_id,
             )
             series = await fetch_person_metric_series(
                 sink,
@@ -506,6 +516,7 @@ async def build_person_summary_response(
                 start_day=start_day,
                 end_day=end_day,
                 extra_where=metric["extra_where"],
+                org_id=org_id,
             )
 
             transform = metric["transform"]
@@ -524,7 +535,11 @@ async def build_person_summary_response(
             )
 
         work_mix_rows = await fetch_person_work_mix(
-            sink, identities=identity_inputs, start_day=start_day, end_day=end_day
+            sink,
+            identities=identity_inputs,
+            start_day=start_day,
+            end_day=end_day,
+            org_id=org_id,
         )
         work_mix = [
             WorkMixItem(
@@ -536,7 +551,11 @@ async def build_person_summary_response(
         ]
 
         flow_rows = await fetch_person_flow_breakdown(
-            sink, identities=identity_inputs, start_day=start_day, end_day=end_day
+            sink,
+            identities=identity_inputs,
+            start_day=start_day,
+            end_day=end_day,
+            org_id=org_id,
         )
         flow_breakdown = [
             FlowStageItem(
@@ -548,7 +567,11 @@ async def build_person_summary_response(
         ]
 
         collab_rows = await fetch_person_collaboration(
-            sink, identities=identity_inputs, start_day=start_day, end_day=end_day
+            sink,
+            identities=identity_inputs,
+            start_day=start_day,
+            end_day=end_day,
+            org_id=org_id,
         )
         review_load: List[CollaborationItem] = []
         handoff_points: List[CollaborationItem] = []
@@ -597,6 +620,7 @@ async def build_person_metric_response(
     metric: str,
     range_days: int,
     compare_days: int,
+    org_id: str = "",
 ) -> PersonMetricResponse:
     config = _metric_config(metric)
     if not config:
@@ -607,7 +631,10 @@ async def build_person_metric_response(
 
     async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            sink, person_id=person_id, aliases=aliases
+            sink,
+            person_id=person_id,
+            aliases=aliases,
+            org_id=org_id,
         )
         if not identity:
             raise ValueError("person not found")
@@ -624,6 +651,7 @@ async def build_person_metric_response(
             start_day=start_day,
             end_day=end_day,
             extra_where=config.get("extra_where", ""),
+            org_id=org_id,
         )
         transform = config["transform"]
         timeseries = [
@@ -651,6 +679,7 @@ async def build_person_metric_response(
                 start_day=start_day,
                 end_day=end_day,
                 extra_where=detail.get("extra_where", ""),
+                org_id=org_id,
             )
             breakdowns[key] = [
                 MetricBreakdownItem(
@@ -689,6 +718,7 @@ async def build_person_drilldown_prs_response(
     range_days: int,
     limit: int,
     cursor: Optional[datetime] = None,
+    org_id: str = "",
 ) -> PersonDrilldownResponse:
     start_day, end_day, _, _ = _time_window(range_days, range_days)
     aliases = load_identity_aliases()
@@ -696,7 +726,10 @@ async def build_person_drilldown_prs_response(
 
     async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            sink, person_id=person_id, aliases=aliases
+            sink,
+            person_id=person_id,
+            aliases=aliases,
+            org_id=org_id,
         )
         if not identity:
             raise ValueError("person not found")
@@ -709,6 +742,7 @@ async def build_person_drilldown_prs_response(
             end_day=end_day,
             limit=limit,
             cursor=cursor,
+            org_id=org_id,
         )
 
     items: List[PullRequestRow] = []
@@ -740,6 +774,7 @@ async def build_person_drilldown_issues_response(
     range_days: int,
     limit: int,
     cursor: Optional[datetime] = None,
+    org_id: str = "",
 ) -> PersonDrilldownResponse:
     start_day, end_day, _, _ = _time_window(range_days, range_days)
     aliases = load_identity_aliases()
@@ -747,7 +782,10 @@ async def build_person_drilldown_issues_response(
 
     async with clickhouse_client(db_url) as sink:
         identity, alias_list = await _resolve_identity_context(
-            sink, person_id=person_id, aliases=aliases
+            sink,
+            person_id=person_id,
+            aliases=aliases,
+            org_id=org_id,
         )
         if not identity:
             raise ValueError("person not found")
@@ -760,6 +798,7 @@ async def build_person_drilldown_issues_response(
             end_day=end_day,
             limit=limit,
             cursor=cursor,
+            org_id=org_id,
         )
 
     items: List[IssueRow] = []

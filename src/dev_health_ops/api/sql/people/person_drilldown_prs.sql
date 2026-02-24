@@ -10,8 +10,10 @@ SELECT
     if(first_review_at IS NULL, NULL,
        dateDiff('hour', created_at, first_review_at)) AS review_latency_hours
 FROM git_pull_requests
+INNER JOIN repos ON toString(repos.id) = toString(git_pull_requests.repo_id)
 WHERE created_at >= %(start_ts)s AND created_at < %(end_ts)s
   AND (author_email IN %(identities)s OR author_name IN %(identities)s)
+  AND repos.org_id = %(org_id)s
   {cursor_filter}
 ORDER BY created_at DESC
 LIMIT %(limit)s

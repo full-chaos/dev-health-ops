@@ -14,7 +14,9 @@ def parse_uuid(value: str) -> Optional[uuid.UUID]:
         return None
 
 
-async def resolve_repo_id(sink: BaseMetricsSink, repo_ref: str) -> Optional[str]:
+async def resolve_repo_id(
+    sink: BaseMetricsSink, repo_ref: str, *, org_id: str = ""
+) -> Optional[str]:
     repo_uuid = parse_uuid(repo_ref)
     if repo_uuid:
         return str(repo_uuid)
@@ -22,16 +24,19 @@ async def resolve_repo_id(sink: BaseMetricsSink, repo_ref: str) -> Optional[str]
         SELECT id
         FROM repos
         WHERE repo = %(repo_name)s
+          AND org_id = %(org_id)s
         LIMIT 1
     """
-    rows = await query_dicts(sink, query, {"repo_name": repo_ref})
+    params = {"repo_name": repo_ref}
+    params["org_id"] = org_id
+    rows = await query_dicts(sink, query, params)
     if not rows:
         return None
     return str(rows[0]["id"])
 
 
 async def resolve_repo_ids(
-    sink: BaseMetricsSink, repo_refs: Iterable[str]
+    sink: BaseMetricsSink, repo_refs: Iterable[str], *, org_id: str = ""
 ) -> List[str]:
     resolved: List[str] = []
     for repo_ref in repo_refs:
@@ -41,7 +46,7 @@ async def resolve_repo_ids(
         if repo_uuid:
             resolved.append(str(repo_uuid))
             continue
-        repo_id = await resolve_repo_id(sink, repo_ref)
+        repo_id = await resolve_repo_id(sink, repo_ref, org_id=org_id)
         if repo_id:
             resolved.append(repo_id)
     return resolved
@@ -50,6 +55,8 @@ async def resolve_repo_ids(
 async def resolve_repo_ids_for_teams(
     sink: BaseMetricsSink,
     team_ids: Iterable[str],
+    *,
+    org_id: str = "",
 ) -> List[str]:
     team_list = [team_id for team_id in team_ids if team_id]
     if not team_list:
@@ -58,8 +65,11 @@ async def resolve_repo_ids_for_teams(
         SELECT distinct repo_id AS id
         FROM user_metrics_daily
         WHERE team_id IN %(team_ids)s
+          AND org_id = %(org_id)s
     """
-    rows = await query_dicts(sink, query, {"team_ids": team_list})
+    params = {"team_ids": team_list}
+    params["org_id"] = org_id
+    rows = await query_dicts(sink, query, params)
     return [str(row.get("id")) for row in rows if row.get("id")]
 
 

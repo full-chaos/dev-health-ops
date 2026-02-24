@@ -288,6 +288,7 @@ def _build_throughput_tree(
 async def build_aggregated_flame_response(
     *,
     db_url: str,
+    org_id: str = "",
     mode: Literal["cycle_breakdown", "code_hotspots", "throughput"],
     start_day: date,
     end_day: date,
@@ -314,6 +315,7 @@ async def build_aggregated_flame_response(
                 team_id=team_id,
                 provider=provider,
                 work_scope_id=work_scope_id,
+                org_id=org_id,
             )
 
             if not rows:
@@ -325,6 +327,7 @@ async def build_aggregated_flame_response(
                     team_id=team_id,
                     provider=provider,
                     work_scope_id=work_scope_id,
+                    org_id=org_id,
                 )
                 if rows:
                     notes.append(
@@ -375,6 +378,7 @@ async def build_aggregated_flame_response(
                 repo_id=repo_id,
                 limit=limit,
                 min_churn=min_value,
+                org_id=org_id,
             )
 
             if not rows:
@@ -385,7 +389,11 @@ async def build_aggregated_flame_response(
                 repo_ids: List[str] = [
                     str(row.get("repo_id")) for row in rows if row.get("repo_id")
                 ]
-                repo_names = await fetch_repo_names(sink, repo_ids=repo_ids)
+                repo_names = await fetch_repo_names(
+                    sink,
+                    repo_ids=repo_ids,
+                    org_id=org_id,
+                )
                 root = _build_code_hotspots_tree(rows, repo_names)
 
             if repo_id:
@@ -412,6 +420,7 @@ async def build_aggregated_flame_response(
                 team_id=team_id,
                 repo_id=repo_id,
                 limit=limit,
+                org_id=org_id,
             )
 
             if not rows:
@@ -423,6 +432,7 @@ async def build_aggregated_flame_response(
                     team_id=team_id,
                     repo_id=repo_id,
                     limit=limit,
+                    org_id=org_id,
                 )
                 notes.append(
                     "Work type classification unavailable. Using team-based grouping."

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 from typing import Annotated
@@ -111,10 +112,18 @@ async def stripe_webhook(request: Request) -> dict:
 
     if event_type == "checkout.session.completed":
         await _handle_checkout_completed(data_object)
+    elif event_type == "customer.subscription.created":
+        await _process_subscription_event(event)
     elif event_type == "customer.subscription.updated":
+        await _process_subscription_event(event)
         await _handle_subscription_updated(data_object)
     elif event_type == "customer.subscription.deleted":
+        await _process_subscription_event(event)
         await _handle_subscription_deleted(data_object)
+    elif event_type == "customer.subscription.paused":
+        await _process_subscription_event(event)
+    elif event_type == "customer.subscription.resumed":
+        await _process_subscription_event(event)
     elif event_type == "invoice.payment_failed":
         _handle_payment_failed(data_object)
     else:
@@ -222,6 +231,28 @@ async def _handle_subscription_deleted(subscription: object) -> None:
 def _handle_payment_failed(invoice: object) -> None:
     customer_id = getattr(invoice, "customer", None)
     logger.warning("Payment failed: customer=%s", customer_id)
+
+
+async def _process_subscription_event(event: object) -> None:
+    try:
+        from dev_health_ops.db import get_postgres_session
+
+        subscription_module = importlib.import_module(
+            "dev_health_ops.api.billing.subscription_service"
+        )
+        subscription_service = getattr(subscription_module, "SubscriptionService")
+
+        async with get_postgres_session() as session:
+            service = subscription_service(session)
+            await service.process_event(event)
+    except ValueError as exc:
+        logger.warning("Skipping malformed subscription event: %s", exc)
+    except RuntimeError:
+        logger.exception(
+            "Billing service unavailable while processing subscription event"
+        )
+    except Exception:
+        logger.exception("Failed to process subscription event")
 
 
 # ---------------------------------------------------------------------------
@@ -435,3 +466,22 @@ async def _get_customer_id(org_id: str) -> str | None:
     except Exception:
         logger.exception("Failed to look up customer_id for org_id=%s", org_id)
         return None
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/billing/entitlements/{org_id}
+# ---------------------------------------------------------------------------
+
+
+@router.get("/entitlements/{org_id}", response_model=EntitlementResponse)
+async def get_org_entitlements(org_id: str) -> EntitlementResponse:
+    """Return entitlements for the given org from the JWT-backed LicenseManager."""
+    entitlements = get_entitlements()
+    return EntitlementResponse(**entitlements)
+
+
+router.include_router(
+    getattr(
+        importlib.import_module("dev_health_ops.api.billing.subscriptions"), "router"
+    )
+)

@@ -341,25 +341,9 @@ async def test_portal_success(authed_client):
 
 
 @pytest.mark.asyncio
-async def test_entitlements_returns_current(client):
-    mock_entitlements = {
-        "tier": "community",
-        "features": {"basic_analytics": True, "team_dashboard": False},
-        "limits": {"users": 5, "repos": 3, "api_rate": 60},
-        "is_licensed": False,
-        "in_grace_period": False,
-    }
-
-    with patch(
-        "dev_health_ops.api.billing.router.get_entitlements",
-        return_value=mock_entitlements,
-    ):
-        resp = await client.get("/api/v1/billing/entitlements/org-abc")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["tier"] == "community"
-        assert data["is_licensed"] is False
-        assert data["limits"]["users"] == 5
+async def test_entitlements_org_endpoint_removed(client):
+    resp = await client.get("/api/v1/billing/entitlements/org-abc")
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

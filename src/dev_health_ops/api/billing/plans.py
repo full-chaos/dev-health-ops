@@ -172,21 +172,48 @@ async def _replace_prices(
     plan_id: uuid.UUID,
     prices: list[BillingPriceInput],
 ) -> None:
-    await db.execute(delete(BillingPrice).where(BillingPrice.plan_id == plan_id))
+    existing_result = await db.execute(
+        select(BillingPrice).where(BillingPrice.plan_id == plan_id)
+    )
+    existing_prices = list(existing_result.scalars().all())
+    existing_by_key = {
+        (price.interval, price.currency): price for price in existing_prices
+    }
+
     now = datetime.now(timezone.utc)
+    incoming_keys: set[tuple[str, str]] = set()
+
     for price in prices:
-        db.add(
-            BillingPrice(
-                plan_id=plan_id,
-                interval=price.interval.value,
-                amount=price.amount,
-                currency=price.currency,
-                is_active=price.is_active,
-                stripe_price_id=price.stripe_price_id,
-                created_at=now,
-                updated_at=now,
+        key = (price.interval.value, price.currency)
+        incoming_keys.add(key)
+        existing = existing_by_key.get(key)
+
+        if existing is None:
+            db.add(
+                BillingPrice(
+                    plan_id=plan_id,
+                    interval=price.interval.value,
+                    amount=price.amount,
+                    currency=price.currency,
+                    is_active=price.is_active,
+                    stripe_price_id=price.stripe_price_id,
+                    created_at=now,
+                    updated_at=now,
+                )
             )
-        )
+            continue
+
+        existing.amount = price.amount
+        existing.is_active = price.is_active
+        if price.stripe_price_id:
+            existing.stripe_price_id = price.stripe_price_id
+        existing.updated_at = now
+
+    to_delete_ids = [
+        price.id for key, price in existing_by_key.items() if key not in incoming_keys
+    ]
+    if to_delete_ids:
+        await db.execute(delete(BillingPrice).where(BillingPrice.id.in_(to_delete_ids)))
 
 
 async def _replace_bundles(
@@ -304,7 +331,7 @@ async def update_billing_plan(
 
     updates = payload.model_dump(exclude_unset=True)
     if "metadata" in updates:
-        plan.metadata_ = updates.pop("metadata")
+        plan.metadata_ = updates.pop("metadata") or {}
     if "prices" in updates:
         await _replace_prices(db, plan.id, updates.pop("prices"))
     if "bundle_ids" in updates:
@@ -352,7 +379,7 @@ async def sync_plan_to_stripe(
         product_id = plan.stripe_product_id
     else:
         product = client.products.create(
-            {
+            params={
                 "name": plan.name,
                 "description": plan.description or "",
                 "metadata": {"plan_key": plan.key, "tier": plan.tier},
@@ -366,7 +393,7 @@ async def sync_plan_to_stripe(
         if price.stripe_price_id:
             continue
         stripe_price = client.prices.create(
-            {
+            params={
                 "product": product_id,
                 "unit_amount": price.amount,
                 "currency": price.currency,

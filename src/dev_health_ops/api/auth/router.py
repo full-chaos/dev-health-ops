@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from dev_health_ops.api.services.auth import (
     AuthenticatedUser,
@@ -244,7 +244,8 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
     from datetime import datetime, timezone
 
     async with get_postgres_session() as db:
-        stmt = select(User).where(User.email == payload.email)
+        email_normalized = payload.email.lower().strip()
+        stmt = select(User).where(func.lower(User.email) == email_normalized)
         result = await db.execute(stmt)
         existing_user = result.scalar_one_or_none()
 
@@ -256,7 +257,7 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
         ).decode("utf-8")
 
         user = User(
-            email=payload.email,
+            email=email_normalized,
             password_hash=password_hash,
             full_name=payload.full_name,
             auth_provider="local",
@@ -311,7 +312,8 @@ async def login(payload: LoginRequest) -> LoginResponse:
 
     async with get_postgres_session() as db:
         # Find user by email
-        stmt = select(User).where(User.email == payload.email)
+        email_normalized = payload.email.lower().strip()
+        stmt = select(User).where(func.lower(User.email) == email_normalized)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
 

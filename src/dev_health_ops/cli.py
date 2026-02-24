@@ -26,6 +26,7 @@ from dev_health_ops.metrics import (
     job_capacity,
 )
 from dev_health_ops.audit import completeness, schema, perf, coverage
+from dev_health_ops import migrate as migrate_mod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -163,6 +164,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- work-graph & investment ----
     work_graph_runner.register_commands(sub)
+
+    # ---- migrate ----
+    migrate_mod.register_commands(sub)
 
     # ---- workers ----
     workers_parser = sub.add_parser(

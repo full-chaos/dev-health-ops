@@ -403,11 +403,13 @@ async def resolve_analytics(
                     FROM {base_table}
                     {joins}
                     WHERE {date_filter}
+                      AND org_id = %(org_id)s
                 """
 
                 cov_params = {
                     "start_date": request.start_date,
                     "end_date": request.end_date,
+                    "org_id": org_id,
                 }
 
                 try:

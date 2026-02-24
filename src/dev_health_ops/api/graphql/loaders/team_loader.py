@@ -44,7 +44,9 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="team")
+        super().__init__(
+            org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="team"
+        )
         self._client = client
         self._org_id = org_id
 
@@ -72,9 +74,10 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
                 count() OVER (PARTITION BY team_id) as member_count
             FROM work_item_cycle_times
             WHERE team_id IN %(team_ids)s
+              AND org_id = %(org_id)s
             ORDER BY team_id
         """
-        params = {"team_ids": list(keys)}
+        params = {"team_ids": list(keys), "org_id": self._org_id}
 
         try:
             rows = await query_dicts(self._client, sql, params)
@@ -122,7 +125,9 @@ class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="team_name")
+        super().__init__(
+            org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="team_name"
+        )
         self._client = client
         self._org_id = org_id
 
@@ -149,9 +154,10 @@ class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
                 count() OVER (PARTITION BY team_id) as member_count
             FROM work_item_cycle_times
             WHERE lower(team_name) IN %(team_names)s
+              AND org_id = %(org_id)s
             ORDER BY team_name
         """
-        params = {"team_names": [k.lower() for k in keys]}
+        params = {"team_names": [k.lower() for k in keys], "org_id": self._org_id}
 
         try:
             rows = await query_dicts(self._client, sql, params)

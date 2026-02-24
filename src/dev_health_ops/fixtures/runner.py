@@ -1,4 +1,5 @@
 import argparse
+import uuid
 import asyncio
 import logging
 import os
@@ -108,7 +109,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data = {"work_items": [], "transitions": []}
 
-    org_id = getattr(ns, "org", None) or ""
+    # Default to the fixture org UUID so demo data is queryable out of the box.
+    _default_org = str(uuid.uuid5(
+        uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "default-org"
+    ))
+    org_id = getattr(ns, "org", None) or _default_org
     logging.info("Generating fixtures for org_id=%s", org_id)
 
     async def _handler(store):

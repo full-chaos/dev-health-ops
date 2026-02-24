@@ -104,7 +104,7 @@ async def test_sankey_investment_applies_work_category_filter(monkeypatch):
         return True
 
     async def _fake_flow_items(
-        _client, *, start_ts, end_ts, scope_filter, scope_params, limit
+        _client, *, start_ts, end_ts, scope_filter, scope_params, limit, org_id=""
     ):
         captured["flow"] = {
             "scope_filter": scope_filter,

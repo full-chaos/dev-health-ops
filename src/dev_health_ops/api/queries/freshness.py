@@ -7,12 +7,15 @@ from .client import query_dicts
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
-async def fetch_last_ingested_at(sink: BaseMetricsSink) -> Optional[datetime]:
+async def fetch_last_ingested_at(
+    sink: BaseMetricsSink, org_id: str = ""
+) -> Optional[datetime]:
     query = """
         SELECT max(computed_at) AS last_ingested_at
         FROM repo_metrics_daily
+        WHERE org_id = %(org_id)s
     """
-    rows = await query_dicts(sink, query, {})
+    rows = await query_dicts(sink, query, {"org_id": org_id})
     if not rows:
         return None
     value = rows[0].get("last_ingested_at")
@@ -32,21 +35,26 @@ async def fetch_coverage(
     *,
     start_day: date,
     end_day: date,
+    org_id: str = "",
 ) -> Dict[str, float]:
     repos_query = """
         SELECT countDistinct(id) AS total
         FROM repos
+        WHERE org_id = %(org_id)s
     """
-    repos_rows = await query_dicts(sink, repos_query, {})
+    repos_rows = await query_dicts(sink, repos_query, {"org_id": org_id})
     total_repos = float((repos_rows[0].get("total") or 0) if repos_rows else 0)
 
     covered_query = """
         SELECT countDistinct(repo_id) AS covered
         FROM repo_metrics_daily
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
     """
     covered_rows = await query_dicts(
-        sink, covered_query, {"start_day": start_day, "end_day": end_day}
+        sink,
+        covered_query,
+        {"start_day": start_day, "end_day": end_day, "org_id": org_id},
     )
     covered = float((covered_rows[0].get("covered") or 0) if covered_rows else 0)
     repos_covered_pct = (covered / total_repos * 100.0) if total_repos else 0.0
@@ -57,9 +65,12 @@ async def fetch_coverage(
             count(*) AS total
         FROM work_item_cycle_times
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
     """
     pr_rows = await query_dicts(
-        sink, pr_link_query, {"start_day": start_day, "end_day": end_day}
+        sink,
+        pr_link_query,
+        {"start_day": start_day, "end_day": end_day, "org_id": org_id},
     )
     linked = float((pr_rows[0].get("linked") or 0) if pr_rows else 0)
     total = float((pr_rows[0].get("total") or 0) if pr_rows else 0)
@@ -71,9 +82,12 @@ async def fetch_coverage(
             count(*) AS total
         FROM work_item_cycle_times
         WHERE day >= %(start_day)s AND day < %(end_day)s
+          AND org_id = %(org_id)s
     """
     cycle_rows = await query_dicts(
-        sink, cycle_query, {"start_day": start_day, "end_day": end_day}
+        sink,
+        cycle_query,
+        {"start_day": start_day, "end_day": end_day, "org_id": org_id},
     )
     with_cycle = float((cycle_rows[0].get("with_cycle") or 0) if cycle_rows else 0)
     total_cycle = float((cycle_rows[0].get("total") or 0) if cycle_rows else 0)

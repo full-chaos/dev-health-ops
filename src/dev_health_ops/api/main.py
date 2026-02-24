@@ -443,12 +443,15 @@ async def meta() -> MetaResponse | JSONResponse:
 
 
 @app.post("/api/v1/home", response_model=HomeResponse)
-async def home_post(payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> HomeResponse:
+async def home_post(
+    payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+) -> HomeResponse:
     try:
         return await build_home_response(
             db_url=_analytics_db_url(),
             filters=payload.filters,
             cache=HOME_CACHE,
+            org_id=current_user.org_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -473,6 +476,7 @@ async def home(
             db_url=_analytics_db_url(),
             filters=filters,
             cache=HOME_CACHE,
+            org_id=current_user.org_id,
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -482,13 +486,16 @@ async def home(
 
 
 @app.post("/api/v1/explain", response_model=ExplainResponse)
-async def explain_post(payload: ExplainRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> ExplainResponse:
+async def explain_post(
+    payload: ExplainRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+) -> ExplainResponse:
     try:
         return await build_explain_response(
             db_url=_analytics_db_url(),
             metric=payload.metric,
             filters=payload.filters,
             cache=EXPLAIN_CACHE,
+            org_id=current_user.org_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -515,6 +522,7 @@ async def explain(
             metric=metric,
             filters=filters,
             cache=EXPLAIN_CACHE,
+            org_id=current_user.org_id,
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -560,7 +568,10 @@ async def heatmap(
 
 
 @app.post("/api/v1/work-units", response_model=list[WorkUnitInvestment])
-async def work_units_post(payload: WorkUnitRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> List[WorkUnitInvestment]:
+async def work_units_post(
+    payload: WorkUnitRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> List[WorkUnitInvestment]:
     try:
         include_textual = (
             True if payload.include_textual is None else payload.include_textual
@@ -834,7 +845,10 @@ async def quadrant(
 
 
 @app.post("/api/v1/drilldown/prs", response_model=DrilldownResponse)
-async def drilldown_prs_post(payload: DrilldownRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> DrilldownResponse:
+async def drilldown_prs_post(
+    payload: DrilldownRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
@@ -888,7 +902,10 @@ async def drilldown_prs(
 
 
 @app.post("/api/v1/drilldown/issues", response_model=DrilldownResponse)
-async def drilldown_issues_post(payload: DrilldownRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> DrilldownResponse:
+async def drilldown_issues_post(
+    payload: DrilldownRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> DrilldownResponse:
     try:
         start_day, end_day, _, _ = time_window(payload.filters)
         async with clickhouse_client(_analytics_db_url()) as sink:
@@ -974,6 +991,7 @@ async def people_summary(
             person_id=person_id,
             range_days=range_days,
             compare_days=compare_days,
+            org_id=current_user.org_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Person not found") from exc
@@ -1084,6 +1102,7 @@ async def opportunities(
             db_url=_analytics_db_url(),
             filters=filters,
             cache=HOME_CACHE,
+            org_id=current_user.org_id,
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -1093,12 +1112,15 @@ async def opportunities(
 
 
 @app.post("/api/v1/opportunities", response_model=OpportunitiesResponse)
-async def opportunities_post(payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> OpportunitiesResponse:
+async def opportunities_post(
+    payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+) -> OpportunitiesResponse:
     try:
         return await build_opportunities_response(
             db_url=_analytics_db_url(),
             filters=payload.filters,
             cache=HOME_CACHE,
+            org_id=current_user.org_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -1119,7 +1141,7 @@ async def investment(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         result = await build_investment_response(
-            db_url=_analytics_db_url(), filters=filters
+            db_url=_analytics_db_url(), filters=filters, org_id=current_user.org_id
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -1129,10 +1151,14 @@ async def investment(
 
 
 @app.post("/api/v1/investment", response_model=InvestmentResponse)
-async def investment_post(payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> InvestmentResponse:
+async def investment_post(
+    payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+) -> InvestmentResponse:
     try:
         return await build_investment_response(
-            db_url=_analytics_db_url(), filters=payload.filters
+            db_url=_analytics_db_url(),
+            filters=payload.filters,
+            org_id=current_user.org_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Data unavailable") from exc
@@ -1157,7 +1183,10 @@ async def investment_sunburst(
             scope_type, scope_id, range_days, range_days, start_date, end_date
         )
         result = await build_investment_sunburst(
-            db_url=_analytics_db_url(), filters=filters, limit=limit
+            db_url=_analytics_db_url(),
+            filters=filters,
+            limit=limit,
+            org_id=current_user.org_id,
         )
         if response is not None:
             response.headers["X-DevHealth-Deprecated"] = "use POST with filters"
@@ -1185,6 +1214,7 @@ async def investment_explain(
                     filters=payload.filters,
                     theme=payload.theme,
                     subcategory=payload.subcategory,
+                    org_id=current_user.org_id,
                     llm_provider=llm_provider,
                     llm_model=payload.llm_model,
                     force_refresh=force_refresh,
@@ -1202,7 +1232,10 @@ async def investment_explain(
 
 
 @app.post("/api/v1/investment/flow", response_model=SankeyResponse)
-async def investment_flow(payload: InvestmentFlowRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> SankeyResponse:
+async def investment_flow(
+    payload: InvestmentFlowRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> SankeyResponse:
     try:
         return await build_investment_flow_response(
             db_url=_analytics_db_url(),
@@ -1211,6 +1244,7 @@ async def investment_flow(payload: InvestmentFlowRequest, current_user: Authenti
             flow_mode=payload.flow_mode,
             drill_category=payload.drill_category,
             top_n_repos=payload.top_n_repos,
+            org_id=current_user.org_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1220,12 +1254,16 @@ async def investment_flow(payload: InvestmentFlowRequest, current_user: Authenti
 
 
 @app.post("/api/v1/investment/flow/repo-team", response_model=SankeyResponse)
-async def investment_flow_repo_team(payload: InvestmentFlowRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> SankeyResponse:
+async def investment_flow_repo_team(
+    payload: InvestmentFlowRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> SankeyResponse:
     try:
         return await build_investment_repo_team_flow_response(
             db_url=_analytics_db_url(),
             filters=payload.filters,
             theme=payload.theme,
+            org_id=current_user.org_id,
         )
     except Exception as exc:
         logger.exception("Investment repo-team flow failed")
@@ -1265,7 +1303,9 @@ async def sankey_get(
 
 
 @app.post("/api/v1/sankey", response_model=SankeyResponse)
-async def sankey_post(payload: SankeyRequest, current_user: AuthenticatedUser = Depends(get_current_user)) -> SankeyResponse:
+async def sankey_post(
+    payload: SankeyRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+) -> SankeyResponse:
     try:
         return await build_sankey_response(
             db_url=_analytics_db_url(),
@@ -1283,7 +1323,9 @@ async def sankey_post(payload: SankeyRequest, current_user: AuthenticatedUser = 
 
 
 @app.get("/api/v1/filters/options", response_model=FilterOptionsResponse)
-async def filter_options(current_user: AuthenticatedUser = Depends(get_current_user)) -> FilterOptionsResponse:
+async def filter_options(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> FilterOptionsResponse:
     try:
         async with clickhouse_client(_analytics_db_url()) as sink:
             options = await fetch_filter_options(sink)

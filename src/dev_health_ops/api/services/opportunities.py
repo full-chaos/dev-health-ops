@@ -13,11 +13,13 @@ async def build_opportunities_response(
     db_url: str,
     filters: MetricFilter,
     cache: TTLCache,
+    org_id: str = "",
 ) -> OpportunitiesResponse:
     home = await build_home_response(
         db_url=db_url,
         filters=filters,
         cache=cache,
+        org_id=org_id,
     )
 
     negative = [d for d in home.deltas if d.delta_pct > 0]

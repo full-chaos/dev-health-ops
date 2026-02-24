@@ -236,6 +236,7 @@ async def build_investment_flow_response(
     flow_mode: Optional[str] = None,
     drill_category: Optional[str] = None,
     top_n_repos: int = 12,
+    org_id: str = "",
 ) -> SankeyResponse:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
@@ -287,6 +288,7 @@ async def build_investment_flow_response(
                     end_ts=end_ts,
                     scope_filter=scope_filter,
                     scope_params=scope_params,
+                    org_id=org_id,
                     themes=theme_filters or None,
                     subcategories=subcategory_filters or None,
                 )
@@ -305,6 +307,7 @@ async def build_investment_flow_response(
                     end_ts=end_ts,
                     scope_filter=scope_filter,
                     scope_params=scope_params,
+                    org_id=org_id,
                     themes=theme_filters or None,
                     subcategories=subcategory_filters or None,
                 )
@@ -321,6 +324,7 @@ async def build_investment_flow_response(
                     end_ts=end_ts,
                     scope_filter=scope_filter,
                     scope_params=scope_params,
+                    org_id=org_id,
                     themes=theme_filters or None,
                     subcategories=subcategory_filters or None,
                 )
@@ -339,6 +343,7 @@ async def build_investment_flow_response(
                 end_ts=end_ts,
                 scope_filter=scope_filter,
                 scope_params=scope_params,
+                org_id=org_id,
                 themes=theme_filters or None,
                 subcategories=subcategory_filters or None,
             )
@@ -419,6 +424,7 @@ async def build_investment_flow_response(
             end_ts=end_ts,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
             themes=theme_filters or None,
             subcategories=subcategory_filters or None,
         )
@@ -429,6 +435,7 @@ async def build_investment_flow_response(
             end_ts=end_ts,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
             themes=theme_filters or None,
             subcategories=subcategory_filters or None,
         )
@@ -518,6 +525,7 @@ async def build_investment_repo_team_flow_response(
     db_url: str,
     filters: MetricFilter,
     theme: Optional[str] = None,
+    org_id: str = "",
 ) -> SankeyResponse:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
@@ -556,6 +564,7 @@ async def build_investment_repo_team_flow_response(
             end_ts=end_ts,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
             themes=theme_filters or None,
             subcategories=subcategory_filters or None,
         )

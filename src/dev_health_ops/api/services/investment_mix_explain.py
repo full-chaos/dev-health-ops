@@ -94,6 +94,7 @@ async def explain_investment_mix(
     filters: Any,
     theme: Optional[str] = None,
     subcategory: Optional[str] = None,
+    org_id: str = "",
     llm_provider: str = "auto",
     llm_model: Optional[str] = None,
     force_refresh: bool = False,
@@ -146,7 +147,11 @@ async def explain_investment_mix(
         except Exception as e:
             logger.debug("Cache lookup failed: %s", e)
 
-    investment = await build_investment_response(db_url=db_url, filters=filters)
+    investment = await build_investment_response(
+        db_url=db_url,
+        filters=filters,
+        org_id=org_id,
+    )
     theme_distribution = investment.theme_distribution
     subcategory_distribution = investment.subcategory_distribution
 

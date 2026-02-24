@@ -1251,10 +1251,14 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
+        # Auto-inject org_id from sink context when record has default empty value.
+        _org_id = getattr(self, "org_id", None) or ""
         for chunk in _chunked(rows, batch_size):
             matrix = []
             for row in chunk:
                 data = asdict(row)
+                if _org_id and "org_id" in columns and not data.get("org_id"):
+                    data["org_id"] = _org_id
                 values = []
                 for col in columns:
                     value = data.get(col)

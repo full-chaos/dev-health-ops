@@ -108,7 +108,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     db_type = resolve_db_type(ns.sink, ns.db_type)
     fixture_data = {"work_items": [], "transitions": []}
 
-    org_id = getattr(ns, "org_id", None) or ""
+    org_id = getattr(ns, "org", None) or ""
     logging.info("Generating fixtures for org_id=%s", org_id)
 
     async def _handler(store):
@@ -408,6 +408,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 sink = None
 
             if sink:
+                # Propagate org_id to sink for auto-injection into metric records.
+                sink.org_id = org_id  # type: ignore[attr-defined]
                 team_resolver = load_team_resolver()
                 computed_at = now
                 end_day = now.date()

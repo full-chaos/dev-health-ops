@@ -76,6 +76,9 @@ FIXTURE_REPO_NAME="${LIVE_E2E_FIXTURE_REPO_NAME:-acme/live-e2e}"
 FIXTURE_COMMITS_PER_DAY="${LIVE_E2E_COMMITS_PER_DAY:-6}"
 FIXTURE_PR_COUNT="${LIVE_E2E_PR_COUNT:-24}"
 
+
+# Must match the org_id used in generate_auth_token() below.
+E2E_ORG_ID="11111111-2222-3333-4444-555555555555"
 READINESS_ATTEMPTS="${LIVE_E2E_READINESS_ATTEMPTS:-90}"
 READINESS_SLEEP_SECS="${LIVE_E2E_READINESS_SLEEP_SECS:-2}"
 
@@ -101,7 +104,7 @@ import hashlib, jwt, uuid, os
 from datetime import datetime, timedelta, timezone
 
 user_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-org_id = uuid.UUID("11111111-2222-3333-4444-555555555555")
+org_id = uuid.UUID(os.getenv("E2E_ORG_ID", "11111111-2222-3333-4444-555555555555"))
 
 pg_uri = os.getenv("POSTGRES_URI", os.getenv("DATABASE_URI", ""))
 if pg_uri:
@@ -214,6 +217,7 @@ PY
 echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
 (
   export DISABLE_DOTENV=1
+  export ORG_ID="${E2E_ORG_ID}"
   unset POSTGRES_URI
   unset DATABASE_URI
   unset DATABASE_URL

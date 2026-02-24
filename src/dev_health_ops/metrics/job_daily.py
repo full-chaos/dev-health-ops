@@ -238,6 +238,10 @@ async def run_daily_metrics_job(
 
     sinks = [primary_sink] + ([secondary_sink] if secondary_sink else [])
 
+    # Propagate org_id to sinks for auto-injection into metric records.
+    for s in sinks:
+        s.org_id = org_id  # type: ignore[attr-defined]
+
     for s in sinks:
         if hasattr(s, "ensure_tables"):
             s.ensure_tables()
@@ -504,6 +508,10 @@ async def run_daily_metrics_finalize(
         primary_sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
 
     sinks_list = [primary_sink] + ([secondary_sink] if secondary_sink else [])
+
+    # Propagate org_id to sinks for auto-injection into metric records.
+    for s in sinks_list:
+        s.org_id = org_id  # type: ignore[attr-defined]
 
     for s in sinks_list:
         if hasattr(s, "ensure_tables"):

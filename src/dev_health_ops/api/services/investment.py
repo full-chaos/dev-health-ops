@@ -141,6 +141,7 @@ async def build_investment_response(
     *,
     db_url: str,
     filters: MetricFilter,
+    org_id: str = "",
 ) -> InvestmentResponse:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
@@ -180,6 +181,7 @@ async def build_investment_response(
             end_ts=end_ts,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
             themes=theme_filters or None,
             subcategories=subcategory_filters or None,
         )
@@ -191,6 +193,7 @@ async def build_investment_response(
             end_ts=end_ts,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
             themes=theme_filters or None,
             subcategories=subcategory_filters or None,
         )
@@ -224,6 +227,7 @@ async def build_investment_sunburst(
     db_url: str,
     filters: MetricFilter,
     limit: int = 500,
+    org_id: str = "",
 ) -> List[InvestmentSunburstSlice]:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
@@ -258,6 +262,7 @@ async def build_investment_sunburst(
             end_ts=end_ts,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
             themes=theme_filters or None,
             subcategories=subcategory_filters or None,
             limit=limit,

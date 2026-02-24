@@ -53,14 +53,25 @@ from .retention import (
     OrgRetentionPolicy,
     RetentionResourceType,
 )
+from .billing import (
+    BillingInterval,
+    BillingPlan,
+    BillingPrice,
+    FeatureBundle,
+    PlanFeatureBundle,
+)
 
 __all__ = [
     "AuditAction",
     "AuditLog",
     "AuditResourceType",
     "AuthProvider",
+    "BillingInterval",
+    "BillingPlan",
+    "BillingPrice",
     "CheckpointStatus",
     "FeatureCategory",
+    "FeatureBundle",
     "FeatureFlag",
     "Base",
     "GitBlame",
@@ -82,6 +93,7 @@ __all__ = [
     "OrgIPAllowlist",
     "OrgLicense",
     "OrgRetentionPolicy",
+    "PlanFeatureBundle",
     "Repo",
     "RetentionResourceType",
     "ScheduledJob",

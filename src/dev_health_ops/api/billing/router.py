@@ -11,8 +11,10 @@ from pydantic import BaseModel
 try:
     from stripe import SignatureVerificationError
 except ModuleNotFoundError:
+
     class SignatureVerificationError(Exception):
         """Fallback when Stripe SDK is not installed."""
+
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -29,10 +31,12 @@ from .stripe_client import (
     get_tier_price_id,
     get_webhook_secret,
 )
+from .plans import router as plans_router
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+router.include_router(plans_router)
 
 
 # ---------------------------------------------------------------------------

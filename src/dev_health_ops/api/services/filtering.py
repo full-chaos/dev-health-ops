@@ -14,7 +14,7 @@ from ..queries.scopes import (
 
 
 def filter_cache_key(
-    prefix: str, filters: MetricFilter, extra: Dict[str, Any] | None = None
+    prefix: str, org_id: str, filters: MetricFilter, extra: Dict[str, Any] | None = None
 ) -> str:
     if hasattr(filters, "model_dump"):
         try:
@@ -25,6 +25,7 @@ def filter_cache_key(
         payload = filters.dict()
     if extra:
         payload = {**payload, **extra}
+    payload["_org_id"] = org_id
     serialized = json.dumps(payload, sort_keys=True, default=str)
     return f"{prefix}:{serialized}"
 

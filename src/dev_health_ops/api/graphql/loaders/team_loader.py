@@ -44,7 +44,7 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(cache=cache, cache_ttl=cache_ttl, cache_prefix="team")
+        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="team")
         self._client = client
         self._org_id = org_id
 
@@ -122,7 +122,7 @@ class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
             cache: Optional cache backend for cross-request caching.
             cache_ttl: Cache TTL in seconds.
         """
-        super().__init__(cache=cache, cache_ttl=cache_ttl, cache_prefix="team_name")
+        super().__init__(org_id=org_id, cache=cache, cache_ttl=cache_ttl, cache_prefix="team_name")
         self._client = client
         self._org_id = org_id
 

@@ -16,20 +16,19 @@ K = TypeVar("K")  # Key type
 V = TypeVar("V")  # Value type
 
 
-def make_cache_key(prefix: str, key: Any) -> str:
+def make_cache_key(prefix: str, org_id: str, key: Any) -> str:
     """
-    Generate a stable cache key from a prefix and key object.
+    Generate a stable cache key from a prefix, org_id, and key object.
 
     Args:
         prefix: Cache key prefix (e.g., 'team', 'repo').
+        org_id: Organization ID for tenant scoping.
         key: The key object to hash.
-
-    Returns:
         A stable hash-based cache key string.
     """
     key_str = json.dumps(key, sort_keys=True, default=str)
     key_hash = hashlib.sha256(key_str.encode()).hexdigest()[:16]
-    return f"loader:{prefix}:{key_hash}"
+    return f"loader:{prefix}:{org_id}:{key_hash}"
 
 
 class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
@@ -47,14 +46,15 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
 
     def __init__(
         self,
+        org_id: str,
         cache: Optional[Any] = None,
         cache_ttl: int = 300,
         cache_prefix: str = "loader",
     ):
         """
         Initialize the cached DataLoader.
-
         Args:
+            org_id: Organization ID for tenant-scoped cache keys.
             cache: Optional cache backend with get(key) and set(key, value) methods.
             cache_ttl: TTL for cached values in seconds.
             cache_prefix: Prefix for cache keys to avoid collisions.
@@ -63,6 +63,7 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
         self._external_cache = cache
         self._cache_ttl = cache_ttl
         self._cache_prefix = cache_prefix
+        self._org_id = org_id
 
     async def _load_with_cache(self, keys: List[K]) -> Sequence[V]:
         """
@@ -77,7 +78,7 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
         # Check cache for each key
         if self._external_cache:
             for idx, key in enumerate(keys):
-                cache_key = make_cache_key(self._cache_prefix, key)
+                cache_key = make_cache_key(self._cache_prefix, self._org_id, key)
                 try:
                     cached = self._external_cache.get(cache_key)
                     if cached is not None:
@@ -102,7 +103,7 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
             ):
                 results[idx] = value
                 if self._external_cache and value is not None:
-                    cache_key = make_cache_key(self._cache_prefix, key)
+                    cache_key = make_cache_key(self._cache_prefix, self._org_id, key)
                     try:
                         self._external_cache.set(cache_key, value)
                     except Exception as e:

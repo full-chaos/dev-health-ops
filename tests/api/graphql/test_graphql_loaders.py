@@ -21,7 +21,7 @@ class _Cache:
 
 class _IntLoader(CachedDataLoader[int, int | None]):
     def __init__(self, cache=None):
-        super().__init__(cache=cache, cache_prefix="ints")
+        super().__init__(org_id="test-org", cache=cache, cache_prefix="ints")
         self.calls = 0
 
     async def batch_load(self, keys):
@@ -32,7 +32,7 @@ class _IntLoader(CachedDataLoader[int, int | None]):
 @pytest.mark.asyncio
 async def test_cached_data_loader_uses_external_cache_for_hits():
     cache = _Cache()
-    cached_key = make_cache_key("ints", 1)
+    cached_key = make_cache_key("ints", "test-org", 1)
     cache.set(cached_key, 999)
 
     loader = _IntLoader(cache=cache)
@@ -40,7 +40,13 @@ async def test_cached_data_loader_uses_external_cache_for_hits():
 
     assert values == [999, 20]
     assert loader.calls == 1
-    assert cache.get(make_cache_key("ints", 2)) == 20
+    assert cache.get(make_cache_key("ints", "test-org", 2)) == 20
+
+
+def test_make_cache_key_differs_by_org_id():
+    key_org_a = make_cache_key("ints", "org-a", 42)
+    key_org_b = make_cache_key("ints", "org-b", 42)
+    assert key_org_a != key_org_b, "Cache keys for different org_ids must differ"
 
 
 @pytest.mark.asyncio

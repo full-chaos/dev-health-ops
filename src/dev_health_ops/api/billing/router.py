@@ -24,6 +24,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import (
     LicenseTier,
+    get_entitlements,
     sign_license,
 )
 
@@ -63,6 +64,13 @@ class CheckoutResponse(BaseModel):
 class PortalResponse(BaseModel):
     url: str
 
+
+class EntitlementResponse(BaseModel):
+    tier: str
+    features: dict[str, bool]
+    limits: dict[str, int]
+    is_licensed: bool
+    in_grace_period: bool
 
 def _validate_checkout_url(url: str) -> str:
     if url.startswith("/"):

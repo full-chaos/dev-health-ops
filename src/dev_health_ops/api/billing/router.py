@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -11,14 +13,15 @@ from pydantic import BaseModel
 try:
     from stripe import SignatureVerificationError
 except ModuleNotFoundError:
+
     class SignatureVerificationError(Exception):
         """Fallback when Stripe SDK is not installed."""
+
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.licensing import (
     LicenseTier,
-    get_entitlements,
     sign_license,
 )
 
@@ -29,10 +32,12 @@ from .stripe_client import (
     get_tier_price_id,
     get_webhook_secret,
 )
+from .plans import router as plans_router
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+router.include_router(plans_router)
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +60,30 @@ class PortalResponse(BaseModel):
     url: str
 
 
-class EntitlementResponse(BaseModel):
-    tier: str
-    features: dict[str, bool]
-    limits: dict[str, int]
-    is_licensed: bool
-    in_grace_period: bool
+def _validate_checkout_url(url: str) -> str:
+    if url.startswith("/"):
+        return url
+
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid checkout URL")
+
+    app_base_url = os.environ.get("APP_BASE_URL", "https://example.com").strip()
+    allowed_prefixes: list[str] = []
+    if app_base_url:
+        allowed_prefixes.append(app_base_url.rstrip("/"))
+    allowed_prefixes.extend(
+        prefix.strip()
+        for prefix in os.environ.get("ALLOWED_CHECKOUT_DOMAINS", "").split(",")
+        if prefix.strip()
+    )
+    if any(prefix and url.startswith(prefix) for prefix in allowed_prefixes):
+        return url
+
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid checkout URL: must be relative or start with an allowed prefix",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -326,12 +349,15 @@ async def create_checkout_session(
             status_code=400, detail=f"No price configured for tier: {body.tier}"
         )
 
+    success_url = _validate_checkout_url(body.success_url)
+    cancel_url = _validate_checkout_url(body.cancel_url)
+
     try:
         client = get_stripe_client()
         checkout_session = client.checkout.sessions.create(
             params={
-                "success_url": body.success_url,
-                "cancel_url": body.cancel_url,
+                "success_url": success_url,
+                "cancel_url": cancel_url,
                 "line_items": [{"price": price_id, "quantity": 1}],
                 "mode": "subscription",
                 "metadata": {"org_id": user.org_id},
@@ -409,15 +435,3 @@ async def _get_customer_id(org_id: str) -> str | None:
     except Exception:
         logger.exception("Failed to look up customer_id for org_id=%s", org_id)
         return None
-
-
-# ---------------------------------------------------------------------------
-# GET /api/v1/billing/entitlements/{org_id}
-# ---------------------------------------------------------------------------
-
-
-@router.get("/entitlements/{org_id}", response_model=EntitlementResponse)
-async def get_org_entitlements(org_id: str) -> EntitlementResponse:
-    """Return entitlements for the given org from the JWT-backed LicenseManager."""
-    entitlements = get_entitlements()
-    return EntitlementResponse(**entitlements)

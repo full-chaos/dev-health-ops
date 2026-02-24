@@ -21,6 +21,7 @@ except ModuleNotFoundError:
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import (
     LicenseTier,
     sign_license,
@@ -33,12 +34,14 @@ from .stripe_client import (
     get_tier_price_id,
     get_webhook_secret,
 )
-from .plans import router as plans_router
+from .invoice_routes import router as invoice_router
+from .invoice_service import InvoiceService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
-router.include_router(plans_router)
+router.include_router(invoice_router)
+invoice_service = InvoiceService()
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +113,17 @@ async def stripe_webhook(request: Request) -> dict:
     event_type: str = event.type
     data_object = event.data.object
 
-    if event_type == "checkout.session.completed":
+    event_id = getattr(event, "id", None)
+
+    if event_type.startswith("invoice."):
+        if event_type == "invoice.payment_failed" and not _invoice_has_org_id(
+            data_object
+        ):
+            customer_id = getattr(data_object, "customer", None)
+            logger.warning("Payment failed: customer=%s", customer_id)
+            return {"status": "ok"}
+        await _handle_invoice_webhook(event_type, data_object, event_id)
+    elif event_type == "checkout.session.completed":
         await _handle_checkout_completed(data_object)
     elif event_type == "customer.subscription.created":
         await _process_subscription_event(event)
@@ -120,16 +133,70 @@ async def stripe_webhook(request: Request) -> dict:
     elif event_type == "customer.subscription.deleted":
         await _process_subscription_event(event)
         await _handle_subscription_deleted(data_object)
-    elif event_type == "customer.subscription.paused":
-        await _process_subscription_event(event)
-    elif event_type == "customer.subscription.resumed":
-        await _process_subscription_event(event)
-    elif event_type == "invoice.payment_failed":
-        _handle_payment_failed(data_object)
     else:
         logger.debug("Unhandled Stripe event: %s", event_type)
 
     return {"status": "ok"}
+
+
+def _invoice_has_org_id(invoice_payload: object) -> bool:
+    metadata = getattr(invoice_payload, "metadata", {}) or {}
+    if isinstance(metadata, dict):
+        return bool(metadata.get("org_id"))
+    return False
+
+
+async def _handle_invoice_webhook(
+    event_type: str,
+    invoice_payload: object,
+    event_id: str | None,
+) -> None:
+    async with get_postgres_session() as db:
+        if event_id:
+            payload = dict(getattr(invoice_payload, "metadata", {}) or {})
+            is_duplicate = await invoice_service.is_duplicate_event(
+                db=db,
+                stripe_event_id=event_id,
+                event_type=event_type,
+                payload=payload,
+            )
+            if is_duplicate:
+                logger.info("Skipping duplicate Stripe invoice event: %s", event_id)
+                await db.rollback()
+                return
+
+        try:
+            invoice = await invoice_service.upsert_invoice(db, invoice_payload)
+        except ValueError as exc:
+            logger.warning("Skipping invoice webhook event %s: %s", event_type, exc)
+            await db.rollback()
+            return
+
+        if event_type in {
+            "invoice.created",
+            "invoice.updated",
+            "invoice.finalized",
+            "invoice.payment_failed",
+            "invoice.paid",
+        }:
+            await invoice_service.upsert_line_items(
+                db=db,
+                invoice_id=invoice.id,
+                stripe_lines=getattr(invoice_payload, "lines", None),
+            )
+
+        if event_type == "invoice.paid":
+            await invoice_service.mark_paid(
+                db,
+                stripe_invoice_id=invoice.stripe_invoice_id,
+                payment_intent=getattr(invoice_payload, "payment_intent", None),
+            )
+        elif event_type == "invoice.payment_failed":
+            invoice.status = "payment_failed"
+        elif event_type == "invoice.voided":
+            await invoice_service.mark_voided(db, invoice.stripe_invoice_id)
+
+        await db.commit()
 
 
 async def _handle_checkout_completed(session: object) -> None:
@@ -226,33 +293,6 @@ async def _handle_subscription_deleted(subscription: object) -> None:
         logger.info(
             "subscription.deleted without org_id metadata, customer=%s", customer_id
         )
-
-
-def _handle_payment_failed(invoice: object) -> None:
-    customer_id = getattr(invoice, "customer", None)
-    logger.warning("Payment failed: customer=%s", customer_id)
-
-
-async def _process_subscription_event(event: object) -> None:
-    try:
-        from dev_health_ops.db import get_postgres_session
-
-        subscription_module = importlib.import_module(
-            "dev_health_ops.api.billing.subscription_service"
-        )
-        subscription_service = getattr(subscription_module, "SubscriptionService")
-
-        async with get_postgres_session() as session:
-            service = subscription_service(session)
-            await service.process_event(event)
-    except ValueError as exc:
-        logger.warning("Skipping malformed subscription event: %s", exc)
-    except RuntimeError:
-        logger.exception(
-            "Billing service unavailable while processing subscription event"
-        )
-    except Exception:
-        logger.exception("Failed to process subscription event")
 
 
 # ---------------------------------------------------------------------------

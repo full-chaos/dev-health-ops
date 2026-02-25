@@ -91,3 +91,5 @@ Stripe webhooks are used for real-time subscription management in SaaS deploymen
 | `LICENSE_PRIVATE_KEY` | Ed25519 private key for signing JWT licenses (base64-encoded) |
 
 > **Note**: Stripe webhooks are only relevant for SaaS deployments. Self-hosted deployments use offline Ed25519 license keys and do not require Stripe configuration.
+
+For full local/CI/ops guidance (Stripe CLI forwarding, replay/retry, reconciliation, and test cards), see the [Stripe Billing Runbook](./ops/stripe-billing-runbook.md).

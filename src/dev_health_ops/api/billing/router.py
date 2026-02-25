@@ -37,11 +37,16 @@ from .stripe_client import (
 )
 from .invoice_routes import router as invoice_router
 from .invoice_service import InvoiceService
+from .plans import router as plans_router
+from .refund_routes import router as refund_router
+from .refund_service import refund_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+router.include_router(plans_router)
 router.include_router(invoice_router)
+router.include_router(refund_router)
 invoice_service = InvoiceService()
 
 
@@ -71,6 +76,7 @@ class EntitlementResponse(BaseModel):
     limits: dict[str, int]
     is_licensed: bool
     in_grace_period: bool
+
 
 def _validate_checkout_url(url: str) -> str:
     if url.startswith("/"):
@@ -141,6 +147,11 @@ async def stripe_webhook(request: Request) -> dict:
     elif event_type == "customer.subscription.deleted":
         await _process_subscription_event(event)
         await _handle_subscription_deleted(data_object)
+    elif event_type == "invoice.payment_failed":
+        _handle_payment_failed(data_object)
+    elif event_type in ("charge.refunded", "charge.refund.updated"):
+        async with get_postgres_session() as db:
+            await refund_service.process_webhook(db=db, event=event)
     else:
         logger.debug("Unhandled Stripe event: %s", event_type)
 
@@ -301,6 +312,31 @@ async def _handle_subscription_deleted(subscription: object) -> None:
         logger.info(
             "subscription.deleted without org_id metadata, customer=%s", customer_id
         )
+
+
+def _handle_payment_failed(invoice: object) -> None:
+    customer_id = getattr(invoice, "customer", None)
+    logger.warning("Payment failed: customer=%s", customer_id)
+
+
+async def _process_subscription_event(event: object) -> None:
+    try:
+        subscription_module = importlib.import_module(
+            "dev_health_ops.api.billing.subscription_service"
+        )
+        subscription_service = getattr(subscription_module, "SubscriptionService")
+
+        async with get_postgres_session() as session:
+            service = subscription_service(session)
+            await service.process_event(event)
+    except ValueError as exc:
+        logger.warning("Skipping malformed subscription event: %s", exc)
+    except RuntimeError:
+        logger.exception(
+            "Billing service unavailable while processing subscription event"
+        )
+    except Exception:
+        logger.exception("Failed to process subscription event")
 
 
 # ---------------------------------------------------------------------------

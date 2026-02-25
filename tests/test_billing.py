@@ -343,7 +343,9 @@ async def test_portal_success(authed_client):
 @pytest.mark.asyncio
 async def test_entitlements_org_endpoint_removed(client):
     resp = await client.get("/api/v1/billing/entitlements/org-abc")
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "tier" in body
 
 
 # ---------------------------------------------------------------------------

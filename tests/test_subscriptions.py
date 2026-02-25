@@ -152,6 +152,8 @@ async def test_subscription_endpoints(authed_client) -> None:
     subscription = SimpleNamespace(
         id=uuid.uuid4(),
         org_id=org_id,
+        billing_plan_id=uuid.uuid4(),
+        billing_price_id=uuid.uuid4(),
         stripe_subscription_id="sub_123",
         stripe_customer_id="cus_123",
         status="active",

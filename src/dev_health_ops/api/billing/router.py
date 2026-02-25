@@ -37,12 +37,14 @@ from .stripe_client import (
 )
 from .invoice_routes import router as invoice_router
 from .invoice_service import InvoiceService
+from .plans import router as plans_router
 from .refund_routes import router as refund_router
 from .refund_service import refund_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
+router.include_router(plans_router)
 router.include_router(invoice_router)
 router.include_router(refund_router)
 invoice_service = InvoiceService()

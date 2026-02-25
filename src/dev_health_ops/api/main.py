@@ -89,6 +89,7 @@ from .auth import router as auth_router
 from .auth.router import get_current_user
 from .services.auth import AuthenticatedUser
 from .billing import router as billing_router
+from .orgs import router as orgs_router
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
@@ -334,6 +335,7 @@ app.include_router(billing_router)
 app.include_router(licensing_router)
 app.include_router(telemetry_router)
 app.include_router(ingest_router)
+app.include_router(orgs_router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)

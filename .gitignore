@@ -21,3 +21,4 @@ docs/monetization-strategy.md
 *.egg-info/
 build/
 dist/
+**.claude/worktree**

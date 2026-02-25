@@ -75,6 +75,7 @@ class EntitlementResponse(BaseModel):
     is_licensed: bool
     in_grace_period: bool
 
+
 def _validate_checkout_url(url: str) -> str:
     if url.startswith("/"):
         return url
@@ -311,6 +312,31 @@ async def _handle_subscription_deleted(subscription: object) -> None:
         )
 
 
+def _handle_payment_failed(invoice: object) -> None:
+    customer_id = getattr(invoice, "customer", None)
+    logger.warning("Payment failed: customer=%s", customer_id)
+
+
+async def _process_subscription_event(event: object) -> None:
+    try:
+        subscription_module = importlib.import_module(
+            "dev_health_ops.api.billing.subscription_service"
+        )
+        subscription_service = getattr(subscription_module, "SubscriptionService")
+
+        async with get_postgres_session() as session:
+            service = subscription_service(session)
+            await service.process_event(event)
+    except ValueError as exc:
+        logger.warning("Skipping malformed subscription event: %s", exc)
+    except RuntimeError:
+        logger.exception(
+            "Billing service unavailable while processing subscription event"
+        )
+    except Exception:
+        logger.exception("Failed to process subscription event")
+
+
 # ---------------------------------------------------------------------------
 # License persistence helpers
 # ---------------------------------------------------------------------------
@@ -536,4 +562,8 @@ async def get_org_entitlements(org_id: str) -> EntitlementResponse:
     return EntitlementResponse(**entitlements)
 
 
-router.include_router(refund_router)
+router.include_router(
+    getattr(
+        importlib.import_module("dev_health_ops.api.billing.subscriptions"), "router"
+    )
+)

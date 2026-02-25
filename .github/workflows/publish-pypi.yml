@@ -11,9 +11,14 @@ on:
         type: string
 
 jobs:
+  pick-runner:
+    uses: ./.github/workflows/_pick-runner.yml
+    secrets: inherit
+
   build-and-publish:
     name: Build and Publish
-    runs-on: ubuntu-latest
+    needs: [pick-runner]
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     permissions:
       contents: read
       id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing

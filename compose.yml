@@ -106,6 +106,43 @@ services:
       retries: 3
       start_period: 30s
 
+  billing-edge:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: api
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    container_name: dev-health-billing-edge
+    entrypoint:
+      - python
+      - -m
+      - uvicorn
+    command:
+      - dev_health_ops.api.billing_edge:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+    environment:
+      <<: *env
+      POSTGRES_URI: "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8010:8000"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   worker:
     build:
       context: .

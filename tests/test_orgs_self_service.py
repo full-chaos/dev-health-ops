@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
 
@@ -80,7 +79,7 @@ def authed_app(mock_session):
     async def _session_override():
         yield mock_session
 
-    app.dependency_overrides[get_current_user] = lambda: _make_user()
+    app.dependency_overrides[get_current_user] = _make_user
     app.dependency_overrides[postgres_session_dependency] = _session_override
     yield app
     app.dependency_overrides.clear()

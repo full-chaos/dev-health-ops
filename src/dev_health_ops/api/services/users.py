@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.users import (
@@ -65,16 +65,34 @@ class UserService:
         return result.scalar_one_or_none()
 
     async def list_all(
-        self, limit: int = 100, offset: int = 0, active_only: bool = True
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        active_only: bool = True,
+        search: str | None = None,
     ) -> list[User]:
         stmt = select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
         if active_only:
             stmt = stmt.where(User.is_active == True)  # noqa: E712
+        if search:
+            pattern = f"%{search.lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(User.email).like(pattern),
+                    func.lower(func.coalesce(User.username, "")).like(pattern),
+                    func.lower(func.coalesce(User.full_name, "")).like(pattern),
+                )
+            )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
     async def list_by_org(
-        self, org_id: str, limit: int = 100, offset: int = 0, active_only: bool = True
+        self,
+        org_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        active_only: bool = True,
+        search: str | None = None,
     ) -> list[User]:
         stmt = (
             select(User)
@@ -86,6 +104,15 @@ class UserService:
         )
         if active_only:
             stmt = stmt.where(User.is_active == True)  # noqa: E712
+        if search:
+            pattern = f"%{search.lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(User.email).like(pattern),
+                    func.lower(func.coalesce(User.username, "")).like(pattern),
+                    func.lower(func.coalesce(User.full_name, "")).like(pattern),
+                )
+            )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

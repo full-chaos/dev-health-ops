@@ -169,6 +169,14 @@ async def _ensure_org_admin_access(
         )
 
 
+def _get_org_id_for_non_superuser(current_user: AuthenticatedUser) -> str:
+    if current_user.is_superuser:
+        return current_user.org_id or ""
+    if not current_user.org_id:
+        raise HTTPException(status_code=403, detail="Organization context required")
+    return current_user.org_id
+
+
 @router.get("/settings/categories")
 async def list_setting_categories() -> list[str]:
     return [c.value for c in SettingCategory]
@@ -1291,13 +1299,28 @@ async def list_users(
     limit: int = 100,
     offset: int = 0,
     active_only: bool = True,
+    q: str | None = Query(default=None, min_length=1, max_length=200),
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_admin_org_id),
+    current_user: AuthenticatedUser = Depends(require_admin),
 ) -> list[UserResponse]:
     svc = UserService(session)
-    users = await svc.list_by_org(
-        org_id, limit=limit, offset=offset, active_only=active_only
-    )
+    search = q.strip() if q and q.strip() else None
+    if current_user.is_superuser:
+        users = await svc.list_all(
+            limit=limit,
+            offset=offset,
+            active_only=active_only,
+            search=search,
+        )
+    else:
+        org_id = _get_org_id_for_non_superuser(current_user)
+        users = await svc.list_by_org(
+            org_id,
+            limit=limit,
+            offset=offset,
+            active_only=active_only,
+            search=search,
+        )
     return [
         UserResponse(
             id=str(u.id),
@@ -1321,9 +1344,9 @@ async def list_users(
 async def get_user(
     user_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_admin_org_id),
     current_user: AuthenticatedUser = Depends(require_admin),
 ) -> UserResponse:
+    org_id = _get_org_id_for_non_superuser(current_user)
     svc = UserService(session)
     user = await svc.get_by_id(user_id)
     if not user:
@@ -1385,9 +1408,9 @@ async def update_user(
     user_id: str,
     payload: UserUpdate,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_admin_org_id),
     current_user: AuthenticatedUser = Depends(require_admin),
 ) -> UserResponse:
+    org_id = _get_org_id_for_non_superuser(current_user)
     svc = UserService(session)
     existing_user = await svc.get_by_id(user_id)
     if not existing_user:
@@ -1429,9 +1452,9 @@ async def set_user_password(
     user_id: str,
     payload: UserSetPassword,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_admin_org_id),
     current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
+    org_id = _get_org_id_for_non_superuser(current_user)
     svc = UserService(session)
     user = await svc.get_by_id(user_id)
     if not user:
@@ -1450,9 +1473,9 @@ async def set_user_password(
 async def delete_user(
     user_id: str,
     session: AsyncSession = Depends(get_session),
-    org_id: str = Depends(get_admin_org_id),
     current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
+    org_id = _get_org_id_for_non_superuser(current_user)
     svc = UserService(session)
     user = await svc.get_by_id(user_id)
     if not user:

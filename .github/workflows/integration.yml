@@ -12,9 +12,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  pick-runner:
+    uses: ./.github/workflows/_pick-runner.yml
+    secrets: inherit
+
   integration:
     name: Integration Tests (conditional)
-    runs-on: ubuntu-latest
+    needs: [pick-runner]
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     permissions:
       contents: read
       packages: read

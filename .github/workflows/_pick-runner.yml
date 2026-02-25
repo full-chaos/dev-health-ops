@@ -1,0 +1,93 @@
+name: Pick Runner
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        description: 'Self-hosted runner label to check for'
+        type: string
+        default: 'arc-runner'
+      fallback:
+        description: 'GitHub-hosted runner to fall back to'
+        type: string
+        default: 'ubuntu-latest'
+      max_queue_depth:
+        description: 'Fall back when queued workflow runs exceed this (0 = disabled)'
+        type: number
+        default: 0
+    outputs:
+      runner:
+        description: 'Selected runner label for runs-on'
+        value: ${{ jobs.check.outputs.runner }}
+      is_self_hosted:
+        description: 'Whether a self-hosted runner was selected'
+        value: ${{ jobs.check.outputs.is_self_hosted }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+      is_self_hosted: ${{ steps.pick.outputs.is_self_hosted }}
+    steps:
+      - name: Select runner
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_ADMIN_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+
+          LABEL="${{ inputs.runner_label }}"
+          FALLBACK="${{ inputs.fallback }}"
+          MAX_QUEUE="${{ inputs.max_queue_depth }}"
+          OVERRIDE="${{ vars.SELF_HOSTED_RUNNERS }}"
+
+          pick() {
+            echo "runner=$1" >> "$GITHUB_OUTPUT"
+            if [ "$1" = "$FALLBACK" ]; then
+              echo "is_self_hosted=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_self_hosted=true" >> "$GITHUB_OUTPUT"
+            fi
+            echo "::notice::$2"
+          }
+
+          # ── Manual override via repository variable ──────────
+          # Set SELF_HOSTED_RUNNERS=enabled  to force self-hosted
+          # Set SELF_HOSTED_RUNNERS=disabled to force GitHub-hosted
+          case "${OVERRIDE}" in
+            enabled)  pick "${LABEL}"    "Forced self-hosted (SELF_HOSTED_RUNNERS=enabled)";  exit 0 ;;
+            disabled) pick "${FALLBACK}" "Self-hosted disabled (SELF_HOSTED_RUNNERS=disabled)"; exit 0 ;;
+          esac
+
+          # ── API-based detection ──────────────────────────────
+          # Requires RUNNER_ADMIN_TOKEN (PAT with admin:org or repo admin scope).
+          # Falls back gracefully if the token lacks permissions.
+          count_online() {
+            gh api "$1" \
+              --jq "[.runners[] | select(.status==\"online\") | select(any(.labels[]; .name==\"${LABEL}\"))] | length" \
+              2>/dev/null || echo "0"
+          }
+
+          ONLINE=$(count_online "repos/${{ github.repository }}/actions/runners")
+
+          if [ "${ONLINE}" -eq 0 ]; then
+            ONLINE=$(count_online "orgs/${{ github.repository_owner }}/actions/runners")
+          fi
+
+          if [ "${ONLINE}" -eq 0 ]; then
+            pick "${FALLBACK}" "No online runners with label '${LABEL}' — using ${FALLBACK}"
+            exit 0
+          fi
+
+          # ── Optional queue-depth gate ────────────────────────
+          if [ "${MAX_QUEUE}" -gt 0 ]; then
+            QUEUED=$(gh api "repos/${{ github.repository }}/actions/runs?status=queued" \
+              --jq '.total_count' 2>/dev/null || echo "0")
+            if [ "${QUEUED}" -ge "${MAX_QUEUE}" ]; then
+              pick "${FALLBACK}" "${QUEUED} queued runs (limit ${MAX_QUEUE}) — using ${FALLBACK}"
+              exit 0
+            fi
+          fi
+
+          pick "${LABEL}" "Using self-hosted: ${LABEL} (${ONLINE} online)"

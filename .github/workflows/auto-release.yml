@@ -10,9 +10,14 @@ on:
 
 
 jobs:
+  pick-runner:
+    uses: ./.github/workflows/_pick-runner.yml
+    secrets: inherit
+
   tag-and-release:
     if: ((github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'pre-release')) || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    needs: [pick-runner]
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     permissions:
       contents: write
     outputs:

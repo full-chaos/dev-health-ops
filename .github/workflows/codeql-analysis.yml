@@ -14,9 +14,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  pick-runner:
+    uses: ./.github/workflows/_pick-runner.yml
+    secrets: inherit
+
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    needs: [pick-runner]
+    runs-on: ${{ needs.pick-runner.outputs.runner }}
     permissions:
       actions: read
       contents: read

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 from datetime import datetime
 from typing import Annotated
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -24,7 +26,7 @@ from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.billing.audit_service import BillingAuditService
 from dev_health_ops.api.billing.reconciliation_service import ReconciliationService
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.db import postgres_session_dependency
+from dev_health_ops.db import get_postgres_session, postgres_session_dependency
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.licensing import (
     LicenseTier,
@@ -106,6 +108,32 @@ class BillingAuditListResponse(BaseModel):
 
 class ResolveMismatchRequest(BaseModel):
     resolution: str
+
+
+def _validate_checkout_url(url: str) -> str:
+    if url.startswith("/"):
+        return url
+
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid checkout URL")
+
+    app_base_url = os.environ.get("APP_BASE_URL", "https://example.com").strip()
+    allowed_prefixes: list[str] = []
+    if app_base_url:
+        allowed_prefixes.append(app_base_url.rstrip("/"))
+    allowed_prefixes.extend(
+        prefix.strip()
+        for prefix in os.environ.get("ALLOWED_CHECKOUT_DOMAINS", "").split(",")
+        if prefix.strip()
+    )
+    if any(prefix and url.startswith(prefix) for prefix in allowed_prefixes):
+        return url
+
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid checkout URL: must be relative or start with an allowed prefix",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +594,13 @@ async def get_org_entitlements(org_id: str) -> EntitlementResponse:
     """Return entitlements for the given org from the JWT-backed LicenseManager."""
     entitlements = get_entitlements()
     return EntitlementResponse(**entitlements)
+
+
+router.include_router(
+    getattr(
+        importlib.import_module("dev_health_ops.api.billing.subscriptions"), "router"
+    )
+)
 
 
 @router.get("/audit", response_model=BillingAuditListResponse)

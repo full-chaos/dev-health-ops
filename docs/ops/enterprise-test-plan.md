@@ -1,8 +1,8 @@
 # Enterprise Features Manual Test Plan
 
 > **Document Status**: Active  
-> **Last Updated**: 2026-02-05  
-> **Related Issues**: [#338](https://github.com/full-chaos/dev-health-ops/issues/338), [#299](https://github.com/full-chaos/dev-health-ops/issues/299)
+> **Last Updated**: 2026-02-25  
+> **Related Issues**: [#338](https://github.com/full-chaos/dev-health-ops/issues/338), [#299](https://github.com/full-chaos/dev-health-ops/issues/299), CHAOS-512, CHAOS-516
 
 This document defines step-by-step manual test procedures for validating enterprise features across SaaS and self-hosted deployments.
 
@@ -20,6 +20,87 @@ This document defines step-by-step manual test procedures for validating enterpr
 8. [Limit Enforcement](#8-limit-enforcement)
 9. [Admin Portal](#9-admin-portal)
 10. [Deployment-Specific Tests](#10-deployment-specific-tests)
+11. [Execution Workflow and Batches (CHAOS-516)](#11-execution-workflow-and-batches-chaos-516)
+
+---
+
+## 11. Execution Workflow and Batches (CHAOS-516)
+
+This section converts the full manual plan into executable batches. Existing section test cases remain unchanged and are executed through the batch workflow below.
+
+### 11.1 Phase Order
+
+- **Phase A - Foundation**: Batch A1
+- **Phase B - Access and Identity**: Batch B1, Batch B2
+- **Phase C - Enterprise Controls**: Batch C1, Batch C2, Batch C3
+- **Phase D - Limits and Operations**: Batch D1, Batch D2
+
+### 11.2 Batch Catalog
+
+| Batch | Scope (Existing Sections) | Required Prerequisites | Owner | Evidence Template ID | Exit Criteria |
+|------|----------------------------|------------------------|-------|----------------------|---------------|
+| A1 | Section 1 + Section 2 + Section 10.1-10.3 | Env vars set, fixtures created, deployment target selected | QA Lead | `EV-BATCH-A1` | Licensing and deployment baseline validated |
+| B1 | Section 3 + Section 9.1-9.3 | A1 complete, owner/admin/editor/viewer accounts active | QA + Security | `EV-BATCH-B1` | RBAC and admin surface behavior validated |
+| B2 | Section 4 | B1 complete, IdP sandbox available, enterprise entitlement active | QA + IAM Owner | `EV-BATCH-B2` | SAML/OIDC flows and SSO edge cases validated |
+| C1 | Section 5 | B1 complete, enterprise entitlement active | QA + Compliance | `EV-BATCH-C1` | Audit generation/query/detail/gating validated |
+| C2 | Section 6 | C1 complete, retention test dataset seeded | QA + Data Governance | `EV-BATCH-C2` | Retention lifecycle behavior validated |
+| C3 | Section 7 | B1 complete, test CIDRs and request replay setup available | QA + Security | `EV-BATCH-C3` | Allowlist CRUD and enforcement validated |
+| D1 | Section 8 | A1 complete, tier-specific org fixtures prepared | QA + Platform | `EV-BATCH-D1` | Tier limits and rate behaviors validated |
+| D2 | Section 9.4 + regression sweep across Sections 2-9 | B2/C1/C2/C3/D1 complete | QA Lead | `EV-BATCH-D2` | Credential flow and final regression signoff complete |
+
+### 11.3 Batch Prerequisite Checklist
+
+| Checkpoint | Description | Owner | Evidence Required | Status |
+|-----------|-------------|-------|-------------------|--------|
+| PR-1 | Test environment initialized (Section 1.1-1.4) | QA Lead | Environment export, startup logs, health checks | [ ] |
+| PR-2 | Tier fixtures and account roles prepared | QA + Platform | Entitlements output + user/org seed logs | [ ] |
+| PR-3 | IdP integrations available for SAML/OIDC | IAM Owner | Provider metadata and callback endpoint verification | [ ] |
+| PR-4 | Audit/retention datasets seeded for delete/query checks | Compliance | Record counts before execution | [ ] |
+| PR-5 | Network paths available for allowlist scenarios | Security | Source IP inventory and test route capture | [ ] |
+
+### 11.4 Evidence Capture Template
+
+Use one record per executed batch and attach it to the issue comment or test run note.
+
+| Field | Value |
+|------|-------|
+| Template ID | `EV-BATCH-<BATCH-ID>` |
+| Linear Issue | `CHAOS-516` |
+| Parent Issue | `CHAOS-512` |
+| Batch ID | |
+| Sections Covered | |
+| Owner | |
+| Support Roles | |
+| Environment | SaaS / Self-Hosted / Both |
+| Build/Commit Ref | |
+| Start Time (UTC) | |
+| End Time (UTC) | |
+| Result | Pass / Fail / Blocked |
+| Blocked By | `CHAOS-176`, `CHAOS-184`, `CHAOS-185`, `CHAOS-136`, or `none` |
+| Evidence Links | API responses, logs, screenshots, exports |
+| Notes / Deviations | |
+
+### 11.5 Explicit Blocked-By Mapping
+
+| Blocked Area | Affected Batches | Blocked By (Linear) | Dependency Reason | Unblock Validation |
+|-------------|------------------|---------------------|-------------------|-------------------|
+| SSO provider provisioning and login flows (Section 4) | B2, D2 | `CHAOS-176` | Upstream SSO plumbing and provider lifecycle must be stable before full manual execution | Provider create/activate/login paths complete without known blocker tags |
+| Audit event visibility and query fidelity (Section 5) | C1, D2 | `CHAOS-184` | Audit event schema/query behavior must match expected contract for manual validation | Audit list/detail/filter endpoints return expected event payloads |
+| Retention execution + legal hold path (Section 6) | C2, D2 | `CHAOS-185` | Retention policy execution and hold semantics require upstream completion | Execute/delete/history behavior matches expected outcomes without bypasses |
+| IP allowlist enforcement and edge behavior (Section 7) | C3, D2 | `CHAOS-136` | Allowlist middleware/control-path needs upstream fixes before deterministic testing | Allowed/blocked decisions consistently match configured CIDRs |
+
+### 11.6 Batch Execution Tracker
+
+| Batch | Planned Window | Owner | Result | Evidence ID | Blocked By | Notes |
+|------|----------------|-------|--------|-------------|------------|-------|
+| A1 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
+| B1 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
+| B2 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
+| C1 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
+| C2 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
+| C3 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
+| D1 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
+| D2 | | | [ ] Pass [ ] Fail [ ] Blocked | | | |
 
 ---
 
@@ -560,6 +641,6 @@ helm install dev-health fullchaos/dev-health-platform \
 
 - [Enterprise Overview](../architecture/enterprise-overview.md)
 - [Licensing Architecture](../architecture/licensing.md)
-- [SSO Setup Guide](./sso-setup.md) (TODO)
+- [SSO Setup Guide](../sso-setup.md)
 - [ADR-001: Enterprise Edition](../architecture/adr/001-enterprise-edition.md)
 - [Self-Hosted Quickstart](../self-hosted-quickstart.md)

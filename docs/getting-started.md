@@ -72,11 +72,12 @@ See [Database Architecture](architecture/database-architecture.md) for details.
 
 ## Environment notes
 
-CLI flags override environment variables. Common env vars:
+CLI flags override environment variables.
 
-- `POSTGRES_URI` - PostgreSQL for semantic data (users, settings)
-- `CLICKHOUSE_URI` - ClickHouse for analytics data
-- `DATABASE_URI` - Legacy fallback (deprecated)
-- `GITHUB_TOKEN`
-- `GITLAB_TOKEN`
-- `REPO_PATH`
+| Variable | Status | Purpose |
+|----------|--------|---------|
+| `POSTGRES_URI` | Required | Semantic data (users, settings, credentials) |
+| `CLICKHOUSE_URI` | Required | Analytics data (sync + metrics) |
+| `DATABASE_URI` / `DATABASE_URL` | Deprecated fallback | Legacy resolver paths; keep only for compatibility |
+| `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, `LINEAR_API_KEY` | Optional | Provider auth for sync commands |
+| `APP_BASE_URL`, `JWT_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` | Optional in dev, required in production | API callback/auth/encryption settings |

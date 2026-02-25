@@ -73,7 +73,7 @@ Notes:
 - **GitHub**: Requires `repo` scope on your personal access token
 - **GitLab**: Requires `read_api` and `read_repository` scopes on your private token
 
-See [`PRIVATE_REPO_TESTING.md`](./PRIVATE_REPO_TESTING.md) for detailed instructions on setting up and testing private repository access, or [`VERIFICATION_SUMMARY.md`](./VERIFICATION_SUMMARY.md) for a comprehensive overview.
+See [`docs/PRIVATE_REPO_TESTING.md`](docs/PRIVATE_REPO_TESTING.md) for detailed instructions on setting up and testing private repository access.
 
 ## Batch Repository Processing ✅
 
@@ -306,16 +306,23 @@ This project supports PostgreSQL, MongoDB, SQLite, and ClickHouse as storage bac
 
 ### Environment Variables
 
-- **`DATABASE_URI`** (optional): Default DB URI for `dev-hops metrics daily --db ...` and for Alembic migrations. Also accepts `DATABASE_URL` as an alias.
-- **`SECONDARY_DATABASE_URI`** (optional): Secondary database URI for `--sink both` mode (writes to both primary and secondary databases).
-- **`DB_ECHO`** (optional): Enable SQL query logging for PostgreSQL and SQLite. Set to `true`, `1`, or `yes` (case-insensitive) to enable. Any other value (including `false`, `0`, `no`, or unset) disables it. Default: `false`. Note: Enabling this in production can expose sensitive data and impact performance.
-- **`REPO_UUID`** (optional): UUID for the repository. If not provided, a deterministic UUID will be derived from the git repository's remote URL (or repository path if no remote exists). This ensures the same repository always gets the same UUID across runs.
-- **`MAX_WORKERS`** (optional): Number of parallel workers for processing git blame data. Higher values can speed up processing but use more CPU and memory. Default: `4`
-- **`LOG_LEVEL`** (optional): Logging level (e.g. `INFO`, `DEBUG`). Default: `INFO`
-- **`DISABLE_DOTENV`** (optional): Set to `1` to disable `.env` loading from the repo root.
-- **`GITHUB_TOKEN`** (optional): Default GitHub token when `--auth` is not provided.
-- **`GITLAB_TOKEN`** (optional): Default GitLab token when `--auth` is not provided.
-- **`GITLAB_URL`** (optional): Default GitLab base URL when `--gitlab-url` is not provided (default: `https://gitlab.com`).
+| Variable | Status | Used for |
+|----------|--------|----------|
+| `POSTGRES_URI` | Required (semantic DB) | Users/orgs/settings, admin flows, Alembic-backed services |
+| `CLICKHOUSE_URI` | Required (analytics DB) | Sync pipelines, metrics jobs, analytics APIs |
+| `DATABASE_URI` | Deprecated fallback | Legacy DB resolver paths (prefer `POSTGRES_URI` + `CLICKHOUSE_URI`) |
+| `DATABASE_URL` | Deprecated alias | Alias fallback alongside `DATABASE_URI` |
+| `SECONDARY_DATABASE_URI` | Optional | Dual-write mode (`--sink both`) |
+| `GITHUB_TOKEN` / `GITLAB_TOKEN` | Optional | Provider auth defaults when `--auth` is omitted |
+| `GITLAB_URL` | Optional | GitLab host override (default `https://gitlab.com`) |
+| `JIRA_*` / `ATLASSIAN_*` | Optional | Jira/Atlassian work-item ingestion and AGG integration |
+| `LINEAR_API_KEY` | Optional | Linear work-item ingestion (`sync work-items --provider linear`) |
+| `APP_BASE_URL` | Optional | API callback origins (billing + SSO routes) |
+| `JWT_SECRET_KEY` / `SETTINGS_ENCRYPTION_KEY` | Required in production | Auth token signing and settings encryption |
+| `DB_ECHO`, `LOG_LEVEL`, `DISABLE_DOTENV` | Optional | Diagnostics/runtime behavior toggles |
+| `REPO_UUID`, `MAX_WORKERS` | Optional | Repository identity and processing parallelism |
+
+Deprecated variables are still honored for compatibility, but new setup should use `POSTGRES_URI` and `CLICKHOUSE_URI`.
 
 ### Command-Line Arguments
 

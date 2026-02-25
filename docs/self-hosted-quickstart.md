@@ -322,6 +322,8 @@ dev-hops sync work-items --provider github \
 
 > **Note**: Billing variables are only required for SaaS deployments that process Stripe subscriptions. Self-hosted deployments use offline Ed25519 license keys instead (set `DEV_HEALTH_LICENSE`).
 
+If you run SaaS billing flows, use the dedicated [Stripe Billing Runbook](./ops/stripe-billing-runbook.md) for webhook forwarding, replay/retry, CI secret handling, and reconciliation operations.
+
 ---
 
 ## Upgrading

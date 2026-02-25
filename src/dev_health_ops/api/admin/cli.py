@@ -162,6 +162,92 @@ async def _seed_features_async(ns: argparse.Namespace) -> int:
 def seed_features(ns: argparse.Namespace) -> int:
     return asyncio.run(_seed_features_async(ns))
 
+async def _seed_billing_plans_async(ns: argparse.Namespace) -> int:
+    from sqlalchemy import select
+    from dev_health_ops.models.billing import BillingPlan, BillingPrice
+
+    STANDARD_PLANS = [
+        {
+            "key": "community",
+            "name": "Community",
+            "description": "For individuals and small teams getting started with engineering analytics.",
+            "tier": "community",
+            "display_order": 0,
+            "prices": [
+                {"interval": "monthly", "amount": 0, "currency": "usd"},
+                {"interval": "yearly", "amount": 0, "currency": "usd"},
+            ],
+        },
+        {
+            "key": "team",
+            "name": "Team",
+            "description": "For growing teams that need full visibility into delivery health and investment patterns.",
+            "tier": "team",
+            "display_order": 1,
+            "prices": [
+                {"interval": "monthly", "amount": 1200, "currency": "usd"},
+                {"interval": "yearly", "amount": 11500, "currency": "usd"},
+            ],
+        },
+        {
+            "key": "enterprise",
+            "name": "Enterprise",
+            "description": "For organizations that need enterprise-grade security, compliance, and dedicated support.",
+            "tier": "enterprise",
+            "display_order": 2,
+            "prices": [
+                {"interval": "monthly", "amount": 12900, "currency": "usd"},
+                {"interval": "yearly", "amount": 124000, "currency": "usd"},
+            ],
+        },
+    ]
+
+    session = await _get_session(ns)
+    try:
+        result = await session.execute(select(BillingPlan.key))
+        existing = {row[0] for row in result.all()}
+        created = 0
+
+        for plan_data in STANDARD_PLANS:
+            if plan_data["key"] in existing:
+                continue
+
+            plan = BillingPlan(
+                key=plan_data["key"],
+                name=plan_data["name"],
+                description=plan_data["description"],
+                tier=plan_data["tier"],
+                display_order=plan_data["display_order"],
+            )
+            session.add(plan)
+            await session.flush()  # get plan.id
+
+            for price_data in plan_data["prices"]:
+                price = BillingPrice(
+                    plan_id=plan.id,
+                    interval=price_data["interval"],
+                    amount=price_data["amount"],
+                    currency=price_data["currency"],
+                )
+                session.add(price)
+
+            created += 1
+
+        if created:
+            await session.commit()
+            print(f"Seeded {created} billing plan(s) with prices.")
+        else:
+            print("All standard billing plans already exist.")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def seed_billing_plans(ns: argparse.Namespace) -> int:
+    return asyncio.run(_seed_billing_plans_async(ns))
 
 def licenses_keygen_cmd(ns: argparse.Namespace) -> int:
     from dev_health_ops.licensing.generator import generate_keypair
@@ -299,3 +385,13 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "seed", help="Seed standard feature flags into the database."
     )
     features_seed.set_defaults(func=seed_features)
+
+    billing_parser = admin_sub.add_parser("billing", help="Billing plan management.")
+    billing_sub = billing_parser.add_subparsers(
+        dest="billing_command", required=True
+    )
+
+    billing_seed = billing_sub.add_parser(
+        "seed", help="Seed standard billing plans (Community, Team, Enterprise) with prices."
+    )
+    billing_seed.set_defaults(func=seed_billing_plans)

@@ -42,6 +42,7 @@ from .audit import (
     AuditLog,
     AuditResourceType,
 )
+from .billing_audit import BillingAuditLog
 from .sso import (
     SSOProtocol,
     SSOProvider,
@@ -78,6 +79,7 @@ __all__ = [
     "PlanFeatureBundle",
     "FeatureFlag",
     "Base",
+    "BillingAuditLog",
     "GitBlame",
     "GitBlameMixin",
     "GitCommit",

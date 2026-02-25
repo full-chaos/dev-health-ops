@@ -5,11 +5,14 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+from datetime import datetime
 from typing import Annotated
+import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 try:
     from stripe import SignatureVerificationError
@@ -20,8 +23,11 @@ except ModuleNotFoundError:
 
 
 from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.billing.audit_service import BillingAuditService
+from dev_health_ops.api.billing.reconciliation_service import ReconciliationService
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.db import get_postgres_session
+from dev_health_ops.db import get_postgres_session, postgres_session_dependency
+from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.licensing import (
     LicenseTier,
     get_entitlements,
@@ -76,6 +82,32 @@ class EntitlementResponse(BaseModel):
     limits: dict[str, int]
     is_licensed: bool
     in_grace_period: bool
+
+
+class BillingAuditLogResponse(BaseModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    actor_id: uuid.UUID | None
+    action: str
+    resource_type: str
+    resource_id: uuid.UUID
+    description: str
+    stripe_event_id: str | None
+    local_state: dict | None
+    stripe_state: dict | None
+    reconciliation_status: str | None
+    created_at: datetime | None
+
+
+class BillingAuditListResponse(BaseModel):
+    items: list[BillingAuditLogResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class ResolveMismatchRequest(BaseModel):
+    resolution: str
 
 
 def _validate_checkout_url(url: str) -> str:
@@ -569,3 +601,113 @@ router.include_router(
         importlib.import_module("dev_health_ops.api.billing.subscriptions"), "router"
     )
 )
+
+
+@router.get("/audit", response_model=BillingAuditListResponse)
+async def list_billing_audit(
+    org_id: uuid.UUID,
+    resource_type: str | None = None,
+    resource_id: uuid.UUID | None = None,
+    action: str | None = None,
+    reconciliation_status: str | None = None,
+    from_date: datetime | None = None,
+    to_date: datetime | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)] = None,
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)] = None,
+) -> BillingAuditListResponse:
+    if not user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+
+    svc = BillingAuditService(db)
+    items, total = await svc.query(
+        org_id=org_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        action=action,
+        reconciliation_status=reconciliation_status,
+        from_date=from_date,
+        to_date=to_date,
+        limit=limit,
+        offset=offset,
+    )
+    return BillingAuditListResponse(
+        items=[_to_audit_response(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/audit/{audit_id}", response_model=BillingAuditLogResponse)
+async def get_billing_audit(
+    audit_id: uuid.UUID,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)],
+) -> BillingAuditLogResponse:
+    if not user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+
+    entry = await db.get(BillingAuditLog, audit_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Audit entry not found")
+    return _to_audit_response(entry)
+
+
+@router.post("/audit/{audit_id}/resolve", response_model=BillingAuditLogResponse)
+async def resolve_billing_mismatch(
+    audit_id: uuid.UUID,
+    payload: ResolveMismatchRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)],
+) -> BillingAuditLogResponse:
+    if not user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+
+    audit_service = BillingAuditService(db)
+    reconciliation_service = ReconciliationService(
+        db, get_stripe_client(), audit_service
+    )
+    resolved = await reconciliation_service.resolve_mismatch(
+        audit_log_id=audit_id,
+        resolution=payload.resolution,
+        actor_id=uuid.UUID(user.user_id),
+    )
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Audit entry not found")
+    return _to_audit_response(resolved)
+
+
+@router.post("/reconcile")
+async def trigger_reconciliation(
+    org_id: uuid.UUID | None = None,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)] = None,
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)] = None,
+) -> dict:
+    if not user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+
+    audit_service = BillingAuditService(db)
+    reconciliation_service = ReconciliationService(
+        db, get_stripe_client(), audit_service
+    )
+    report = await reconciliation_service.reconcile_all(org_id=org_id)
+    return report.to_dict()
+
+
+def _to_audit_response(entry: BillingAuditLog) -> BillingAuditLogResponse:
+    return BillingAuditLogResponse(
+        id=entry.id,
+        org_id=entry.org_id,
+        actor_id=entry.actor_id,
+        action=entry.action,
+        resource_type=entry.resource_type,
+        resource_id=entry.resource_id,
+        description=entry.description,
+        stripe_event_id=entry.stripe_event_id,
+        local_state=entry.local_state,
+        stripe_state=entry.stripe_state,
+        reconciliation_status=entry.reconciliation_status,
+        created_at=entry.created_at,
+    )

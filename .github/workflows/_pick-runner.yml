@@ -35,7 +35,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RUNNER_ADMIN_TOKEN || github.token }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           LABEL="${{ inputs.runner_label }}"
           FALLBACK="${{ inputs.fallback }}"
@@ -63,10 +63,19 @@ jobs:
           # ── API-based detection ──────────────────────────────
           # Requires RUNNER_ADMIN_TOKEN (PAT with admin:org or repo admin scope).
           # Falls back gracefully if the token lacks permissions.
+          # NOTE: gh api writes error JSON to stdout (not stderr) on 403,
+          # so we must validate the output is actually a number.
+          to_int() {
+            local val="$1"
+            if [[ "$val" =~ ^[0-9]+$ ]]; then echo "$val"; else echo "0"; fi
+          }
+
           count_online() {
-            gh api "$1" \
+            local raw
+            raw=$(gh api "$1" \
               --jq "[.runners[] | select(.status==\"online\") | select(any(.labels[]; .name==\"${LABEL}\"))] | length" \
-              2>/dev/null || echo "0"
+              2>/dev/null) || true
+            to_int "$raw"
           }
 
           ONLINE=$(count_online "repos/${{ github.repository }}/actions/runners")
@@ -82,8 +91,9 @@ jobs:
 
           # ── Optional queue-depth gate ────────────────────────
           if [ "${MAX_QUEUE}" -gt 0 ]; then
-            QUEUED=$(gh api "repos/${{ github.repository }}/actions/runs?status=queued" \
-              --jq '.total_count' 2>/dev/null || echo "0")
+            raw_queued=$(gh api "repos/${{ github.repository }}/actions/runs?status=queued" \
+              --jq '.total_count' 2>/dev/null) || true
+            QUEUED=$(to_int "$raw_queued")
             if [ "${QUEUED}" -ge "${MAX_QUEUE}" ]; then
               pick "${FALLBACK}" "${QUEUED} queued runs (limit ${MAX_QUEUE}) — using ${FALLBACK}"
               exit 0

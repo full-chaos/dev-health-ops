@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.refresh_tokens import revoke_all_for_user
 from dev_health_ops.models.users import (
     AuthProvider,
     MemberRole,
@@ -212,6 +213,7 @@ class UserService:
             )
         user.password_hash = _hash_password(password)
         user.updated_at = datetime.now(timezone.utc)
+        await revoke_all_for_user(self.session, user_id)
         await self.session.flush()
         return True
 

@@ -39,6 +39,7 @@ def get_current_org_id() -> str | None:
     """Get the org_id for the current request context, or None if unset."""
     return _current_org_id.get(None)
 
+
 # JWT configuration
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -131,6 +132,7 @@ class AuthService:
         self,
         user_id: str,
         org_id: str = "",
+        family_id: str | None = None,
         expires_delta: timedelta | None = None,
     ) -> str:
         """Create a JWT refresh token."""
@@ -141,6 +143,7 @@ class AuthService:
         payload = {
             "sub": user_id,
             "org_id": org_id,
+            "family_id": family_id or str(uuid.uuid4()),
             "type": "refresh",
             "exp": expire,
             "iat": datetime.now(timezone.utc),

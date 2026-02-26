@@ -74,6 +74,7 @@ class RegisterResponse(BaseModel):
 
 class VerifyEmailResponse(BaseModel):
     message: str
+    verified: bool | None = None
 
 
 class ResendVerificationRequest(BaseModel):
@@ -106,6 +107,12 @@ class LoginResponse(BaseModel):
     expires_in: int
     needs_onboarding: bool = False
     user: "UserInfo"
+
+
+class EmailVerificationRequiredResponse(BaseModel):
+    status: str
+    email: str
+    message: str
 
 
 class UserInfo(BaseModel):
@@ -412,8 +419,10 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
 
 
 @router.get("/verify", response_model=VerifyEmailResponse)
+@limiter.limit("10/hour", key_func=get_auth_key)
 async def verify_email(
     token: Annotated[str, Query(min_length=1)],
+    request: Request,
 ) -> VerifyEmailResponse:
     email_verification_service = importlib.import_module(
         "dev_health_ops.api.services.email_verification"
@@ -423,14 +432,20 @@ async def verify_email(
     async with get_postgres_session() as db:
         user = await verify_token(db, token)
         if user is None:
-            raise HTTPException(status_code=400, detail="Invalid or expired token")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid or expired verification token",
+            )
         await db.commit()
 
-    return VerifyEmailResponse(message="Email verification successful")
+    return VerifyEmailResponse(
+        message="Email verified successfully",
+        verified=True,
+    )
 
 
 @router.post("/resend-verification", response_model=VerifyEmailResponse)
-@limiter.limit(AUTH_REGISTER_LIMIT, key_func=get_auth_key)
+@limiter.limit("3/hour", key_func=get_auth_key)
 async def resend_verification_email(
     payload: ResendVerificationRequest,
     request: Request,
@@ -445,7 +460,7 @@ async def resend_verification_email(
     send_verification = getattr(email_verification_service, "send_verification_email")
 
     generic_response = VerifyEmailResponse(
-        message="If the account exists, a verification email has been sent"
+        message="If an account exists with that email, a verification link has been sent"
     )
     async with get_postgres_session() as db:
         email_normalized = payload.email.lower().strip()
@@ -530,10 +545,16 @@ async def reset_password(payload: ResetPasswordRequest) -> VerifyEmailResponse:
     return VerifyEmailResponse(message="Password reset successful")
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post(
+    "/login",
+    response_model=LoginResponse | EmailVerificationRequiredResponse,
+)
 @limiter.limit(AUTH_LOGIN_IP_LIMIT)
 @limiter.limit(AUTH_LOGIN_LIMIT, key_func=get_auth_key)
-async def login(payload: LoginRequest, request: Request) -> LoginResponse:
+async def login(
+    payload: LoginRequest,
+    request: Request,
+) -> LoginResponse | EmailVerificationRequiredResponse:
     """Authenticate user and return tokens.
 
     For local auth, validates email/password.
@@ -656,6 +677,34 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
 
         assert user is not None
         await clear_attempts(db, email_normalized)
+
+        auth_provider = str(getattr(user, "auth_provider", "local")).lower()
+        if auth_provider == "local" and not bool(getattr(user, "is_verified", False)):
+            blocked_org_id = primary_org_id or await _resolve_login_audit_org_id(
+                db,
+                user,
+                payload.org_id,
+            )
+            if blocked_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=blocked_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=str(user.id),
+                    user_id=user.id,
+                    description="Login blocked: email not verified",
+                    changes={"email": email_normalized},
+                    request=request,
+                    status="failure",
+                    error_message="Email not verified",
+                )
+            await db.commit()
+            return EmailVerificationRequiredResponse(
+                status="email_verification_required",
+                email=str(user.email),
+                message="Please verify your email address before logging in",
+            )
 
         # Get user's membership/org
         membership_stmt = select(Membership).where(Membership.user_id == user.id)

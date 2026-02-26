@@ -54,6 +54,7 @@ class FakeSession:
     async def delete(self, obj):
         pass  # no-op for testing
 
+
 def _make_app() -> FastAPI:
     app = FastAPI()
     app.include_router(auth_router_module.router)
@@ -71,6 +72,8 @@ def _local_user(email: str, password: str) -> SimpleNamespace:
         full_name="Test User",
         password_hash=password_hash,
         is_active=True,
+        is_verified=True,
+        auth_provider="local",
         is_superuser=False,
         last_login_at=None,
     )
@@ -83,11 +86,11 @@ async def test_login_without_membership_returns_needs_onboarding(monkeypatch):
     user = _local_user("orgless@example.com", "password123")
     session = FakeSession(
         execute_results=[
-            FakeResult(scalar=user),       # 1) find user by email
-            FakeResult(scalar=None),       # 2) check_lockout -> _get_attempt (no lockout)
-            FakeResult(scalar=None),       # 3) primary_org lookup (audit context)
-            FakeResult(scalar=None),       # 4) clear_attempts -> _get_attempt (no attempt)
-            FakeResult(scalar=None),       # 5) membership lookup
+            FakeResult(scalar=user),  # 1) find user by email
+            FakeResult(scalar=None),  # 2) check_lockout -> _get_attempt (no lockout)
+            FakeResult(scalar=None),  # 3) primary_org lookup (audit context)
+            FakeResult(scalar=None),  # 4) clear_attempts -> _get_attempt (no attempt)
+            FakeResult(scalar=None),  # 5) membership lookup
         ]
     )
 
@@ -123,11 +126,11 @@ async def test_login_with_membership_returns_needs_onboarding_false(monkeypatch)
     membership = SimpleNamespace(org_id=org_id, role="admin")
     session = FakeSession(
         execute_results=[
-            FakeResult(scalar=user),             # 1) find user by email
-            FakeResult(scalar=None),             # 2) check_lockout -> _get_attempt (no lockout)
-            FakeResult(scalar=org_id),            # 3) primary_org lookup (audit context)
-            FakeResult(scalar=None),             # 4) clear_attempts -> _get_attempt (no attempt)
-            FakeResult(scalar=membership),        # 5) membership lookup
+            FakeResult(scalar=user),  # 1) find user by email
+            FakeResult(scalar=None),  # 2) check_lockout -> _get_attempt (no lockout)
+            FakeResult(scalar=org_id),  # 3) primary_org lookup (audit context)
+            FakeResult(scalar=None),  # 4) clear_attempts -> _get_attempt (no attempt)
+            FakeResult(scalar=membership),  # 5) membership lookup
         ]
     )
 

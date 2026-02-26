@@ -151,6 +151,8 @@ async def test_login_finds_user_case_insensitive(app):
         full_name="Test User",
         password_hash=password_hash,
         is_active=True,
+        is_verified=True,
+        auth_provider="local",
         is_superuser=False,
         last_login_at=None,
     )
@@ -191,6 +193,7 @@ async def test_login_finds_user_case_insensitive(app):
             result = MagicMock()
             result.scalar_one_or_none.return_value = membership
             return result
+
     session.execute = AsyncMock(side_effect=_execute_side_effect)
 
     with patch(

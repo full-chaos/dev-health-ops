@@ -376,6 +376,7 @@ class UserUpdate(BaseModel):
 
 
 class UserSetPassword(BaseModel):
+    admin_password: str = Field(..., min_length=8)
     password: str = Field(..., min_length=8)
 
 

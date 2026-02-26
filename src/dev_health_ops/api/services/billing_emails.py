@@ -1,5 +1,6 @@
 import logging
 import uuid
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import select
@@ -52,7 +53,7 @@ async def send_invoice_receipt(
         if owner is None:
             return
         to_email, full_name, org_name = owner
-        amount_str = f"{amount_cents / 100:.2f}"
+        amount_str = f"{Decimal(amount_cents) / 100:.2f}"
         email_service = get_email_service()
         await email_service.send_template_email(
             to_address=to_email,
@@ -84,7 +85,7 @@ async def send_payment_failed(
         if owner is None:
             return
         to_email, full_name, org_name = owner
-        amount_str = f"{amount_cents / 100:.2f}"
+        amount_str = f"{Decimal(amount_cents) / 100:.2f}"
         email_service = get_email_service()
         await email_service.send_template_email(
             to_address=to_email,

@@ -78,7 +78,7 @@ Email templates are plain HTML files in `src/dev_health_ops/templates/email/` us
 ```
 templates/email/
 ├── welcome.html
-├── email_verification.html
+├── verification.html
 ├── password_reset.html
 ├── invite.html
 ├── invoice_receipt.html

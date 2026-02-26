@@ -23,14 +23,9 @@ env:
   CLOUDFLARE_PAGES_BUILD_DIR: ${{ secrets.CLOUDFLARE_PAGES_BUILD_DIR || 'webapp' }}
 
 jobs:
-  pick-runner:
-    uses: ./.github/workflows/_pick-runner.yml
-    secrets: inherit
-
   deploy:
     name: Deploy API + front-end
-    needs: [pick-runner]
-    runs-on: ${{ needs.pick-runner.outputs.runner }}
+    runs-on: ubuntu-latest
     env:
       VERSION: ${{ github.event.inputs.version }}
       IMAGE_REGISTRY: ${{ github.event.inputs.image_registry }}

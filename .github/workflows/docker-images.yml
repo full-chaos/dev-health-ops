@@ -33,14 +33,9 @@ permissions:
   id-token: write
 
 jobs:
-  pick-runner:
-    uses: ./.github/workflows/_pick-runner.yml
-    secrets: inherit
-
   build:
     name: Build Image
-    needs: [pick-runner]
-    runs-on: ${{ needs.pick-runner.outputs.runner }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -123,8 +118,8 @@ jobs:
 
   merge:
     name: Merge Digests
-    needs: [pick-runner, build]
-    runs-on: ${{ needs.pick-runner.outputs.runner }}
+    runs-on: ubuntu-latest
+    needs: build
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
     strategy:
       matrix:

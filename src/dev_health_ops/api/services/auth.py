@@ -197,6 +197,8 @@ class AuthService:
     ) -> dict[str, Any] | None:
         """Validate a JWT token and return its payload."""
         try:
+            # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
+            # Intentional: peek at claims to check aud/iss presence before full verification
             unverified_payload = jwt.decode(
                 token,
                 options={

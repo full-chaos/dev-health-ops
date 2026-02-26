@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def get_org_owner_email(
     db: AsyncSession, org_id: uuid.UUID
 ) -> Optional[tuple[str, str, str]]:
-    # Return (email, full_name, org_name) of the Organization owner, or None if not found.
+    """Return (email, full_name, org_name) of the Organization owner, or None if not found."""
     result = await db.execute(
         select(User.email, User.full_name)
         .join(Membership, Membership.user_id == User.id)
@@ -42,32 +42,29 @@ async def send_invoice_receipt(
     currency: str,
     invoice_url: str,
 ) -> None:
-    try:
-        async with get_postgres_session() as db:
-            owner = await get_org_owner_email(db, org_id)
-            if owner is None:
-                return
-            to_email, full_name, org_name = owner
-            amount_str = f"{amount_cents / 100:.2f}"
-            email_service = get_email_service()
-            await email_service.send_template_email(
-                to_address=to_email,
-                subject="Invoice receipt",
-                template_name="invoice_receipt",
-                context={
-                    "full_name": full_name,
-                    "org_name": org_name,
-                    "amount": amount_str,
-                    "currency": currency.upper(),
-                    "invoice_url": invoice_url,
-                },
-            )
-    except Exception as exc:  # noqa: BLE001 - broad catch to satisfy non-raising requirement
-        logger.error(
-            "Failed to send invoice receipt email for org_id=%s: %s",
-            org_id,
-            exc,
-            exc_info=True,
+    """Send invoice receipt email to org owner.
+
+    Raises on email service failure so Celery can retry.
+    Returns silently if no org owner is found (not retryable).
+    """
+    async with get_postgres_session() as db:
+        owner = await get_org_owner_email(db, org_id)
+        if owner is None:
+            return
+        to_email, full_name, org_name = owner
+        amount_str = f"{amount_cents / 100:.2f}"
+        email_service = get_email_service()
+        await email_service.send_template_email(
+            to_address=to_email,
+            subject="Invoice receipt",
+            template_name="invoice_receipt",
+            context={
+                "full_name": full_name,
+                "org_name": org_name,
+                "amount": amount_str,
+                "currency": currency.upper(),
+                "invoice_url": invoice_url,
+            },
         )
 
 
@@ -77,32 +74,29 @@ async def send_payment_failed(
     currency: str,
     attempt_count: int,
 ) -> None:
-    try:
-        async with get_postgres_session() as db:
-            owner = await get_org_owner_email(db, org_id)
-            if owner is None:
-                return
-            to_email, full_name, org_name = owner
-            amount_str = f"{amount_cents / 100:.2f}"
-            email_service = get_email_service()
-            await email_service.send_template_email(
-                to_address=to_email,
-                subject="Invoice payment failed",
-                template_name="payment_failed",
-                context={
-                    "full_name": full_name,
-                    "org_name": org_name,
-                    "amount": amount_str,
-                    "currency": currency.upper(),
-                    "attempt_count": str(attempt_count),
-                },
-            )
-    except Exception as exc:
-        logger.error(
-            "Failed to send payment failed email for org_id=%s: %s",
-            org_id,
-            exc,
-            exc_info=True,
+    """Send payment failed email to org owner.
+
+    Raises on email service failure so Celery can retry.
+    Returns silently if no org owner is found (not retryable).
+    """
+    async with get_postgres_session() as db:
+        owner = await get_org_owner_email(db, org_id)
+        if owner is None:
+            return
+        to_email, full_name, org_name = owner
+        amount_str = f"{amount_cents / 100:.2f}"
+        email_service = get_email_service()
+        await email_service.send_template_email(
+            to_address=to_email,
+            subject="Invoice payment failed",
+            template_name="payment_failed",
+            context={
+                "full_name": full_name,
+                "org_name": org_name,
+                "amount": amount_str,
+                "currency": currency.upper(),
+                "attempt_count": str(attempt_count),
+            },
         )
 
 
@@ -111,30 +105,27 @@ async def send_subscription_changed(
     old_tier: str,
     new_tier: str,
 ) -> None:
-    try:
-        async with get_postgres_session() as db:
-            owner = await get_org_owner_email(db, org_id)
-            if owner is None:
-                return
-            to_email, full_name, org_name = owner
-            email_service = get_email_service()
-            await email_service.send_template_email(
-                to_address=to_email,
-                subject="Subscription changed",
-                template_name="subscription_changed",
-                context={
-                    "full_name": full_name,
-                    "org_name": org_name,
-                    "old_tier": old_tier,
-                    "new_tier": new_tier,
-                },
-            )
-    except Exception as exc:
-        logger.error(
-            "Failed to send subscription changed email for org_id=%s: %s",
-            org_id,
-            exc,
-            exc_info=True,
+    """Send subscription changed email to org owner.
+
+    Raises on email service failure so Celery can retry.
+    Returns silently if no org owner is found (not retryable).
+    """
+    async with get_postgres_session() as db:
+        owner = await get_org_owner_email(db, org_id)
+        if owner is None:
+            return
+        to_email, full_name, org_name = owner
+        email_service = get_email_service()
+        await email_service.send_template_email(
+            to_address=to_email,
+            subject="Subscription changed",
+            template_name="subscription_changed",
+            context={
+                "full_name": full_name,
+                "org_name": org_name,
+                "old_tier": old_tier,
+                "new_tier": new_tier,
+            },
         )
 
 
@@ -142,27 +133,24 @@ async def send_subscription_cancelled(
     org_id: uuid.UUID,
     tier: str,
 ) -> None:
-    try:
-        async with get_postgres_session() as db:
-            owner = await get_org_owner_email(db, org_id)
-            if owner is None:
-                return
-            to_email, full_name, org_name = owner
-            email_service = get_email_service()
-            await email_service.send_template_email(
-                to_address=to_email,
-                subject="Subscription cancelled",
-                template_name="subscription_cancelled",
-                context={
-                    "full_name": full_name,
-                    "org_name": org_name,
-                    "tier": tier,
-                },
-            )
-    except Exception as exc:
-        logger.error(
-            "Failed to send subscription cancelled email for org_id=%s: %s",
-            org_id,
-            exc,
-            exc_info=True,
+    """Send subscription cancelled email to org owner.
+
+    Raises on email service failure so Celery can retry.
+    Returns silently if no org owner is found (not retryable).
+    """
+    async with get_postgres_session() as db:
+        owner = await get_org_owner_email(db, org_id)
+        if owner is None:
+            return
+        to_email, full_name, org_name = owner
+        email_service = get_email_service()
+        await email_service.send_template_email(
+            to_address=to_email,
+            subject="Subscription cancelled",
+            template_name="subscription_cancelled",
+            context={
+                "full_name": full_name,
+                "org_name": org_name,
+                "tier": tier,
+            },
         )

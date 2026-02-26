@@ -221,6 +221,7 @@ async def test_send_invoice_receipt_missing_owner():
 
 @pytest.mark.asyncio
 async def test_send_invoice_receipt_email_failure():
+    """Verify email service errors propagate (Celery handles retry)."""
     org_id = uuid.uuid4()
     mock_session = _mock_db_session(owner=("owner@test.com", "Test Owner"))
     mock_email_service = MagicMock()
@@ -236,7 +237,8 @@ async def test_send_invoice_receipt_email_failure():
             return_value=mock_email_service,
         ),
     ):
-        await send_invoice_receipt(org_id, 4900, "usd", "https://example.com")
+        with pytest.raises(RuntimeError, match="boom"):
+            await send_invoice_receipt(org_id, 4900, "usd", "https://example.com")
 
     mock_email_service.send_template_email.assert_called_once()
 

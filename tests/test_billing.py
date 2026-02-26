@@ -357,7 +357,6 @@ async def test_entitlements_org_endpoint_removed(client):
 @pytest.mark.asyncio
 async def test_webhook_invoice_paid_sends_receipt_email(client):
     from contextlib import asynccontextmanager
-    import uuid
 
     event = _make_stripe_event(
         "invoice.paid",
@@ -391,9 +390,8 @@ async def test_webhook_invoice_paid_sends_receipt_email(client):
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
-            "dev_health_ops.api.billing.router.send_invoice_receipt",
-            new_callable=AsyncMock,
-        ) as mock_send_receipt,
+            "dev_health_ops.api.billing.router.send_billing_notification",
+        ) as mock_task,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -407,18 +405,18 @@ async def test_webhook_invoice_paid_sends_receipt_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_send_receipt.assert_awaited_once_with(
-            uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            4900,
-            "usd",
-            "https://invoice.stripe.com/i/test",
+        mock_task.delay.assert_called_once_with(
+            "invoice_receipt",
+            "00000000-0000-0000-0000-000000000001",
+            amount_cents=4900,
+            currency="usd",
+            invoice_url="https://invoice.stripe.com/i/test",
         )
 
 
 @pytest.mark.asyncio
 async def test_webhook_invoice_payment_failed_sends_email(client):
     from contextlib import asynccontextmanager
-    import uuid
 
     event = _make_stripe_event(
         "invoice.payment_failed",
@@ -452,9 +450,8 @@ async def test_webhook_invoice_payment_failed_sends_email(client):
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
-            "dev_health_ops.api.billing.router.send_payment_failed",
-            new_callable=AsyncMock,
-        ) as mock_send_failed,
+            "dev_health_ops.api.billing.router.send_billing_notification",
+        ) as mock_task,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -468,18 +465,18 @@ async def test_webhook_invoice_payment_failed_sends_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_send_failed.assert_awaited_once_with(
-            uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            4900,
-            "usd",
-            3,
+        mock_task.delay.assert_called_once_with(
+            "payment_failed",
+            "00000000-0000-0000-0000-000000000001",
+            amount_cents=4900,
+            currency="usd",
+            attempt_count=3,
         )
 
 
 @pytest.mark.asyncio
 async def test_webhook_subscription_deleted_sends_cancelled_email(client):
     from contextlib import asynccontextmanager
-    import uuid
 
     event = _make_stripe_event(
         "customer.subscription.deleted",
@@ -506,9 +503,8 @@ async def test_webhook_subscription_deleted_sends_cancelled_email(client):
         patch("dev_health_ops.api.billing.router._process_subscription_event", new_callable=AsyncMock),
         patch("dev_health_ops.api.billing.router._revoke_license", new_callable=AsyncMock),
         patch(
-            "dev_health_ops.api.billing.router.send_subscription_cancelled",
-            new_callable=AsyncMock,
-        ) as mock_send_cancelled,
+            "dev_health_ops.api.billing.router.send_billing_notification",
+        ) as mock_task,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -522,16 +518,16 @@ async def test_webhook_subscription_deleted_sends_cancelled_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_send_cancelled.assert_awaited_once_with(
-            uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            "team",
+        mock_task.delay.assert_called_once_with(
+            "subscription_cancelled",
+            "00000000-0000-0000-0000-000000000001",
+            tier="team",
         )
 
 
 @pytest.mark.asyncio
 async def test_webhook_subscription_updated_sends_changed_email(client):
     from contextlib import asynccontextmanager
-    import uuid
 
     from dev_health_ops.licensing.types import LicenseTier
 
@@ -566,9 +562,8 @@ async def test_webhook_subscription_updated_sends_changed_email(client):
         patch("dev_health_ops.api.billing.router.sign_license", return_value="signed_license"),
         patch("dev_health_ops.api.billing.router.get_tier_from_line_items", return_value=LicenseTier.ENTERPRISE),
         patch(
-            "dev_health_ops.api.billing.router.send_subscription_changed",
-            new_callable=AsyncMock,
-        ) as mock_send_changed,
+            "dev_health_ops.api.billing.router.send_billing_notification",
+        ) as mock_task,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -582,10 +577,11 @@ async def test_webhook_subscription_updated_sends_changed_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        mock_send_changed.assert_awaited_once_with(
-            uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            "team",
-            "enterprise",
+        mock_task.delay.assert_called_once_with(
+            "subscription_changed",
+            "00000000-0000-0000-0000-000000000001",
+            old_tier="team",
+            new_tier="enterprise",
         )
 
 
@@ -625,11 +621,12 @@ async def test_webhook_email_failure_does_not_break_webhook(client):
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
-            "dev_health_ops.api.billing.router.send_invoice_receipt",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("email service down"),
-        ),
+            "dev_health_ops.api.billing.router.send_billing_notification",
+        ) as mock_task,
     ):
+        # Simulate Celery dispatch failure (e.g. Redis down)
+        mock_task.delay.side_effect = RuntimeError("broker unavailable")
+
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
         mock_client_fn.return_value = mock_client

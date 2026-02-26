@@ -2085,6 +2085,85 @@ def health_check(self) -> dict:
     }
 
 
+
+@celery_app.task(bind=True, max_retries=3, queue="webhooks")
+def send_billing_notification(
+    self,
+    email_type: str,
+    org_id: str,
+    amount_cents: int = 0,
+    currency: str = "usd",
+    invoice_url: str = "",
+    attempt_count: int = 1,
+    old_tier: str = "",
+    new_tier: str = "",
+    tier: str = "",
+) -> dict:
+    """Send billing email notification via worker queue.
+
+    Dispatched from billing webhook handlers to decouple email delivery
+    from Stripe webhook response time. Retries with exponential backoff
+    on transient failures (email service errors, DB connection issues).
+
+    Returns silently (no retry) if org has no owner — that is a data
+    condition, not a transient failure.
+
+    Args:
+        email_type: One of invoice_receipt, payment_failed,
+                    subscription_changed, subscription_cancelled
+        org_id: Organization UUID as string
+        amount_cents: Invoice amount in cents (invoice emails)
+        currency: ISO currency code (invoice emails)
+        invoice_url: Hosted invoice URL (invoice_receipt only)
+        attempt_count: Payment retry attempt number (payment_failed only)
+        old_tier: Previous tier name (subscription_changed only)
+        new_tier: New tier name (subscription_changed only)
+        tier: Current tier name (subscription_cancelled only)
+
+    Returns:
+        dict with send status
+    """
+    from dev_health_ops.api.services.billing_emails import (
+        send_invoice_receipt,
+        send_payment_failed,
+        send_subscription_changed,
+        send_subscription_cancelled,
+    )
+
+    dispatch = {
+        "invoice_receipt": lambda oid: send_invoice_receipt(
+            oid, amount_cents, currency, invoice_url
+        ),
+        "payment_failed": lambda oid: send_payment_failed(
+            oid, amount_cents, currency, attempt_count
+        ),
+        "subscription_changed": lambda oid: send_subscription_changed(
+            oid, old_tier, new_tier
+        ),
+        "subscription_cancelled": lambda oid: send_subscription_cancelled(oid, tier),
+    }
+
+    fn = dispatch.get(email_type)
+    if not fn:
+        logger.error("Unknown billing email type: %s", email_type)
+        return {"status": "error", "reason": f"unknown_email_type: {email_type}"}
+
+    try:
+        org_uuid = uuid.UUID(org_id)
+        asyncio.run(fn(org_uuid))
+        return {"status": "sent", "email_type": email_type, "org_id": org_id}
+    except Exception as exc:
+        logger.warning(
+            "Billing email %s failed for org_id=%s (attempt %d/%d): %s",
+            email_type,
+            org_id,
+            self.request.retries + 1,
+            self.max_retries + 1,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+
+
 @celery_app.task(bind=True, max_retries=3, queue="webhooks")
 def process_webhook_event(
     self,

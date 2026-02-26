@@ -96,6 +96,10 @@ Stripe Webhook Event
     ↓
 billing/router.py (handles event, commits DB changes)
     ↓
+Celery task queue (webhooks queue, Redis broker)
+    ↓
+send_billing_notification worker task (max 3 retries, exponential backoff)
+    ↓
 billing_emails.py (looks up org owner, calls email service)
     ↓
 email.py → EmailService → EmailProvider (Resend or Console)
@@ -103,11 +107,26 @@ email.py → EmailService → EmailProvider (Resend or Console)
 Resend API (production) or stdout (development)
 ```
 
-The email dispatch happens **after** database commits in webhook handlers. This ensures:
+Billing email dispatch is **asynchronous via Celery**. The webhook handler enqueues a `send_billing_notification` task on the `webhooks` queue and returns immediately. This ensures:
 
+- Webhook response time is not affected by email delivery latency.
+- Failed emails are retried automatically (up to 3 times with exponential backoff).
 - DB state is always consistent regardless of email delivery success.
-- Email failures are logged but never prevent webhook processing.
 - Stripe always receives a `200 OK` response.
+
+### Worker Requirements
+
+A Celery worker must be running to process billing email tasks:
+
+```bash
+# Start worker with webhooks queue
+dev-hops workers start-worker --queues webhooks
+
+# Or include webhooks in a multi-queue worker
+dev-hops workers start-worker --queues default,webhooks,sync
+```
+
+If the Celery broker (Redis) is unavailable when a webhook is processed, the email dispatch is silently skipped — the webhook still succeeds.
 
 ## Troubleshooting
 

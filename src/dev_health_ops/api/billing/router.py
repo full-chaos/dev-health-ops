@@ -25,12 +25,7 @@ except ModuleNotFoundError:
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.billing.audit_service import BillingAuditService
 from dev_health_ops.api.billing.reconciliation_service import ReconciliationService
-from dev_health_ops.api.services.billing_emails import (
-    send_invoice_receipt,
-    send_payment_failed,
-    send_subscription_cancelled,
-    send_subscription_changed,
-)
+from dev_health_ops.workers.tasks import send_billing_notification
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session, postgres_session_dependency
 from dev_health_ops.models.billing_audit import BillingAuditLog
@@ -272,15 +267,16 @@ async def _handle_invoice_webhook(
                         getattr(invoice_payload, "hosted_invoice_url", "") or ""
                     )
                     try:
-                        await send_invoice_receipt(
-                            org_uuid,
-                            amount_due,
-                            currency,
-                            invoice_url,
+                        send_billing_notification.delay(
+                            "invoice_receipt",
+                            str(org_uuid),
+                            amount_cents=amount_due,
+                            currency=currency,
+                            invoice_url=invoice_url,
                         )
                     except Exception:
                         logger.debug(
-                            "Failed to send invoice receipt email for org_id=%s",
+                            "Failed to enqueue invoice receipt email for org_id=%s",
                             org_id_str,
                         )
                 elif event_type == "invoice.payment_failed":
@@ -288,15 +284,16 @@ async def _handle_invoice_webhook(
                     currency = getattr(invoice_payload, "currency", "usd") or "usd"
                     attempt_count = getattr(invoice_payload, "attempt_count", 1) or 1
                     try:
-                        await send_payment_failed(
-                            org_uuid,
-                            amount_due,
-                            currency,
-                            attempt_count,
+                        send_billing_notification.delay(
+                            "payment_failed",
+                            str(org_uuid),
+                            amount_cents=amount_due,
+                            currency=currency,
+                            attempt_count=attempt_count,
                         )
                     except Exception:
                         logger.debug(
-                            "Failed to send payment failed email for org_id=%s",
+                            "Failed to enqueue payment failed email for org_id=%s",
                             org_id_str,
                         )
 
@@ -398,12 +395,15 @@ async def _handle_subscription_updated(subscription: object) -> None:
     # Send subscription changed email if tier actually changed.
     if old_tier is not None and old_tier != str(tier.value):
         try:
-            await send_subscription_changed(
-                uuid.UUID(org_id), old_tier, str(tier.value)
+            send_billing_notification.delay(
+                "subscription_changed",
+                org_id,
+                old_tier=old_tier,
+                new_tier=str(tier.value),
             )
         except Exception:
             logger.debug(
-                "Failed to send subscription changed email for org_id=%s", org_id
+                "Failed to enqueue subscription changed email for org_id=%s", org_id
             )
 
 
@@ -439,10 +439,14 @@ async def _handle_subscription_deleted(subscription: object) -> None:
             )
 
         try:
-            await send_subscription_cancelled(uuid.UUID(org_id), current_tier)
+            send_billing_notification.delay(
+                "subscription_cancelled",
+                org_id,
+                tier=current_tier,
+            )
         except Exception:
             logger.debug(
-                "Failed to send subscription cancelled email for org_id=%s", org_id
+                "Failed to enqueue subscription cancelled email for org_id=%s", org_id
             )
 
         await _revoke_license(org_id)

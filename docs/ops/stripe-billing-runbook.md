@@ -195,8 +195,10 @@ When billing webhook events are processed, the system automatically sends email 
 
 ### Email Delivery Guarantees
 
-- Emails are sent **after** DB commits — database state is never affected by email failures.
-- All email calls are wrapped in try/except — a failed email delivery will **never** cause the webhook to return an error to Stripe.
+- Emails are dispatched **asynchronously via Celery** on the `webhooks` queue — the webhook handler returns immediately after enqueuing.
+- Failed email deliveries are **retried up to 3 times** with exponential backoff (30s, 60s, 120s).
+- Database state is never affected by email failures — DB commits happen before email dispatch.
+- If the Celery broker (Redis) is unavailable, email dispatch is silently skipped — the webhook still succeeds.
 - If no organization owner is found (missing `org_id` in metadata or no owner-role member), the email is silently skipped with a warning log.
 
 ### Email Provider Configuration

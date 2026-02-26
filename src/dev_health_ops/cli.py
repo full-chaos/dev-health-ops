@@ -13,12 +13,14 @@ from typing import List, Optional
 # Runner and registration modules
 from dev_health_ops.processors import sync as sync_processor
 from dev_health_ops.providers import teams as teams_provider
+from dev_health_ops.api.services.refresh_tokens import cleanup_expired
 from dev_health_ops.fixtures import runner as fixtures_runner
 from dev_health_ops.work_graph import runner as work_graph_runner
 from dev_health_ops.workers import runner as workers_runner
 from dev_health_ops.api import runner as api_runner
 import dev_health_ops.api.billing.cli as billing_cli
 from dev_health_ops.api.admin import cli as admin_cli
+from dev_health_ops.db import get_postgres_session
 from dev_health_ops.metrics import (
     job_work_items,
     job_daily,
@@ -90,6 +92,30 @@ def _resolve_first_org_id(db_url: str | None) -> str | None:
             engine.dispose()
     except Exception:
         return None
+
+
+async def _run_refresh_token_cleanup() -> int:
+    async with get_postgres_session() as db:
+        deleted_count = await cleanup_expired(db)
+        await db.commit()
+    return deleted_count
+
+
+async def _cmd_maintenance_cleanup_tokens(_ns: argparse.Namespace) -> int:
+    deleted_count = await _run_refresh_token_cleanup()
+    logging.getLogger(__name__).info("Deleted %s expired refresh tokens", deleted_count)
+    return 0
+
+
+async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
+    refresh_tokens_deleted = await _run_refresh_token_cleanup()
+    total_deleted = refresh_tokens_deleted
+    logging.getLogger(__name__).info(
+        "Maintenance cleanup complete: refresh_tokens_deleted=%s total_deleted=%s",
+        refresh_tokens_deleted,
+        total_deleted,
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -179,6 +205,23 @@ def build_parser() -> argparse.ArgumentParser:
         dest="workers_command", required=True
     )
     workers_runner.register_commands(workers_subparsers)
+
+    maintenance_parser = sub.add_parser(
+        "maintenance", help="Run maintenance operations."
+    )
+    maintenance_subparsers = maintenance_parser.add_subparsers(
+        dest="maintenance_command", required=True
+    )
+
+    cleanup_tokens_parser = maintenance_subparsers.add_parser(
+        "cleanup-tokens", help="Delete expired refresh tokens."
+    )
+    cleanup_tokens_parser.set_defaults(func=_cmd_maintenance_cleanup_tokens)
+
+    cleanup_all_parser = maintenance_subparsers.add_parser(
+        "cleanup-all", help="Run all maintenance cleanup tasks."
+    )
+    cleanup_all_parser.set_defaults(func=_cmd_maintenance_cleanup_all)
 
     return parser
 

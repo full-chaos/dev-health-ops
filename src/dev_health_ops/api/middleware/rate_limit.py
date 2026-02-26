@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 from fastapi import Request
+from limits.storage import RedisStorage
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -35,7 +37,9 @@ def _extract_login_email(request: Request) -> str:
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
             # Malformed body is expected for non-JSON or non-login requests;
             # fall through to query param / "unknown" fallback for rate-limit keying.
-            logging.getLogger(__name__).debug("Could not parse request body for rate-limit email key")
+            logging.getLogger(__name__).debug(
+                "Could not parse request body for rate-limit email key"
+            )
 
     email_from_query = request.query_params.get("email")
     if email_from_query:
@@ -62,4 +66,13 @@ def get_admin_user_key(request: Request) -> str:
     return f"admin-ip:{ip}"
 
 
-limiter = Limiter(key_func=get_remote_address)
+_REDIS_URL = os.getenv("REDIS_URL")
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
+)
+if _REDIS_URL:
+    _ = RedisStorage
+    logging.getLogger(__name__).info(
+        "Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "..."
+    )

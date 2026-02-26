@@ -180,6 +180,48 @@ curl -X POST "https://<your-domain>/api/v1/billing/audit/<audit-id>/resolve" \
   -d '{"resolution":"manual correction applied after Stripe replay"}'
 ```
 
+## Email Notifications
+
+When billing webhook events are processed, the system automatically sends email notifications to the organization owner. This happens after all database operations complete successfully.
+
+### Emails Sent
+
+| Event | Email | Details |
+|-------|-------|---------|
+| `invoice.paid` | Invoice receipt | Amount, currency, link to hosted invoice |
+| `invoice.payment_failed` | Payment failed alert | Amount, currency, retry attempt count |
+| `customer.subscription.updated` | Subscription changed | Old tier → new tier (only sent when tier actually changes) |
+| `customer.subscription.deleted` | Subscription cancelled | Current tier name |
+
+### Email Delivery Guarantees
+
+- Emails are dispatched **asynchronously via Celery** on the `webhooks` queue — the webhook handler returns immediately after enqueuing.
+- Failed email deliveries are **retried up to 3 times** with exponential backoff (30s, 60s, 120s).
+- Database state is never affected by email failures — DB commits happen before email dispatch.
+- If the Celery broker (Redis) is unavailable, email dispatch is silently skipped — the webhook still succeeds.
+- If no organization owner is found (missing `org_id` in metadata or no owner-role member), the email is silently skipped with a warning log.
+
+### Email Provider Configuration
+
+Billing emails use the same email service as account emails (invites, verification, password reset). Configure via:
+
+```bash
+export EMAIL_PROVIDER="resend"        # or "console" for dev/test
+export EMAIL_API_KEY="re_..."         # Resend API key
+export EMAIL_FROM_ADDRESS="noreply@yourdomain.com"
+```
+
+See [Email Setup](../email-setup.md) for full provider configuration, troubleshooting, and template details.
+
+### Verifying Email Delivery Locally
+
+1. Start the API with `EMAIL_PROVIDER=console` (default) to log emails to stdout.
+2. Forward Stripe events as described in the [Local Workflow](#local-workflow-saas) section.
+3. Trigger an event: `stripe trigger invoice.paid`
+4. Check API logs for the rendered email content.
+
+To test with real email delivery, set `EMAIL_PROVIDER=resend` with a valid API key and from address.
+
 ## CI Workflow
 
 ### Secret handling

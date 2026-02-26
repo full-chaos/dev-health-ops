@@ -25,6 +25,7 @@ except ModuleNotFoundError:
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.billing.audit_service import BillingAuditService
 from dev_health_ops.api.billing.reconciliation_service import ReconciliationService
+from dev_health_ops.workers.tasks import send_billing_notification
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session, postgres_session_dependency
 from dev_health_ops.models.billing_audit import BillingAuditLog
@@ -202,6 +203,8 @@ async def _handle_invoice_webhook(
     invoice_payload: object,
     event_id: str | None,
 ) -> None:
+    pending_email: tuple | None = None
+
     async with get_postgres_session() as db:
         if event_id:
             payload = dict(getattr(invoice_payload, "metadata", {}) or {})
@@ -248,6 +251,56 @@ async def _handle_invoice_webhook(
             await invoice_service.mark_voided(db, invoice.stripe_invoice_id)
 
         await db.commit()
+
+        # Collect email dispatch parameters before leaving the DB session.
+        metadata = getattr(invoice_payload, "metadata", {}) or {}
+        org_id_str = metadata.get("org_id") if isinstance(metadata, dict) else None
+        if org_id_str:
+            try:
+                org_uuid = uuid.UUID(org_id_str)
+            except ValueError:
+                org_uuid = None
+
+            if org_uuid:
+                org_str = str(org_uuid)
+                if event_type == "invoice.paid":
+                    amount_due = getattr(invoice_payload, "amount_due", 0) or 0
+                    currency = getattr(invoice_payload, "currency", "usd") or "usd"
+                    invoice_url = (
+                        getattr(invoice_payload, "hosted_invoice_url", "") or ""
+                    )
+                    pending_email = (
+                        "invoice_receipt",
+                        org_str,
+                        {
+                            "amount_cents": amount_due,
+                            "currency": currency,
+                            "invoice_url": invoice_url,
+                        },
+                    )
+                elif event_type == "invoice.payment_failed":
+                    amount_due = getattr(invoice_payload, "amount_due", 0) or 0
+                    currency = getattr(invoice_payload, "currency", "usd") or "usd"
+                    attempt_count = getattr(invoice_payload, "attempt_count", 1) or 1
+                    pending_email = (
+                        "payment_failed",
+                        org_str,
+                        {
+                            "amount_cents": amount_due,
+                            "currency": currency,
+                            "attempt_count": attempt_count,
+                        },
+                    )
+
+    # Dispatch email notification after DB session is closed.
+    if pending_email:
+        email_type, org_str, kwargs = pending_email
+        try:
+            send_billing_notification.delay(email_type, org_str, **kwargs)
+        except Exception:
+            logger.debug(
+                "Failed to enqueue %s email for org_id=%s", email_type, org_str
+            )
 
 
 async def _handle_checkout_completed(session: object) -> None:
@@ -313,6 +366,23 @@ async def _handle_subscription_updated(subscription: object) -> None:
         )
         return
 
+    # Read current tier BEFORE persisting new one (for change notification).
+    old_tier: str | None = None
+    try:
+        from sqlalchemy import select
+
+        from dev_health_ops.models.users import Organization
+
+        org_uuid = uuid.UUID(org_id)
+        async with get_postgres_session() as db:
+            result = await db.execute(
+                select(Organization.tier).where(Organization.id == org_uuid)
+            )
+            row = result.first()
+            old_tier = str(row.tier) if row and row.tier else None
+    except Exception:
+        logger.debug("Could not read old tier for org_id=%s", org_id)
+
     try:
         private_key = get_private_key()
         license_key = sign_license(private_key, org_id=org_id, tier=tier)
@@ -327,6 +397,20 @@ async def _handle_subscription_updated(subscription: object) -> None:
 
     await _persist_license(org_id, tier, license_key, customer_id)
 
+    # Send subscription changed email if tier actually changed.
+    if old_tier is not None and old_tier != str(tier.value):
+        try:
+            send_billing_notification.delay(
+                "subscription_changed",
+                org_id,
+                old_tier=old_tier,
+                new_tier=str(tier.value),
+            )
+        except Exception:
+            logger.debug(
+                "Failed to enqueue subscription changed email for org_id=%s", org_id
+            )
+
 
 async def _handle_subscription_deleted(subscription: object) -> None:
     metadata = getattr(subscription, "metadata", {})
@@ -339,7 +423,38 @@ async def _handle_subscription_deleted(subscription: object) -> None:
             org_id,
             customer_id,
         )
+
+        # Read current tier before revoking (for cancellation email).
+        current_tier = "unknown"
+        try:
+            from sqlalchemy import select
+
+            from dev_health_ops.models.users import Organization
+
+            org_uuid = uuid.UUID(org_id)
+            async with get_postgres_session() as db:
+                result = await db.execute(
+                    select(Organization.tier).where(Organization.id == org_uuid)
+                )
+                row = result.first()
+                current_tier = str(row.tier) if row and row.tier else "unknown"
+        except Exception:
+            logger.debug(
+                "Could not read tier for org_id=%s before cancellation", org_id
+            )
+
         await _revoke_license(org_id)
+
+        try:
+            send_billing_notification.delay(
+                "subscription_cancelled",
+                org_id,
+                tier=current_tier,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to enqueue subscription cancelled email for org_id=%s", org_id
+            )
     else:
         logger.info(
             "subscription.deleted without org_id metadata, customer=%s", customer_id

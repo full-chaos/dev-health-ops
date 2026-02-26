@@ -22,6 +22,9 @@ nav:
       - Concepts: product/concepts.md
       - Investment Taxonomy: product/investment-taxonomy.md
   - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - Email Setup: email-setup.md
+  - Webhooks: webhooks.md
   - Architecture:
       - Overview: architecture.md
       - Data Pipeline: architecture/data-pipeline.md

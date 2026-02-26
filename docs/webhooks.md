@@ -64,10 +64,17 @@ Stripe webhooks are used for real-time subscription management in SaaS deploymen
 3. Set **Endpoint URL** to `https://your-dev-health-instance.com/api/v1/billing/webhooks/stripe`.
 4. Under **Events to send**, select:
    - `checkout.session.completed`
+   - `customer.subscription.created`
    - `customer.subscription.updated`
    - `customer.subscription.deleted`
-   - `invoice.payment_succeeded`
+   - `invoice.created`
+   - `invoice.updated`
+   - `invoice.finalized`
+   - `invoice.paid`
    - `invoice.payment_failed`
+   - `invoice.voided`
+   - `charge.refunded`
+   - `charge.refund.updated`
 5. Click **Add endpoint**.
 6. Copy the **Signing secret** and set it as `STRIPE_WEBHOOK_SECRET` in your environment.
 
@@ -91,5 +98,18 @@ Stripe webhooks are used for real-time subscription management in SaaS deploymen
 | `LICENSE_PRIVATE_KEY` | Ed25519 private key for signing JWT licenses (base64-encoded) |
 
 > **Note**: Stripe webhooks are only relevant for SaaS deployments. Self-hosted deployments use offline Ed25519 license keys and do not require Stripe configuration.
+
+### Email Notifications
+
+When billing events are processed, the webhook handler sends email notifications to the organization owner:
+
+| Stripe Event | Email Sent | Recipient |
+|-------------|-----------|-----------|
+| `invoice.paid` | Invoice receipt | Org owner |
+| `invoice.payment_failed` | Payment failed alert | Org owner |
+| `customer.subscription.updated` | Subscription changed (only if tier changed) | Org owner |
+| `customer.subscription.deleted` | Subscription cancelled | Org owner |
+
+Email delivery failures are logged but never prevent the webhook from returning a successful response. See [Email Setup](./email-setup.md) for provider configuration and troubleshooting.
 
 For full local/CI/ops guidance (Stripe CLI forwarding, replay/retry, reconciliation, and test cards), see the [Stripe Billing Runbook](./ops/stripe-billing-runbook.md).

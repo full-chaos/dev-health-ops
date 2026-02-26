@@ -81,8 +81,9 @@ async def test_login_without_membership_returns_needs_onboarding(monkeypatch):
     user = _local_user("orgless@example.com", "password123")
     session = FakeSession(
         execute_results=[
-            FakeResult(scalar=user),
-            FakeResult(scalar=None),
+            FakeResult(scalar=user),       # 1) find user by email
+            FakeResult(scalar=None),       # 2) primary org lookup (audit context)
+            FakeResult(scalar=None),       # 3) membership lookup
         ]
     )
 
@@ -118,8 +119,9 @@ async def test_login_with_membership_returns_needs_onboarding_false(monkeypatch)
     membership = SimpleNamespace(org_id=org_id, role="admin")
     session = FakeSession(
         execute_results=[
-            FakeResult(scalar=user),
-            FakeResult(scalar=membership),
+            FakeResult(scalar=user),             # 1) find user by email
+            FakeResult(scalar=org_id),            # 2) primary org lookup (audit context)
+            FakeResult(scalar=membership),        # 3) membership lookup
         ]
     )
 

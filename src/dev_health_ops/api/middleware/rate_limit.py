@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import Request
 from slowapi import Limiter
@@ -32,7 +33,9 @@ def _extract_login_email(request: Request) -> str:
                 if isinstance(email_value, str):
                     return _normalize_email(email_value)
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
-            pass
+            # Malformed body is expected for non-JSON or non-login requests;
+            # fall through to query param / "unknown" fallback for rate-limit keying.
+            logging.getLogger(__name__).debug("Could not parse request body for rate-limit email key")
 
     email_from_query = request.query_params.get("email")
     if email_from_query:

@@ -1462,12 +1462,31 @@ async def set_user_password(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
+    import bcrypt
+
     org_id = _get_org_id_for_non_superuser(current_user)
     svc = UserService(session)
     user = await svc.get_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     await _ensure_user_in_scope(session, user, org_id, current_user)
+
+    admin_user = await svc.get_by_id(current_user.user_id)
+    if not admin_user or not admin_user.password_hash:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin password verification failed",
+        )
+
+    if not bcrypt.checkpw(
+        payload.admin_password.encode("utf-8"),
+        str(admin_user.password_hash).encode("utf-8"),
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin password verification failed",
+        )
+
     try:
         success = await svc.set_password(user_id, payload.password)
     except ValueError as e:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
+from importlib import import_module
 import logging
 import os
 from typing import List, Literal, cast
@@ -319,8 +320,19 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+
+def _rate_limit_handler(request: Request, exc: Exception):
+    if isinstance(exc, RateLimitExceeded):
+        return _rate_limit_exceeded_handler(request, exc)
+    raise exc
+
+
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(
+    RateLimitExceeded,
+    _rate_limit_handler,
+)
 
 _cors_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 _cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
@@ -331,6 +343,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Request-ID"],
+)
+OriginValidationMiddleware = import_module(
+    "dev_health_ops.api.middleware.csrf"
+).OriginValidationMiddleware
+app.add_middleware(
+    OriginValidationMiddleware,
+    allowed_origins=_cors_origins,
+    protected_paths={"/api/v1/auth/register"},
 )
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(OrgIdMiddleware)

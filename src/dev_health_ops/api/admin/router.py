@@ -39,6 +39,7 @@ from dev_health_ops.api.services.users import (
 )
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.api.utils.audit import emit_audit_log
+from dev_health_ops.api.utils.password_policy import validate_password
 from dev_health_ops.models.settings import (
     JobRun,
     ScheduledJob,
@@ -1463,6 +1464,10 @@ async def set_user_password(
     current_user: AuthenticatedUser = Depends(require_admin),
 ) -> dict:
     org_id = _get_org_id_for_non_superuser(current_user)
+    password_violations = validate_password(payload.password)
+    if password_violations:
+        raise HTTPException(status_code=422, detail={"violations": password_violations})
+
     svc = UserService(session)
     user = await svc.get_by_id(user_id)
     if not user:

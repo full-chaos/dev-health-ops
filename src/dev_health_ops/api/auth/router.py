@@ -31,6 +31,7 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_auth_key,
     limiter,
 )
+from dev_health_ops.api.utils.password_policy import validate_password
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.db import get_postgres_session
@@ -269,6 +270,13 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
 
     async with get_postgres_session() as db:
         email_normalized = payload.email.lower().strip()
+        password_violations = validate_password(payload.password)
+        if password_violations:
+            raise HTTPException(
+                status_code=422,
+                detail={"violations": password_violations},
+            )
+
         stmt = select(User).where(func.lower(User.email) == email_normalized)
         result = await db.execute(stmt)
         existing_user = result.scalar_one_or_none()

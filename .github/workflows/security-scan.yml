@@ -39,25 +39,15 @@ jobs:
     continue-on-error: true
     permissions:
       contents: read
+      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Install Gitleaks
-        run: |
-          GITLEAKS_VERSION="8.24.3"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar xz -C /usr/local/bin gitleaks
-
       - name: Run Gitleaks
-        run: |
-          gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --exit-code 0
-
-      - name: Upload Gitleaks results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gitleaks-results
-          path: gitleaks.sarif
-          if-no-files-found: warn
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

@@ -8,13 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  pick-runner:
-    uses: ./.github/workflows/_pick-runner.yml
-    secrets: inherit
-
   build-and-deploy:
-    needs: [pick-runner]
-    runs-on: ${{ needs.pick-runner.outputs.runner }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6

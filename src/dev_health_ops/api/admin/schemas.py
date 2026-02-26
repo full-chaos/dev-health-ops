@@ -440,6 +440,26 @@ class MembershipUpdateRole(BaseModel):
     role: str = Field(..., min_length=1)
 
 
+class OrgInviteCreate(BaseModel):
+    email: str = Field(..., min_length=3)
+    role: str = "member"
+
+
+class OrgInviteResponse(BaseModel):
+    id: str
+    org_id: str
+    email: str
+    role: str
+    invited_by_id: Optional[str]
+    status: str
+    expires_at: datetime
+    accepted_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class OwnershipTransfer(BaseModel):
     new_owner_user_id: str = Field(..., min_length=1)
 

@@ -23,6 +23,10 @@ from dev_health_ops.api.services.refresh_tokens import (
     revoke_token,
     rotate_token,
 )
+from dev_health_ops.api.services.invites import (
+    accept_invite as accept_org_invite,
+    validate_invite as validate_org_invite,
+)
 from dev_health_ops.api.services.login_attempts import (
     check_lockout,
     clear_attempts,
@@ -134,6 +138,20 @@ class OnboardRequest(BaseModel):
 
 
 class OnboardResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    org_id: str
+    org_name: str
+    role: str
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+
+
+class AcceptInviteResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
@@ -839,6 +857,43 @@ async def _resolve_login_audit_org_id(
     return membership_result.scalar_one_or_none()
 
 
+async def _issue_membership_tokens(
+    db,
+    request: Request,
+    db_user: User,
+    membership: Membership,
+):
+    auth_service = get_auth_service()
+    token_pair = auth_service.create_token_pair(
+        user_id=str(db_user.id),
+        email=str(db_user.email),
+        org_id=str(membership.org_id),
+        role=str(membership.role),
+        is_superuser=bool(db_user.is_superuser),
+        username=str(db_user.username) if db_user.username is not None else None,
+        full_name=str(db_user.full_name) if db_user.full_name is not None else None,
+    )
+
+    refresh_payload = auth_service.validate_token(
+        token_pair.refresh_token, token_type="refresh"
+    )
+    if refresh_payload and refresh_payload.get("jti"):
+        expires_at = _expiry_to_utc(refresh_payload.get("exp"))
+        if expires_at is not None:
+            await create_refresh_token_record(
+                db=db,
+                user_id=str(db_user.id),
+                org_id=str(membership.org_id),
+                token_hash=str(refresh_payload["jti"]),
+                family_id=str(refresh_payload.get("family_id") or uuid_mod.uuid4()),
+                expires_at=expires_at,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+
+    return token_pair
+
+
 def _extract_unverified_org_and_subject(
     token: str,
 ) -> tuple[uuid_mod.UUID | None, str | None]:
@@ -850,6 +905,71 @@ def _extract_unverified_org_and_subject(
         return None, None
 
     return _parse_uuid(claims.get("org_id")), claims.get("sub")
+
+
+@router.post("/accept-invite", response_model=AcceptInviteResponse)
+async def accept_invite(
+    payload: AcceptInviteRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    request: Request,
+) -> AcceptInviteResponse:
+    async with get_postgres_session() as db:
+        try:
+            user_uuid = uuid_mod.UUID(user.user_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=401, detail="Invalid user identity"
+            ) from exc
+
+        user_result = await db.execute(select(User).where(User.id == user_uuid))
+        db_user = user_result.scalar_one_or_none()
+        if db_user is None:
+            raise HTTPException(status_code=401, detail="User not found")
+
+        invite = await validate_org_invite(db, payload.token)
+        if invite is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired invite")
+
+        org_result = await db.execute(
+            select(Organization).where(Organization.id == invite.org_id)
+        )
+        org = org_result.scalar_one_or_none()
+        if org is None:
+            raise HTTPException(status_code=404, detail="Organization not found")
+
+        try:
+            membership = await accept_org_invite(db, invite, db_user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        emit_audit_log(
+            db,
+            org_id=invite.org_id,
+            action=AuditAction.MEMBER_JOINED,
+            resource_type=AuditResourceType.MEMBERSHIP,
+            resource_id=str(membership.id),
+            user_id=db_user.id,
+            description="Invite accepted",
+            changes={
+                "invite_id": str(invite.id),
+                "user_id": str(db_user.id),
+                "role": membership.role,
+            },
+            request=request,
+        )
+
+        await db.commit()
+        token_pair = await _issue_membership_tokens(db, request, db_user, membership)
+
+        return AcceptInviteResponse(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+            token_type=token_pair.token_type,
+            expires_in=token_pair.expires_in,
+            org_id=str(org.id),
+            org_name=str(org.name),
+            role=str(membership.role),
+        )
 
 
 @router.post("/onboard", response_model=OnboardResponse)
@@ -880,9 +1000,54 @@ async def onboard(
             raise HTTPException(status_code=400, detail="Already onboarded")
 
         if payload.action == "join_org":
-            raise HTTPException(
-                status_code=501,
-                detail="Invite-based joining not yet implemented",
+            if not payload.invite_code:
+                raise HTTPException(status_code=400, detail="invite_code is required")
+
+            invite = await validate_org_invite(db, payload.invite_code)
+            if invite is None:
+                raise HTTPException(status_code=400, detail="Invalid or expired invite")
+
+            org_result = await db.execute(
+                select(Organization).where(Organization.id == invite.org_id)
+            )
+            org = org_result.scalar_one_or_none()
+            if org is None:
+                raise HTTPException(status_code=404, detail="Organization not found")
+
+            try:
+                membership = await accept_org_invite(db, invite, db_user.id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            emit_audit_log(
+                db,
+                org_id=org.id,
+                action=AuditAction.MEMBER_JOINED,
+                resource_type=AuditResourceType.MEMBERSHIP,
+                resource_id=str(membership.id),
+                user_id=db_user.id,
+                description="Invite accepted during onboarding",
+                changes={
+                    "invite_id": str(invite.id),
+                    "user_id": str(db_user.id),
+                    "role": membership.role,
+                },
+                request=request,
+            )
+
+            await db.commit()
+            token_pair = await _issue_membership_tokens(
+                db, request, db_user, membership
+            )
+
+            return OnboardResponse(
+                access_token=token_pair.access_token,
+                refresh_token=token_pair.refresh_token,
+                token_type=token_pair.token_type,
+                expires_in=token_pair.expires_in,
+                org_id=str(org.id),
+                org_name=str(org.name),
+                role=str(membership.role),
             )
 
         if payload.action != "create_org":
@@ -925,33 +1090,7 @@ async def onboard(
 
         await db.commit()
 
-        auth_service = get_auth_service()
-        token_pair = auth_service.create_token_pair(
-            user_id=str(db_user.id),
-            email=str(db_user.email),
-            org_id=str(org.id),
-            role="owner",
-            is_superuser=bool(db_user.is_superuser),
-            username=str(db_user.username) if db_user.username is not None else None,
-            full_name=str(db_user.full_name) if db_user.full_name is not None else None,
-        )
-
-        refresh_payload = auth_service.validate_token(
-            token_pair.refresh_token, token_type="refresh"
-        )
-        if refresh_payload and refresh_payload.get("jti"):
-            expires_at = _expiry_to_utc(refresh_payload.get("exp"))
-            if expires_at is not None:
-                await create_refresh_token_record(
-                    db=db,
-                    user_id=str(db_user.id),
-                    org_id=str(org.id),
-                    token_hash=str(refresh_payload["jti"]),
-                    family_id=str(refresh_payload.get("family_id") or uuid_mod.uuid4()),
-                    expires_at=expires_at,
-                    ip_address=request.client.host if request.client else None,
-                    user_agent=request.headers.get("user-agent"),
-                )
+        token_pair = await _issue_membership_tokens(db, request, db_user, membership)
 
         return OnboardResponse(
             access_token=token_pair.access_token,

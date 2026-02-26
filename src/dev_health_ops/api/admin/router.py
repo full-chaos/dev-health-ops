@@ -37,6 +37,7 @@ from dev_health_ops.api.services.users import (
     OrganizationService,
     UserService,
 )
+from dev_health_ops.api.services.invites import create_invite, send_invite_email
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.password_policy import validate_password
@@ -79,6 +80,8 @@ from .schemas import (
     IPCheckRequest,
     IPCheckResponse,
     MembershipCreate,
+    OrgInviteCreate,
+    OrgInviteResponse,
     MembershipResponse,
     MembershipUpdateRole,
     OrganizationCreate,
@@ -1953,6 +1956,97 @@ async def add_member(
         joined_at=membership.joined_at,
         created_at=membership.created_at,
         updated_at=membership.updated_at,
+    )
+
+
+@router.post(
+    "/orgs/{org_id}/invites", response_model=OrgInviteResponse, status_code=201
+)
+@limiter.limit("10/hour", key_func=get_admin_user_key)
+async def create_org_invite(
+    org_id: str,
+    payload: OrgInviteCreate,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_admin),
+) -> OrgInviteResponse:
+    await _ensure_org_admin_access(session, org_id, current_user)
+
+    org_uuid = uuid.UUID(org_id)
+    try:
+        invited_by_id = uuid.UUID(current_user.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid user identity") from exc
+
+    org_result = await session.execute(
+        select(Organization.id, Organization.name).where(Organization.id == org_uuid)
+    )
+    org_row = org_result.one_or_none()
+    if org_row is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    inviter_result = await session.execute(
+        select(User.full_name, User.email).where(User.id == invited_by_id)
+    )
+    inviter_row = inviter_result.one_or_none()
+    inviter_name = (
+        str(inviter_row.full_name)
+        if inviter_row is not None and inviter_row.full_name
+        else (
+            str(inviter_row.email)
+            if inviter_row is not None and inviter_row.email
+            else current_user.email
+        )
+    )
+
+    try:
+        invite, token = await create_invite(
+            db=session,
+            org_id=org_uuid,
+            email=payload.email,
+            role=payload.role,
+            invited_by_id=invited_by_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    emit_audit_log(
+        session,
+        org_id=org_uuid,
+        action=AuditAction.MEMBER_INVITED,
+        resource_type=AuditResourceType.MEMBERSHIP,
+        resource_id=str(invite.id),
+        user_id=invited_by_id,
+        description="Organization invite created",
+        changes={
+            "email": invite.email,
+            "role": invite.role,
+            "status": invite.status,
+        },
+        request=request,
+    )
+
+    try:
+        await send_invite_email(
+            to_email=invite.email,
+            org_name=str(org_row.name),
+            inviter_name=inviter_name,
+            token=token,
+        )
+    except Exception:
+        logger.exception("Failed to send invite email to %s", invite.email)
+
+    return OrgInviteResponse(
+        id=str(invite.id),
+        org_id=str(invite.org_id),
+        email=str(invite.email),
+        role=str(invite.role),
+        invited_by_id=str(invite.invited_by_id) if invite.invited_by_id else None,
+        status=str(invite.status),
+        expires_at=invite.expires_at,
+        accepted_at=invite.accepted_at,
+        created_at=invite.created_at,
+        updated_at=invite.updated_at,
     )
 
 

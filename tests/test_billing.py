@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -346,6 +346,302 @@ async def test_entitlements_org_endpoint_removed(client):
     assert resp.status_code == 200
     body = resp.json()
     assert "tier" in body
+
+
+
+# ---------------------------------------------------------------------------
+# Webhook -> email integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_webhook_invoice_paid_sends_receipt_email(client):
+    from contextlib import asynccontextmanager
+    import uuid
+
+    event = _make_stripe_event(
+        "invoice.paid",
+        {
+            "metadata": {"org_id": "00000000-0000-0000-0000-000000000001"},
+            "amount_due": 4900,
+            "currency": "usd",
+            "hosted_invoice_url": "https://invoice.stripe.com/i/test",
+        },
+    )
+    event.id = "evt_test_123"
+
+    mock_db = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+
+    @asynccontextmanager
+    async def mock_session():
+        yield mock_db
+
+    mock_inv_svc = MagicMock()
+    mock_inv_svc.is_duplicate_event = AsyncMock(return_value=False)
+    mock_invoice = MagicMock(id="inv_test", stripe_invoice_id="in_test", status="paid")
+    mock_inv_svc.upsert_invoice = AsyncMock(return_value=mock_invoice)
+    mock_inv_svc.upsert_line_items = AsyncMock()
+    mock_inv_svc.mark_paid = AsyncMock()
+
+    with (
+        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
+        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
+        patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
+        patch(
+            "dev_health_ops.api.billing.router.send_invoice_receipt",
+            new_callable=AsyncMock,
+        ) as mock_send_receipt,
+    ):
+        mock_client = MagicMock()
+        mock_client.construct_event.return_value = event
+        mock_client_fn.return_value = mock_client
+
+        resp = await client.post(
+            "/api/v1/billing/webhooks/stripe",
+            content=b"{}",
+            headers={"stripe-signature": "valid"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        mock_send_receipt.assert_awaited_once_with(
+            uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            4900,
+            "usd",
+            "https://invoice.stripe.com/i/test",
+        )
+
+
+@pytest.mark.asyncio
+async def test_webhook_invoice_payment_failed_sends_email(client):
+    from contextlib import asynccontextmanager
+    import uuid
+
+    event = _make_stripe_event(
+        "invoice.payment_failed",
+        {
+            "metadata": {"org_id": "00000000-0000-0000-0000-000000000001"},
+            "amount_due": 4900,
+            "currency": "usd",
+            "attempt_count": 3,
+        },
+    )
+    event.id = "evt_test_123"
+
+    mock_db = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+
+    @asynccontextmanager
+    async def mock_session():
+        yield mock_db
+
+    mock_inv_svc = MagicMock()
+    mock_inv_svc.is_duplicate_event = AsyncMock(return_value=False)
+    mock_invoice = MagicMock(id="inv_test", stripe_invoice_id="in_test", status="open")
+    mock_inv_svc.upsert_invoice = AsyncMock(return_value=mock_invoice)
+    mock_inv_svc.upsert_line_items = AsyncMock()
+    mock_inv_svc.mark_paid = AsyncMock()
+
+    with (
+        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
+        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
+        patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
+        patch(
+            "dev_health_ops.api.billing.router.send_payment_failed",
+            new_callable=AsyncMock,
+        ) as mock_send_failed,
+    ):
+        mock_client = MagicMock()
+        mock_client.construct_event.return_value = event
+        mock_client_fn.return_value = mock_client
+
+        resp = await client.post(
+            "/api/v1/billing/webhooks/stripe",
+            content=b"{}",
+            headers={"stripe-signature": "valid"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        mock_send_failed.assert_awaited_once_with(
+            uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            4900,
+            "usd",
+            3,
+        )
+
+
+@pytest.mark.asyncio
+async def test_webhook_subscription_deleted_sends_cancelled_email(client):
+    from contextlib import asynccontextmanager
+    import uuid
+
+    event = _make_stripe_event(
+        "customer.subscription.deleted",
+        {
+            "metadata": {"org_id": "00000000-0000-0000-0000-000000000001"},
+            "customer": "cus_test",
+        },
+    )
+
+    mock_result = MagicMock()
+    mock_result.first.return_value = SimpleNamespace(tier="team")
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    @asynccontextmanager
+    async def mock_session():
+        yield mock_db
+
+    with (
+        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
+        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
+        patch("dev_health_ops.api.billing.router._process_subscription_event", new_callable=AsyncMock),
+        patch("dev_health_ops.api.billing.router._revoke_license", new_callable=AsyncMock),
+        patch(
+            "dev_health_ops.api.billing.router.send_subscription_cancelled",
+            new_callable=AsyncMock,
+        ) as mock_send_cancelled,
+    ):
+        mock_client = MagicMock()
+        mock_client.construct_event.return_value = event
+        mock_client_fn.return_value = mock_client
+
+        resp = await client.post(
+            "/api/v1/billing/webhooks/stripe",
+            content=b"{}",
+            headers={"stripe-signature": "valid"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        mock_send_cancelled.assert_awaited_once_with(
+            uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            "team",
+        )
+
+
+@pytest.mark.asyncio
+async def test_webhook_subscription_updated_sends_changed_email(client):
+    from contextlib import asynccontextmanager
+    import uuid
+
+    from dev_health_ops.licensing.types import LicenseTier
+
+    event = _make_stripe_event(
+        "customer.subscription.updated",
+        {
+            "metadata": {"org_id": "00000000-0000-0000-0000-000000000001"},
+            "customer": "cus_test",
+            "items": SimpleNamespace(
+                data=[SimpleNamespace(price=SimpleNamespace(id="price_enterprise_123"))]
+            ),
+        },
+    )
+
+    mock_result = MagicMock()
+    mock_result.first.return_value = SimpleNamespace(tier="team")
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    @asynccontextmanager
+    async def mock_session():
+        yield mock_db
+
+    with (
+        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
+        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
+        patch("dev_health_ops.api.billing.router._process_subscription_event", new_callable=AsyncMock),
+        patch("dev_health_ops.api.billing.router._persist_license", new_callable=AsyncMock),
+        patch("dev_health_ops.api.billing.router.get_private_key", return_value="test_private_key"),
+        patch("dev_health_ops.api.billing.router.sign_license", return_value="signed_license"),
+        patch("dev_health_ops.api.billing.router.get_tier_from_line_items", return_value=LicenseTier.ENTERPRISE),
+        patch(
+            "dev_health_ops.api.billing.router.send_subscription_changed",
+            new_callable=AsyncMock,
+        ) as mock_send_changed,
+    ):
+        mock_client = MagicMock()
+        mock_client.construct_event.return_value = event
+        mock_client_fn.return_value = mock_client
+
+        resp = await client.post(
+            "/api/v1/billing/webhooks/stripe",
+            content=b"{}",
+            headers={"stripe-signature": "valid"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        mock_send_changed.assert_awaited_once_with(
+            uuid.UUID("00000000-0000-0000-0000-000000000001"),
+            "team",
+            "enterprise",
+        )
+
+
+@pytest.mark.asyncio
+async def test_webhook_email_failure_does_not_break_webhook(client):
+    from contextlib import asynccontextmanager
+
+    event = _make_stripe_event(
+        "invoice.paid",
+        {
+            "metadata": {"org_id": "00000000-0000-0000-0000-000000000001"},
+            "amount_due": 4900,
+            "currency": "usd",
+            "hosted_invoice_url": "https://invoice.stripe.com/i/test",
+        },
+    )
+    event.id = "evt_test_123"
+
+    mock_db = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+
+    @asynccontextmanager
+    async def mock_session():
+        yield mock_db
+
+    mock_inv_svc = MagicMock()
+    mock_inv_svc.is_duplicate_event = AsyncMock(return_value=False)
+    mock_invoice = MagicMock(id="inv_test", stripe_invoice_id="in_test", status="paid")
+    mock_inv_svc.upsert_invoice = AsyncMock(return_value=mock_invoice)
+    mock_inv_svc.upsert_line_items = AsyncMock()
+    mock_inv_svc.mark_paid = AsyncMock()
+
+    with (
+        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
+        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
+        patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
+        patch(
+            "dev_health_ops.api.billing.router.send_invoice_receipt",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("email service down"),
+        ),
+    ):
+        mock_client = MagicMock()
+        mock_client.construct_event.return_value = event
+        mock_client_fn.return_value = mock_client
+
+        resp = await client.post(
+            "/api/v1/billing/webhooks/stripe",
+            content=b"{}",
+            headers={"stripe-signature": "valid"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

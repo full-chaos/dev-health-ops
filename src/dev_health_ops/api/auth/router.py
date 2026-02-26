@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 import uuid as uuid_mod
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func, select
 
@@ -61,6 +62,14 @@ class RegisterResponse(BaseModel):
     message: str
     user_id: str
     org_id: str
+
+
+class VerifyEmailResponse(BaseModel):
+    message: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
 
 
 class LoginRequest(BaseModel):
@@ -267,6 +276,15 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
     import bcrypt
     from datetime import datetime, timezone
 
+    email_verification_service = importlib.import_module(
+        "dev_health_ops.api.services.email_verification"
+    )
+    create_verification_token = getattr(
+        email_verification_service,
+        "create_email_verification_token",
+    )
+    send_verification = getattr(email_verification_service, "send_verification_email")
+
     async with get_postgres_session() as db:
         email_normalized = payload.email.lower().strip()
         stmt = select(User).where(func.lower(User.email) == email_normalized)
@@ -344,7 +362,21 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
             request=request,
         )
 
+        verification_token = await create_verification_token(db, user.id)
+
         await db.commit()
+
+        try:
+            await send_verification(
+                to_email=str(user.email),
+                full_name=str(user.full_name) if user.full_name is not None else None,
+                token=verification_token,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send verification email for %s",
+                sanitize_for_log(payload.email),
+            )
 
         logger.info("User registered: %s", sanitize_for_log(payload.email))
 
@@ -353,6 +385,68 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
             user_id=str(user.id),
             org_id=str(org.id),
         )
+
+
+@router.get("/verify", response_model=VerifyEmailResponse)
+async def verify_email(
+    token: Annotated[str, Query(min_length=1)],
+) -> VerifyEmailResponse:
+    email_verification_service = importlib.import_module(
+        "dev_health_ops.api.services.email_verification"
+    )
+    verify_token = getattr(email_verification_service, "verify_email_token")
+
+    async with get_postgres_session() as db:
+        user = await verify_token(db, token)
+        if user is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired token")
+        await db.commit()
+
+    return VerifyEmailResponse(message="Email verification successful")
+
+
+@router.post("/resend-verification", response_model=VerifyEmailResponse)
+@limiter.limit(AUTH_REGISTER_LIMIT, key_func=get_auth_key)
+async def resend_verification_email(
+    payload: ResendVerificationRequest,
+    request: Request,
+) -> VerifyEmailResponse:
+    email_verification_service = importlib.import_module(
+        "dev_health_ops.api.services.email_verification"
+    )
+    create_verification_token = getattr(
+        email_verification_service,
+        "create_email_verification_token",
+    )
+    send_verification = getattr(email_verification_service, "send_verification_email")
+
+    generic_response = VerifyEmailResponse(
+        message="If the account exists, a verification email has been sent"
+    )
+    async with get_postgres_session() as db:
+        email_normalized = payload.email.lower().strip()
+        result = await db.execute(
+            select(User).where(func.lower(User.email) == email_normalized)
+        )
+        user = result.scalar_one_or_none()
+        if user is None or bool(getattr(user, "is_verified", False)):
+            return generic_response
+
+        verification_token = await create_verification_token(db, user.id)
+        await db.commit()
+
+        try:
+            await send_verification(
+                to_email=str(user.email),
+                full_name=str(user.full_name) if user.full_name is not None else None,
+                token=verification_token,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to resend verification email for %s",
+                sanitize_for_log(payload.email),
+            )
+        return generic_response
 
 
 @router.post("/login", response_model=LoginResponse)

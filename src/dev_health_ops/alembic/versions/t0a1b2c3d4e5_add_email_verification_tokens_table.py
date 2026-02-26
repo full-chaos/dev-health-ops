@@ -1,0 +1,75 @@
+"""Add email_verification_tokens table.
+
+Revision ID: t0a1b2c3d4e5
+Revises: s9n0o1p2q3r4
+Create Date: 2026-02-26
+"""
+
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import UUID
+
+
+revision: str = "t0a1b2c3d4e5"
+down_revision: Union[str, None] = "s9n0o1p2q3r4"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "email_verification_tokens",
+        sa.Column("id", UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "user_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("token_hash", sa.Text(), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.UniqueConstraint(
+            "token_hash",
+            name="uq_email_verification_tokens_token_hash",
+        ),
+    )
+
+    op.create_index(
+        "ix_email_verification_tokens_user_id",
+        "email_verification_tokens",
+        ["user_id"],
+    )
+    op.create_index(
+        "ix_email_verification_tokens_token_hash",
+        "email_verification_tokens",
+        ["token_hash"],
+    )
+    op.create_index(
+        "ix_email_verification_tokens_user_expires",
+        "email_verification_tokens",
+        ["user_id", "expires_at"],
+    )
+
+
+def downgrade() -> None:
+    op.drop_index(
+        "ix_email_verification_tokens_user_expires",
+        table_name="email_verification_tokens",
+    )
+    op.drop_index(
+        "ix_email_verification_tokens_token_hash",
+        table_name="email_verification_tokens",
+    )
+    op.drop_index(
+        "ix_email_verification_tokens_user_id",
+        table_name="email_verification_tokens",
+    )
+    op.drop_table("email_verification_tokens")

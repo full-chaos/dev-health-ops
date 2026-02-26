@@ -44,6 +44,8 @@ def get_current_org_id() -> str | None:
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60
 JWT_REFRESH_TOKEN_EXPIRE_DAYS = 7
+JWT_ISSUER = os.getenv("JWT_ISSUER", "dev-health-ops")
+JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "dev-health-api")
 
 
 def _get_jwt_secret() -> str:
@@ -90,6 +92,17 @@ class AuthService:
 
     def __init__(self, secret_key: str | None = None):
         self.secret_key = secret_key or _get_jwt_secret()
+        self.issuer = JWT_ISSUER
+        self.audience = JWT_AUDIENCE
+
+        # Key rotation strategy (HS256 shared-secret):
+        # 1. Generate a new secret and set it as JWT_SECRET_KEY.
+        # 2. Deploy after reducing access/refresh TTLs temporarily, if desired.
+        # 3. Keep old service instances alive only for a bounded grace window.
+        # 4. After the grace window, retire old instances so old key validation ends.
+        #
+        # This service signs and validates with one active key from JWT_SECRET_KEY.
+        # Rotation is performed operationally by coordinated rollout + key replacement.
 
     def create_access_token(
         self,
@@ -115,6 +128,8 @@ class AuthService:
             "role": role,
             "is_superuser": is_superuser,
             "type": "access",
+            "iss": self.issuer,
+            "aud": self.audience,
             "exp": expire,
             "iat": datetime.now(timezone.utc),
             "jti": str(uuid.uuid4()),
@@ -145,6 +160,8 @@ class AuthService:
             "org_id": org_id,
             "family_id": family_id or str(uuid.uuid4()),
             "type": "refresh",
+            "iss": self.issuer,
+            "aud": self.audience,
             "exp": expire,
             "iat": datetime.now(timezone.utc),
             "jti": str(uuid.uuid4()),
@@ -180,11 +197,40 @@ class AuthService:
     ) -> dict[str, Any] | None:
         """Validate a JWT token and return its payload."""
         try:
+            unverified_payload = jwt.decode(
+                token,
+                options={
+                    "verify_signature": False,
+                    "verify_exp": False,
+                    "verify_nbf": False,
+                    "verify_iat": False,
+                    "verify_aud": False,
+                    "verify_iss": False,
+                },
+                algorithms=[JWT_ALGORITHM],
+            )
+
+            has_audience = "aud" in unverified_payload
+            has_issuer = "iss" in unverified_payload
+
+            decode_kwargs: dict[str, Any] = {
+                "key": self.secret_key,
+                "algorithms": [JWT_ALGORITHM],
+                "options": {
+                    "require": ["exp", "sub", "type"],
+                    "verify_aud": has_audience,
+                    "verify_iss": has_issuer,
+                },
+            }
+
+            if has_audience:
+                decode_kwargs["audience"] = self.audience
+            if has_issuer:
+                decode_kwargs["issuer"] = self.issuer
+
             payload = jwt.decode(
                 token,
-                self.secret_key,
-                algorithms=[JWT_ALGORITHM],
-                options={"require": ["exp", "sub", "type"]},
+                **decode_kwargs,
             )
 
             if payload.get("type") != token_type:

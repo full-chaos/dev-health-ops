@@ -22,6 +22,12 @@ from dev_health_ops.api.services.refresh_tokens import (
     revoke_token,
     rotate_token,
 )
+from dev_health_ops.api.services.login_attempts import (
+    check_lockout,
+    clear_attempts,
+    get_lockout_remaining_seconds,
+    record_failed_attempt,
+)
 from dev_health_ops.api.middleware.rate_limit import (
     AUTH_LOGIN_IP_LIMIT,
     AUTH_LOGIN_LIMIT,
@@ -376,11 +382,41 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
     from datetime import datetime, timezone
 
     async with get_postgres_session() as db:
-        # Find user by email
         email_normalized = payload.email.lower().strip()
         stmt = select(User).where(func.lower(User.email) == email_normalized)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
+
+        if await check_lockout(db, email_normalized):
+            retry_after_seconds = await get_lockout_remaining_seconds(
+                db, email_normalized
+            )
+            if retry_after_seconds <= 0:
+                retry_after_seconds = 1
+
+            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
+            if failure_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=failure_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=email_normalized,
+                    user_id=user.id if user is not None else None,
+                    description="Login failed: account locked",
+                    changes={"email": email_normalized},
+                    request=request,
+                    status="failure",
+                    error_message="Account temporarily locked due to failed login attempts",
+                )
+
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "message": "Too many failed login attempts. Please try again later.",
+                    "retry_after_seconds": retry_after_seconds,
+                },
+            )
 
         primary_org_id: uuid_mod.UUID | None = None
         if user is not None:
@@ -390,6 +426,7 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
             primary_org_id = primary_org_result.scalar_one_or_none()
 
         if not user:
+            await record_failed_attempt(db, email_normalized)
             failure_org_id = await _resolve_login_audit_org_id(db, None, payload.org_id)
             if failure_org_id is not None:
                 emit_audit_log(
@@ -411,6 +448,7 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         if user.is_active is not True:
+            await record_failed_attempt(db, email_normalized)
             failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
             if failure_org_id is not None:
                 emit_audit_log(
@@ -432,6 +470,7 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
             str(user.password_hash) if user.password_hash is not None else ""
         )
         if not password_hash:
+            await record_failed_attempt(db, email_normalized)
             failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
             if failure_org_id is not None:
                 emit_audit_log(
@@ -454,6 +493,7 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
         if not bcrypt.checkpw(
             payload.password.encode("utf-8"), password_hash.encode("utf-8")
         ):
+            await record_failed_attempt(db, email_normalized)
             failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
             if failure_org_id is not None:
                 emit_audit_log(
@@ -472,6 +512,8 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
                 "Invalid password for user: %s", sanitize_for_log(payload.email)
             )
             raise HTTPException(status_code=401, detail="Invalid credentials")
+
+        await clear_attempts(db, email_normalized)
 
         # Get user's membership/org
         membership_stmt = select(Membership).where(Membership.user_id == user.id)

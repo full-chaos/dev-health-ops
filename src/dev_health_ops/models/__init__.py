@@ -1,6 +1,7 @@
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
 from .users import (
     AuthProvider,
+    LoginAttempt,
     MemberRole,
     Membership,
     Organization,
@@ -94,6 +95,7 @@ __all__ = [
     "JobRun",
     "JobRunStatus",
     "JobStatus",
+    "LoginAttempt",
     "MemberRole",
     "Membership",
     "MetricCheckpoint",

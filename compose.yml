@@ -87,6 +87,10 @@ services:
       STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
       STRIPE_PRICE_ID_ENTERPRISE: ${STRIPE_PRICE_ID_ENTERPRISE:-}
       LICENSE_PRIVATE_KEY: ${LICENSE_PRIVATE_KEY:-}
+      # Email (Resend)
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
     depends_on:
       postgres:
         condition: service_healthy
@@ -151,11 +155,15 @@ services:
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: worker
-    command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync
+    command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync,webhooks
     environment:
       <<: *env
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Email (Resend) — worker sends billing emails via Celery task
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
     depends_on:
       redis:
         condition: service_healthy

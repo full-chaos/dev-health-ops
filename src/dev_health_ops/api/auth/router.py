@@ -23,6 +23,12 @@ from dev_health_ops.api.services.refresh_tokens import (
     revoke_token,
     rotate_token,
 )
+from dev_health_ops.api.services.login_attempts import (
+    check_lockout,
+    clear_attempts,
+    get_lockout_remaining_seconds,
+    record_failed_attempt,
+)
 from dev_health_ops.api.middleware.rate_limit import (
     AUTH_LOGIN_IP_LIMIT,
     AUTH_LOGIN_LIMIT,
@@ -32,6 +38,7 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_auth_key,
     limiter,
 )
+from dev_health_ops.api.utils.password_policy import validate_password
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.db import get_postgres_session
@@ -39,6 +46,7 @@ from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.users import Membership, Organization, User
 
 logger = logging.getLogger(__name__)
+DUMMY_PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEeO4x1n4Q4M4WQ0uGAaHo9dZYkTfLZNV6G"
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -296,6 +304,13 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
 
     async with get_postgres_session() as db:
         email_normalized = payload.email.lower().strip()
+        password_violations = validate_password(payload.password)
+        if password_violations:
+            raise HTTPException(
+                status_code=422,
+                detail={"violations": password_violations},
+            )
+
         stmt = select(User).where(func.lower(User.email) == email_normalized)
         result = await db.execute(stmt)
         existing_user = result.scalar_one_or_none()
@@ -528,11 +543,41 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
     from datetime import datetime, timezone
 
     async with get_postgres_session() as db:
-        # Find user by email
         email_normalized = payload.email.lower().strip()
         stmt = select(User).where(func.lower(User.email) == email_normalized)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
+
+        if await check_lockout(db, email_normalized):
+            retry_after_seconds = await get_lockout_remaining_seconds(
+                db, email_normalized
+            )
+            if retry_after_seconds <= 0:
+                retry_after_seconds = 1
+
+            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
+            if failure_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=failure_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=email_normalized,
+                    user_id=user.id if user is not None else None,
+                    description="Login failed: account locked",
+                    changes={"email": email_normalized},
+                    request=request,
+                    status="failure",
+                    error_message="Account temporarily locked due to failed login attempts",
+                )
+
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "message": "Too many failed login attempts. Please try again later.",
+                    "retry_after_seconds": retry_after_seconds,
+                },
+            )
 
         primary_org_id: uuid_mod.UUID | None = None
         if user is not None:
@@ -541,89 +586,76 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
             )
             primary_org_id = primary_org_result.scalar_one_or_none()
 
-        if not user:
-            failure_org_id = await _resolve_login_audit_org_id(db, None, payload.org_id)
+        hash_for_timing_check = DUMMY_PASSWORD_HASH
+        if (
+            user is not None
+            and user.is_active is True
+            and user.password_hash is not None
+        ):
+            hash_for_timing_check = str(user.password_hash)
+
+        try:
+            password_matches = bcrypt.checkpw(
+                payload.password.encode("utf-8"),
+                hash_for_timing_check.encode("utf-8"),
+            )
+        except ValueError:
+            password_matches = False
+
+        failure_description = ""
+        failure_error_message = ""
+        failure_resource_id = email_normalized
+        failure_user_id = None
+
+        if user is None:
+            failure_description = "Login failed: user not found"
+            failure_error_message = "Invalid credentials"
+        elif user.is_active is not True:
+            failure_description = "Login failed: account is disabled"
+            failure_error_message = "Account is disabled"
+            failure_resource_id = str(user.id)
+            failure_user_id = user.id
+        elif user.password_hash is None:
+            failure_description = "Login failed: password login unavailable"
+            failure_error_message = "Password login not available for this account"
+            failure_resource_id = str(user.id)
+            failure_user_id = user.id
+        elif not password_matches:
+            failure_description = "Login failed: invalid credentials"
+            failure_error_message = "Invalid credentials"
+            failure_resource_id = str(user.id)
+            failure_user_id = user.id
+
+        if failure_description:
+            await record_failed_attempt(db, email_normalized)
+            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
             if failure_org_id is not None:
                 emit_audit_log(
                     db,
                     org_id=failure_org_id,
                     action=AuditAction.LOGIN_FAILED,
                     resource_type=AuditResourceType.SESSION,
-                    resource_id=email_normalized,
-                    description="Login failed: user not found",
+                    resource_id=failure_resource_id,
+                    user_id=failure_user_id,
+                    description=failure_description,
                     changes={"email": email_normalized},
                     request=request,
                     status="failure",
-                    error_message="Invalid credentials",
+                    error_message=failure_error_message,
                 )
-            logger.warning(
-                "Login attempt for non-existent user: %s",
-                sanitize_for_log(payload.email),
-            )
+            if user is None:
+                logger.warning(
+                    "Login attempt for non-existent user: %s",
+                    sanitize_for_log(payload.email),
+                )
+            elif failure_error_message == "Invalid credentials":
+                logger.warning(
+                    "Invalid password for user: %s", sanitize_for_log(payload.email)
+                )
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        if user.is_active is not True:
-            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
-            if failure_org_id is not None:
-                emit_audit_log(
-                    db,
-                    org_id=failure_org_id,
-                    action=AuditAction.LOGIN_FAILED,
-                    resource_type=AuditResourceType.SESSION,
-                    resource_id=str(user.id),
-                    user_id=user.id,
-                    description="Login failed: account is disabled",
-                    request=request,
-                    status="failure",
-                    error_message="Account is disabled",
-                )
-            raise HTTPException(status_code=401, detail="Account is disabled")
-
-        # Verify password
-        password_hash = (
-            str(user.password_hash) if user.password_hash is not None else ""
-        )
-        if not password_hash:
-            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
-            if failure_org_id is not None:
-                emit_audit_log(
-                    db,
-                    org_id=failure_org_id,
-                    action=AuditAction.LOGIN_FAILED,
-                    resource_type=AuditResourceType.SESSION,
-                    resource_id=str(user.id),
-                    user_id=user.id,
-                    description="Login failed: password login unavailable",
-                    request=request,
-                    status="failure",
-                    error_message="Password login not available for this account",
-                )
-            raise HTTPException(
-                status_code=401,
-                detail="Password login not available for this account",
-            )
-
-        if not bcrypt.checkpw(
-            payload.password.encode("utf-8"), password_hash.encode("utf-8")
-        ):
-            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
-            if failure_org_id is not None:
-                emit_audit_log(
-                    db,
-                    org_id=failure_org_id,
-                    action=AuditAction.LOGIN_FAILED,
-                    resource_type=AuditResourceType.SESSION,
-                    resource_id=str(user.id),
-                    user_id=user.id,
-                    description="Login failed: invalid credentials",
-                    request=request,
-                    status="failure",
-                    error_message="Invalid credentials",
-                )
-            logger.warning(
-                "Invalid password for user: %s", sanitize_for_log(payload.email)
-            )
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+        assert user is not None
+        await clear_attempts(db, email_normalized)
 
         # Get user's membership/org
         membership_stmt = select(Membership).where(Membership.user_id == user.id)

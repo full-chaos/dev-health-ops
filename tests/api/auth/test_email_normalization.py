@@ -162,7 +162,12 @@ async def test_login_finds_user_case_insensitive(app):
 
     session = _mock_session(scalar_return=existing_user)
 
-    # Login hits execute twice: once for user, once for membership
+    # Login hits execute 5 times for successful login with lockout checking:
+    # 1) find user by email
+    # 2) check_lockout -> _get_attempt (returns None = no lockout)
+    # 3) primary_org lookup (audit context)
+    # 4) clear_attempts -> _get_attempt (returns None = no attempt to clear)
+    # 5) membership lookup
     call_count = 0
 
     async def _execute_side_effect(*args, **kwargs):
@@ -172,11 +177,20 @@ async def test_login_finds_user_case_insensitive(app):
             result = MagicMock()
             result.scalar_one_or_none.return_value = existing_user
             return result
+        elif call_count in (2, 4):
+            # check_lockout and clear_attempts -> _get_attempt returns None
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = None
+            return result
+        elif call_count == 3:
+            # primary_org lookup returns None (no org for audit)
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = None
+            return result
         else:
             result = MagicMock()
             result.scalar_one_or_none.return_value = membership
             return result
-
     session.execute = AsyncMock(side_effect=_execute_side_effect)
 
     with patch(

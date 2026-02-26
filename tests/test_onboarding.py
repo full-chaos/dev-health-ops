@@ -51,6 +51,8 @@ class FakeSession:
     async def commit(self):
         self.commit_count += 1
 
+    async def delete(self, obj):
+        pass  # no-op for testing
 
 def _make_app() -> FastAPI:
     app = FastAPI()
@@ -82,8 +84,10 @@ async def test_login_without_membership_returns_needs_onboarding(monkeypatch):
     session = FakeSession(
         execute_results=[
             FakeResult(scalar=user),       # 1) find user by email
-            FakeResult(scalar=None),       # 2) primary org lookup (audit context)
-            FakeResult(scalar=None),       # 3) membership lookup
+            FakeResult(scalar=None),       # 2) check_lockout -> _get_attempt (no lockout)
+            FakeResult(scalar=None),       # 3) primary_org lookup (audit context)
+            FakeResult(scalar=None),       # 4) clear_attempts -> _get_attempt (no attempt)
+            FakeResult(scalar=None),       # 5) membership lookup
         ]
     )
 
@@ -120,8 +124,10 @@ async def test_login_with_membership_returns_needs_onboarding_false(monkeypatch)
     session = FakeSession(
         execute_results=[
             FakeResult(scalar=user),             # 1) find user by email
-            FakeResult(scalar=org_id),            # 2) primary org lookup (audit context)
-            FakeResult(scalar=membership),        # 3) membership lookup
+            FakeResult(scalar=None),             # 2) check_lockout -> _get_attempt (no lockout)
+            FakeResult(scalar=org_id),            # 3) primary_org lookup (audit context)
+            FakeResult(scalar=None),             # 4) clear_attempts -> _get_attempt (no attempt)
+            FakeResult(scalar=membership),        # 5) membership lookup
         ]
     )
 

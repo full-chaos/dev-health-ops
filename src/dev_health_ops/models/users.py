@@ -19,6 +19,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     JSON,
     Text,
     UniqueConstraint,
@@ -101,6 +102,32 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"<User {self.email}>"
+
+
+class LoginAttempt(Base):
+    __tablename__ = "login_attempts"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    email = Column(Text, nullable=False, unique=True, index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    first_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (Index("ix_login_attempts_locked_until", "locked_until"),)
+
+    def __repr__(self) -> str:
+        return f"<LoginAttempt email={self.email} attempts={self.attempt_count}>"
 
 
 class Organization(Base):

@@ -26,6 +26,7 @@ dependencies = [
   "sqlalchemy",
   "clickhouse-connect",
   "fastapi",
+  "slowapi",
   "httpx",
   "psycopg2-binary",
   "asyncpg",
@@ -135,6 +136,7 @@ tqdm = "*"
 sqlalchemy = "*"
 clickhouse-connect = "*"
 fastapi = "*"
+slowapi = "*"
 httpx = "*"
 psycopg2-binary = "*"
 asyncpg = "*"

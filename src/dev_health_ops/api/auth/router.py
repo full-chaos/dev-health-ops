@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import uuid as uuid_mod
+from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func, select
 
@@ -15,8 +15,26 @@ from dev_health_ops.api.services.auth import (
     get_auth_service,
     extract_token_from_header,
 )
+from dev_health_ops.api.services.refresh_tokens import (
+    create_refresh_token as create_refresh_token_record,
+    find_by_hash,
+    revoke_family,
+    revoke_token,
+    rotate_token,
+)
+from dev_health_ops.api.middleware.rate_limit import (
+    AUTH_LOGIN_IP_LIMIT,
+    AUTH_LOGIN_LIMIT,
+    AUTH_REFRESH_LIMIT,
+    AUTH_REGISTER_LIMIT,
+    AUTH_VALIDATE_LIMIT,
+    get_auth_key,
+    limiter,
+)
+from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.users import Membership, Organization, User
 
 logger = logging.getLogger(__name__)
@@ -98,6 +116,7 @@ class TokenRefreshRequest(BaseModel):
 
 class TokenRefreshResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     expires_in: int
     user: "UserInfo | None" = None
@@ -105,6 +124,10 @@ class TokenRefreshResponse(BaseModel):
 
 class TokenValidateRequest(BaseModel):
     token: str
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
 
 
 class TokenValidateResponse(BaseModel):
@@ -239,7 +262,8 @@ async def get_current_user_optional(
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
-async def register(payload: RegisterRequest) -> RegisterResponse:
+@limiter.limit(AUTH_REGISTER_LIMIT)
+async def register(payload: RegisterRequest, request: Request) -> RegisterResponse:
     import bcrypt
     from datetime import datetime, timezone
 
@@ -250,6 +274,26 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
         existing_user = result.scalar_one_or_none()
 
         if existing_user:
+            existing_org_result = await db.execute(
+                select(Membership.org_id)
+                .where(Membership.user_id == existing_user.id)
+                .limit(1)
+            )
+            existing_org_id = existing_org_result.scalar_one_or_none()
+            if existing_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=existing_org_id,
+                    action=AuditAction.CREATE,
+                    resource_type=AuditResourceType.USER,
+                    resource_id=str(existing_user.id),
+                    user_id=existing_user.id,
+                    description="User registration failed: email already registered",
+                    changes={"email": email_normalized},
+                    request=request,
+                    status="failure",
+                    error_message="Email already registered",
+                )
             raise HTTPException(status_code=400, detail="Email already registered")
 
         password_hash = bcrypt.hashpw(
@@ -271,8 +315,6 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
         org_slug = org_name.lower().replace(" ", "-")[:50]
         org_slug = f"{org_slug}-{str(user.id)[:8]}"
 
-        from dev_health_ops.models.users import Organization, Membership
-
         org = Organization(
             slug=org_slug,
             name=org_name,
@@ -289,6 +331,19 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
             joined_at=datetime.now(timezone.utc),
         )
         db.add(membership)
+
+        emit_audit_log(
+            db,
+            org_id=org.id,
+            action=AuditAction.CREATE,
+            resource_type=AuditResourceType.USER,
+            resource_id=str(user.id),
+            user_id=user.id,
+            description="User registered",
+            changes={"email": email_normalized, "organization_id": str(org.id)},
+            request=request,
+        )
+
         await db.commit()
 
         logger.info("User registered: %s", sanitize_for_log(payload.email))
@@ -301,7 +356,9 @@ async def register(payload: RegisterRequest) -> RegisterResponse:
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(payload: LoginRequest) -> LoginResponse:
+@limiter.limit(AUTH_LOGIN_IP_LIMIT)
+@limiter.limit(AUTH_LOGIN_LIMIT, key_func=get_auth_key)
+async def login(payload: LoginRequest, request: Request) -> LoginResponse:
     """Authenticate user and return tokens.
 
     For local auth, validates email/password.
@@ -317,7 +374,28 @@ async def login(payload: LoginRequest) -> LoginResponse:
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
 
+        primary_org_id: uuid_mod.UUID | None = None
+        if user is not None:
+            primary_org_result = await db.execute(
+                select(Membership.org_id).where(Membership.user_id == user.id).limit(1)
+            )
+            primary_org_id = primary_org_result.scalar_one_or_none()
+
         if not user:
+            failure_org_id = await _resolve_login_audit_org_id(db, None, payload.org_id)
+            if failure_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=failure_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=email_normalized,
+                    description="Login failed: user not found",
+                    changes={"email": email_normalized},
+                    request=request,
+                    status="failure",
+                    error_message="Invalid credentials",
+                )
             logger.warning(
                 "Login attempt for non-existent user: %s",
                 sanitize_for_log(payload.email),
@@ -325,6 +403,20 @@ async def login(payload: LoginRequest) -> LoginResponse:
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         if user.is_active is not True:
+            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
+            if failure_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=failure_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=str(user.id),
+                    user_id=user.id,
+                    description="Login failed: account is disabled",
+                    request=request,
+                    status="failure",
+                    error_message="Account is disabled",
+                )
             raise HTTPException(status_code=401, detail="Account is disabled")
 
         # Verify password
@@ -332,6 +424,20 @@ async def login(payload: LoginRequest) -> LoginResponse:
             str(user.password_hash) if user.password_hash is not None else ""
         )
         if not password_hash:
+            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
+            if failure_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=failure_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=str(user.id),
+                    user_id=user.id,
+                    description="Login failed: password login unavailable",
+                    request=request,
+                    status="failure",
+                    error_message="Password login not available for this account",
+                )
             raise HTTPException(
                 status_code=401,
                 detail="Password login not available for this account",
@@ -340,6 +446,20 @@ async def login(payload: LoginRequest) -> LoginResponse:
         if not bcrypt.checkpw(
             payload.password.encode("utf-8"), password_hash.encode("utf-8")
         ):
+            failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
+            if failure_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=failure_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=str(user.id),
+                    user_id=user.id,
+                    description="Login failed: invalid credentials",
+                    request=request,
+                    status="failure",
+                    error_message="Invalid credentials",
+                )
             logger.warning(
                 "Invalid password for user: %s", sanitize_for_log(payload.email)
             )
@@ -369,6 +489,22 @@ async def login(payload: LoginRequest) -> LoginResponse:
 
         # Update last login
         setattr(user, "last_login_at", datetime.now(timezone.utc))
+
+        success_org_id = _parse_uuid(payload.org_id) or (
+            membership.org_id if membership else primary_org_id
+        )
+        if success_org_id is not None:
+            emit_audit_log(
+                db,
+                org_id=success_org_id,
+                action=AuditAction.LOGIN,
+                resource_type=AuditResourceType.SESSION,
+                resource_id=str(user.id),
+                user_id=user.id,
+                description="User logged in",
+                request=request,
+            )
+
         await db.commit()
 
         # Create tokens
@@ -382,6 +518,23 @@ async def login(payload: LoginRequest) -> LoginResponse:
             username=str(user.username) if user.username is not None else None,
             full_name=str(user.full_name) if user.full_name is not None else None,
         )
+
+        refresh_payload = auth_service.validate_token(
+            token_pair.refresh_token, token_type="refresh"
+        )
+        if refresh_payload and membership and refresh_payload.get("jti"):
+            expires_at = _expiry_to_utc(refresh_payload.get("exp"))
+            if expires_at is not None:
+                await create_refresh_token_record(
+                    db=db,
+                    user_id=str(user.id),
+                    org_id=str(membership.org_id),
+                    token_hash=str(refresh_payload["jti"]),
+                    family_id=str(refresh_payload.get("family_id") or uuid_mod.uuid4()),
+                    expires_at=expires_at,
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
 
         return LoginResponse(
             access_token=token_pair.access_token,
@@ -406,10 +559,63 @@ def _slugify_org_name(name: str) -> str:
     return slug[:50] or "my-organization"
 
 
+def _parse_uuid(value: str | None) -> uuid_mod.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid_mod.UUID(value)
+    except ValueError:
+        return None
+
+
+def _expiry_to_utc(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    return None
+
+
+async def _resolve_login_audit_org_id(
+    db,
+    user: User | None,
+    payload_org_id: str | None,
+) -> uuid_mod.UUID | None:
+    parsed_org_id = _parse_uuid(payload_org_id)
+    if parsed_org_id is not None:
+        org_result = await db.execute(
+            select(Organization.id).where(Organization.id == parsed_org_id)
+        )
+        if org_result.scalar_one_or_none() is not None:
+            return parsed_org_id
+
+    if user is None:
+        return None
+
+    membership_result = await db.execute(
+        select(Membership.org_id).where(Membership.user_id == user.id).limit(1)
+    )
+    return membership_result.scalar_one_or_none()
+
+
+def _extract_unverified_org_and_subject(
+    token: str,
+) -> tuple[uuid_mod.UUID | None, str | None]:
+    try:
+        from jose import jwt
+
+        claims = jwt.get_unverified_claims(token)
+    except Exception:
+        return None, None
+
+    return _parse_uuid(claims.get("org_id")), claims.get("sub")
+
+
 @router.post("/onboard", response_model=OnboardResponse)
 async def onboard(
     payload: OnboardRequest,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    request: Request,
 ) -> OnboardResponse:
     from datetime import datetime, timezone
 
@@ -463,6 +669,19 @@ async def onboard(
             joined_at=datetime.now(timezone.utc),
         )
         db.add(membership)
+
+        emit_audit_log(
+            db,
+            org_id=org.id,
+            action=AuditAction.CREATE,
+            resource_type=AuditResourceType.ORGANIZATION,
+            resource_id=str(org.id),
+            user_id=db_user.id,
+            description="Organization created during onboarding",
+            changes={"organization_name": org_name},
+            request=request,
+        )
+
         await db.commit()
 
         auth_service = get_auth_service()
@@ -475,6 +694,23 @@ async def onboard(
             username=str(db_user.username) if db_user.username is not None else None,
             full_name=str(db_user.full_name) if db_user.full_name is not None else None,
         )
+
+        refresh_payload = auth_service.validate_token(
+            token_pair.refresh_token, token_type="refresh"
+        )
+        if refresh_payload and refresh_payload.get("jti"):
+            expires_at = _expiry_to_utc(refresh_payload.get("exp"))
+            if expires_at is not None:
+                await create_refresh_token_record(
+                    db=db,
+                    user_id=str(db_user.id),
+                    org_id=str(org.id),
+                    token_hash=str(refresh_payload["jti"]),
+                    family_id=str(refresh_payload.get("family_id") or uuid_mod.uuid4()),
+                    expires_at=expires_at,
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
 
         return OnboardResponse(
             access_token=token_pair.access_token,
@@ -509,24 +745,75 @@ async def get_me(
 
 
 @router.post("/refresh", response_model=TokenRefreshResponse)
-async def refresh_token(payload: TokenRefreshRequest) -> TokenRefreshResponse:
+@limiter.limit(AUTH_REFRESH_LIMIT)
+async def refresh_token(
+    payload: TokenRefreshRequest,
+    request: Request,
+) -> TokenRefreshResponse:
     auth_service = get_auth_service()
 
     refresh_payload = auth_service.validate_token(
         payload.refresh_token, token_type="refresh"
     )
     if not refresh_payload:
+        org_id, subject = _extract_unverified_org_and_subject(payload.refresh_token)
+        if org_id is not None:
+            async with get_postgres_session() as db:
+                org_result = await db.execute(
+                    select(Organization.id).where(Organization.id == org_id)
+                )
+                if org_result.scalar_one_or_none() is not None:
+                    emit_audit_log(
+                        db,
+                        org_id=org_id,
+                        action=AuditAction.LOGIN_FAILED,
+                        resource_type=AuditResourceType.SESSION,
+                        resource_id=subject or "unknown",
+                        user_id=_parse_uuid(subject),
+                        description="Refresh token validation failed",
+                        request=request,
+                        status="failure",
+                        error_message="Invalid or expired refresh token",
+                    )
+                    await db.commit()
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
-    user_id = refresh_payload["sub"]
-    org_id = refresh_payload.get("org_id", "")
+    user_id = str(refresh_payload["sub"])
+    org_id = str(refresh_payload.get("org_id", ""))
+    token_jti = refresh_payload.get("jti")
+    if not token_jti:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     async with get_postgres_session() as db:
+        token_record = await find_by_hash(db, str(token_jti))
+        if token_record is None:
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired refresh token"
+            )
+
+        if token_record.revoked_at is not None:
+            await revoke_family(db, str(token_record.family_id))
+            raise HTTPException(status_code=401, detail="Refresh token reuse detected")
+
         user_result = await db.execute(
             select(User).where(User.id == uuid_mod.UUID(user_id))
         )
         user = user_result.scalar_one_or_none()
         if not user:
+            parsed_org_id = _parse_uuid(org_id)
+            if parsed_org_id is not None:
+                emit_audit_log(
+                    db,
+                    org_id=parsed_org_id,
+                    action=AuditAction.LOGIN_FAILED,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=user_id,
+                    description="Token refresh failed: user not found",
+                    request=request,
+                    status="failure",
+                    error_message="User not found",
+                )
+                await db.commit()
             raise HTTPException(status_code=401, detail="User not found")
 
         role = "member"
@@ -541,18 +828,61 @@ async def refresh_token(payload: TokenRefreshRequest) -> TokenRefreshResponse:
             if membership:
                 role = str(membership.role)
 
-    new_access_token = auth_service.create_access_token(
-        user_id=user_id,
-        email=str(user.email),
-        org_id=org_id,
-        role=role,
-        is_superuser=bool(user.is_superuser),
-        username=str(user.username) if user.username else None,
-        full_name=str(user.full_name) if user.full_name else None,
-    )
+        new_refresh_token = auth_service.create_refresh_token(
+            user_id=user_id,
+            org_id=org_id,
+            family_id=str(token_record.family_id),
+        )
+        new_refresh_payload = auth_service.validate_token(
+            new_refresh_token, token_type="refresh"
+        )
+        if not new_refresh_payload or not new_refresh_payload.get("jti"):
+            raise HTTPException(
+                status_code=401, detail="Unable to rotate refresh token"
+            )
+
+        new_expires_at = _expiry_to_utc(new_refresh_payload.get("exp"))
+        if new_expires_at is None:
+            raise HTTPException(
+                status_code=401, detail="Unable to rotate refresh token"
+            )
+
+        rotated = await rotate_token(
+            db=db,
+            old_token_hash=str(token_jti),
+            new_token_hash=str(new_refresh_payload["jti"]),
+            new_expires_at=new_expires_at,
+        )
+        if rotated is None:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+        parsed_org_id = _parse_uuid(org_id)
+        if parsed_org_id is not None:
+            emit_audit_log(
+                db,
+                org_id=parsed_org_id,
+                action=AuditAction.LOGIN,
+                resource_type=AuditResourceType.SESSION,
+                resource_id=user_id,
+                user_id=user.id,
+                description="Access token refreshed",
+                request=request,
+            )
+            await db.commit()
+
+        new_access_token = auth_service.create_access_token(
+            user_id=user_id,
+            email=str(user.email),
+            org_id=org_id,
+            role=role,
+            is_superuser=bool(user.is_superuser),
+            username=str(user.username) if user.username is not None else None,
+            full_name=str(user.full_name) if user.full_name is not None else None,
+        )
 
     return TokenRefreshResponse(
         access_token=new_access_token,
+        refresh_token=new_refresh_token,
         token_type="bearer",
         expires_in=3600,
         user=UserInfo(
@@ -566,7 +896,11 @@ async def refresh_token(payload: TokenRefreshRequest) -> TokenRefreshResponse:
 
 
 @router.post("/validate", response_model=TokenValidateResponse)
-async def validate_token(payload: TokenValidateRequest) -> TokenValidateResponse:
+@limiter.limit(AUTH_VALIDATE_LIMIT)
+async def validate_token(
+    payload: TokenValidateRequest,
+    request: Request,
+) -> TokenValidateResponse:
     auth_service = get_auth_service()
     user = auth_service.get_authenticated_user(payload.token)
 
@@ -597,7 +931,36 @@ async def validate_token(payload: TokenValidateRequest) -> TokenValidateResponse
 
 
 @router.post("/logout")
-async def logout() -> dict:
+async def logout(
+    payload: LogoutRequest,
+    request: Request,
+    user: Annotated[AuthenticatedUser | None, Depends(get_current_user_optional)],
+) -> dict:
+    auth_service = get_auth_service()
+    refresh_payload = auth_service.validate_token(
+        payload.refresh_token, token_type="refresh"
+    )
+    if refresh_payload and refresh_payload.get("jti"):
+        async with get_postgres_session() as db:
+            await revoke_token(db, str(refresh_payload["jti"]))
+
+    if user and user.org_id:
+        user_uuid = _parse_uuid(user.user_id)
+        org_uuid = _parse_uuid(user.org_id)
+        if user_uuid is not None and org_uuid is not None:
+            async with get_postgres_session() as db:
+                emit_audit_log(
+                    db,
+                    org_id=org_uuid,
+                    action=AuditAction.LOGOUT,
+                    resource_type=AuditResourceType.SESSION,
+                    resource_id=user.user_id,
+                    user_id=user_uuid,
+                    description="User logged out",
+                    request=request,
+                )
+                await db.commit()
+
     return {"message": "Logout successful"}
 
 

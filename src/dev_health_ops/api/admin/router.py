@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,19 +27,25 @@ from dev_health_ops.api.services.settings import (
     TeamMappingService,
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.middleware.rate_limit import (
+    ADMIN_PASSWORD_LIMIT,
+    get_admin_user_key,
+    limiter,
+)
 from dev_health_ops.api.services.users import (
     MembershipService,
     OrganizationService,
     UserService,
 )
 from dev_health_ops.db import get_postgres_session
+from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.models.settings import (
     JobRun,
     ScheduledJob,
     SettingCategory,
     SyncConfiguration,
 )
-from dev_health_ops.models.audit import AuditLog
+from dev_health_ops.models.audit import AuditAction, AuditLog, AuditResourceType
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.users import Membership, Organization, User
 
@@ -1448,7 +1454,9 @@ async def update_user(
 
 
 @router.post("/users/{user_id}/password")
+@limiter.limit(ADMIN_PASSWORD_LIMIT, key_func=get_admin_user_key)
 async def set_user_password(
+    request: Request,
     user_id: str,
     payload: UserSetPassword,
     session: AsyncSession = Depends(get_session),
@@ -1466,6 +1474,36 @@ async def set_user_password(
         raise HTTPException(status_code=400, detail=str(e))
     if not success:
         raise HTTPException(status_code=404, detail="User not found")
+
+    audit_org_id: uuid.UUID | None = None
+    try:
+        audit_org_id = uuid.UUID(org_id) if org_id else None
+    except ValueError:
+        audit_org_id = None
+
+    if audit_org_id is None:
+        membership_result = await session.execute(
+            select(Membership.org_id).where(Membership.user_id == user.id).limit(1)
+        )
+        audit_org_id = membership_result.scalar_one_or_none()
+
+    try:
+        actor_user_id = uuid.UUID(current_user.user_id)
+    except ValueError:
+        actor_user_id = None
+
+    if audit_org_id is not None:
+        emit_audit_log(
+            session,
+            org_id=audit_org_id,
+            action=AuditAction.PASSWORD_CHANGED,
+            resource_type=AuditResourceType.USER,
+            resource_id=str(user.id),
+            user_id=actor_user_id,
+            description="Admin changed user password",
+            request=request,
+        )
+
     return {"success": True}
 
 

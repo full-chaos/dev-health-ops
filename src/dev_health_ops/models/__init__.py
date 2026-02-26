@@ -6,6 +6,7 @@ from .users import (
     Organization,
     User,
 )
+from .refresh_token import RefreshToken
 from .settings import (
     IdentityMapping,
     IntegrationCredential,
@@ -103,6 +104,7 @@ __all__ = [
     "OrgRetentionPolicy",
     "Refund",
     "RefundStatus",
+    "RefreshToken",
     "Repo",
     "RetentionResourceType",
     "Subscription",

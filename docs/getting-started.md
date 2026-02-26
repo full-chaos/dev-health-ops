@@ -80,4 +80,5 @@ CLI flags override environment variables.
 | `CLICKHOUSE_URI` | Required | Analytics data (sync + metrics) |
 | `DATABASE_URI` / `DATABASE_URL` | Deprecated fallback | Legacy resolver paths; keep only for compatibility |
 | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, `LINEAR_API_KEY` | Optional | Provider auth for sync commands |
+| `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM_ADDRESS` | Optional (`console` default) | Email delivery via [Resend](./email-setup.md) |
 | `APP_BASE_URL`, `JWT_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` | Optional in dev, required in production | API callback/auth/encryption settings |

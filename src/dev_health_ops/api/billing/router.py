@@ -203,6 +203,8 @@ async def _handle_invoice_webhook(
     invoice_payload: object,
     event_id: str | None,
 ) -> None:
+    pending_email: tuple | None = None
+
     async with get_postgres_session() as db:
         if event_id:
             payload = dict(getattr(invoice_payload, "metadata", {}) or {})
@@ -250,7 +252,7 @@ async def _handle_invoice_webhook(
 
         await db.commit()
 
-        # Send billing email notifications (non-blocking).
+        # Collect email dispatch parameters before leaving the DB session.
         metadata = getattr(invoice_payload, "metadata", {}) or {}
         org_id_str = metadata.get("org_id") if isinstance(metadata, dict) else None
         if org_id_str:
@@ -260,42 +262,45 @@ async def _handle_invoice_webhook(
                 org_uuid = None
 
             if org_uuid:
+                org_str = str(org_uuid)
                 if event_type == "invoice.paid":
                     amount_due = getattr(invoice_payload, "amount_due", 0) or 0
                     currency = getattr(invoice_payload, "currency", "usd") or "usd"
                     invoice_url = (
                         getattr(invoice_payload, "hosted_invoice_url", "") or ""
                     )
-                    try:
-                        send_billing_notification.delay(
-                            "invoice_receipt",
-                            str(org_uuid),
-                            amount_cents=amount_due,
-                            currency=currency,
-                            invoice_url=invoice_url,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "Failed to enqueue invoice receipt email for org_id=%s",
-                            org_id_str,
-                        )
+                    pending_email = (
+                        "invoice_receipt",
+                        org_str,
+                        {
+                            "amount_cents": amount_due,
+                            "currency": currency,
+                            "invoice_url": invoice_url,
+                        },
+                    )
                 elif event_type == "invoice.payment_failed":
                     amount_due = getattr(invoice_payload, "amount_due", 0) or 0
                     currency = getattr(invoice_payload, "currency", "usd") or "usd"
                     attempt_count = getattr(invoice_payload, "attempt_count", 1) or 1
-                    try:
-                        send_billing_notification.delay(
-                            "payment_failed",
-                            str(org_uuid),
-                            amount_cents=amount_due,
-                            currency=currency,
-                            attempt_count=attempt_count,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "Failed to enqueue payment failed email for org_id=%s",
-                            org_id_str,
-                        )
+                    pending_email = (
+                        "payment_failed",
+                        org_str,
+                        {
+                            "amount_cents": amount_due,
+                            "currency": currency,
+                            "attempt_count": attempt_count,
+                        },
+                    )
+
+    # Dispatch email notification after DB session is closed.
+    if pending_email:
+        email_type, org_str, kwargs = pending_email
+        try:
+            send_billing_notification.delay(email_type, org_str, **kwargs)
+        except Exception:
+            logger.debug(
+                "Failed to enqueue %s email for org_id=%s", email_type, org_str
+            )
 
 
 async def _handle_checkout_completed(session: object) -> None:
@@ -438,6 +443,8 @@ async def _handle_subscription_deleted(subscription: object) -> None:
                 "Could not read tier for org_id=%s before cancellation", org_id
             )
 
+        await _revoke_license(org_id)
+
         try:
             send_billing_notification.delay(
                 "subscription_cancelled",
@@ -448,8 +455,6 @@ async def _handle_subscription_deleted(subscription: object) -> None:
             logger.debug(
                 "Failed to enqueue subscription cancelled email for org_id=%s", org_id
             )
-
-        await _revoke_license(org_id)
     else:
         logger.info(
             "subscription.deleted without org_id metadata, customer=%s", customer_id

@@ -190,8 +190,8 @@ async def test_send_invoice_receipt_calls_email_service():
     ):
         await send_invoice_receipt(org_id, 4900, "usd", "https://example.com")
 
-    mock_email_service.send_template_email.assert_called_once()
-    call_kwargs = mock_email_service.send_template_email.call_args.kwargs
+    mock_email_service.send_template_email.assert_awaited_once()
+    call_kwargs = mock_email_service.send_template_email.await_args.kwargs
     assert call_kwargs["template_name"] == "invoice_receipt"
     assert call_kwargs["context"]["amount"] == "49.00"
     assert call_kwargs["context"]["currency"] == "USD"
@@ -240,7 +240,7 @@ async def test_send_invoice_receipt_email_failure():
         with pytest.raises(RuntimeError, match="boom"):
             await send_invoice_receipt(org_id, 4900, "usd", "https://example.com")
 
-    mock_email_service.send_template_email.assert_called_once()
+    mock_email_service.send_template_email.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -262,8 +262,8 @@ async def test_send_payment_failed_calls_email_service():
     ):
         await send_payment_failed(org_id, 999, "eur", 3)
 
-    mock_email_service.send_template_email.assert_called_once()
-    call_kwargs = mock_email_service.send_template_email.call_args.kwargs
+    mock_email_service.send_template_email.assert_awaited_once()
+    call_kwargs = mock_email_service.send_template_email.await_args.kwargs
     assert call_kwargs["template_name"] == "payment_failed"
     assert call_kwargs["context"]["amount"] == "9.99"
     assert call_kwargs["context"]["attempt_count"] == "3"
@@ -289,8 +289,8 @@ async def test_send_subscription_changed_calls_email_service():
     ):
         await send_subscription_changed(org_id, "team", "enterprise")
 
-    mock_email_service.send_template_email.assert_called_once()
-    call_kwargs = mock_email_service.send_template_email.call_args.kwargs
+    mock_email_service.send_template_email.assert_awaited_once()
+    call_kwargs = mock_email_service.send_template_email.await_args.kwargs
     assert call_kwargs["template_name"] == "subscription_changed"
     assert call_kwargs["context"]["old_tier"] == "team"
     assert call_kwargs["context"]["new_tier"] == "enterprise"
@@ -315,8 +315,8 @@ async def test_send_subscription_cancelled_calls_email_service():
     ):
         await send_subscription_cancelled(org_id, "team")
 
-    mock_email_service.send_template_email.assert_called_once()
-    call_kwargs = mock_email_service.send_template_email.call_args.kwargs
+    mock_email_service.send_template_email.assert_awaited_once()
+    call_kwargs = mock_email_service.send_template_email.await_args.kwargs
     assert call_kwargs["template_name"] == "subscription_cancelled"
     assert call_kwargs["context"]["tier"] == "team"
 

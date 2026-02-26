@@ -6,7 +6,7 @@ on:
       runner_label:
         description: 'Self-hosted runner label to check for'
         type: string
-        default: 'arc-runner-set'
+        default: 'arc-runner'
       fallback:
         description: 'GitHub-hosted runner to fall back to'
         type: string

@@ -734,7 +734,7 @@ async def login(
         membership_result = await db.execute(membership_stmt)
         membership = membership_result.scalar_one_or_none()
 
-        needs_onboarding = membership is None
+        needs_onboarding = membership is None and not bool(user.is_superuser)
 
         if payload.org_id and not membership:
             any_membership_result = await db.execute(

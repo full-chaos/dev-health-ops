@@ -3,25 +3,27 @@ from __future__ import annotations
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.schemas import (
-    ImpersonateRequest,
-    ImpersonateResponse,
-    ImpersonateStatusResponse,
-    ImpersonateStopResponse,
-    ImpersonatedUserInfo,
+    ImpersonateTargetUser,
+    ImpersonationStatusResponse,
+    StartImpersonationRequest,
+    StartImpersonationResponse,
+    StopImpersonationResponse,
 )
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.audit import AuditService
-from dev_health_ops.api.services.auth import AuthenticatedUser, get_auth_service
+from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.impersonation_cache import invalidate
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
+from dev_health_ops.models.impersonation import ImpersonationSession
 from dev_health_ops.models.users import Membership, User
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -60,19 +62,6 @@ def _impersonation_ttl_minutes() -> int:
     return ttl
 
 
-async def _membership_for_org(
-    session: AsyncSession,
-    user_id: uuid.UUID,
-    org_id: uuid.UUID,
-) -> Membership | None:
-    membership_result = await session.execute(
-        select(Membership).where(
-            Membership.user_id == user_id, Membership.org_id == org_id
-        )
-    )
-    return membership_result.scalar_one_or_none()
-
-
 async def _first_membership(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -85,18 +74,23 @@ async def _first_membership(
     return membership_result.scalars().first()
 
 
-@router.post("/impersonate", response_model=ImpersonateResponse)
+@router.post("/impersonate", response_model=StartImpersonationResponse)
 async def start_impersonation(
-    payload: ImpersonateRequest,
+    payload: StartImpersonationRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> ImpersonateResponse:
+) -> StartImpersonationResponse:
     if not current_user.is_superuser:
         raise HTTPException(status_code=403, detail="Superuser access required")
 
     target_user_uuid = _parse_uuid(payload.target_user_id, "target_user_id")
-    current_org_uuid = _parse_uuid(current_user.org_id, "org_id")
+    admin_user_uuid = _parse_uuid(current_user.user_id, "user_id")
 
+    # Prevent self-impersonation
+    if target_user_uuid == admin_user_uuid:
+        raise HTTPException(status_code=400, detail="Cannot impersonate yourself")
+
+    # Fetch and validate target user
     target_user_result = await session.execute(
         select(User).where(User.id == target_user_uuid)
     )
@@ -104,144 +98,155 @@ async def start_impersonation(
     if not target_user:
         raise HTTPException(status_code=404, detail="Target user not found")
 
+    if not target_user.is_active:
+        raise HTTPException(status_code=400, detail="Target user is not active")
+
     if target_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Cannot impersonate superuser")
+        raise HTTPException(status_code=403, detail="Cannot impersonate a superuser")
 
-    target_membership = await _membership_for_org(
-        session=session,
-        user_id=target_user_uuid,
-        org_id=current_org_uuid,
+    # Fetch target's first membership for org_id and role
+    target_membership = await _first_membership(
+        session=session, user_id=target_user_uuid
     )
-
-    if not target_membership:
-        if not current_user.is_superuser:
-            raise HTTPException(
-                status_code=403,
-                detail="Cross-organization impersonation is not allowed",
-            )
-        target_membership = await _first_membership(
-            session=session, user_id=target_user_uuid
-        )
-
     if not target_membership:
         raise HTTPException(
             status_code=404,
             detail="Target user has no organization membership",
         )
 
-    ttl_minutes = _impersonation_ttl_minutes()
-    expires_delta = timedelta(minutes=ttl_minutes)
-    auth_service = get_auth_service()
-    access_token = auth_service.create_access_token(
-        user_id=str(target_user.id),
-        email=str(target_user.email),
-        org_id=str(target_membership.org_id),
-        role=str(target_membership.role),
-        is_superuser=bool(target_user.is_superuser),
-        username=str(target_user.username) if target_user.username else None,
-        full_name=str(target_user.full_name) if target_user.full_name else None,
-        impersonating_user_id=current_user.user_id,
-        expires_delta=expires_delta,
+    # End any existing active session for this admin
+    await session.execute(
+        update(ImpersonationSession)
+        .where(
+            ImpersonationSession.admin_user_id == admin_user_uuid,
+            ImpersonationSession.ended_at.is_(None),
+        )
+        .values(ended_at=datetime.now(timezone.utc))
     )
 
+    # Create new ImpersonationSession row
+    ttl_minutes = _impersonation_ttl_minutes()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+    new_session = ImpersonationSession(
+        admin_user_id=admin_user_uuid,
+        target_user_id=target_user_uuid,
+        target_org_id=target_membership.org_id,
+        target_role=str(target_membership.role),
+        expires_at=expires_at,
+    )
+    session.add(new_session)
+    await session.flush()
+
+    # Invalidate cache for this admin
+    invalidate(current_user.user_id)
+
+    # Audit log
+    target_org_uuid = uuid.UUID(str(target_membership.org_id))
     audit_service = AuditService(session)
     await audit_service.log(
-        org_id=current_org_uuid,
+        org_id=target_org_uuid,
         action=AuditAction.IMPERSONATION_START,
         resource_type=AuditResourceType.SESSION,
-        user_id=uuid.UUID(current_user.user_id),
+        user_id=admin_user_uuid,
         resource_id=str(target_user.id),
         user=current_user,
     )
 
-    return ImpersonateResponse(
-        access_token=access_token,
-        token_type="bearer",
-        expires_in=ttl_minutes * 60,
-        impersonated_user=ImpersonatedUserInfo(
+    return StartImpersonationResponse(
+        status="active",
+        target_user=ImpersonateTargetUser(
             id=str(target_user.id),
             email=str(target_user.email),
-            role=str(target_membership.role),
             org_id=str(target_membership.org_id),
+            role=str(target_membership.role),
         ),
+        expires_at=expires_at,
     )
 
 
-@router.post("/impersonate/stop", response_model=ImpersonateStopResponse)
+@router.post("/impersonate/stop", response_model=StopImpersonationResponse)
 async def stop_impersonation(
     current_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
-) -> ImpersonateStopResponse:
-    if not current_user.impersonated_by:
-        raise HTTPException(status_code=400, detail="Not currently impersonating")
+) -> StopImpersonationResponse:
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Superuser access required")
 
-    real_admin_uuid = _parse_uuid(current_user.impersonated_by, "impersonating_user_id")
-    current_org_uuid = _parse_uuid(current_user.org_id, "org_id")
+    admin_user_uuid = _parse_uuid(current_user.user_id, "user_id")
+    now = datetime.now(timezone.utc)
 
-    real_user_result = await session.execute(
-        select(User).where(User.id == real_admin_uuid)
-    )
-    real_user = real_user_result.scalar_one_or_none()
-    if not real_user:
-        raise HTTPException(status_code=404, detail="Impersonating user not found")
-
-    real_membership = await _membership_for_org(
-        session=session,
-        user_id=real_admin_uuid,
-        org_id=current_org_uuid,
-    )
-
-    if not real_membership and real_user.is_superuser:
-        real_membership = await _first_membership(
-            session=session, user_id=real_admin_uuid
+    # Find active session for this admin (DB, not cache)
+    active_result = await session.execute(
+        select(ImpersonationSession)
+        .where(
+            ImpersonationSession.admin_user_id == admin_user_uuid,
+            ImpersonationSession.ended_at.is_(None),
+            ImpersonationSession.expires_at > now,
         )
-
-    if not real_user.is_superuser and not real_membership:
-        raise HTTPException(
-            status_code=403,
-            detail="Impersonating user is not a member of this organization",
-        )
-
-    role = str(real_membership.role) if real_membership else "admin"
-    org_id = str(real_membership.org_id) if real_membership else current_user.org_id
-
-    auth_service = get_auth_service()
-    access_token = auth_service.create_access_token(
-        user_id=str(real_user.id),
-        email=str(real_user.email),
-        org_id=org_id,
-        role=role,
-        is_superuser=bool(real_user.is_superuser),
-        username=str(real_user.username) if real_user.username else None,
-        full_name=str(real_user.full_name) if real_user.full_name else None,
+        .limit(1)
     )
+    active_session = active_result.scalar_one_or_none()
+    if not active_session:
+        raise HTTPException(status_code=400, detail="No active impersonation session")
 
-    expires_in = int(timedelta(hours=1).total_seconds())
+    # End the session
+    active_session.ended_at = now  # type: ignore[assignment]
+    await session.flush()
 
+    # Invalidate cache
+    invalidate(current_user.user_id)
+
+    # Audit log
+    target_org_uuid = uuid.UUID(str(active_session.target_org_id))
     audit_service = AuditService(session)
     await audit_service.log(
-        org_id=current_org_uuid,
+        org_id=target_org_uuid,
         action=AuditAction.IMPERSONATION_STOP,
         resource_type=AuditResourceType.SESSION,
-        user_id=real_admin_uuid,
-        resource_id=current_user.user_id,
+        user_id=admin_user_uuid,
+        resource_id=str(active_session.target_user_id),
         user=current_user,
     )
 
-    return ImpersonateStopResponse(
-        access_token=access_token,
-        token_type="bearer",
-        expires_in=expires_in,
-    )
+    return StopImpersonationResponse(status="stopped")
 
 
-@router.get("/impersonate/status", response_model=ImpersonateStatusResponse)
+@router.get("/impersonate/status", response_model=ImpersonationStatusResponse)
 async def impersonation_status(
     current_user: AuthenticatedUser = Depends(get_current_user),
-) -> ImpersonateStatusResponse:
-    is_impersonating = current_user.impersonated_by is not None
-    return ImpersonateStatusResponse(
-        is_impersonating=is_impersonating,
-        impersonated_user_id=current_user.user_id if is_impersonating else None,
-        real_user_id=current_user.impersonated_by if is_impersonating else None,
+    session: AsyncSession = Depends(get_db_session),
+) -> ImpersonationStatusResponse:
+    if not current_user.is_superuser:
+        return ImpersonationStatusResponse(is_impersonating=False)
+
+    admin_user_uuid = _parse_uuid(current_user.user_id, "user_id")
+    now = datetime.now(timezone.utc)
+
+    active_result = await session.execute(
+        select(ImpersonationSession)
+        .where(
+            ImpersonationSession.admin_user_id == admin_user_uuid,
+            ImpersonationSession.ended_at.is_(None),
+            ImpersonationSession.expires_at > now,
+        )
+        .limit(1)
+    )
+    active_session = active_result.scalar_one_or_none()
+
+    if not active_session:
+        return ImpersonationStatusResponse(is_impersonating=False)
+
+    # Fetch target email for the response
+    target_result = await session.execute(
+        select(User).where(User.id == active_session.target_user_id)
+    )
+    target_user = target_result.scalar_one_or_none()
+    target_email = str(target_user.email) if target_user else None
+
+    return ImpersonationStatusResponse(
+        is_impersonating=True,
+        target_user_id=str(active_session.target_user_id),
+        target_email=target_email,
+        target_org_id=str(active_session.target_org_id),
+        expires_at=active_session.expires_at,
     )

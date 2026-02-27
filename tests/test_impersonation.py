@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,9 +10,10 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+import dev_health_ops.api.admin.impersonation as _imp_mod
 from dev_health_ops.api.admin.impersonation import get_db_session, router
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.services.auth import AuthService, AuthenticatedUser
+from dev_health_ops.api.services.auth import AuthenticatedUser
 
 
 def _user(
@@ -20,6 +21,7 @@ def _user(
     email: str,
     *,
     is_superuser: bool = False,
+    is_active: bool = True,
     username: str | None = None,
     full_name: str | None = None,
 ) -> SimpleNamespace:
@@ -27,6 +29,7 @@ def _user(
         id=user_id,
         email=email,
         is_superuser=is_superuser,
+        is_active=is_active,
         username=username,
         full_name=full_name,
     )
@@ -39,6 +42,25 @@ def _membership(user_id: uuid.UUID, org_id: uuid.UUID, role: str) -> SimpleNames
         role=role,
         created_at=datetime.now(timezone.utc),
     )
+
+
+def _impersonation_session(
+    admin_id: uuid.UUID,
+    target_id: uuid.UUID,
+    target_org_id: uuid.UUID,
+    target_role: str = "member",
+) -> SimpleNamespace:
+    now = datetime.now(timezone.utc)
+    sess = SimpleNamespace(
+        id=uuid.uuid4(),
+        admin_user_id=admin_id,
+        target_user_id=target_id,
+        target_org_id=target_org_id,
+        target_role=target_role,
+        expires_at=now + timedelta(hours=1),
+        ended_at=None,
+    )
+    return sess
 
 
 class _FakeResult:
@@ -81,39 +103,34 @@ async def test_client(monkeypatch):
     async def _override_current_user():
         return current["user"]
 
-    auth_service = AuthService(secret_key="test-secret")
-    monkeypatch.setattr(
-        "dev_health_ops.api.admin.impersonation.get_auth_service",
-        lambda: auth_service,
-    )
+    mock_invalidate = MagicMock()
+    monkeypatch.setattr(_imp_mod, "invalidate", mock_invalidate)
 
     app.dependency_overrides[get_db_session] = _override_db_session
     app.dependency_overrides[get_current_user] = _override_current_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, session, auth_service, current
+        yield client, session, current, mock_invalidate
 
     app.dependency_overrides.clear()
 
 
+# ---------------------------------------------------------------------------
+# POST /api/v1/admin/impersonate (start)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_start_impersonation_superuser_can_impersonate_member(test_client):
-    client, session, auth_service, current = test_client
-    admin_org_id = uuid.uuid4()
+    client, session, current, mock_invalidate = test_client
+    admin_org_id = uuid.UUID(current["user"].org_id)
     target_id = uuid.uuid4()
-
-    current["user"] = AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="admin@example.com",
-        org_id=str(admin_org_id),
-        role="admin",
-        is_superuser=True,
-    )
 
     session.execute.side_effect = [
         _FakeResult(one=_user(target_id, "member@example.com")),
-        _FakeResult(one=_membership(target_id, admin_org_id, "member")),
+        _FakeResult(many=[_membership(target_id, admin_org_id, "member")]),
+        MagicMock(),  # update (end existing sessions) result — not used
     ]
 
     resp = await client.post(
@@ -123,21 +140,21 @@ async def test_start_impersonation_superuser_can_impersonate_member(test_client)
 
     assert resp.status_code == 200
     body = resp.json()
-    payload = auth_service.validate_token(body["access_token"])
-    assert payload is not None
-    assert body["token_type"] == "bearer"
-    assert body["expires_in"] == 3600
-    assert body["impersonated_user"]["id"] == str(target_id)
-    assert payload["sub"] == str(target_id)
-    assert payload["impersonating_user_id"] == current["user"].user_id
+    assert body["status"] == "active"
+    assert "access_token" not in body
+    assert body["target_user"]["id"] == str(target_id)
+    assert body["target_user"]["email"] == "member@example.com"
+    assert body["target_user"]["org_id"] == str(admin_org_id)
+    assert body["target_user"]["role"] == "member"
+    assert "expires_at" in body
 
 
 @pytest.mark.asyncio
 async def test_start_impersonation_non_superuser_forbidden(test_client):
-    client, session, _, current = test_client
+    client, session, current, _ = test_client
     current["user"] = AuthenticatedUser(
         user_id=str(uuid.uuid4()),
-        email="admin@example.com",
+        email="regular@example.com",
         org_id=str(uuid.uuid4()),
         role="admin",
         is_superuser=False,
@@ -155,15 +172,9 @@ async def test_start_impersonation_non_superuser_forbidden(test_client):
 
 @pytest.mark.asyncio
 async def test_start_impersonation_cannot_impersonate_superuser(test_client):
-    client, session, _, current = test_client
+    client, session, current, _ = test_client
     target_id = uuid.uuid4()
-    current["user"] = AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="root@example.com",
-        org_id=current["user"].org_id,
-        role="admin",
-        is_superuser=True,
-    )
+
     session.execute.side_effect = [
         _FakeResult(one=_user(target_id, "other-root@example.com", is_superuser=True)),
     ]
@@ -174,19 +185,12 @@ async def test_start_impersonation_cannot_impersonate_superuser(test_client):
     )
 
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Cannot impersonate superuser"
+    assert resp.json()["detail"] == "Cannot impersonate a superuser"
 
 
 @pytest.mark.asyncio
 async def test_start_impersonation_target_not_found(test_client):
-    client, session, _, current = test_client
-    current["user"] = AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="root@example.com",
-        org_id=current["user"].org_id,
-        role="admin",
-        is_superuser=True,
-    )
+    client, session, current, _ = test_client
     session.execute.side_effect = [_FakeResult(one=None)]
 
     resp = await client.post(
@@ -199,196 +203,229 @@ async def test_start_impersonation_target_not_found(test_client):
 
 
 @pytest.mark.asyncio
-async def test_start_impersonation_non_superuser_blocked_entirely(test_client):
-    client, session, _, current = test_client
+async def test_start_impersonation_self_impersonation_blocked(test_client):
+    client, session, current, _ = test_client
+    admin_id = uuid.UUID(current["user"].user_id)
+
+    resp = await client.post(
+        "/api/v1/admin/impersonate",
+        json={"target_user_id": str(admin_id)},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Cannot impersonate yourself"
+    session.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_impersonation_target_inactive(test_client):
+    client, session, current, _ = test_client
+    target_id = uuid.uuid4()
+
+    session.execute.side_effect = [
+        _FakeResult(one=_user(target_id, "inactive@example.com", is_active=False)),
+    ]
+
+    resp = await client.post(
+        "/api/v1/admin/impersonate",
+        json={"target_user_id": str(target_id)},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Target user is not active"
+
+
+@pytest.mark.asyncio
+async def test_start_impersonation_no_membership(test_client):
+    client, session, current, _ = test_client
+    target_id = uuid.uuid4()
+
+    session.execute.side_effect = [
+        _FakeResult(one=_user(target_id, "member@example.com")),
+        _FakeResult(many=[]),  # no membership
+    ]
+
+    resp = await client.post(
+        "/api/v1/admin/impersonate",
+        json={"target_user_id": str(target_id)},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Target user has no organization membership"
+
+
+@pytest.mark.asyncio
+async def test_start_impersonation_invalidates_cache(test_client):
+    client, session, current, mock_invalidate = test_client
+    admin_org_id = uuid.UUID(current["user"].org_id)
+    target_id = uuid.uuid4()
+
+    session.execute.side_effect = [
+        _FakeResult(one=_user(target_id, "member@example.com")),
+        _FakeResult(many=[_membership(target_id, admin_org_id, "member")]),
+        MagicMock(),
+    ]
+
+    resp = await client.post(
+        "/api/v1/admin/impersonate",
+        json={"target_user_id": str(target_id)},
+    )
+
+    assert resp.status_code == 200
+    mock_invalidate.assert_called_once_with(current["user"].user_id)
+
+
+@pytest.mark.asyncio
+async def test_start_impersonation_creates_session_row(test_client):
+    client, session, current, _ = test_client
+    admin_org_id = uuid.UUID(current["user"].org_id)
+    target_id = uuid.uuid4()
+
+    session.execute.side_effect = [
+        _FakeResult(one=_user(target_id, "member@example.com")),
+        _FakeResult(many=[_membership(target_id, admin_org_id, "member")]),
+        MagicMock(),
+    ]
+
+    resp = await client.post(
+        "/api/v1/admin/impersonate",
+        json={"target_user_id": str(target_id)},
+    )
+
+    assert resp.status_code == 200
+    # session.add should be called with the new ImpersonationSession
+    session.add.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/admin/impersonate/stop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stop_impersonation_works(test_client):
+    client, session, current, mock_invalidate = test_client
+    admin_id = uuid.UUID(current["user"].user_id)
+    target_id = uuid.uuid4()
+    target_org_id = uuid.uuid4()
+
+    active = _impersonation_session(admin_id, target_id, target_org_id)
+    session.execute.side_effect = [_FakeResult(one=active)]
+
+    resp = await client.post("/api/v1/admin/impersonate/stop")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "stopped"
+    assert "access_token" not in body
+    mock_invalidate.assert_called_once_with(current["user"].user_id)
+
+
+@pytest.mark.asyncio
+async def test_stop_impersonation_ends_session_in_db(test_client):
+    client, session, current, _ = test_client
+    admin_id = uuid.UUID(current["user"].user_id)
+    target_id = uuid.uuid4()
+    target_org_id = uuid.uuid4()
+
+    active = _impersonation_session(admin_id, target_id, target_org_id)
+    assert active.ended_at is None
+
+    session.execute.side_effect = [_FakeResult(one=active)]
+
+    resp = await client.post("/api/v1/admin/impersonate/stop")
+
+    assert resp.status_code == 200
+    # The session object should have ended_at set
+    assert active.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_stop_impersonation_forbidden_for_non_superuser(test_client):
+    client, session, current, _ = test_client
     current["user"] = AuthenticatedUser(
         user_id=str(uuid.uuid4()),
-        email="admin@example.com",
+        email="regular@example.com",
         org_id=str(uuid.uuid4()),
         role="admin",
         is_superuser=False,
     )
 
-    resp = await client.post(
-        "/api/v1/admin/impersonate",
-        json={"target_user_id": str(uuid.uuid4())},
-    )
+    resp = await client.post("/api/v1/admin/impersonate/stop")
 
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Superuser access required"
     session.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_start_impersonation_cross_org_allowed_for_superuser(test_client):
-    client, session, _, current = test_client
-    caller_org_id = uuid.uuid4()
-    target_org_id = uuid.uuid4()
-    target_id = uuid.uuid4()
-    current["user"] = AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="root@example.com",
-        org_id=str(caller_org_id),
-        role="owner",
-        is_superuser=True,
-    )
-
-    session.execute.side_effect = [
-        _FakeResult(one=_user(target_id, "member@example.com")),
-        _FakeResult(one=None),
-        _FakeResult(many=[_membership(target_id, target_org_id, "viewer")]),
-    ]
-
-    resp = await client.post(
-        "/api/v1/admin/impersonate",
-        json={"target_user_id": str(target_id)},
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["impersonated_user"]["org_id"] == str(target_org_id)
-    assert body["impersonated_user"]["role"] == "viewer"
-
-
-@pytest.mark.asyncio
-async def test_stop_impersonation_returns_real_admin_token(test_client):
-    client, session, auth_service, current = test_client
-    org_id = uuid.uuid4()
-    real_admin_id = uuid.uuid4()
-    impersonated_user_id = uuid.uuid4()
-
-    current["user"] = AuthenticatedUser(
-        user_id=str(impersonated_user_id),
-        email="member@example.com",
-        org_id=str(org_id),
-        role="member",
-        impersonated_by=str(real_admin_id),
-    )
-
-    session.execute.side_effect = [
-        _FakeResult(one=_user(real_admin_id, "admin@example.com")),
-        _FakeResult(one=_membership(real_admin_id, org_id, "admin")),
-    ]
-
-    resp = await client.post("/api/v1/admin/impersonate/stop")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    payload = auth_service.validate_token(body["access_token"])
-    assert payload is not None
-    assert payload["sub"] == str(real_admin_id)
-    assert "impersonating_user_id" not in payload
-
-
-@pytest.mark.asyncio
-async def test_stop_impersonation_fails_if_not_impersonating(test_client):
-    client, session, _, current = test_client
-    current["user"] = AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="admin@example.com",
-        org_id=str(uuid.uuid4()),
-        role="admin",
-    )
+async def test_stop_impersonation_no_active_session(test_client):
+    client, session, current, _ = test_client
+    session.execute.side_effect = [_FakeResult(one=None)]
 
     resp = await client.post("/api/v1/admin/impersonate/stop")
 
     assert resp.status_code == 400
-    assert resp.json()["detail"] == "Not currently impersonating"
+    assert resp.json()["detail"] == "No active impersonation session"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/admin/impersonate/status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_non_superuser_returns_false_without_db_call(test_client):
+    client, session, current, _ = test_client
+    current["user"] = AuthenticatedUser(
+        user_id=str(uuid.uuid4()),
+        email="regular@example.com",
+        org_id=str(uuid.uuid4()),
+        role="member",
+        is_superuser=False,
+    )
+
+    resp = await client.get("/api/v1/admin/impersonate/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_impersonating"] is False
     session.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_status_when_impersonating(test_client):
-    client, _, _, current = test_client
-    real_admin_id = uuid.uuid4()
-    impersonated_user_id = uuid.uuid4()
-    current["user"] = AuthenticatedUser(
-        user_id=str(impersonated_user_id),
-        email="member@example.com",
-        org_id=str(uuid.uuid4()),
-        role="member",
-        impersonated_by=str(real_admin_id),
-    )
+async def test_status_superuser_with_no_active_session(test_client):
+    client, session, current, _ = test_client
+    session.execute.side_effect = [_FakeResult(one=None)]
 
     resp = await client.get("/api/v1/admin/impersonate/status")
 
     assert resp.status_code == 200
-    assert resp.json() == {
-        "is_impersonating": True,
-        "impersonated_user_id": str(impersonated_user_id),
-        "real_user_id": str(real_admin_id),
-    }
+    body = resp.json()
+    assert body["is_impersonating"] is False
+    assert body.get("target_user_id") is None
 
 
 @pytest.mark.asyncio
-async def test_status_when_not_impersonating(test_client):
-    client, _, _, current = test_client
-    current["user"] = AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="admin@example.com",
-        org_id=str(uuid.uuid4()),
-        role="admin",
-    )
+async def test_status_superuser_with_active_session(test_client):
+    client, session, current, _ = test_client
+    admin_id = uuid.UUID(current["user"].user_id)
+    target_id = uuid.uuid4()
+    target_org_id = uuid.uuid4()
+
+    active = _impersonation_session(admin_id, target_id, target_org_id, "viewer")
+    target = _user(target_id, "target@example.com")
+
+    session.execute.side_effect = [
+        _FakeResult(one=active),
+        _FakeResult(one=target),
+    ]
 
     resp = await client.get("/api/v1/admin/impersonate/status")
 
     assert resp.status_code == 200
-    assert resp.json() == {
-        "is_impersonating": False,
-        "impersonated_user_id": None,
-        "real_user_id": None,
-    }
-
-
-@pytest.mark.asyncio
-async def test_impersonation_token_contains_required_claims(test_client):
-    client, session, auth_service, current = test_client
-    org_id = uuid.uuid4()
-    target_id = uuid.uuid4()
-    current["user"] = AuthenticatedUser(
-        user_id=str(uuid.uuid4()),
-        email="admin@example.com",
-        org_id=str(org_id),
-        role="owner",
-        is_superuser=True,
-    )
-
-    session.execute.side_effect = [
-        _FakeResult(one=_user(target_id, "member@example.com")),
-        _FakeResult(one=_membership(target_id, org_id, "viewer")),
-    ]
-
-    resp = await client.post(
-        "/api/v1/admin/impersonate",
-        json={"target_user_id": str(target_id)},
-    )
-
-    assert resp.status_code == 200
-    token_payload = auth_service.validate_token(resp.json()["access_token"])
-    assert token_payload is not None
-    assert token_payload["sub"] == str(target_id)
-    assert token_payload["org_id"] == str(org_id)
-    assert token_payload["role"] == "viewer"
-    assert token_payload["impersonating_user_id"] == current["user"].user_id
-
-
-@pytest.mark.asyncio
-async def test_impersonation_token_has_short_ttl(test_client):
-    client, session, auth_service, _ = test_client
-    org_id = uuid.uuid4()
-    target_id = uuid.uuid4()
-
-    session.execute.side_effect = [
-        _FakeResult(one=_user(target_id, "member@example.com")),
-        _FakeResult(one=_membership(target_id, org_id, "member")),
-    ]
-
-    resp = await client.post(
-        "/api/v1/admin/impersonate",
-        json={"target_user_id": str(target_id)},
-    )
-
-    assert resp.status_code == 200
-    token_payload = auth_service.validate_token(resp.json()["access_token"])
-    assert token_payload is not None
-    assert (token_payload["exp"] - token_payload["iat"]) == 3600
+    body = resp.json()
+    assert body["is_impersonating"] is True
+    assert body["target_user_id"] == str(target_id)
+    assert body["target_email"] == "target@example.com"
+    assert body["target_org_id"] == str(target_org_id)
+    assert body["expires_at"] is not None

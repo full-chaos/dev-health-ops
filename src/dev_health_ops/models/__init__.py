@@ -1,4 +1,5 @@
 from .git import Base, GitBlame, GitBlameMixin, GitCommit, GitCommitStat, GitFile, Repo
+from .impersonation import ImpersonationSession
 from .users import (
     AuthProvider,
     LoginAttempt,

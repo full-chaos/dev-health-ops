@@ -99,6 +99,7 @@ from .licensing import router as licensing_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.licensing import LicenseManager
 from dev_health_ops.api.middleware import OrgIdMiddleware
+from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.middleware.rate_limit import limiter
 
 HOME_CACHE = create_cache(ttl_seconds=60)
@@ -354,6 +355,7 @@ app.add_middleware(
 )
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(OrgIdMiddleware)
+app.add_middleware(ImpersonationMiddleware)
 
 graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")

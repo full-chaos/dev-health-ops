@@ -40,6 +40,50 @@ def get_current_org_id() -> str | None:
     return _current_org_id.get(None)
 
 
+# ─── Impersonation context ──────────────────────────────────────────────────
+# Tracks the active impersonation session for the current request.
+# Set by ImpersonationMiddleware; read by audit service and permission checks.
+
+@dataclass
+class ImpersonationContext:
+    target_user_id: str
+    target_org_id: str
+    target_role: str
+    real_user_id: str
+    is_active: bool = True
+
+
+_impersonation_ctx: contextvars.ContextVar[ImpersonationContext | None] = contextvars.ContextVar(
+    "impersonation_ctx", default=None
+)
+
+
+def get_impersonation_context() -> ImpersonationContext | None:
+    """Return the active ImpersonationContext for this request, or None."""
+    return _impersonation_ctx.get(None)
+
+
+def set_impersonation_context(
+    target_user_id: str,
+    target_org_id: str,
+    target_role: str,
+    real_user_id: str,
+) -> contextvars.Token[ImpersonationContext | None]:
+    """Activate impersonation context for the current request scope."""
+    ctx = ImpersonationContext(
+        target_user_id=target_user_id,
+        target_org_id=target_org_id,
+        target_role=target_role,
+        real_user_id=real_user_id,
+    )
+    return _impersonation_ctx.set(ctx)
+
+
+def is_impersonating() -> bool:
+    """Return True if an active impersonation session is set for this request."""
+    ctx = _impersonation_ctx.get(None)
+    return ctx is not None and ctx.is_active
+
 # JWT configuration
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60

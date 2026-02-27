@@ -536,35 +536,33 @@ class FeatureOverrideResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class ImpersonateRequest(BaseModel):
+class StartImpersonationRequest(BaseModel):
     target_user_id: str
 
 
-class ImpersonatedUserInfo(BaseModel):
+class ImpersonateTargetUser(BaseModel):
     id: str
     email: str
-    role: str
     org_id: str
+    role: str
 
 
-class ImpersonateResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
-    impersonated_user: ImpersonatedUserInfo
+class StartImpersonationResponse(BaseModel):
+    status: str  # "active"
+    target_user: ImpersonateTargetUser
+    expires_at: datetime
 
 
-class ImpersonateStopResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in: int
+class StopImpersonationResponse(BaseModel):
+    status: str  # "stopped"
 
 
-class ImpersonateStatusResponse(BaseModel):
+class ImpersonationStatusResponse(BaseModel):
     is_impersonating: bool
-    impersonated_user_id: Optional[str]
-    real_user_id: Optional[str]
-
+    target_user_id: Optional[str] = None
+    target_email: Optional[str] = None
+    target_org_id: Optional[str] = None
+    expires_at: Optional[datetime] = None
 
 # ---- IP Allowlist schemas (Enterprise feature: ip_allowlist) ----
 

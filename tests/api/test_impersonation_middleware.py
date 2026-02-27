@@ -8,12 +8,20 @@ from __future__ import annotations
 
 import contextvars
 import time
+import types
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
+from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.services.auth import (
     ImpersonationContext,
+    _current_org_id,
     _impersonation_ctx,
+    get_current_org_id,
     get_impersonation_context,
     is_impersonating,
     set_impersonation_context,
@@ -195,23 +203,6 @@ def test_is_impersonating_false_after_context_reset():
 # wrapping it in a minimal test-only stack and sending real HTTP requests via
 # httpx.AsyncClient + ASGITransport.
 # ---------------------------------------------------------------------------
-
-
-import types
-from datetime import datetime, timedelta, timezone
-from typing import Any
-from unittest.mock import AsyncMock, patch
-
-import httpx
-import pytest
-
-from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
-from dev_health_ops.api.services.auth import (
-    _current_org_id,
-    _impersonation_ctx,
-    get_current_org_id,
-    get_impersonation_context,
-)
 
 
 # ---------------------------------------------------------------------------

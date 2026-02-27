@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Text, CheckConstraint
-from sqlalchemy.dialects.postgresql import UUID
+
 from dev_health_ops.models.git import Base, GUID
 
 
@@ -21,7 +21,7 @@ class ImpersonationSession(Base):
     # Admin initiating the impersonation
     admin_user_id = Column(
         GUID(),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -29,7 +29,7 @@ class ImpersonationSession(Base):
     # Target user being impersonated
     target_user_id = Column(
         GUID(),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -37,7 +37,7 @@ class ImpersonationSession(Base):
     # Organization within which impersonation occurs
     target_org_id = Column(
         GUID(),
-        ForeignKey("organizations.id", ondelete="CASCADE"),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

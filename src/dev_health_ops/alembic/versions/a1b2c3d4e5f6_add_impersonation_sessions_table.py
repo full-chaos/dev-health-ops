@@ -25,23 +25,20 @@ def upgrade() -> None:
         sa.Column(
             "admin_user_id",
             UUID(as_uuid=True),
-            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            sa.ForeignKey("users.id", ondelete="RESTRICT"),
             nullable=False,
-            index=True,
         ),
         sa.Column(
             "target_user_id",
             UUID(as_uuid=True),
-            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            sa.ForeignKey("users.id", ondelete="RESTRICT"),
             nullable=False,
-            index=True,
         ),
         sa.Column(
             "target_org_id",
             UUID(as_uuid=True),
-            sa.ForeignKey("organizations.id", ondelete="CASCADE"),
+            sa.ForeignKey("organizations.id", ondelete="RESTRICT"),
             nullable=False,
-            index=True,
         ),
         sa.Column("target_role", sa.String(length=50), nullable=False),
         sa.Column(
@@ -60,6 +57,25 @@ def upgrade() -> None:
         ),
     )
 
+    op.create_index(
+        "ix_impersonation_sessions_admin_user_id",
+        "impersonation_sessions",
+        ["admin_user_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_impersonation_sessions_target_user_id",
+        "impersonation_sessions",
+        ["target_user_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_impersonation_sessions_target_org_id",
+        "impersonation_sessions",
+        ["target_org_id"],
+        unique=False,
+    )
+
     # Partial index for fast lookup of active sessions by admin_id
     op.create_index(
         "ix_impersonation_sessions_admin_active",
@@ -73,6 +89,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(
         "ix_impersonation_sessions_admin_active",
+        table_name="impersonation_sessions",
+    )
+    op.drop_index(
+        "ix_impersonation_sessions_target_org_id",
+        table_name="impersonation_sessions",
+    )
+    op.drop_index(
+        "ix_impersonation_sessions_target_user_id",
+        table_name="impersonation_sessions",
+    )
+    op.drop_index(
+        "ix_impersonation_sessions_admin_user_id",
         table_name="impersonation_sessions",
     )
     op.drop_table("impersonation_sessions")

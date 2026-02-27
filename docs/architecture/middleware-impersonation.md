@@ -62,10 +62,10 @@ Request arrives
 
 ```sql
 CREATE TABLE impersonation_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    admin_user_id UUID NOT NULL REFERENCES users(id),
-    target_user_id UUID NOT NULL REFERENCES users(id),
-    target_org_id UUID NOT NULL REFERENCES organizations(id),
+    id UUID PRIMARY KEY,
+    admin_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    target_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    target_org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
     target_role VARCHAR(50) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at TIMESTAMPTZ NOT NULL,
@@ -84,7 +84,7 @@ CREATE INDEX idx_impersonation_active
 - One active session per admin (enforce in application — end previous before starting new)
 - TTL-based expiry (default 60 min, configurable via `IMPERSONATION_TTL_MINUTES`)
 - `ended_at` NULL = active, non-NULL = stopped
-- No cascade delete — sessions are audit trail
+- `ON DELETE RESTRICT` on user/org FKs — sessions are preserved as an audit trail; users/orgs with sessions cannot be deleted until sessions are removed
 
 ### API Changes
 

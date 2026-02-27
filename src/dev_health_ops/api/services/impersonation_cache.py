@@ -2,7 +2,8 @@
 
 Caches active ImpersonationSession lookups to avoid a DB query on every
 request. TTL is 30 seconds — short enough for responsive UX while cutting
-per-request DB cost during impersonation.
+per-request DB cost during impersonation. The cache is unbounded (no
+max-size eviction); entries are evicted only when their TTL expires.
 """
 
 from __future__ import annotations

@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 import logging
+
+try:
+    # Runtime import to avoid circular import issues with auth module
+    from dev_health_ops.api.services.auth import get_impersonation_context  # type: ignore
+except Exception:
+    # Fallback if import fails due to circular import during module import
+    get_impersonation_context = None  # type: ignore
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -60,6 +67,16 @@ def has_permission(user: "AuthenticatedUser", permission: str) -> bool:
     Returns:
         True if user has permission, False otherwise
     """
+    # Check impersonation context first. If impersonating, use the impersonated
+    # target_role instead of the superuser bypass.
+    imp_ctx = None
+    if callable(get_impersonation_context):
+        imp_ctx = get_impersonation_context()
+    if imp_ctx is not None and getattr(imp_ctx, "is_active", False):
+        # When impersonating, derive permissions from the target role
+        role_perms = _get_role_permissions(getattr(imp_ctx, "target_role", ""))
+        return permission in role_perms
+
     if user.is_superuser:
         return True
 
@@ -83,6 +100,13 @@ def has_all_permissions(user: "AuthenticatedUser", *permissions: str) -> bool:
 
 def get_user_permissions(user: "AuthenticatedUser") -> set[str]:
     """Get all permissions for a user."""
+    # If impersonating, return impersonated user's permissions
+    imp_ctx = None
+    if callable(get_impersonation_context):
+        imp_ctx = get_impersonation_context()
+    if imp_ctx is not None and getattr(imp_ctx, "is_active", False):
+        return set(_get_role_permissions(getattr(imp_ctx, "target_role", "")))
+
     if user.is_superuser:
         return set(_get_all_permission_names())
     return set(_get_role_permissions(user.role))

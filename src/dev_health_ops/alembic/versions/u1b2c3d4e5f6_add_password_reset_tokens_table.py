@@ -1,7 +1,7 @@
 """Add password_reset_tokens table.
 
 Revision ID: u1b2c3d4e5f6
-Revises: t0a1b2c3d4e5
+Revises: t0a1b2c3d4e6
 Create Date: 2026-02-26
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 
 revision: str = "u1b2c3d4e5f6"
-down_revision: Union[str, None] = "t0a1b2c3d4e5"
+down_revision: Union[str, None] = "t0a1b2c3d4e6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

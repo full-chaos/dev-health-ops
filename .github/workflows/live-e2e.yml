@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload live-e2e API logs
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: live-e2e-api-logs
           path: live-e2e-api.log

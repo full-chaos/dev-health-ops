@@ -32,6 +32,7 @@ nav:
       - Data Pipeline: architecture/data-pipeline.md
       - Repo Layout: architecture/repo-layout.md
       - Frontend Architecture: architecture/frontend-architecture.md
+      - Middleware Impersonation: architecture/middleware-impersonation.md
   - CLI:
       - Overview: cli.md
       - Reference: ops/cli-reference.md

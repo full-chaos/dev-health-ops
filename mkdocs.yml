@@ -18,6 +18,8 @@ nav:
   - Home: index.md
   - Product:
       - PRD: product/prd.md
+      - Feature Flag and User Impact PRD: product/feature-flag-user-impact-prd.md
+      - Feature Flag PRD Review: product/feature-flag-prd-review.md
       - Product Brief: product/product-brief.md
       - Concepts: product/concepts.md
       - Investment Taxonomy: product/investment-taxonomy.md

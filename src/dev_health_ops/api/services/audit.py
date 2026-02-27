@@ -75,6 +75,9 @@ class AuditService:
         )
 
         req_metadata: dict[str, Any] = {}
+        # Import impersonation context lazily to avoid circular imports at module level
+        from dev_health_ops.api.services.auth import get_impersonation_context
+
         if ip_address:
             req_metadata["ip_address"] = ip_address
         if user_agent:
@@ -85,6 +88,14 @@ class AuditService:
             req_metadata.update(extra_metadata)
         if user and user.impersonated_by:
             req_metadata["impersonated_by"] = user.impersonated_by
+        # Attach impersonation context if an impersonation session is active
+        imp_ctx = get_impersonation_context()
+        if imp_ctx is not None and imp_ctx.is_active:
+            if req_metadata is None:
+                req_metadata = {}
+            req_metadata["impersonated_by"] = imp_ctx.real_user_id
+            req_metadata["impersonation_target"] = imp_ctx.target_user_id
+            req_metadata["impersonation_org"] = imp_ctx.target_org_id
 
         audit_log = AuditLog(
             org_id=org_id,

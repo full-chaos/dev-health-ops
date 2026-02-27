@@ -1,7 +1,7 @@
 """Add login_attempts table for account lockout tracking.
 
-Revision ID: t0a1b2c3d4e5
-Revises: s9n0o1p2q3r4
+Revision ID: t0a1b2c3d4e6
+Revises: t0a1b2c3d4e5
 Create Date: 2026-02-26
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
 
-revision: str = "t0a1b2c3d4e5"
-down_revision: Union[str, None] = "s9n0o1p2q3r4"
+revision: str = "t0a1b2c3d4e6"
+down_revision: Union[str, None] = "t0a1b2c3d4e5"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -6,8 +6,7 @@ for GitHub API, Celery, ClickHouse, and LLM metrics.
 
 from __future__ import annotations
 
-import pytest
-from prometheus_client import REGISTRY, CollectorRegistry
+from prometheus_client import REGISTRY
 
 from dev_health_ops.metrics.prometheus import (
     GITHUB_API_REQUESTS_TOTAL,

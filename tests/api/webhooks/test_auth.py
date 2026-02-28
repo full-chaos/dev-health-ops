@@ -81,6 +81,14 @@ class TestJiraSignatureValidation:
 
         assert verify_jira_signature(body, expected, secret) is True
 
+    def test_prefixed_hmac_accepted(self):
+        secret = "jira-secret"
+        body = b'{"webhookEvent": "jira:issue_created"}'
+
+        expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+        assert verify_jira_signature(body, f"sha256={expected}", secret) is True
+
     def test_invalid_hmac_rejected(self):
         secret = "jira-secret"
         body = b'{"webhookEvent": "jira:issue_created"}'

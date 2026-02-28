@@ -124,7 +124,13 @@ def verify_jira_signature(
         hashlib.sha256,
     ).hexdigest()
 
-    return hmac.compare_digest(computed, signature_header)
+    # Strip "sha256=" prefix if present (Jira may send either format)
+    expected = (
+        signature_header[7:]
+        if signature_header.startswith("sha256=")
+        else signature_header
+    )
+    return hmac.compare_digest(computed, expected)
 
 
 async def validate_github_webhook(

@@ -12,18 +12,26 @@ def test_health_endpoint_returns_ok_when_required_services_ok(monkeypatch):
     async def _ch_ok():
         return "clickhouse", "ok"
 
+    async def _redis_ok():
+        return "redis", "ok"
+
+    async def _celery_ok():
+        return "celery", "ok"
+
     monkeypatch.setattr(main, "_check_postgres_health", _pg_ok)
     monkeypatch.setattr(main, "_check_clickhouse_health", _ch_ok)
-    monkeypatch.setattr(main.HOME_CACHE, "status", lambda: "ok")
+    monkeypatch.setattr(main, "_check_redis_health", _redis_ok)
+    monkeypatch.setattr(main, "_check_celery_health", _celery_ok)
 
     with TestClient(main.app) as client:
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "services": {"postgres": "ok", "clickhouse": "ok", "redis": "ok"},
-    }
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["services"]["postgres"] == "ok"
+    assert body["services"]["clickhouse"] == "ok"
+    assert body["services"]["redis"] == "ok"
 
 
 def test_health_endpoint_returns_503_when_required_service_is_down(monkeypatch):
@@ -33,9 +41,16 @@ def test_health_endpoint_returns_503_when_required_service_is_down(monkeypatch):
     async def _ch_ok():
         return "clickhouse", "ok"
 
+    async def _redis_ok():
+        return "redis", "ok"
+
+    async def _celery_ok():
+        return "celery", "ok"
+
     monkeypatch.setattr(main, "_check_postgres_health", _pg_down)
     monkeypatch.setattr(main, "_check_clickhouse_health", _ch_ok)
-    monkeypatch.setattr(main.HOME_CACHE, "status", lambda: "ok")
+    monkeypatch.setattr(main, "_check_redis_health", _redis_ok)
+    monkeypatch.setattr(main, "_check_celery_health", _celery_ok)
 
     with TestClient(main.app) as client:
         response = client.get("/health")

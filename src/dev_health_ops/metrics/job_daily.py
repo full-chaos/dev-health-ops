@@ -23,9 +23,6 @@ from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
-from dev_health_ops.metrics.db_utils import (
-    normalize_sqlite_url as _normalize_sqlite_url,
-)
 from dev_health_ops.metrics.hotspots import compute_file_hotspots
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
@@ -38,17 +35,12 @@ from dev_health_ops.metrics.knowledge import (
 )
 from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
-from dev_health_ops.metrics.loaders.mongo import MongoDataLoader
-from dev_health_ops.metrics.loaders.sqlalchemy import SqlAlchemyDataLoader
 from dev_health_ops.metrics.quality import (
     compute_rework_churn_ratio,
     compute_single_owner_file_ratio,
 )
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
-from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import build_repo_pattern_resolver
 from dev_health_ops.storage import detect_db_type
@@ -86,90 +78,40 @@ def discover_repos(
             )
         ]
 
-    # Fallback: attempt to get all repos from sink
+    # Fallback: query all repos from ClickHouse
     try:
-        # Most sinks have access to the underlying storage/client
-        if backend == "clickhouse":
-            rows = primary_sink.client.query(
-                "SELECT id, repo, settings FROM repos"
-            ).result_rows
-            return [
-                DiscoveredRepo(
-                    repo_id=uuid.UUID(str(r[0])),
-                    full_name=r[1],
-                    source="auto",
-                    settings=r[2] or {},
-                )
-                for r in rows
-            ]
-        elif backend == "mongo":
-            cursor = primary_sink.db["repos"].find(
-                {}, {"id": 1, "repo": 1, "settings": 1}
+        rows = primary_sink.client.query(
+            "SELECT id, repo, settings FROM repos"
+        ).result_rows
+        return [
+            DiscoveredRepo(
+                repo_id=uuid.UUID(str(r[0])),
+                full_name=r[1],
+                source="auto",
+                settings=r[2] or {},
             )
-            return [
-                DiscoveredRepo(
-                    repo_id=uuid.UUID(str(d.get("id") or d["_id"])),
-                    full_name=d["repo"],
-                    source="auto",
-                    settings=d.get("settings") or {},
-                )
-                for d in cursor
-            ]
-        else:
-            # SQLAlchemy/SQLite
-            from sqlalchemy import text
-
-            with primary_sink.engine.connect() as conn:
-                rows = conn.execute(text("SELECT id, repo, settings FROM repos")).all()
-                import json
-
-                return [
-                    DiscoveredRepo(
-                        repo_id=uuid.UUID(str(r[0])),
-                        full_name=r[1],
-                        source="auto",
-                        settings=json.loads(r[2])
-                        if isinstance(r[2], str)
-                        else (r[2] or {}),
-                    )
-                    for r in rows
-                ]
+            for r in rows
+        ]
     except Exception as exc:
         logger.warning("Repo discovery failed: %s", exc)
         return []
 
 
-# Alias for backward compatibility
+# Backward-compat alias used by job_dora and job_work_items
 _discover_repos = discover_repos
 
 
 async def _get_loader(db_url: str, backend: str, org_id: str = "") -> DataLoader:
-    """Factory to create the appropriate DataLoader for the backend."""
-    if backend == "clickhouse":
-        from dev_health_ops.api.queries.client import get_global_client
+    """Factory to create the ClickHouse DataLoader."""
+    if backend != "clickhouse":
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
+            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
+        )
+    from dev_health_ops.api.queries.client import get_global_client
 
-        client = await get_global_client(db_url)
-        return ClickHouseDataLoader(client, org_id=org_id)
-    elif backend == "mongo":
-        import pymongo
-
-        client = pymongo.MongoClient(db_url)
-        try:
-            db = client.get_default_database()
-        except Exception:
-            db = client["mergestat"]
-        return MongoDataLoader(db)
-    elif backend in {"sqlite", "postgres"}:
-        from sqlalchemy import create_engine
-
-        if "sqlite+aiosqlite://" in db_url:
-            db_url = db_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
-        elif "postgresql+asyncpg://" in db_url:
-            db_url = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-        engine = create_engine(db_url)
-        return SqlAlchemyDataLoader(engine)
-    else:
-        raise ValueError(f"No DataLoader implementation for backend: {backend}")
+    client = await get_global_client(db_url)
+    return ClickHouseDataLoader(client, org_id=org_id)
 
 
 def _utc_day_window(day: date) -> tuple[datetime, datetime]:
@@ -221,22 +163,15 @@ async def run_daily_metrics_job(
     identity = load_identity_resolver()
 
     primary_sink: Any
-    secondary_sink: Any | None = None
 
-    if backend == "clickhouse":
-        primary_sink = ClickHouseMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = MongoMetricsSink(_secondary_uri_from_env())
-    elif backend == "mongo":
-        primary_sink = MongoMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = ClickHouseMetricsSink(_secondary_uri_from_env())
-    elif backend == "postgres":
-        primary_sink = PostgresMetricsSink(db_url)
-    else:
-        primary_sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
+    if backend != "clickhouse":
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
+            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
+        )
+    primary_sink = ClickHouseMetricsSink(db_url)
 
-    sinks = [primary_sink] + ([secondary_sink] if secondary_sink else [])
+    sinks = [primary_sink]
 
     # Propagate org_id to sinks for auto-injection into metric records.
     for s in sinks:
@@ -245,8 +180,6 @@ async def run_daily_metrics_job(
     for s in sinks:
         if hasattr(s, "ensure_tables"):
             s.ensure_tables()
-        elif hasattr(s, "ensure_indexes"):
-            s.ensure_indexes()
 
     await init_team_resolver(primary_sink)
     team_resolver = get_team_resolver()
@@ -492,22 +425,15 @@ async def run_daily_metrics_finalize(
         sink = backend
 
     primary_sink: Any
-    secondary_sink: Any | None = None
 
-    if backend == "clickhouse":
-        primary_sink = ClickHouseMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = MongoMetricsSink(_secondary_uri_from_env())
-    elif backend == "mongo":
-        primary_sink = MongoMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = ClickHouseMetricsSink(_secondary_uri_from_env())
-    elif backend == "postgres":
-        primary_sink = PostgresMetricsSink(db_url)
-    else:
-        primary_sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
+    if backend != "clickhouse":
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
+            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
+        )
+    primary_sink = ClickHouseMetricsSink(db_url)
 
-    sinks_list = [primary_sink] + ([secondary_sink] if secondary_sink else [])
+    sinks_list = [primary_sink]
 
     # Propagate org_id to sinks for auto-injection into metric records.
     for s in sinks_list:
@@ -516,8 +442,6 @@ async def run_daily_metrics_finalize(
     for s in sinks_list:
         if hasattr(s, "ensure_tables"):
             s.ensure_tables()
-        elif hasattr(s, "ensure_indexes"):
-            s.ensure_indexes()
 
     await init_team_resolver(primary_sink)
 

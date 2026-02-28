@@ -24,6 +24,23 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _fakeredis_supports_lua() -> bool:
+    """Check if the installed fakeredis version supports Lua eval/evalsha."""
+    if fakeredis is None:
+        return False
+    try:
+        client = fakeredis.FakeRedis(decode_responses=True)
+        # Redis EVAL command for Lua scripting (not Python eval)
+        client.eval("return 1", 0)  # noqa: S307
+        return True
+    except Exception:
+        return False
+
+
+_HAS_LUA = _fakeredis_supports_lua()
+requires_lua = pytest.mark.skipif(not _HAS_LUA, reason="fakeredis Lua scripting unavailable")
+
+
 @pytest.fixture()
 def redis_client() -> Any:
     return fakeredis.FakeRedis(decode_responses=True)
@@ -66,6 +83,7 @@ class TestRegisterToken:
         assert stored == "ghp_secret"
 
 
+@requires_lua
 class TestLeaseToken:
     def test_returns_registered_token(self, pool: TokenPool):
         pool.register_token("ghp_one")
@@ -114,6 +132,7 @@ class TestLeaseToken:
         assert pool.lease_token() is None
 
 
+@requires_lua
 class TestReturnToken:
     def test_makes_token_available_again(self, pool: TokenPool):
         pool.register_token("ghp_ret")
@@ -267,11 +286,13 @@ class TestFactory:
 
 
 class TestLuaScript:
+    @requires_lua
     def test_evalsha_receives_correct_args(self, pool: TokenPool):
         pool.register_token("ghp_lua")
         pool._redis.evalsha = MagicMock(wraps=pool._redis.evalsha)
         pool.lease_token()
 
+    @requires_lua
     def test_eval_fallback_on_evalsha_failure(self, redis_client: Any):
         pool = TokenPool("github", "org", redis_client=redis_client)
         pool.register_token("ghp_fb")

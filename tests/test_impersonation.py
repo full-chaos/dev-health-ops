@@ -10,7 +10,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-import dev_health_ops.api.admin.impersonation as _imp_mod
+from dev_health_ops.api.admin import impersonation as _imp_mod
 from dev_health_ops.api.admin.impersonation import get_db_session, router
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser

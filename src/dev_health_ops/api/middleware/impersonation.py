@@ -70,7 +70,7 @@ class ImpersonationMiddleware:
             try:
                 await _expire_session(session, admin_user_id)
             except Exception:
-                pass
+                logger.debug("Failed to expire impersonation session", exc_info=True)
             await self.app(scope, receive, send)
             return
 

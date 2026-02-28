@@ -182,9 +182,18 @@ wait_for_ready() {
     status="$(
       curl -sS -o "${readiness_file}" -w "%{http_code}" \
         -H "Accept: application/json" \
-        "${BASE_URL}/health" || true
+        "${BASE_URL}/ready" || true
     )"
-    if [ "${status}" = "200" ] && run_python - "${readiness_file}" <<'PY'
+    if [ "${status}" = "200" ]; then
+      echo "API process ready after ${i} attempt(s), checking dependencies..."
+      # Now verify critical dependencies via /health
+      local health_status
+      health_status="$(
+        curl -sS -o "${readiness_file}" -w "%{http_code}" \
+          -H "Accept: application/json" \
+          "${BASE_URL}/health" || true
+      )"
+      if [ "${health_status}" = "200" ] && run_python - "${readiness_file}" <<'PY'
 import json
 import pathlib
 import sys
@@ -194,11 +203,12 @@ payload = json.loads(path.read_text())
 assert payload.get("status") == "ok", payload
 services = payload.get("services", {})
 assert services.get("clickhouse") == "ok", services
-assert services.get("postgres") == "ok", services
+assert services.get("postgres") in ("ok", "not_configured"), services
 PY
-    then
-      echo "API ready after ${i} attempt(s)."
-      return 0
+      then
+        echo "All dependencies healthy."
+        return 0
+      fi
     fi
 
     if [ -n "${API_PID}" ] && ! kill -0 "${API_PID}" >/dev/null 2>&1; then
@@ -264,7 +274,7 @@ payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
 assert payload["status"] == "ok", payload
 services = payload.get("services", {})
 assert services.get("clickhouse") == "ok", services
-assert services.get("postgres") == "ok", services
+assert services.get("postgres") in ("ok", "not_configured"), services
 PY
 
 echo "==> validating /api/v1/meta"
@@ -276,7 +286,7 @@ import pathlib
 import sys
 
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
-assert payload.get("backend") == "postgres", payload
+assert payload.get("backend") == "clickhouse", payload
 assert payload.get("limits", {}).get("max_days") == 365, payload
 assert payload.get("limits", {}).get("max_repos") == 1000, payload
 supported = payload.get("supported_endpoints", [])

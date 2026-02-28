@@ -198,28 +198,15 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
         sink = None
         if ns.with_metrics:
-            from dev_health_ops.metrics.job_daily import (
-                ClickHouseMetricsSink,
-                MongoMetricsSink,
-                PostgresMetricsSink,
-                SQLiteMetricsSink,
-                _normalize_sqlite_url,
-            )
+            from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-            if db_type == "clickhouse":
-                sink = ClickHouseMetricsSink(ns.sink)
-            elif db_type == "sqlite":
-                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.sink))
-            elif db_type == "mongo":
-                sink = MongoMetricsSink(ns.sink)
-            elif db_type == "postgres":
-                sink = PostgresMetricsSink(ns.sink)
-
-            if sink:
-                if isinstance(sink, MongoMetricsSink):
-                    sink.ensure_indexes()
-                else:
-                    sink.ensure_tables()
+            if db_type != "clickhouse":
+                raise ValueError(
+                    f"Unsupported backend '{db_type}'. Only ClickHouse is supported (CHAOS-641). "
+                    "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
+                )
+            sink = ClickHouseMetricsSink(ns.sink)
+            sink.ensure_tables()
 
         for i in range(repo_count):
             r_name = base_name if repo_count == 1 else f"{base_name}-{i + 1}"
@@ -411,24 +398,14 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         )
 
         if fixture_data["work_items"] and fixture_data["transitions"]:
-            from dev_health_ops.metrics.job_daily import (
-                ClickHouseMetricsSink,
-                MongoMetricsSink,
-                PostgresMetricsSink,
-                SQLiteMetricsSink,
-                _normalize_sqlite_url,
-            )
+            from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-            if db_type == "clickhouse":
-                sink = ClickHouseMetricsSink(ns.sink)
-            elif db_type == "sqlite":
-                sink = SQLiteMetricsSink(_normalize_sqlite_url(ns.sink))
-            elif db_type == "mongo":
-                sink = MongoMetricsSink(ns.sink)
-            elif db_type == "postgres":
-                sink = PostgresMetricsSink(ns.sink)
-            else:
-                sink = None
+            if db_type != "clickhouse":
+                raise ValueError(
+                    f"Unsupported backend '{db_type}'. Only ClickHouse is supported (CHAOS-641). "
+                    "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
+                )
+            sink = ClickHouseMetricsSink(ns.sink)
 
             if sink:
                 # Propagate org_id to sink for auto-injection into metric records.

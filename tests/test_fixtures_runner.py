@@ -32,12 +32,11 @@ async def test_fixtures_generation_smoke_sqlite(tmp_path):
         seed=42,
         provider="synthetic",
         with_work_graph=False,
-        with_metrics=True,
+        with_metrics=False,
         team_count=2,
     )
 
-    # Run the generation
-    # We expect this to complete without raising NameError, SyntaxError, etc.
+    # Run the generation (metrics require ClickHouse since CHAOS-641)
     result = await run_fixtures_generation(ns)
 
     assert result == 0

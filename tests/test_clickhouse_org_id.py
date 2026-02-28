@@ -6,7 +6,6 @@ from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import text
 
 from dev_health_ops.metrics.schemas import (
     CICDMetricsDailyRecord,
@@ -225,101 +224,6 @@ def test_clickhouse_sink_write_work_graph_edges_includes_org_id():
         matrix = call_args[0][1]
         org_id_idx = list(column_names).index("org_id")
         assert matrix[0][org_id_idx] == "edge-org"
-
-
-# ---------------------------------------------------------------------------
-# 4. SQLite/SQLAlchemy sink DDL includes org_id and writes it
-# ---------------------------------------------------------------------------
-
-
-def test_sqlite_sink_org_id_column_exists(tmp_path):
-    """ensure_tables must create org_id column in all tables."""
-    from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
-
-    db_path = tmp_path / "test.db"
-    sink = SQLiteMetricsSink(f"sqlite:///{db_path}")
-    try:
-        sink.ensure_tables()
-
-        with sink.engine.begin() as conn:
-            result = conn.execute(
-                text("PRAGMA table_info(repo_metrics_daily)")
-            ).fetchall()
-            col_names = [row[1] for row in result]
-            assert "org_id" in col_names, (
-                f"org_id not in repo_metrics_daily columns: {col_names}"
-            )
-    finally:
-        sink.close()
-
-
-def test_sqlite_sink_writes_org_id(tmp_path):
-    """write_repo_metrics must persist org_id value."""
-    from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
-
-    db_path = tmp_path / "test.db"
-    sink = SQLiteMetricsSink(f"sqlite:///{db_path}")
-    try:
-        sink.ensure_tables()
-        repo_id = uuid.uuid4()
-        row = RepoMetricsDailyRecord(
-            repo_id=repo_id,
-            day=date(2025, 1, 1),
-            commits_count=1,
-            total_loc_touched=10,
-            avg_commit_size_loc=10.0,
-            large_commit_ratio=0.0,
-            prs_merged=0,
-            median_pr_cycle_hours=0.0,
-            computed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
-            org_id="acme-corp",
-        )
-        sink.write_repo_metrics([row])
-
-        with sink.engine.begin() as conn:
-            result = conn.execute(
-                text("SELECT org_id FROM repo_metrics_daily WHERE repo_id = :rid"),
-                {"rid": str(repo_id)},
-            ).fetchone()
-
-        assert result is not None
-        assert result[0] == "acme-corp"
-    finally:
-        sink.close()
-
-
-def test_sqlite_sink_org_id_defaults(tmp_path):
-    """When org_id is not explicitly set, it should default to ''."""
-    from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
-
-    db_path = tmp_path / "test.db"
-    sink = SQLiteMetricsSink(f"sqlite:///{db_path}")
-    try:
-        sink.ensure_tables()
-        repo_id = uuid.uuid4()
-        row = RepoMetricsDailyRecord(
-            repo_id=repo_id,
-            day=date(2025, 1, 1),
-            commits_count=1,
-            total_loc_touched=10,
-            avg_commit_size_loc=10.0,
-            large_commit_ratio=0.0,
-            prs_merged=0,
-            median_pr_cycle_hours=0.0,
-            computed_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
-        )
-        sink.write_repo_metrics([row])
-
-        with sink.engine.begin() as conn:
-            result = conn.execute(
-                text("SELECT org_id FROM repo_metrics_daily WHERE repo_id = :rid"),
-                {"rid": str(repo_id)},
-            ).fetchone()
-
-        assert result is not None
-        assert result[0] == ""
-    finally:
-        sink.close()
 
 
 # ---------------------------------------------------------------------------

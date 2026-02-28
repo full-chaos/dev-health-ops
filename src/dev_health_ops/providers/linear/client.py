@@ -426,8 +426,7 @@ class LinearClient:
             teams_data = data.get("teams", {})
             nodes = teams_data.get("nodes", [])
 
-            for node in nodes:
-                yield node
+            yield from nodes
 
             page_info = teams_data.get("pageInfo", {})
             if not page_info.get("hasNextPage"):
@@ -454,8 +453,7 @@ class LinearClient:
             cycles_data = data.get("cycles", {})
             nodes = cycles_data.get("nodes", [])
 
-            for node in nodes:
-                yield node
+            yield from nodes
 
             page_info = cycles_data.get("pageInfo", {})
             if not page_info.get("hasNextPage"):
@@ -471,8 +469,7 @@ class LinearClient:
             projects_data = data.get("projects", {})
             nodes = projects_data.get("nodes", [])
 
-            for node in nodes:
-                yield node
+            yield from nodes
 
             page_info = projects_data.get("pageInfo", {})
             if not page_info.get("hasNextPage"):
@@ -488,8 +485,7 @@ class LinearClient:
             states_data = data.get("workflowStates", {})
             nodes = states_data.get("nodes", [])
 
-            for node in nodes:
-                yield node
+            yield from nodes
 
             page_info = states_data.get("pageInfo", {})
             if not page_info.get("hasNextPage"):

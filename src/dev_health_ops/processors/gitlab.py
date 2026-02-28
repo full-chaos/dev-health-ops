@@ -10,15 +10,19 @@ from dev_health_ops.models.git import (
     GitBlame,
     GitCommit,
     GitCommitStat,
-    GitFile,
     GitPullRequest,
     Incident,
     Repo,
+)
+from dev_health_ops.processors.base_git import (
+    backfill_file_records,
+    check_backfill_needs,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
     safe_parse_datetime,
 )
+from dev_health_ops.processors.storage_protocol import GitSyncStore
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
@@ -531,8 +535,7 @@ def _iter_gitlab_repo_tree(
             len(page_items),
             seen,
         )
-        for item in page_items:
-            yield item
+        yield from page_items
         if limit is not None and seen >= limit:
             return
         page += 1
@@ -607,20 +610,8 @@ async def _backfill_gitlab_missing_data(
     max_commits: int | None,
     blame_only: bool = False,
 ) -> None:
-    if not (
-        hasattr(store, "has_any_git_files")
-        and hasattr(store, "has_any_git_blame")
-        and hasattr(store, "has_any_git_commit_stats")
-    ):
-        return
-
-    needs_files = not await store.has_any_git_files(db_repo.id)
-    needs_commit_stats = (
-        False if blame_only else not await store.has_any_git_commit_stats(db_repo.id)
-    )
-    needs_blame = not await store.has_any_git_blame(db_repo.id)
-
-    if not (needs_files or needs_commit_stats or needs_blame):
+    needs = await check_backfill_needs(store, db_repo.id, blame_only=blame_only)
+    if not needs.any:
         return
 
     try:
@@ -630,7 +621,7 @@ async def _backfill_gitlab_missing_data(
         return
 
     file_paths: list[str] = []
-    if needs_files or needs_blame:
+    if needs.files or needs.blame:
         try:
             items = _iter_gitlab_repo_tree(
                 project,
@@ -650,22 +641,12 @@ async def _backfill_gitlab_missing_data(
                 continue
             file_paths.append(path)
 
-        if needs_files and file_paths:
-            async with AsyncBatchCollector(
-                store.insert_git_file_data
-            ) as file_collector:
-                for path in file_paths:
-                    file_collector.add(
-                        GitFile(
-                            repo_id=db_repo.id,
-                            path=path,
-                            executable=False,
-                            contents=None,
-                        )
-                    )
-                    await file_collector.maybe_flush()
+        if needs.files and file_paths:
+            await backfill_file_records(
+                store, db_repo.id, file_paths, project_full_name
+            )
 
-    if needs_commit_stats:
+    if needs.commit_stats:
         try:
             commits = project.commits.list(
                 ref_name=default_branch, per_page=100, get_all=True
@@ -708,7 +689,7 @@ async def _backfill_gitlab_missing_data(
                         f"Failed commit stat fetch for {project_full_name}@{sha}: {e}"
                     )
 
-    if needs_blame and file_paths:
+    if needs.blame and file_paths:
         async with AsyncBatchCollector(store.insert_blame_data) as blame_collector:
             for path in file_paths:
                 try:
@@ -746,7 +727,7 @@ async def _backfill_gitlab_missing_data(
 
 
 async def process_gitlab_project(
-    store: Any,
+    store: GitSyncStore | Any,
     project_id: int,
     token: str,
     gitlab_url: str,

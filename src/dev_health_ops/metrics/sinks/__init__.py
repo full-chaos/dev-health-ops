@@ -1,16 +1,8 @@
 """
 Sink implementations for writing derived metrics.
 
-Sinks persist derived metrics data to various backends:
-- ClickHouse: append-only analytics store (primary, only supported for analytics)
-- MongoDB: document store with idempotent upserts (DEPRECATED for analytics)
-- SQLite: file-based relational store (DEPRECATED for analytics)
-- PostgreSQL: production relational store (DEPRECATED for analytics)
-
-DEPRECATION NOTICE:
-MongoDB, PostgreSQL, and SQLite are deprecated for analytics use. ClickHouse is
-the only supported analytics backend. Migrate to ClickHouse. See
-docs/architecture/database-architecture.md for migration guidance.
+ClickHouse is the only supported analytics backend.
+All other backends (MongoDB, SQLite, PostgreSQL) were removed in CHAOS-641.
 
 Usage:
     from dev_health_ops.metrics.sinks import create_sink, BaseMetricsSink
@@ -28,9 +20,6 @@ from dev_health_ops.metrics.sinks.factory import (
     create_sink,
     detect_backend,
 )
-from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
-from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 
 __all__ = [
     "BaseMetricsSink",
@@ -38,7 +27,4 @@ __all__ = [
     "create_sink",
     "detect_backend",
     "ClickHouseMetricsSink",
-    "MongoMetricsSink",
-    "SQLiteMetricsSink",
-    "PostgresMetricsSink",
 ]

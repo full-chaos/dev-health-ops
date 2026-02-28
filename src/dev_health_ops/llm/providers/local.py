@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import os
 
+from dev_health_ops.llm.errors import classify_provider_error
+
 from .openai import (
     OpenAIGPT5Provider,
     OpenAIProviderConfig,
@@ -153,8 +155,9 @@ class LocalProvider:
                     retry_count += 1
                     continue
 
-                logger.error("Local LLM API error (%s): %s", self.base_url, e)
-                raise
+                llm_exc = classify_provider_error(e, provider="local", model=self.model)
+                logger.error("Local LLM API error (%s): %s", self.base_url, llm_exc)
+                raise llm_exc from e
         return ""  # Should not be reachable
 
     async def aclose(self) -> None:

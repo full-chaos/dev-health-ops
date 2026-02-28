@@ -15,8 +15,6 @@ from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_
 from dev_health_ops.metrics.job_daily import (
     REPO_ROOT,
     _discover_repos,
-    _normalize_sqlite_url,
-    _secondary_uri_from_env,
     _to_utc,
 )
 from dev_health_ops.metrics.schemas import (
@@ -25,9 +23,6 @@ from dev_health_ops.metrics.schemas import (
     IssueTypeMetricsRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
-from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.metrics.work_items import (
     fetch_github_project_v2_items,
     fetch_github_work_items,
@@ -73,25 +68,10 @@ def run_work_items_sync_job(
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
 
     backend = detect_db_type(db_url)
-    sink = (sink or "auto").strip().lower()
-    if sink == "auto":
-        sink = backend
-
-    if backend not in {"clickhouse", "mongo", "sqlite", "postgres"}:
-        raise ValueError(f"Unsupported db backend for work item sync: {backend}")
-
-    if sink not in {"clickhouse", "mongo", "sqlite", "postgres", "both"}:
+    if backend != "clickhouse":
         raise ValueError(
-            "sink must be one of: auto, clickhouse, mongo, sqlite, postgres, both"
-        )
-    if sink != "both" and sink != backend:
-        raise ValueError(
-            f"sink='{sink}' requires db backend '{sink}', got '{backend}'. "
-            "For cross-backend writes use sink='both'."
-        )
-    if sink == "both" and backend not in {"clickhouse", "mongo"}:
-        raise ValueError(
-            "sink='both' is only supported when source backend is clickhouse or mongo"
+            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
+            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
         )
 
     provider = (provider or "none").strip().lower()
@@ -121,35 +101,12 @@ def run_work_items_sync_job(
     since_dt = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
     until_dt = datetime.combine(max(days), time.max, tzinfo=timezone.utc)
 
-    # Primary sink is always the same as `backend` unless sink='both'.
-    primary_sink: Any
-    secondary_sink: Any | None = None
-
-    if backend == "clickhouse":
-        primary_sink = ClickHouseMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = MongoMetricsSink(_secondary_uri_from_env())
-    elif backend == "mongo":
-        primary_sink = MongoMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = ClickHouseMetricsSink(_secondary_uri_from_env())
-    elif backend == "postgres":
-        primary_sink = PostgresMetricsSink(db_url)
-    else:
-        primary_sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
-
-    sinks: list[Any] = [primary_sink] + (
-        [secondary_sink] if secondary_sink is not None else []
-    )
+    primary_sink = ClickHouseMetricsSink(db_url)
+    sinks: list[Any] = [primary_sink]
 
     try:
         for s in sinks:
-            if isinstance(s, ClickHouseMetricsSink):
-                s.ensure_tables()
-            elif isinstance(s, MongoMetricsSink):
-                s.ensure_indexes()
-            elif isinstance(s, PostgresMetricsSink) or isinstance(s, SQLiteMetricsSink):
-                s.ensure_tables()
+            s.ensure_tables()
 
         _teams_data = (
             primary_sink.query_dicts(

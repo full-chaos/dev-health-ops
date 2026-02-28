@@ -28,23 +28,19 @@ class TestBackendDetection:
             == SinkBackend.CLICKHOUSE
         )
 
-    def test_postgres_detection(self):
-        assert detect_backend("postgresql://localhost/db") == SinkBackend.POSTGRES
-        assert detect_backend("postgres://localhost/db") == SinkBackend.POSTGRES
-        assert (
-            detect_backend("postgresql+asyncpg://localhost/db") == SinkBackend.POSTGRES
-        )
-
-    def test_sqlite_detection(self):
-        assert detect_backend("sqlite:///./test.db") == SinkBackend.SQLITE
-        assert detect_backend("sqlite+aiosqlite:///./test.db") == SinkBackend.SQLITE
-
-    def test_mongo_detection(self):
-        assert detect_backend("mongodb://localhost:27017") == SinkBackend.MONGO
-        assert detect_backend("mongodb+srv://cluster.example.net") == SinkBackend.MONGO
+    def test_removed_backends_raise_value_error(self):
+        """Backends removed in CHAOS-641 should raise ValueError."""
+        for dsn in [
+            "postgresql://localhost/db",
+            "postgres://localhost/db",
+            "sqlite:///./test.db",
+            "mongodb://localhost:27017",
+        ]:
+            with pytest.raises(ValueError, match="Only ClickHouse is supported"):
+                detect_backend(dsn)
 
     def test_unknown_raises_value_error(self):
-        with pytest.raises(ValueError, match="Unknown sink scheme"):
+        with pytest.raises(ValueError):
             detect_backend("unknown://localhost")
 
 
@@ -61,22 +57,17 @@ class TestSinkFactory:
             assert sink.backend_type == "clickhouse"
             sink.close()
 
-    def test_creates_sqlite_sink(self):
-        sink = create_sink("sqlite:///./test_sinks.db")
-        assert sink.backend_type == "sqlite"
-        sink.close()
+    def test_rejects_sqlite_sink(self):
+        with pytest.raises(ValueError, match="Only ClickHouse is supported"):
+            create_sink("sqlite:///./test_sinks.db")
 
-    def test_requires_dsn_or_env_var(self):
-        import os
+    def test_requires_dsn_or_env_var(self, monkeypatch):
+        # Clear all env vars that create_sink() checks
+        monkeypatch.delenv("DEV_HEALTH_SINK", raising=False)
+        monkeypatch.delenv("CLICKHOUSE_URI", raising=False)
 
-        # Temporarily clear the env var if set
-        old_val = os.environ.pop("DEV_HEALTH_SINK", None)
-        try:
-            with pytest.raises(ValueError, match="No sink DSN provided"):
-                create_sink()
-        finally:
-            if old_val:
-                os.environ["DEV_HEALTH_SINK"] = old_val
+        with pytest.raises(ValueError, match="No sink DSN provided"):
+            create_sink()
 
 
 class TestSinkInterface:
@@ -86,29 +77,25 @@ class TestSinkInterface:
         with pytest.raises(TypeError, match="abstract"):
             BaseMetricsSink()  # type: ignore
 
-    def test_sqlite_sink_has_required_methods(self):
-        sink = create_sink("sqlite:///:memory:")
-        try:
-            # Check all required methods exist
-            assert hasattr(sink, "backend_type")
-            assert hasattr(sink, "close")
-            assert hasattr(sink, "ensure_schema")
-            assert hasattr(sink, "write_repo_metrics")
-            assert hasattr(sink, "write_user_metrics")
-            assert hasattr(sink, "write_commit_metrics")
-            assert hasattr(sink, "write_file_metrics")
-            assert hasattr(sink, "write_team_metrics")
-            assert hasattr(sink, "write_work_item_metrics")
-            assert hasattr(sink, "write_investment_classifications")
-            assert hasattr(sink, "write_investment_metrics")
-            assert hasattr(sink, "write_issue_type_metrics")
-        finally:
-            sink.close()
+    def test_clickhouse_sink_has_required_methods(self):
+        from unittest.mock import MagicMock, patch
 
-    def test_sqlite_sink_ensure_schema(self):
-        sink = create_sink("sqlite:///:memory:")
-        try:
-            # Should not raise
-            sink.ensure_schema()
-        finally:
-            sink.close()
+        mock_client = MagicMock()
+        with patch("clickhouse_connect.get_client", return_value=mock_client):
+            sink = create_sink("clickhouse://localhost:8123/default")
+            try:
+                # Check all required methods exist
+                assert hasattr(sink, "backend_type")
+                assert hasattr(sink, "close")
+                assert hasattr(sink, "ensure_schema")
+                assert hasattr(sink, "write_repo_metrics")
+                assert hasattr(sink, "write_user_metrics")
+                assert hasattr(sink, "write_commit_metrics")
+                assert hasattr(sink, "write_file_metrics")
+                assert hasattr(sink, "write_team_metrics")
+                assert hasattr(sink, "write_work_item_metrics")
+                assert hasattr(sink, "write_investment_classifications")
+                assert hasattr(sink, "write_investment_metrics")
+                assert hasattr(sink, "write_issue_type_metrics")
+            finally:
+                sink.close()

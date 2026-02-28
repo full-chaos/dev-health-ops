@@ -17,12 +17,24 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from dev_health_ops.logging_config import configure_logging
+from dev_health_ops.metrics.sinks.factory import detect_backend
+from dev_health_ops.sentry import init_sentry
+from dev_health_ops.tracing import init_tracing, instrument_fastapi_app
+
+from .utils.logging import sanitize_for_log
+
+# Configure structured JSON logging, Sentry, and OpenTelemetry as early as possible
+configure_logging()
+init_sentry()
+init_tracing()
+
 from dev_health_ops.api.middleware import OrgIdMiddleware
+from dev_health_ops.api.middleware.correlation_id import CorrelationIdMiddleware
 from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.licensing import LicenseManager
-from dev_health_ops.metrics.sinks.factory import SinkBackend, detect_backend
 
 from .admin import router as admin_router
 from .admin.impersonation import router as impersonation_router
@@ -97,7 +109,6 @@ from .services.quadrant import build_quadrant_response
 from .services.sankey import build_sankey_response
 from .services.work_unit_explain import explain_work_unit
 from .services.work_units import build_work_unit_investments
-from .utils.logging import sanitize_for_log
 from .webhooks import router as webhooks_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
@@ -186,54 +197,6 @@ def _dsn_uses_async_driver(dsn: str) -> bool:
     return "+asyncpg" in scheme or "+aiosqlite" in scheme
 
 
-def _check_mongo_health(dsn: str) -> bool:
-    from pymongo import MongoClient
-
-    client = MongoClient(dsn, serverSelectionTimeoutMS=2000)
-    try:
-        client.admin.command("ping")
-        return True
-    except Exception:
-        return False
-    finally:
-        try:
-            client.close()
-        except Exception:
-            pass
-
-
-async def _check_database_service(dsn: str) -> tuple[str, str]:
-    try:
-        backend = detect_backend(dsn)
-    except Exception as exc:
-        logger.warning(
-            "Unable to detect database backend for health check: %s",
-            sanitize_for_log(exc),
-        )
-        return "database", "down"
-
-    if backend == SinkBackend.CLICKHOUSE:
-        try:
-            async with clickhouse_client(dsn) as sink:
-                rows = await query_dicts(sink, "SELECT 1 AS ok", {})
-            return backend.value, "ok" if rows else "down"
-        except Exception:
-            return backend.value, "down"
-
-    if backend in (SinkBackend.SQLITE, SinkBackend.POSTGRES):
-        if _dsn_uses_async_driver(dsn):
-            ok = await _check_sqlalchemy_health_async(dsn)
-        else:
-            ok = await asyncio.to_thread(_check_sqlalchemy_health, dsn)
-        return backend.value, "ok" if ok else "down"
-
-    if backend == SinkBackend.MONGO:
-        ok = await asyncio.to_thread(_check_mongo_health, dsn)
-        return backend.value, "ok" if ok else "down"
-
-    return backend.value, "down"
-
-
 async def _check_postgres_health() -> tuple[str, str]:
     uri = _postgres_url()
     if not uri:
@@ -255,6 +218,39 @@ async def _check_clickhouse_health() -> tuple[str, str]:
         return "clickhouse", "ok" if rows else "down"
     except Exception:
         return "clickhouse", "down"
+
+
+async def _check_redis_health() -> tuple[str, str]:
+    """Ping Redis directly to verify connectivity."""
+    redis_url = os.getenv("REDIS_URL", "")
+    if not redis_url:
+        return "redis", "not_configured"
+    try:
+        import redis.asyncio as aioredis
+
+        client = aioredis.from_url(redis_url, socket_connect_timeout=2)
+        try:
+            await client.ping()
+            return "redis", "ok"
+        finally:
+            await client.aclose()
+    except Exception:
+        return "redis", "down"
+
+
+async def _check_celery_health() -> tuple[str, str]:
+    """Inspect active Celery workers via the broker."""
+    try:
+        from dev_health_ops.workers.celery_app import celery_app
+
+        # Use inspect with a very short timeout so health checks stay fast
+        inspect = celery_app.control.inspect(timeout=1.5)
+        active = await asyncio.to_thread(inspect.ping)
+        if active:
+            return "celery", "ok"
+        return "celery", "no_workers"
+    except Exception:
+        return "celery", "down"
 
 
 def _filters_from_query(
@@ -342,6 +338,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
 OriginValidationMiddleware = import_module(
     "dev_health_ops.api.middleware.csrf"
@@ -354,6 +351,7 @@ app.add_middleware(
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(OrgIdMiddleware)
 app.add_middleware(ImpersonationMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
 
 graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
@@ -367,29 +365,64 @@ app.include_router(telemetry_router)
 app.include_router(ingest_router)
 app.include_router(orgs_router)
 
+# OpenTelemetry FastAPI instrumentation (must run after app is created)
+instrument_fastapi_app(app)
+
+# Prometheus metrics — expose /metrics endpoint
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/health", "/ready", "/metrics"],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+    logger.info("Prometheus /metrics endpoint enabled")
+except ImportError:
+    logger.warning(
+        "prometheus-fastapi-instrumentator not installed — /metrics endpoint disabled"
+    )
+
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:
-    services = {}
-    required_services = []
+    """Deep health check: verifies all critical dependencies.
 
-    pg_key, pg_status = await _check_postgres_health()
-    services[pg_key] = pg_status
-    required_services.append(pg_status)
+    Returns 200 when all required services (Postgres, ClickHouse, Redis)
+    are reachable. Returns 503 if any required service is down.
+    Celery worker status is reported but does not affect the HTTP status
+    code (no workers may be a valid state during cold start).
+    """
+    services: dict[str, str] = {}
+    required_statuses: list[str] = []
 
-    ch_key, ch_status = await _check_clickhouse_health()
-    services[ch_key] = ch_status
-    required_services.append(ch_status)
+    # Run all checks concurrently for speed
+    results = await asyncio.gather(
+        _check_postgres_health(),
+        _check_clickhouse_health(),
+        _check_redis_health(),
+        _check_celery_health(),
+        return_exceptions=True,
+    )
 
-    try:
-        services["redis"] = HOME_CACHE.status()
-    except Exception:
-        services["redis"] = "down"
+    for result in results:
+        if isinstance(result, Exception):
+            services["unknown"] = "error"
+            required_statuses.append("error")
+        else:
+            key, status_val = result
+            services[key] = status_val
+            # Celery is informational only — don't fail the health check
+            if key != "celery":
+                required_statuses.append(status_val)
 
-    required_ok = all(state == "ok" for state in required_services)
-    status = "ok" if required_ok else "down"
-    response = HealthResponse(status=status, services=services)
-    if status != "ok":
+    overall = (
+        "ok"
+        if all(s in ("ok", "not_configured") for s in required_statuses)
+        else "down"
+    )
+    response = HealthResponse(status=overall, services=services)
+    if overall != "ok":
         content = (
             response.model_dump()
             if hasattr(response, "model_dump")
@@ -397,6 +430,17 @@ async def health() -> HealthResponse | JSONResponse:
         )
         return JSONResponse(status_code=503, content=content)
     return response
+
+
+@app.api_route("/ready", methods=["GET", "HEAD"])
+async def ready() -> JSONResponse:
+    """Readiness probe: fast check that the API process is up.
+
+    Unlike /health, this does NOT verify external dependencies.
+    Kubernetes/Docker should use this for readiness probes and /health
+    for liveness probes.
+    """
+    return JSONResponse(status_code=200, content={"status": "ready"})
 
 
 async def keep_alive_wrapper(coro):
@@ -438,7 +482,7 @@ async def meta() -> MetaResponse | JSONResponse:
     """
     Return backend metadata including DB kind, version, limits, and supported endpoints.
     """
-    db_url = _db_url()
+    db_url = _analytics_db_url()
     backend = detect_backend(db_url).value  # Get string value from enum
 
     try:

@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, time, timezone
 
-from dev_health_ops.investment_taxonomy import THEMES
+from dev_health_ops.core.taxonomy import (
+    _title_case,
+)
+from dev_health_ops.core.taxonomy import (
+    format_subcategory_label as _format_subcategory_label,
+)
+from dev_health_ops.core.taxonomy import (
+    format_theme_label as _format_theme_label,
+)
+from dev_health_ops.core.taxonomy import (
+    normalize_theme_key as _normalize_theme_key,
+)
 
 from ..models.filters import MetricFilter
 from ..models.schemas import SankeyLink, SankeyNode, SankeyResponse
@@ -19,53 +30,11 @@ from ..queries.scopes import build_scope_filter_multi
 from .filtering import resolve_repo_filter_ids, time_window
 from .investment import _columns_present, _split_category_filters, _tables_present
 
-
-def _title_case(value: str) -> str:
-    return value.replace("_", " ").replace("-", " ").strip().title()
-
-
-def _format_subcategory_label(subcategory_key: str) -> str:
-    if "." not in subcategory_key:
-        return _title_case(subcategory_key)
-    theme, sub = subcategory_key.split(".", 1)
-    return f"{_title_case(theme)} · {_title_case(sub)}"
-
-
-THEME_LABELS = {
-    "feature_delivery": "Feature Delivery",
-    "operational": "Operational / Support",
-    "maintenance": "Maintenance / Tech Debt",
-    "quality": "Quality / Reliability",
-    "risk": "Risk / Security",
-}
-THEME_KEYS_BY_LABEL = {label.lower(): key for key, label in THEME_LABELS.items()}
-
 UNASSIGNED_TEAM = "unassigned"
 UNASSIGNED_REPO = "unassigned"
 UNASSIGNED_TEAM_LABEL = "Unassigned team"
 UNASSIGNED_REPO_LABEL = "Unassigned repo"
 OTHER_REPOS_LABEL = "Other repos"
-
-
-def _format_theme_label(theme_key: str) -> str:
-    key = str(theme_key or "").strip().lower()
-    if key in THEME_LABELS:
-        return THEME_LABELS[key]
-    return _title_case(theme_key)
-
-
-def _normalize_theme_key(theme_key: str | None) -> str | None:
-    if theme_key is None:
-        return None
-    raw = str(theme_key).strip()
-    if not raw:
-        return None
-    lowered = raw.lower()
-    if lowered in THEMES:
-        return lowered
-    if lowered in THEME_KEYS_BY_LABEL:
-        return THEME_KEYS_BY_LABEL[lowered]
-    return None
 
 
 def _get_repo_rollup_map(

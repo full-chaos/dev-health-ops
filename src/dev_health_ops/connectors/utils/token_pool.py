@@ -80,9 +80,11 @@ class TokenPool:
             self._redis = redis_client
             try:
                 self._lua_sha = redis_client.script_load(_LEASE_LUA)
-            except Exception:
+            except ConnectionError:
                 self._redis_available = False
-                self._warn_once("Failed to load Lua script into Redis")
+                self._warn_once("Redis connection failed during Lua script load")
+            except Exception:
+                logger.warning("Failed to load Lua script into Redis")
         else:
             self._connect(redis_url)
 
@@ -101,7 +103,6 @@ class TokenPool:
             client = _redis_mod.from_url(url, decode_responses=True)
             client.ping()
             self._redis = client
-            self._lua_sha = client.script_load(_LEASE_LUA)
             logger.info(
                 "Token pool connected to Redis for %s/%s",
                 self._provider,
@@ -110,6 +111,11 @@ class TokenPool:
         except Exception as exc:
             self._redis_available = False
             self._warn_once(f"Redis unavailable, token pool disabled: {exc}")
+            return
+        try:
+            self._lua_sha = client.script_load(_LEASE_LUA)
+        except Exception:
+            logger.warning("Failed to load Lua script into Redis")
 
     def _warn_once(self, msg: str) -> None:
         if not self._warned:

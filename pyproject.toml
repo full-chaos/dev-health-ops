@@ -13,15 +13,14 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
-keywords = ["metrics", "git", "analytics", "developer-experience", "grafana"]
-requires-python = ">=3.11"
+keywords = ["metrics", "git", "analytics", "developer-experience"]
+requires-python = ">=3.10"
 dependencies = [
   "tqdm",
   "sqlalchemy",
@@ -52,7 +51,6 @@ dependencies = [
   "redis>=5.0.0",
   # Shared Atlassian client library (Jira REST/GraphQL)
   "atlassian-gen-client>=0.1.0b3",
-  "pytest-xdist (>=3.8.0,<4.0.0)",
   # Authentication
   "PyJWT>=2.8.0",
   "bcrypt>=4.0.0",
@@ -60,15 +58,42 @@ dependencies = [
   "PyNaCl>=1.5.0",
   "stripe>=7.0.0",
   "resend>=2.5.0",
+  # Observability
+  "python-json-logger>=2.0.7",
+  "sentry-sdk[fastapi,celery]>=2.0.0",
+  "prometheus-fastapi-instrumentator>=6.1.0",
+  "prometheus-client>=0.20.0",
+  "opentelemetry-api>=1.24.0",
+  "opentelemetry-sdk>=1.24.0",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.24.0",
+  "opentelemetry-instrumentation-fastapi>=0.45b0",
+  "opentelemetry-instrumentation-httpx>=0.45b0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.45b0",
+  "opentelemetry-instrumentation-celery>=0.45b0",
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "ruff>=0.4.0", "pytest", "pytest-asyncio", "pytest-cov"]
-enterprise-sso = ["defusedxml>=0.7.0", "signxml>=3.0.0"]
+dev = [
+  "mypy",
+  "ruff",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "pytest-xdist>=3.8.0,<4.0.0",
+  "fakeredis",
+]
+enterprise-sso = [
+  "defusedxml>=0.7.0",
+  "signxml>=3.0.0",
+]
 
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"
 Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
+
+[project.scripts]
+dev-health-ops = "dev_health_ops.cli:main"
+dev-hops = "dev_health_ops.cli:main"
 
 [tool.setuptools_scm]
 version_scheme = "post-release"
@@ -76,7 +101,9 @@ local_scheme = "dirty-tag"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = { find = { where = ["src"], exclude = [
+packages = { find = { where = [
+  "src",
+], exclude = [
   "tests*",
   "docs*",
   "examples*",
@@ -93,126 +120,25 @@ include-package-data = true
 "*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.mako", "**/*.html", "**/*.txt"]
 
 [tool.ruff]
-target-version = "py310"
 line-length = 88
-src = ["src", "tests"]
+target-version = "py310"
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "__pycache__",
+  "docs",
+  "build",
+  "dist",
+  "migrations",
+  "site",
+]
 
 [tool.ruff.lint]
-select = [
-  "E", # pycodestyle errors
-  "W", # pycodestyle warnings
-  "F", # pyflakes
-  "I", # isort
-  "UP", # pyupgrade
-  "B", # flake8-bugbear
-  "SIM", # flake8-simplify
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E203", "E501"]
+per-file-ignores = {"__init__.py" = ["F401"], "src/dev_health_ops/api/main.py" = ["E402"], "tests/test_ingest_streams.py" = ["E402"]}
 
-]
-ignore = [
-  "E501", # line too long (handled by formatter)
-  "B008", # do not perform function calls in argument defaults (FastAPI Depends)
-  "SIM108", # use ternary operator (readability trade-off)
-  # Existing violations suppressed to unblock CI — address incrementally
-  "B904", # raise-without-from-inside-except (58 violations)
-  "B905", # zip-without-explicit-strict (14 violations)
-  "B023", # function-uses-loop-variable (12 violations)
-  "B027", # empty-method-without-abstract-decorator (9 violations)
-  "B017", # assert-raises-exception (6 violations)
-  "B007", # unused-loop-control-variable (4 violations)
-  "UP045", # non-pep604-annotation-optional (requires unsafe fix)
-  "UP028", # yield-in-for-loop (8 violations)
-  "SIM102", # collapsible-if (25 violations)
-  "SIM117", # multiple-with-statements (13 violations)
-  "SIM113", # enumerate-for-loop (8 violations)
-  "SIM105", # suppressible-exception (7 violations)
-  "SIM103", # needless-bool (5 violations)
-  "SIM110", # reimplemented-builtin (4 violations)
-  "SIM118", # in-dict-keys (4 violations)
-  "SIM116", # if-else-block-instead-of-dict-lookup (2 violations)
-  "SIM101", # duplicate-isinstance-call (1 violation)
-  "SIM201", # negate-equal-op (1 violation)
-  "E402", # module-import-not-at-top-of-file (2 violations)
-
-]
-
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"] # re-exports are intentional in __init__ files
-
-[tool.ruff.lint.isort]
-known-first-party = ["dev_health_ops"]
-
-[tool.poetry]
-name = "dev-health-ops"
-version = "0.1.0"
-description = "Open Source Development Team Operation Analytics"
-authors = ["Chris Geo <chris@example.com>"]
-license = "MIT"
-readme = "README.md"
-packages = [{ include = "dev_health_ops", from = "src" }]
-include = [
-  "src/dev_health_ops/config/**/*",
-  "src/dev_health_ops/alembic.ini",
-  "src/dev_health_ops/alembic/**/*",
-]
-
-[tool.poetry.dependencies]
-python = "^3.10"
-tqdm = "*"
-sqlalchemy = "*"
-clickhouse-connect = "*"
-fastapi = "*"
-slowapi = "*"
-httpx = "*"
-psycopg2-binary = "*"
-asyncpg = "*"
-aiosqlite = "*"
-python-gitlab = "*"
-GitPython = "*"
-PyGithub = ">=2.1.0,<3.0.0"
-requests = "*"
-pydantic = ">=2.7.0"
-PyYAML = "*"
-typing_extensions = "*"
-jira = "*"
-alembic = "*"
-motor = "*"
-uvicorn = "*"
-radon = "*"
-openai = "*"
-anthropic = "*"
-strawberry-graphql = { extras = ["fastapi"], version = "*" }
-celery = { extras = ["redis"], version = ">=5.3.0" }
-croniter = ">=1.3.0"
-redis = ">=5.0.0"
-atlassian-gen-client = ">=0.1.0b3"
-PyNaCl = ">=1.5.0"
-stripe = ">=7.0.0"
-resend = ">=2.5.0"
-
-[[tool.poetry.source]]
-name = "github"
-url = "https://pypi.pkg.github.com/full-chaos"
-priority = "supplemental"
-
-[tool.poetry.group.dev.dependencies]
-mypy = "*"
-ruff = ">=0.4.0"
-pytest = "*"
-pytest-asyncio = "*"
-pytest-cov = "*"
-fakeredis = "*"
-
-[tool.poetry.group.enterprise-sso]
-optional = true
-
-[tool.poetry.group.enterprise-sso.dependencies]
-defusedxml = ">=0.7.0"
-signxml = ">=3.0.0"
-
-[tool.poetry.scripts]
-dev-health-ops = "dev_health_ops.cli:main"
-dev-hops = "dev_health_ops.cli:main"
-
-[project.scripts]
-dev-health-ops = "dev_health_ops.cli:main"
-dev-hops = "dev_health_ops.cli:main"
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -8,6 +8,7 @@ import strawberry
 from strawberry.types import Info
 
 from .context import GraphQLContext
+from .extensions import OrgIdAuthExtension
 from .models.inputs import (
     AnalyticsRequestInput,
     CapacityForecastFilterInput,
@@ -22,9 +23,6 @@ from .models.outputs import (
     CapacityForecastConnection,
     CatalogResult,
     HomeResult,
-    OpportunitiesResult,
-    PersonResult,
-    PersonSearchResult,
     WorkGraphEdgesResult,
 )
 from .resolvers.analytics import resolve_analytics
@@ -51,7 +49,7 @@ class Query:
         info: Info,
         org_id: str,
         dimension: DimensionInput | None = None,
-        filters: FilterInput | None = None,  # NEW: Filter support
+        filters: FilterInput | None = None,
     ) -> CatalogResult:
         """
         Fetch catalog information.
@@ -65,11 +63,7 @@ class Query:
             CatalogResult with dimensions, measures, limits, and optional values.
         """
         context = get_context(info)
-        if context.org_id and context.org_id != org_id:
-            from .errors import AuthorizationError
-
-            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
-        context.org_id = org_id
+        # org_id is already validated and written to context by OrgIdAuthExtension.
         return await resolve_catalog(context, dimension, filters=filters)
 
     @strawberry.field(description="Run batch analytics queries")
@@ -90,11 +84,6 @@ class Query:
             AnalyticsResult with all query results.
         """
         context = get_context(info)
-        if context.org_id and context.org_id != org_id:
-            from .errors import AuthorizationError
-
-            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
-        context.org_id = org_id
         return await resolve_analytics(context, batch)
 
     @strawberry.field(description="Get home dashboard metrics")
@@ -119,11 +108,6 @@ class Query:
         from .resolvers.home import resolve_home
 
         context = get_context(info)
-        if context.org_id and context.org_id != org_id:
-            from .errors import AuthorizationError
-
-            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
-        context.org_id = org_id
         data = await resolve_home(context, filters)
 
         return HR(
@@ -145,66 +129,6 @@ class Query:
             ],
         )
 
-    @strawberry.field(description="Search for people")
-    async def people(
-        self,
-        info: Info,
-        query: str,
-        limit: int = 20,
-    ) -> list[PersonSearchResult]:
-        """
-        Search for people by name or email.
-
-        Args:
-            query: Search query string.
-            limit: Maximum results to return.
-
-        Returns:
-            List of matching people.
-        """
-        # Placeholder - would integrate with people service
-        return []
-
-    @strawberry.field(description="Get person details")
-    async def person(
-        self,
-        info: Info,
-        person_id: str,
-    ) -> PersonResult | None:
-        """
-        Get detailed information about a person.
-
-        Args:
-            person_id: Unique person identifier.
-
-        Returns:
-            Person details or None if not found.
-        """
-        # Placeholder - would integrate with people service
-        return None
-
-    @strawberry.field(description="Get opportunities/focus cards")
-    async def opportunities(
-        self,
-        info: Info,
-        org_id: str,
-        filters: FilterInput | None = None,
-    ) -> OpportunitiesResult:
-        """
-        Fetch opportunity cards for the organization.
-
-        Args:
-            org_id: Required organization ID.
-            filters: Optional filters to apply.
-
-        Returns:
-            OpportunitiesResult with opportunity cards.
-        """
-        from .models.outputs import OpportunitiesResult as OR
-
-        # Placeholder - would integrate with opportunities service
-        return OR(items=[])
-
     @strawberry.field(description="Query work graph edges with optional filters")
     async def work_graph_edges(
         self,
@@ -215,11 +139,6 @@ class Query:
         from .resolvers.work_graph import resolve_work_graph_edges
 
         context = get_context(info)
-        if context.org_id and context.org_id != org_id:
-            from .errors import AuthorizationError
-
-            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
-        context.org_id = org_id
         return await resolve_work_graph_edges(context, filters)
 
     @strawberry.field(description="Compute capacity forecast on-demand")
@@ -232,11 +151,6 @@ class Query:
         from .resolvers.capacity import resolve_capacity_forecast
 
         context = get_context(info)
-        if context.org_id and context.org_id != org_id:
-            from .errors import AuthorizationError
-
-            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
-        context.org_id = org_id
         return await resolve_capacity_forecast(context, input)
 
     @strawberry.field(description="List persisted capacity forecasts")
@@ -249,13 +163,13 @@ class Query:
         from .resolvers.capacity import resolve_capacity_forecasts
 
         context = get_context(info)
-        if context.org_id and context.org_id != org_id:
-            from .errors import AuthorizationError
-
-            raise AuthorizationError(f"Access denied: cannot query org '{org_id}'")
-        context.org_id = org_id
         return await resolve_capacity_forecasts(context, filters)
 
 
-# Create the Strawberry schema with subscription support
-schema = strawberry.Schema(query=Query, subscription=Subscription)
+# Create the Strawberry schema with OrgIdAuthExtension to enforce org scoping
+# centrally rather than repeating the guard in every resolver.
+schema = strawberry.Schema(
+    query=Query,
+    subscription=Subscription,
+    extensions=[OrgIdAuthExtension],
+)

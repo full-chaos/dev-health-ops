@@ -8,7 +8,6 @@ These tasks wrap the existing metrics jobs to enable async execution:
 
 from __future__ import annotations
 
-import asyncio
 import fnmatch
 import json
 import logging
@@ -19,6 +18,7 @@ from typing import Any
 
 from celery import chord, group
 
+from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -341,7 +341,7 @@ def run_sync_config(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
+            run_async(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
             result_payload.update(
                 {
                     "owner": owner,
@@ -372,7 +372,7 @@ def run_sync_config(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
+            run_async(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
             result_payload.update(
                 {
                     "project_id": int(project_id),
@@ -912,7 +912,7 @@ def _run_sync_for_repo(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
+            run_async(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
             result_payload.update({"owner": owner, "repo": repo_name})
 
         elif provider == "gitlab":
@@ -939,7 +939,7 @@ def _run_sync_for_repo(
                     **merged_flags,
                 )
 
-            asyncio.run(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
+            run_async(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
             result_payload.update(
                 {"project_id": int(project_id), "gitlab_url": gitlab_url}
             )
@@ -1158,7 +1158,7 @@ def run_daily_metrics(
 
     try:
         # Run the async job in a new event loop
-        asyncio.run(
+        run_async(
             run_daily_metrics_job(
                 db_url=db_url,
                 day=target_day,
@@ -1352,7 +1352,7 @@ def run_daily_metrics_batch(
                 )
                 checkpoint_id = checkpoint.id
 
-            asyncio.run(
+            run_async(
                 run_daily_metrics_job(
                     db_url=db_url,
                     day=target_day,
@@ -1447,7 +1447,7 @@ def run_daily_metrics_finalize_task(
             )
             checkpoint_id = checkpoint.id
 
-        asyncio.run(
+        run_async(
             _run_finalize(
                 db_url=db_url,
                 day=target_day,
@@ -1709,7 +1709,7 @@ def sync_team_drift(self, org_id: str | None = None) -> dict:
         return {"status": "success", "results": results}
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         logger.exception("sync_team_drift failed: %s", exc)
         raise self.retry(exc=exc, countdown=300)
@@ -1770,7 +1770,7 @@ def reconcile_team_members(self, org_id: str | None = None) -> dict:
             }
 
     try:
-        return asyncio.run(_run())
+        return run_async(_run())
     except Exception as exc:
         logger.exception("reconcile_team_members failed: %s", exc)
         raise self.retry(exc=exc, countdown=300)
@@ -1999,7 +1999,7 @@ def run_investment_materialize(
             team_ids=team_ids,
             force=force,
         )
-        stats = asyncio.run(materialize_investments(config))
+        stats = run_async(materialize_investments(config))
         return {"status": "success", "stats": stats}
     except Exception as exc:
         logger.exception("Investment materialize task failed: %s", exc)
@@ -2047,7 +2047,7 @@ def run_capacity_forecast_job(
     )
 
     try:
-        results = asyncio.run(
+        results = run_async(
             run_capacity_forecast(
                 db_url=db_url,
                 team_id=team_id,
@@ -2149,7 +2149,7 @@ def send_billing_notification(
 
     try:
         org_uuid = uuid.UUID(org_id)
-        asyncio.run(fn(org_uuid))
+        run_async(fn(org_uuid))
         return {"status": "sent", "email_type": email_type, "org_id": org_id}
     except Exception as exc:
         logger.warning(
@@ -2366,7 +2366,7 @@ def _process_github_event(
 
     # Execute sync
     try:
-        asyncio.run(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
+        run_async(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
         return {"processed": True, "repo": f"{owner}/{repo}", "event": event_type}
     except Exception as e:
         logger.error("Failed to process GitHub webhook %s: %s", event_type, e)
@@ -2444,7 +2444,7 @@ def _process_gitlab_event(
             )
 
     try:
-        asyncio.run(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
+        run_async(run_with_store(db_url, db_type, _sync_handler, org_id=org_id))
         return {"processed": True, "project_id": project_id, "event": event_type}
     except Exception as e:
         logger.error("Failed to process GitLab webhook %s: %s", event_type, e)

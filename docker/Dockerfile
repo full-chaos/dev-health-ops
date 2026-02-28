@@ -1,39 +1,37 @@
-# ---- builder stage: install deps with build tools ----
-FROM python:3.14-slim AS builder
+FROM python:3.14-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1
 
 WORKDIR /build
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  build-essential git wget \
-  && rm -rf /var/lib/apt/lists/*
-
 COPY . .
+RUN apt update && apt install -y build-essential git wget
 
 ARG SETUPTOOLS_SCM_PRETEND_VERSION
 ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
-RUN pip install --no-cache-dir --prefix=/install .
-
-# ---- final stage: runtime only (no build tools) ----
-FROM python:3.14-slim AS base
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-  PYTHONUNBUFFERED=1
-
-# Copy installed packages and scripts from builder
-COPY --from=builder /install/lib /usr/local/lib
-COPY --from=builder /install/bin /usr/local/bin
+RUN pip install --no-cache-dir .
+RUN rm -rf /build
 
 WORKDIR /app
+RUN mkdir -p /app
+# Ensure config files are available if needed
+# COPY --from=base /usr/local/lib/python3.14/site-packages/dev_health_ops/config /app/config
+
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
 
 FROM base AS api
 EXPOSE 8000
 
+# Readiness probe — fast check, no external dependency validation
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget --spider -q http://localhost:8000/ready || exit 1
+
 ENTRYPOINT ["dev-hops", "api"]
 CMD ["--host", "0.0.0.0", "--port", "8000"]
+
 
 FROM base AS runner
 ENTRYPOINT ["dev-hops"]

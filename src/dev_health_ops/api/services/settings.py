@@ -7,9 +7,7 @@ Uses Fernet symmetric encryption with a key derived from SETTINGS_ENCRYPTION_KEY
 from __future__ import annotations
 
 import asyncio
-import base64
 import difflib
-import hashlib
 import json
 import logging
 import os
@@ -17,11 +15,11 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import requests
-from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.core.encryption import decrypt_value, encrypt_value
 from dev_health_ops.models.settings import (
     IdentityMapping,
     IntegrationCredential,
@@ -80,40 +78,6 @@ def _get_jira_activity_schema_classes() -> tuple[type, type]:
 
 
 logger = logging.getLogger(__name__)
-
-
-def _derive_key(secret: str) -> bytes:
-    """Derive a Fernet-compatible key from a secret string using SHA-256."""
-    digest = hashlib.sha256(secret.encode()).digest()
-    return base64.urlsafe_b64encode(digest)
-
-
-def _get_encryption_key() -> bytes:
-    """Get the encryption key from environment, deriving it if needed."""
-    secret = os.getenv("SETTINGS_ENCRYPTION_KEY")
-    if not secret:
-        raise RuntimeError(
-            "SETTINGS_ENCRYPTION_KEY environment variable is required for encryption"
-        )
-    return _derive_key(secret)
-
-
-def encrypt_value(plaintext: str) -> str:
-    """Encrypt a plaintext string and return base64-encoded ciphertext."""
-    key = _get_encryption_key()
-    f = Fernet(key)
-    return f.encrypt(plaintext.encode()).decode()
-
-
-def decrypt_value(ciphertext: str) -> str:
-    """Decrypt a base64-encoded ciphertext and return plaintext."""
-    key = _get_encryption_key()
-    f = Fernet(key)
-    try:
-        return f.decrypt(ciphertext.encode()).decode()
-    except InvalidToken:
-        logger.error("Failed to decrypt value - invalid token or wrong key")
-        raise ValueError("Decryption failed - check SETTINGS_ENCRYPTION_KEY")
 
 
 class SettingsService:

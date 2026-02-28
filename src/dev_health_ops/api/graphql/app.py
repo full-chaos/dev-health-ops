@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from strawberry.fastapi import GraphQLRouter
 
 from .context import GraphQLContext, build_context
@@ -36,12 +36,22 @@ def _get_cache() -> Any | None:
     return _graphql_cache
 
 
+def _graphql_auth_required() -> bool:
+    """Check whether GraphQL authentication is enforced.
+
+    Defaults to True (enforced).  Set GRAPHQL_AUTH_REQUIRED=false to
+    disable — useful for local development / GraphiQL playground.
+    """
+    return os.getenv("GRAPHQL_AUTH_REQUIRED", "true").lower() != "false"
+
+
 async def get_context(request: Request) -> GraphQLContext:
     """
     Build GraphQL context from FastAPI request.
-    org_id is resolved by OrgIdMiddleware (X-Org-Id header → JWT fallback)
-    and stored in a contextvar.  Query params are checked as a last resort
-    for backwards compatibility (e.g. GraphiQL playground).
+
+    Authentication is enforced by default (GRAPHQL_AUTH_REQUIRED != "false").
+    org_id is resolved from the JWT, then OrgIdMiddleware contextvar,
+    then query params as a last resort.
     """
     logger.debug("Entering get_context")
     from dev_health_ops.api.services.auth import (
@@ -50,9 +60,10 @@ async def get_context(request: Request) -> GraphQLContext:
         get_current_org_id,
     )
 
-    org_id = get_current_org_id() or request.query_params.get("org_id", "") or ""
     db_url = os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
     persisted_query_id = request.headers.get("X-Persisted-Query-Id")
+
+    # --- Authenticate --------------------------------------------------------
     user = None
     auth_header = request.headers.get("Authorization")
     if auth_header:
@@ -61,6 +72,18 @@ async def get_context(request: Request) -> GraphQLContext:
             auth_service = get_auth_service()
             user = auth_service.get_authenticated_user(token)
             logger.debug("Authenticated user: %s", user.email if user else None)
+
+    if _graphql_auth_required() and user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # --- Resolve org_id (prefer JWT claim, fall back to context/param) -------
+    org_id = ""
+    if user and user.org_id:
+        org_id = user.org_id
+    if not org_id:
+        org_id = get_current_org_id() or request.query_params.get("org_id", "") or ""
+
+    # --- Build context -------------------------------------------------------
     client = None
     try:
         import asyncio

@@ -37,10 +37,31 @@ async def _clickhouse_query_dicts(
 
 
 class ClickHouseDataLoader(DataLoader):
-    """DataLoader implementation for ClickHouse backend."""
+    """DataLoader implementation for ClickHouse backend.
 
-    def __init__(self, client: Any) -> None:
+    Args:
+        client: ClickHouse client instance.
+        org_id: Optional organisation ID.  When set, every read query is
+                scoped to this org preventing cross-org data leakage.
+    """
+
+    def __init__(self, client: Any, org_id: str = "") -> None:
         self.client = client
+        self.org_id = org_id
+
+    def _org_filter(self, *, alias: str = "") -> str:
+        """Return an ``AND org_id = …`` clause when *org_id* is set."""
+        if not self.org_id:
+            return ""
+        col = f"{alias}.org_id" if alias else "org_id"
+        return f" AND {col} = {{org_id:String}}"
+
+    def _inject_org_id(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Inject *org_id* into query parameters when set."""
+        if self.org_id:
+            params = dict(params)
+            params["org_id"] = self.org_id
+        return params
 
     async def load_git_rows(
         self,
@@ -58,6 +79,10 @@ class ClickHouseDataLoader(DataLoader):
             params["repo_name"] = repo_name
             repo_filter = " AND c.repo_id IN (SELECT id FROM repos WHERE repo = {repo_name:String})"
 
+        org_filter_c = self._org_filter(alias="c")
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
         commit_query = f"""
         SELECT
           c.repo_id AS repo_id,
@@ -73,6 +98,7 @@ class ClickHouseDataLoader(DataLoader):
           ON (s.repo_id = c.repo_id) AND (s.commit_hash = c.hash)
         WHERE c.committer_when >= {{start:DateTime}} AND c.committer_when < {{end:DateTime}}
         {repo_filter}
+        {org_filter_c}
         """
 
         pr_query = f"""
@@ -96,6 +122,7 @@ class ClickHouseDataLoader(DataLoader):
           (created_at >= {{start:DateTime}} AND created_at < {{end:DateTime}})
           OR (merged_at IS NOT NULL AND merged_at >= {{start:DateTime}} AND merged_at < {{end:DateTime}})
           {repo_filter.replace("c.repo_id", "repo_id") if repo_id or repo_name else ""}
+        {org_filter}
         """
 
         review_query = f"""
@@ -108,6 +135,7 @@ class ClickHouseDataLoader(DataLoader):
         FROM git_pull_request_reviews
         WHERE submitted_at >= {{start:DateTime}} AND submitted_at < {{end:DateTime}}
         {repo_filter.replace("c.repo_id", "repo_id") if repo_id or repo_name else ""}
+        {org_filter}
         """
 
         commit_dicts = await _clickhouse_query_dicts(self.client, commit_query, params)
@@ -190,17 +218,22 @@ class ClickHouseDataLoader(DataLoader):
             params["repo_id"] = str(repo_id)
             repo_filter = " AND repo_id = {repo_id:UUID}"
 
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
         item_query = f"""
         SELECT * FROM work_items
         WHERE (created_at < {{end:DateTime}})
         AND (status != 'done' OR completed_at >= {{start:DateTime}})
         {repo_filter}
+        {org_filter}
         """
 
         trans_query = f"""
         SELECT * FROM work_item_transitions
         WHERE (occurred_at < {{end:DateTime}})
         {repo_filter}
+        {org_filter}
         """
 
         item_dicts = await _clickhouse_query_dicts(self.client, item_query, params)
@@ -224,15 +257,20 @@ class ClickHouseDataLoader(DataLoader):
             params["repo_id"] = str(repo_id)
             repo_filter = " AND repo_id = {repo_id:UUID}"
 
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
         pipe_query = f"""
         SELECT * FROM ci_pipeline_runs
         WHERE finished_at >= {{start:DateTime}} AND finished_at < {{end:DateTime}}
         {repo_filter}
+        {org_filter}
         """
         deploy_query = f"""
         SELECT * FROM deployments
         WHERE deployed_at >= {{start:DateTime}} AND deployed_at < {{end:DateTime}}
         {repo_filter}
+        {org_filter}
         """
 
         pipes_dicts = await _clickhouse_query_dicts(self.client, pipe_query, params)
@@ -257,10 +295,14 @@ class ClickHouseDataLoader(DataLoader):
             params["repo_id"] = str(repo_id)
             repo_filter = " AND repo_id = {repo_id:UUID}"
 
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
         query = f"""
         SELECT * FROM incidents
         WHERE started_at >= {{start:DateTime}} AND started_at < {{end:DateTime}}
         {repo_filter}
+        {org_filter}
         """
         dicts = await _clickhouse_query_dicts(self.client, query, params)
         return [dict(d) for d in dicts]  # type: ignore
@@ -270,13 +312,17 @@ class ClickHouseDataLoader(DataLoader):
         repo_id: uuid.UUID,
         as_of: datetime,
     ) -> dict[uuid.UUID, float]:
-        params = {"repo_id": str(repo_id), "as_of": naive_utc(as_of)}
-        query = """
+        params: dict[str, Any] = {"repo_id": str(repo_id), "as_of": naive_utc(as_of)}
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        query = f"""
         SELECT
             repo_id,
             sum(lines_count * lines_count) / (sum(lines_count) * sum(lines_count)) as concentration
         FROM git_file_blame
-        WHERE repo_id = {repo_id:UUID}
+        WHERE repo_id = {{repo_id:UUID}}
+        {org_filter}
         GROUP BY repo_id
         """
         rows = await _clickhouse_query_dicts(self.client, query, params)
@@ -293,9 +339,13 @@ class ClickHouseDataLoader(DataLoader):
         end: datetime,
     ) -> list[AtlassianOpsIncident]:
         params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
-        query = """
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        query = f"""
         SELECT * FROM atlassian_ops_incidents
-        WHERE created_at >= {start:DateTime} AND created_at < {end:DateTime}
+        WHERE created_at >= {{start:DateTime}} AND created_at < {{end:DateTime}}
+        {org_filter}
         """
         dicts = await _clickhouse_query_dicts(self.client, query, params)
 
@@ -322,9 +372,13 @@ class ClickHouseDataLoader(DataLoader):
         end: datetime,
     ) -> list[AtlassianOpsAlert]:
         params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
-        query = """
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        query = f"""
         SELECT * FROM atlassian_ops_alerts
-        WHERE created_at >= {start:DateTime} AND created_at < {end:DateTime}
+        WHERE created_at >= {{start:DateTime}} AND created_at < {{end:DateTime}}
+        {org_filter}
         """
         dicts = await _clickhouse_query_dicts(self.client, query, params)
 
@@ -347,8 +401,15 @@ class ClickHouseDataLoader(DataLoader):
     async def load_atlassian_ops_schedules(
         self,
     ) -> list[AtlassianOpsSchedule]:
-        query = "SELECT * FROM atlassian_ops_schedules"
-        dicts = await _clickhouse_query_dicts(self.client, query, {})
+        params: dict[str, Any] = {}
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        if org_filter:
+            query = f"SELECT * FROM atlassian_ops_schedules WHERE 1=1 {org_filter}"
+        else:
+            query = "SELECT * FROM atlassian_ops_schedules"
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
 
         schedules: list[AtlassianOpsSchedule] = []
         for r in dicts:
@@ -365,8 +426,15 @@ class ClickHouseDataLoader(DataLoader):
     async def load_jira_project_ops_team_links(
         self,
     ) -> list[JiraProjectOpsTeamLink]:
-        query = "SELECT * FROM jira_project_ops_team_links"
-        dicts = await _clickhouse_query_dicts(self.client, query, {})
+        params: dict[str, Any] = {}
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        if org_filter:
+            query = f"SELECT * FROM jira_project_ops_team_links WHERE 1=1 {org_filter}"
+        else:
+            query = "SELECT * FROM jira_project_ops_team_links"
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
 
         links: list[JiraProjectOpsTeamLink] = []
         for r in dicts:
@@ -385,8 +453,11 @@ class ClickHouseDataLoader(DataLoader):
         self,
         as_of: date,
     ) -> list[dict[str, Any]]:
-        params = {"end": as_of, "start": as_of - timedelta(days=29)}
-        query = """
+        params: dict[str, Any] = {"end": as_of, "start": as_of - timedelta(days=29)}
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        query = f"""
         SELECT
             identity_id,
             any(team_id) as team_id,
@@ -395,7 +466,8 @@ class ClickHouseDataLoader(DataLoader):
             median(cycle_p50_hours) as cycle_p50_30d_hours,
             max(work_items_active) as wip_max_30d
         FROM user_metrics_daily
-        WHERE day >= {start:Date} AND day <= {end:Date}
+        WHERE day >= {{start:Date}} AND day <= {{end:Date}}
+        {org_filter}
         GROUP BY identity_id
         """
         return await _clickhouse_query_dicts(self.client, query, params)

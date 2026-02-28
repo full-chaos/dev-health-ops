@@ -85,7 +85,7 @@ def _extract_owner_repo(
 
 
 def _decrypt_credential_sync(credential) -> dict[str, Any]:
-    from dev_health_ops.api.services.settings import decrypt_value
+    from dev_health_ops.core.encryption import decrypt_value
 
     if credential.credentials_encrypted:
         return json.loads(decrypt_value(credential.credentials_encrypted))
@@ -1488,10 +1488,8 @@ def run_daily_metrics_finalize_task(
 def _invalidate_metrics_cache(day: str, org_id: str) -> None:
     """Invalidate GraphQL caches after metrics update."""
     try:
-        from dev_health_ops.api.graphql.cache_invalidation import (
-            invalidate_on_metrics_update,
-        )
-        from dev_health_ops.api.services.cache import create_cache
+        from dev_health_ops.core.cache import create_cache
+        from dev_health_ops.core.cache_invalidation import invalidate_on_metrics_update
 
         cache = create_cache(ttl_seconds=300)
         count = invalidate_on_metrics_update(cache, org_id, day)
@@ -1503,10 +1501,8 @@ def _invalidate_metrics_cache(day: str, org_id: str) -> None:
 def _invalidate_sync_cache(sync_type: str, org_id: str) -> None:
     """Invalidate GraphQL caches after data sync."""
     try:
-        from dev_health_ops.api.graphql.cache_invalidation import (
-            invalidate_on_sync_complete,
-        )
-        from dev_health_ops.api.services.cache import create_cache
+        from dev_health_ops.core.cache import create_cache
+        from dev_health_ops.core.cache_invalidation import invalidate_on_sync_complete
 
         cache = create_cache(ttl_seconds=300)
         count = invalidate_on_sync_complete(cache, org_id, sync_type)
@@ -2254,7 +2250,7 @@ def _is_duplicate_delivery(provider: str, delivery_id: str) -> bool:
     """
     cache_key = f"webhook_delivery:{provider}:{delivery_id}"
     try:
-        from dev_health_ops.api.services.cache import create_cache
+        from dev_health_ops.core.cache import create_cache
 
         # Use a short TTL for idempotency (e.g., 24 hours)
         cache = create_cache(ttl_seconds=86400)
@@ -2271,7 +2267,7 @@ def _record_delivery(provider: str, delivery_id: str) -> None:
     """
     cache_key = f"webhook_delivery:{provider}:{delivery_id}"
     try:
-        from dev_health_ops.api.services.cache import create_cache
+        from dev_health_ops.core.cache import create_cache
 
         cache = create_cache(ttl_seconds=86400)
         cache.set(cache_key, "processed")

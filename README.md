@@ -150,11 +150,9 @@ asyncio.run(main())
 | `chrisgeo/*`  | All repositories owned by `chrisgeo`         |
 | `*sync*`      | Any repository with `sync` in the name       |
 
-## Developer Health Metrics (Work + Git) + Grafana ✅
+## Developer Health Metrics (Work + Git) ✅
 
-> **DEPRECATION NOTICE**: The Grafana panels and plugin integration have been moved to a separate repository (`dev-health-panels`) and are being superseded by the full-stack web application [`dev-health-web`](../dev-health-web).
-
-This repo can compute daily “developer health” metrics and provision Grafana dashboards on top of:
+This repo computes daily “developer health” metrics on top of:
 
 - **Git + PR/MR facts** (from GitHub/GitLab/local syncs)
 - **Work tracking items** (Jira issues, GitHub issues/Projects, GitLab issues)
@@ -166,46 +164,40 @@ Jira is **not** a replacement for pull request data — it’s used to track ass
 - Metrics definitions + tables: `docs/metrics.md`
 - Implementation plans, metrics inventory, requirements/roadmap: `docs/project.md`, `docs/metrics-inventory.md`, `docs/roadmap.md`
 - Task tracker configuration (Jira/GitHub/GitLab, status mapping, teams): `docs/task_trackers.md`
-- Grafana dashboards + provisioning: `docs/grafana.md`
 
-### Quickstart (ClickHouse + Grafana)
+### Quickstart (ClickHouse)
 
-1. Start ClickHouse + Grafana:
+1. Start ClickHouse:
 
 ```bash
-docker compose -f compose.yml up -d
+docker compose -f compose.yml up -d clickhouse
 ```
 
 1. Sync Git data into ClickHouse (choose one):
 
 ```bash
 # Local repo (commits + stats)
-dev-hops sync git --provider local --db "clickhouse://localhost:8123/default" --repo-path .
+dev-hops sync git --provider local --db “clickhouse://localhost:8123/default” --repo-path .
 
 # GitHub repo (commits + stats)
-dev-hops sync git --provider github --db "clickhouse://localhost:8123/default" --owner <owner> --repo <repo>
+dev-hops sync git --provider github --db “clickhouse://localhost:8123/default” --owner <owner> --repo <repo>
 
 # GitLab project (commits + stats)
-dev-hops sync git --provider gitlab --db "clickhouse://localhost:8123/default" --project-id <id>
+dev-hops sync git --provider gitlab --db “clickhouse://localhost:8123/default” --project-id <id>
 ```
 
 1. Compute derived metrics (Git + Work Items):
 
 ```bash
 # (Optional) Sync work items from provider APIs (recommended)
-dev-hops sync work-items --provider all --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
+dev-hops sync work-items --provider all --date 2025-02-01 --backfill 30 --db “clickhouse://localhost:8123/default”
 
 # One day (derived Git metrics; enriches IC metrics from already-synced work items when available)
-dev-hops metrics daily --date 2025-02-01 --db "clickhouse://localhost:8123/default"
+dev-hops metrics daily --date 2025-02-01 --db “clickhouse://localhost:8123/default”
 
 # Backfill last 30 days ending at date
-dev-hops metrics daily --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
+dev-hops metrics daily --date 2025-02-01 --backfill 30 --db “clickhouse://localhost:8123/default”
 ```
-
-1. Open Grafana:
-
-- <http://localhost:3000> (default `admin` / `admin`)
-- Dashboards are provisioned under the “Developer Health” folder.
 
 ### API (FastAPI)
 

@@ -64,15 +64,15 @@ async def resolve_work_graph_edges(
 ) -> WorkGraphEdgesResult:
     from dev_health_ops.api.queries.client import query_dicts
 
-    require_org_id(context)
+    org_id = require_org_id(context)
     client = context.client
 
     if client is None:
         raise RuntimeError("Database client not available")
 
     limit = filters.limit if filters else 1000
-    params: Dict[str, Any] = {"limit": int(limit)}
-    where_clauses: List[str] = []
+    params: Dict[str, Any] = {"limit": int(limit), "org_id": org_id}
+    where_clauses: List[str] = ["org_id = %(org_id)s"]
 
     if filters:
         if filters.repo_ids:
@@ -95,7 +95,7 @@ async def resolve_work_graph_edges(
             where_clauses.append("(source_id = %(node_id)s OR target_id = %(node_id)s)")
             params["node_id"] = filters.node_id
 
-    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    where_sql = f"WHERE {' AND '.join(where_clauses)}"
 
     query = f"""
         SELECT

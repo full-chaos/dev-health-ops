@@ -21,6 +21,7 @@ from dev_health_ops.utils import (
     CONNECTORS_AVAILABLE,
     is_skippable,
 )
+from dev_health_ops.processors.base_git import check_backfill_needs, backfill_file_records
 from dev_health_ops.processors.fetch_utils import (
     safe_parse_datetime as _coerce_datetime,
     extract_retry_after,
@@ -661,26 +662,14 @@ async def _backfill_github_missing_data(
     )
     owner, repo_name = _split_full_name(repo_full_name)
 
-    if not (
-        hasattr(store, "has_any_git_files")
-        and hasattr(store, "has_any_git_blame")
-        and hasattr(store, "has_any_git_commit_stats")
-    ):
-        return
-
-    needs_files = not await store.has_any_git_files(db_repo.id)
-    needs_commit_stats = (
-        False if blame_only else not await store.has_any_git_commit_stats(db_repo.id)
-    )
-    needs_blame = not await store.has_any_git_blame(db_repo.id)
-
-    if not (needs_files or needs_commit_stats or needs_blame):
+    needs = await check_backfill_needs(store, db_repo.id, blame_only=blame_only)
+    if not needs.any:
         return
 
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
 
     file_paths: List[str] = []
-    if needs_files or needs_blame:
+    if needs.files or needs.blame:
         try:
             branch = gh_repo.get_branch(default_branch)
             tree = gh_repo.get_git_tree(branch.commit.sha, recursive=True)
@@ -692,31 +681,14 @@ async def _backfill_github_missing_data(
                     continue
                 file_paths.append(path)
 
-            if needs_files and file_paths:
-                async with AsyncBatchCollector(
-                    store.insert_git_file_data
-                ) as file_collector:
-                    for path in file_paths:
-                        file_collector.add(
-                            GitFile(
-                                repo_id=db_repo.id,
-                                path=path,
-                                executable=False,
-                                contents=None,
-                            )
-                        )
-                        await file_collector.maybe_flush()
-                logging.info(
-                    "Backfilled %d files for %s",
-                    len(file_paths),
-                    repo_full_name,
-                )
+            if needs.files and file_paths:
+                await backfill_file_records(store, db_repo.id, file_paths, repo_full_name)
         except Exception as e:
             logging.warning(
                 f"Failed to backfill GitHub files for {repo_full_name}: {e}"
             )
 
-    if needs_commit_stats:
+    if needs.commit_stats:
         try:
             logging.info(
                 "Backfilling commit stats for %s...",
@@ -767,7 +739,7 @@ async def _backfill_github_missing_data(
                 e,
             )
 
-    if needs_blame and file_paths:
+    if needs.blame and file_paths:
         try:
             logging.info(
                 "Backfilling blame for %d files in %s...",

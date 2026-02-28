@@ -4,6 +4,7 @@ Defines application-level counters, histograms, and gauges for:
   - Celery task execution
   - ClickHouse query latency
   - LLM API calls (OpenAI / Anthropic)
+  - GitHub API calls (requests by endpoint/status, rate limit remaining)
 
 Usage:
     from dev_health_ops.metrics.prometheus import (
@@ -14,6 +15,10 @@ Usage:
         LLM_REQUESTS_TOTAL,
         LLM_TOKENS_TOTAL,
         record_llm_call,
+        GITHUB_API_REQUESTS_TOTAL,
+        GITHUB_RATE_LIMIT_REMAINING,
+        record_github_api_request,
+        record_github_rate_limit,
     )
 """
 
@@ -24,7 +29,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 try:
-    from prometheus_client import Counter, Histogram
+    from prometheus_client import Counter, Gauge, Histogram
 
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
@@ -47,6 +52,23 @@ def _noop_counter(*args, **kwargs):
 
 def _noop_histogram(*args, **kwargs):
     return _noop_counter()
+
+
+def _noop_gauge(*args, **kwargs):
+    class _NoopGauge:
+        def labels(self, **kw):
+            return self
+
+        def set(self, value):
+            pass
+
+        def inc(self, amount=1):
+            pass
+
+        def dec(self, amount=1):
+            pass
+
+    return _NoopGauge()
 
 
 if _PROMETHEUS_AVAILABLE:
@@ -104,6 +126,21 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
     )
 
+    # ---------------------------------------------------------------------------
+    # GitHub API metrics
+    # ---------------------------------------------------------------------------
+    GITHUB_API_REQUESTS_TOTAL = Counter(
+        "devhealth_github_api_requests_total",
+        "Total GitHub API requests by endpoint and status code",
+        ["endpoint", "status_code"],
+    )
+
+    GITHUB_RATE_LIMIT_REMAINING = Gauge(
+        "devhealth_github_rate_limit_remaining",
+        "GitHub API rate limit remaining calls by resource type",
+        ["resource"],
+    )
+
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -113,6 +150,8 @@ else:
     LLM_REQUESTS_TOTAL = _noop_counter()
     LLM_TOKENS_TOTAL = _noop_counter()
     LLM_REQUEST_DURATION_SECONDS = _noop_histogram()
+    GITHUB_API_REQUESTS_TOTAL = _noop_counter()
+    GITHUB_RATE_LIMIT_REMAINING = _noop_gauge()
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +189,16 @@ def record_llm_call(
         LLM_TOKENS_TOTAL.labels(
             provider=provider, model=model, token_type="completion"
         ).inc(completion_tokens)
+
+
+def record_github_api_request(endpoint: str, status_code: str) -> None:
+    """Record a GitHub API request with endpoint and HTTP status code."""
+    GITHUB_API_REQUESTS_TOTAL.labels(endpoint=endpoint, status_code=status_code).inc()
+
+
+def record_github_rate_limit(resource: str, remaining: int) -> None:
+    """Update the GitHub rate limit remaining gauge for a resource type."""
+    GITHUB_RATE_LIMIT_REMAINING.labels(resource=resource).set(remaining)
 
 
 @contextmanager

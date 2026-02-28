@@ -39,6 +39,10 @@ from dev_health_ops.connectors.utils import (
     match_repo_pattern,
     retry_with_backoff,
 )
+from dev_health_ops.metrics.prometheus import (
+    record_github_api_request,
+    record_github_rate_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +91,13 @@ class GitHubConnector(GitConnector):
         :raises: Appropriate connector exception.
         """
         if isinstance(e, RateLimitExceededException):
+            record_github_api_request(endpoint="unknown", status_code="429")
             raise RateLimitException(
                 f"GitHub rate limit exceeded: {e}",
                 retry_after_seconds=self._rate_limit_reset_delay_seconds(),
             )
         elif isinstance(e, GithubException):
+            record_github_api_request(endpoint="unknown", status_code=str(e.status))
             if e.status == 401:
                 raise AuthenticationException(f"GitHub authentication failed: {e}")
             elif e.status == 404:
@@ -104,6 +110,7 @@ class GitHubConnector(GitConnector):
             else:
                 raise APIException(f"GitHub API error: {e}")
         else:
+            record_github_api_request(endpoint="unknown", status_code="500")
             raise APIException(f"Unexpected error: {e}")
 
     @retry_with_backoff(
@@ -623,16 +630,21 @@ class GitHubConnector(GitConnector):
             core = getattr(rl, "core", rl)
             search = getattr(rl, "search", None)
 
+            core_remaining = getattr(core, "remaining", 0)
+            record_github_rate_limit("core", core_remaining)
+
             res = {
                 "limit": getattr(core, "limit", 0),
-                "remaining": getattr(core, "remaining", 0),
+                "remaining": core_remaining,
                 "reset": getattr(core, "reset", datetime.now(timezone.utc)).isoformat(),
             }
 
             if search:
+                search_remaining = getattr(search, "remaining", 0)
+                record_github_rate_limit("search", search_remaining)
                 res["search"] = {
                     "limit": getattr(search, "limit", 0),
-                    "remaining": getattr(search, "remaining", 0),
+                    "remaining": search_remaining,
                     "reset": getattr(
                         search, "reset", datetime.now(timezone.utc)
                     ).isoformat(),

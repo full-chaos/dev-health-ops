@@ -109,17 +109,9 @@ async def write_batch(records: List[Model], session: AsyncSession) -> int:
 
 ---
 
-## 5. Visualization (Grafana + dev-health-web)
+## 5. Visualization (dev-health-web)
 
 **Purpose:** Render persisted data for exploration.
-
-### Grafana
-
-- Dashboards provisioned via `grafana/` directory
-- Query conventions:
-  - Prefer table format with stable time ordering
-  - Handle `team_id` null/empty normalization
-  - Avoid ClickHouse `WITH name = expr` syntax; use `WITH ... AS`
 
 ### dev-health-web
 
@@ -187,7 +179,7 @@ alembic upgrade head
 2. Add sink in `metrics/sinks/`
 3. Implement computation in `metrics/`
 4. Create Alembic migration if using Postgres
-5. Update Grafana dashboards
+5. Update dev-health-web or OTLP dashboards as needed
 
 ### Rules When Modifying
 

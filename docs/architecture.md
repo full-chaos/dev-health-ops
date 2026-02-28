@@ -12,8 +12,8 @@ The project follows a pipeline-style architecture that separates data collection
    - Persist processed data into PostgreSQL, ClickHouse, MongoDB, or SQLite.
 4. **Metrics** (`metrics/`)
    - Compute high-level metrics like throughput, cycle time, rework, and predictability.
-5. **Visualization** (`grafana/`)
-   - Provision dashboards for exploration and reporting.
+5. **Visualization** (`dev-health-web`)
+   - Web frontend for exploration and reporting via OTLP-native observability.
 
 ## Storage backends
 

@@ -16,7 +16,7 @@ Developer health tooling drifted into expensive, opaque scoring systems that are
 - Sync data from GitHub, GitLab, Jira, and local Git repositories.
 - Normalize and store work items, commits, and blame data.
 - Compute metrics like throughput, cycle time, rework, and predictability.
-- Explore optional Grafana dashboards for hotspots, investment flow, and team health (panel plugin moved to `dev-health-panels`).
+- Explore metrics via the `dev-health-web` frontend or OTLP-native observability tooling.
 
 ## Quick links
 
@@ -24,7 +24,6 @@ Developer health tooling drifted into expensive, opaque scoring systems that are
 - Architecture: `architecture.md`
 - CLI reference: `cli.md`
 - Metrics: `metrics.md`
-- Grafana: `grafana.md`
 
 ## Product documentation (PRD-style)
 

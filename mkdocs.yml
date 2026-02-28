@@ -67,7 +67,6 @@ nav:
       - Web Investment Queries: api/web-graphql-investment.md
   - Visualizations: visualizations/patterns.md
   - LLM: llm/categorization-contract.md
-  - Grafana: grafana.md
   - Task Trackers: task_trackers.md
   - Roadmap: roadmap.md
   - Project Plan: project.md

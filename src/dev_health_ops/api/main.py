@@ -21,12 +21,14 @@ import json
 from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
+from dev_health_ops.tracing import init_tracing, instrument_fastapi_app
 
 from .utils.logging import sanitize_for_log
 
-# Configure structured JSON logging and Sentry as early as possible
+# Configure structured JSON logging, Sentry, and OpenTelemetry as early as possible
 configure_logging()
 init_sentry()
+init_tracing()
 
 from .models.filters import (
     DrilldownRequest,
@@ -360,6 +362,9 @@ app.include_router(licensing_router)
 app.include_router(telemetry_router)
 app.include_router(ingest_router)
 app.include_router(orgs_router)
+
+# OpenTelemetry FastAPI instrumentation (must run after app is created)
+instrument_fastapi_app(app)
 
 # Prometheus metrics — expose /metrics endpoint
 try:

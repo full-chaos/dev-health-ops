@@ -7,10 +7,13 @@ from celery.signals import task_prerun, task_postrun, task_failure
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
+from dev_health_ops.tracing import init_tracing, instrument_celery
 
-# Configure logging and Sentry for Celery workers
+# Configure logging, Sentry, and OpenTelemetry for Celery workers
 configure_logging()
 init_sentry()
+init_tracing()
+instrument_celery()
 
 # Per-task start-time registry for duration tracking
 _task_start: dict[str, float] = {}

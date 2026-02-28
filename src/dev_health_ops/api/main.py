@@ -20,11 +20,13 @@ import json
 
 from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
 from dev_health_ops.logging_config import configure_logging
+from dev_health_ops.sentry import init_sentry
 
 from .utils.logging import sanitize_for_log
 
-# Configure structured JSON logging as early as possible
+# Configure structured JSON logging and Sentry as early as possible
 configure_logging()
+init_sentry()
 
 from .models.filters import (
     DrilldownRequest,

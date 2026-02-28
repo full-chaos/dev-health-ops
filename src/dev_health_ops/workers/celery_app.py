@@ -1,6 +1,12 @@
 """Celery application factory and instance."""
 
 from celery import Celery
+from dev_health_ops.logging_config import configure_logging
+from dev_health_ops.sentry import init_sentry
+
+# Configure logging and Sentry for Celery workers
+configure_logging()
+init_sentry()
 
 
 def create_celery_app() -> Celery:

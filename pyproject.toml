@@ -60,6 +60,7 @@ dependencies = [
   "resend>=2.5.0",
   # Observability
   "python-json-logger>=2.0.7",
+  "sentry-sdk[fastapi,celery]>=2.0.0",
 ]
 
 [project.optional-dependencies]

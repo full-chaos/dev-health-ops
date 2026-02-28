@@ -12,13 +12,120 @@ and gitlab.py only contain provider-specific fetch logic.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Coroutine
+from datetime import datetime, timezone
 from typing import Any
 
 from dev_health_ops.models.git import GitBlame, GitCommitStat, GitFile
 from dev_health_ops.processors.fetch_utils import AsyncBatchCollector
+from dev_health_ops.utils import CONNECTORS_AVAILABLE
+
+if CONNECTORS_AVAILABLE:
+    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+else:
+    RateLimitConfig = None  # type: ignore
+    RateLimitGate = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+class BaseGitProcessor:
+    """Shared helper methods for GitHub and GitLab processors.
+
+    Encapsulates patterns that appear in both processors so they can be
+    maintained in one place:
+
+    - Default rate-limit gate creation.
+    - Thread-safe batch persistence from synchronous worker threads.
+    - PR/MR ``created_at`` coercion (first non-None of created/merged/closed).
+    """
+
+    # Default initial backoff used when no gate is provided.
+    DEFAULT_INITIAL_BACKOFF: float = 1.0
+
+    @staticmethod
+    def make_default_gate() -> Any:
+        """Create a RateLimitGate with the standard default configuration.
+
+        Both GitHub and GitLab processors share the same default:
+        ``RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))``.
+
+        Returns:
+            A configured RateLimitGate instance, or None when connectors
+            are not available (test environments).
+        """
+        if RateLimitGate is None or RateLimitConfig is None:
+            return None
+        return RateLimitGate(
+            RateLimitConfig(
+                initial_backoff_seconds=BaseGitProcessor.DEFAULT_INITIAL_BACKOFF
+            )
+        )
+
+    @staticmethod
+    def ensure_gate(gate: Any) -> Any:
+        """Return *gate* unchanged, or a fresh default gate if None.
+
+        Convenience wrapper replacing the boilerplate::
+
+            if gate is None:
+                gate = RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+
+        Args:
+            gate: An existing gate instance or None.
+
+        Returns:
+            The provided gate, or a newly created default gate.
+        """
+        if gate is None:
+            return BaseGitProcessor.make_default_gate()
+        return gate
+
+    @staticmethod
+    def coerce_created_at(
+        created_at: datetime | None,
+        merged_at: datetime | None = None,
+        closed_at: datetime | None = None,
+    ) -> datetime:
+        """Return the first non-None timestamp from created/merged/closed, or now.
+
+        Both GitHub and GitLab processors use::
+
+            created_at = x.created_at or x.merged_at or x.closed_at
+                         or datetime.now(timezone.utc)
+
+        This method centralises that pattern.
+
+        Args:
+            created_at: Primary creation timestamp.
+            merged_at: Merge timestamp (fallback).
+            closed_at: Close timestamp (second fallback).
+
+        Returns:
+            A non-None ``datetime`` (UTC).
+        """
+        return created_at or merged_at or closed_at or datetime.now(timezone.utc)
+
+    @staticmethod
+    def persist_batch_threadsafe(
+        coro: Coroutine[Any, Any, Any],
+        loop: asyncio.AbstractEventLoop,
+    ) -> Any:
+        """Run an async persistence coroutine from a synchronous worker thread.
+
+        Both processors use ``asyncio.run_coroutine_threadsafe(...).result()``
+        to write batches to the async store while running in a sync thread.
+
+        Args:
+            coro: The coroutine to schedule (e.g. ``store.insert_git_pull_requests(batch)``).
+            loop: The running event loop to schedule the coroutine on.
+
+        Returns:
+            The result of the coroutine.
+        """
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
 
 class BackfillNeeds:

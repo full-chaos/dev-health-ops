@@ -15,6 +15,7 @@ from dev_health_ops.models.git import (
     Repo,
 )
 from dev_health_ops.processors.base_git import (
+    BaseGitProcessor,
     backfill_file_records,
     check_backfill_needs,
 )
@@ -226,9 +227,6 @@ def _fetch_github_prs_sync(connector, owner, repo_name, repo_id, max_prs):
     )
     pr_objects = []
     for pr in prs:
-        created_at = (
-            pr.created_at or pr.merged_at or pr.closed_at or datetime.now(timezone.utc)
-        )
         git_pr = GitPullRequest(
             repo_id=repo_id,
             number=pr.number,
@@ -237,7 +235,9 @@ def _fetch_github_prs_sync(connector, owner, repo_name, repo_id, max_prs):
             state=pr.state,
             author_name=pr.author.username if pr.author else "Unknown",
             author_email=pr.author.email if pr.author else None,
-            created_at=created_at,
+            created_at=BaseGitProcessor.coerce_created_at(
+                pr.created_at, pr.merged_at, pr.closed_at
+            ),
             merged_at=pr.merged_at,
             closed_at=pr.closed_at,
             head_branch=pr.head_branch,
@@ -422,14 +422,11 @@ def _collect_github_pr_objects(
         if getattr(gh_pr, "user", None):
             author_name = getattr(gh_pr.user, "login", None) or author_name
 
-        created_at = (
-            getattr(gh_pr, "created_at", None)
-            or getattr(gh_pr, "merged_at", None)
-            or getattr(gh_pr, "closed_at", None)
-            or datetime.now(timezone.utc)
-        )
         merged_at = getattr(gh_pr, "merged_at", None)
         closed_at = getattr(gh_pr, "closed_at", None)
+        created_at = BaseGitProcessor.coerce_created_at(
+            getattr(gh_pr, "created_at", None), merged_at, closed_at
+        )
 
         additions = getattr(gh_pr, "additions", 0)
         deletions = getattr(gh_pr, "deletions", 0)
@@ -553,8 +550,7 @@ def _sync_github_prs_to_store(
     )
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
 
-    if gate is None:
-        gate = RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+    gate = BaseGitProcessor.ensure_gate(gate)
 
     # Phase 1: collect all PR objects without per-PR review/comment API calls
     pr_objects, raw_gh_prs = _collect_github_pr_objects(
@@ -583,10 +579,10 @@ def _sync_github_prs_to_store(
 
     # Phase 3: persist reviews in one bulk insert
     if review_objects:
-        asyncio.run_coroutine_threadsafe(
+        BaseGitProcessor.persist_batch_threadsafe(
             store.insert_git_pull_request_reviews(review_objects),
             loop,
-        ).result()
+        )
         logging.debug(
             "Stored %d reviews for %s/%s",
             len(review_objects),
@@ -597,10 +593,10 @@ def _sync_github_prs_to_store(
     # Phase 4: persist PRs in batches
     for i in range(0, len(pr_objects), batch_size):
         batch = pr_objects[i : i + batch_size]
-        asyncio.run_coroutine_threadsafe(
+        BaseGitProcessor.persist_batch_threadsafe(
             store.insert_git_pull_requests(batch),
             loop,
-        ).result()
+        )
         logging.debug(
             "Stored batch of %d PRs for %s/%s (total so far: %d)",
             len(batch),

@@ -15,6 +15,7 @@ from dev_health_ops.models.git import (
     Repo,
 )
 from dev_health_ops.processors.base_git import (
+    BaseGitProcessor,
     backfill_file_records,
     check_backfill_needs,
 )
@@ -185,9 +186,6 @@ def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
     )
     pr_objects = []
     for mr in mrs:
-        created_at = (
-            mr.created_at or mr.merged_at or mr.closed_at or datetime.now(timezone.utc)
-        )
         git_pr = GitPullRequest(
             repo_id=repo_id,
             number=mr.number,
@@ -196,7 +194,9 @@ def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
             state=normalize_pr_state(mr.state, mr.merged_at),
             author_name=mr.author.username if mr.author else "Unknown",
             author_email=None,
-            created_at=created_at,
+            created_at=BaseGitProcessor.coerce_created_at(
+                mr.created_at, mr.merged_at, mr.closed_at
+            ),
             merged_at=mr.merged_at,
             closed_at=mr.closed_at,
             head_branch=mr.head_branch,
@@ -234,8 +234,7 @@ def _sync_gitlab_mrs_to_store(
     total = 0
     page = 1
 
-    if gate is None:
-        gate = RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+    gate = BaseGitProcessor.ensure_gate(gate)
 
     while True:
         try:
@@ -282,12 +281,11 @@ def _sync_gitlab_mrs_to_store(
             if author_data:
                 author_name = author_data.get("username") or author_name
 
-            created_at = safe_parse_datetime(mr.get("created_at"))
-            updated_at = safe_parse_datetime(mr.get("updated_at"))
             merged_at = safe_parse_datetime(mr.get("merged_at"))
             closed_at = safe_parse_datetime(mr.get("closed_at"))
-            created_at = (
-                created_at or merged_at or closed_at or datetime.now(timezone.utc)
+            updated_at = safe_parse_datetime(mr.get("updated_at"))
+            created_at = BaseGitProcessor.coerce_created_at(
+                safe_parse_datetime(mr.get("created_at")), merged_at, closed_at
             )
 
             comments_count = int(mr.get("user_notes_count") or 0)
@@ -322,10 +320,10 @@ def _sync_gitlab_mrs_to_store(
             total += 1
 
             if len(batch) >= batch_size:
-                asyncio.run_coroutine_threadsafe(
+                BaseGitProcessor.persist_batch_threadsafe(
                     store.insert_git_pull_requests(batch),
                     loop,
-                ).result()
+                )
                 logging.debug(
                     "Stored batch of %d MRs for project %d (total: %d)",
                     len(batch),
@@ -339,10 +337,10 @@ def _sync_gitlab_mrs_to_store(
             break
 
     if batch:
-        asyncio.run_coroutine_threadsafe(
+        BaseGitProcessor.persist_batch_threadsafe(
             store.insert_git_pull_requests(batch),
             loop,
-        ).result()
+        )
 
     logging.info(
         "Fetched %d merge requests for project %d",

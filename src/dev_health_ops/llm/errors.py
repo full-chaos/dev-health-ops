@@ -139,7 +139,7 @@ def classify_provider_error(
             try:
                 retry_after = float(getattr(exc, "retry_after"))
             except (TypeError, ValueError):
-                pass
+                pass  # retry_after is not a valid number; leave as None
         return LLMRateLimitError(
             msg, retry_after=retry_after, provider=provider, model=model, original=exc
         )
@@ -218,7 +218,7 @@ async def call_with_retry(
                     else retry_delay(attempt)
                 )
                 logger.warning(
-                    "LLM %s error on attempt %d/%d; retrying in %.1fs — %s",
+                    "LLM %s error on attempt %d/%d; retrying in %.1fs — %r",
                     provider_name,
                     attempt + 1,
                     max_retries + 1,
@@ -230,7 +230,7 @@ async def call_with_retry(
                 continue
             # Non-retryable or exhausted
             logger.error(
-                "LLM %s/%s failed after %d attempt(s): %s",
+                "LLM %s/%s failed after %d attempt(s): %r",
                 provider_name,
                 model,
                 attempt + 1,
@@ -245,7 +245,7 @@ async def call_with_retry(
             if is_retryable(llm_exc) and attempt < max_retries:
                 delay = retry_delay(attempt)
                 logger.warning(
-                    "LLM %s transient error on attempt %d/%d; retrying in %.1fs — %s",
+                    "LLM %s transient error on attempt %d/%d; retrying in %.1fs — %r",
                     provider_name,
                     attempt + 1,
                     max_retries + 1,
@@ -256,7 +256,7 @@ async def call_with_retry(
                 attempt += 1
                 continue
             logger.error(
-                "LLM %s/%s failed after %d attempt(s): %s",
+                "LLM %s/%s failed after %d attempt(s): %r",
                 provider_name,
                 model,
                 attempt + 1,

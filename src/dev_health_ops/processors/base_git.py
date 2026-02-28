@@ -13,11 +13,10 @@ and gitlab.py only contain provider-specific fetch logic.
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, List
 
-from dev_health_ops.models.git import GitBlame, GitCommitStat, GitFile, Repo
+from dev_health_ops.models.git import GitBlame, GitCommitStat, GitFile
 from dev_health_ops.processors.fetch_utils import AsyncBatchCollector
-from dev_health_ops.processors.storage_protocol import GitSyncStore
 
 logger = logging.getLogger(__name__)
 

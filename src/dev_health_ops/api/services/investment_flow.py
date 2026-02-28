@@ -4,8 +4,6 @@ from datetime import datetime, time, timezone
 from typing import Dict, List, Optional
 
 from dev_health_ops.core.taxonomy import (
-    THEME_LABELS,
-    THEME_KEYS_BY_LABEL,
     format_theme_label as _format_theme_label,
     format_subcategory_label as _format_subcategory_label,
     normalize_theme_key as _normalize_theme_key,

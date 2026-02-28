@@ -19,6 +19,9 @@ RUN mkdir -p /app
 # Ensure config files are available if needed
 # COPY --from=base /usr/local/lib/python3.14/site-packages/dev_health_ops/config /app/config
 
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
+
 FROM base AS api
 EXPOSE 8000
 

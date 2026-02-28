@@ -216,9 +216,7 @@ live_e2e_tests() {
 }
 
 ci_tests() {
-  require_cmd black
-  require_cmd isort
-  require_cmd flake8
+  require_cmd ruff
   require_cmd mypy
   require_cmd pytest
 
@@ -226,16 +224,16 @@ ci_tests() {
   local strict_quality_gates="${STRICT_QUALITY_GATES:-0}"
 
   if [ "${strict_quality_gates}" = "1" ]; then
-    run_step "black (format check)" black --check .
-    run_step "isort (import order check)" isort --check-only .
+    run_step "ruff (format check)" ruff format --check .
+    run_step "ruff (import and lint check)" ruff check .
     run_step "mypy (type checking)" mypy --install-types --non-interactive .
   else
-    run_advisory_step "black (format check)" black --check .
-    run_advisory_step "isort (import order check)" isort --check-only .
+    run_advisory_step "ruff (format check)" ruff format --check .
+    run_advisory_step "ruff (import and lint check)" ruff check .
     run_advisory_step "mypy (type checking)" mypy --install-types --non-interactive .
   fi
 
-  run_step "flake8 (lint)" flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+  run_step "ruff (lint gates)" ruff check --select=E9,F63,F7,F82 .
   run_pytest_step "unit tests with coverage >= ${coverage_threshold}" "${JUNIT_XML_UNIT}" \
     tests -v --tb=short -m "not benchmark" \
     --ignore=tests/test_connectors_integration.py \

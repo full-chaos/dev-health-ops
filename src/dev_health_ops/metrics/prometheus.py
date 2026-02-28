@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from typing import Generator
 
 try:
-    from prometheus_client import Counter, Histogram, Gauge, REGISTRY
+    from prometheus_client import Counter, Histogram
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
     _PROMETHEUS_AVAILABLE = False

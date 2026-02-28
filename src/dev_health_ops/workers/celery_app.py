@@ -37,7 +37,7 @@ def _task_finished(task_id: str, task, state: str = "SUCCESS", **kwargs) -> None
             duration_seconds=duration,
         )
     except Exception:
-        pass
+        pass  # Metrics recording is best-effort; never fail a task over it
 
 
 def create_celery_app() -> Celery:

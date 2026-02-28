@@ -7,11 +7,7 @@ from typing import Any, Dict, Iterable, List, Sequence
 
 from sqlalchemy import text
 
-from dev_health_ops.metrics.db_utils import (
-    normalize_sqlite_url as _normalize_sqlite_url,
-)
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.storage import detect_db_type
 
 ROLLING_WINDOWS = (7, 30)
@@ -349,46 +345,29 @@ def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> Dict[str, Any]:
         "overall_ok": True,
     }
 
-    if backend == "clickhouse":
-        sink = ClickHouseMetricsSink(db_url)
-        client = sink.client
-        try:
-            presence = _fetch_table_presence_clickhouse(client, tables)
-            for spec in ROLLING_TABLE_SPECS:
-                _populate_table_report(
-                    report=report,
-                    presence=presence,
-                    spec=spec,
-                    backend=backend,
-                    client=client,
-                    engine=None,
-                    start_short=start_short,
-                    start_long=start_long,
-                    end=as_of,
-                )
-        finally:
-            sink.close()
-    elif backend == "sqlite":
-        sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
-        engine = sink.engine
-        try:
-            presence = _fetch_table_presence_sqlite(engine, tables)
-            for spec in ROLLING_TABLE_SPECS:
-                _populate_table_report(
-                    report=report,
-                    presence=presence,
-                    spec=spec,
-                    backend=backend,
-                    client=None,
-                    engine=engine,
-                    start_short=start_short,
-                    start_long=start_long,
-                    end=as_of,
-                )
-        finally:
-            sink.close()
-    else:
-        raise ValueError(f"Unsupported backend for rolling aggregates audit: {backend}")
+    if backend != "clickhouse":
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
+            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
+        )
+    sink = ClickHouseMetricsSink(db_url)
+    client = sink.client
+    try:
+        presence = _fetch_table_presence_clickhouse(client, tables)
+        for spec in ROLLING_TABLE_SPECS:
+            _populate_table_report(
+                report=report,
+                presence=presence,
+                spec=spec,
+                backend=backend,
+                client=client,
+                engine=None,
+                start_short=start_short,
+                start_long=start_long,
+                end=as_of,
+            )
+    finally:
+        sink.close()
 
     report["overall_ok"] = all(
         entry.get("status") in {"ok", "no_data"} for entry in report["tables"].values()

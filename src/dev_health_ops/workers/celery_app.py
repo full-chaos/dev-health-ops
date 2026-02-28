@@ -3,7 +3,7 @@
 import time
 
 from celery import Celery
-from celery.signals import task_prerun, task_postrun, task_failure
+from celery.signals import task_prerun, task_postrun
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
@@ -34,22 +34,6 @@ def _task_finished(task_id: str, task, state: str = "SUCCESS", **kwargs) -> None
         record_celery_task(
             task_name=task.name,
             state=state.lower(),
-            duration_seconds=duration,
-        )
-    except Exception:
-        pass
-
-
-@task_failure.connect
-def _task_failed(task_id: str, sender, **kwargs) -> None:  # type: ignore[no-untyped-def]
-    start = _task_start.pop(task_id, None)
-    duration = (time.perf_counter() - start) if start is not None else 0.0
-    try:
-        from dev_health_ops.metrics.prometheus import record_celery_task
-
-        record_celery_task(
-            task_name=sender.name,
-            state="failure",
             duration_seconds=duration,
         )
     except Exception:

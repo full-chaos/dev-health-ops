@@ -4,7 +4,6 @@ Defines application-level counters, histograms, and gauges for:
   - Celery task execution
   - ClickHouse query latency
   - LLM API calls (OpenAI / Anthropic)
-  - GitHub API requests
 
 Usage:
     from dev_health_ops.metrics.prometheus import (
@@ -15,8 +14,6 @@ Usage:
         LLM_REQUESTS_TOTAL,
         LLM_TOKENS_TOTAL,
         record_llm_call,
-        GITHUB_API_REQUESTS_TOTAL,
-        GITHUB_API_DURATION_SECONDS,
     )
 """
 
@@ -103,22 +100,6 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
     )
 
-    # ---------------------------------------------------------------------------
-    # GitHub API metrics
-    # ---------------------------------------------------------------------------
-    GITHUB_API_REQUESTS_TOTAL = Counter(
-        "devhealth_github_api_requests_total",
-        "Total GitHub API requests",
-        ["endpoint", "status_code"],
-    )
-
-    GITHUB_API_DURATION_SECONDS = Histogram(
-        "devhealth_github_api_duration_seconds",
-        "GitHub API request latency in seconds",
-        ["endpoint"],
-        buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
-    )
-
 else:
     # Graceful no-ops when prometheus_client is unavailable
     CELERY_TASKS_TOTAL = _noop_counter()
@@ -128,8 +109,6 @@ else:
     LLM_REQUESTS_TOTAL = _noop_counter()
     LLM_TOKENS_TOTAL = _noop_counter()
     LLM_REQUEST_DURATION_SECONDS = _noop_histogram()
-    GITHUB_API_REQUESTS_TOTAL = _noop_counter()
-    GITHUB_API_DURATION_SECONDS = _noop_histogram()
 
 
 # ---------------------------------------------------------------------------

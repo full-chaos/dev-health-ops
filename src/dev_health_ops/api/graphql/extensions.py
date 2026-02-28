@@ -47,7 +47,11 @@ class OrgIdAuthExtension(SchemaExtension):
         if context is None:
             return
 
-        # Extract org_id from the top-level variable or parsed argument.
+        # Extract org_id from GraphQL variables only. Inline argument org_id
+        # (e.g. query { metrics(org_id: "x") }) is intentionally not validated
+        # here — the OrgIdMiddleware contextvar is the authoritative source and
+        # all resolvers scope via context.org_id, so inline args cannot bypass
+        # the auth boundary.
         variables = getattr(execution_context, "variables", None) or {}
         requested_org_id: str | None = variables.get("org_id") or None
 

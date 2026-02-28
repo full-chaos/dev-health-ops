@@ -51,9 +51,9 @@ class TestCoreEncryption:
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 if isinstance(node, ast.ImportFrom) and node.module:
-                    assert not node.module.startswith(
-                        "dev_health_ops.api"
-                    ), f"Found api import: {node.module}"
+                    assert not node.module.startswith("dev_health_ops.api"), (
+                        f"Found api import: {node.module}"
+                    )
 
 
 class TestCoreCache:
@@ -96,9 +96,9 @@ class TestCoreCache:
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 if isinstance(node, ast.ImportFrom) and node.module:
-                    assert not node.module.startswith(
-                        "dev_health_ops.api"
-                    ), f"Found api import: {node.module}"
+                    assert not node.module.startswith("dev_health_ops.api"), (
+                        f"Found api import: {node.module}"
+                    )
 
 
 class TestCoreCacheInvalidation:
@@ -132,9 +132,9 @@ class TestCoreCacheInvalidation:
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 if isinstance(node, ast.ImportFrom) and node.module:
-                    assert not node.module.startswith(
-                        "dev_health_ops.api"
-                    ), f"Found api import: {node.module}"
+                    assert not node.module.startswith("dev_health_ops.api"), (
+                        f"Found api import: {node.module}"
+                    )
 
 
 class TestBackwardCompatibility:

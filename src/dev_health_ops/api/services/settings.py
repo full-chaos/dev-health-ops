@@ -10,7 +10,6 @@ import asyncio
 import difflib
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 

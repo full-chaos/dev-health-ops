@@ -2,10 +2,11 @@ name: Live Backend E2E
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: ["**"]
+    branches: [ "**" ]
   workflow_dispatch:
+
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -47,7 +48,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.14"
           cache: "pip"
 
       - name: Install dependencies

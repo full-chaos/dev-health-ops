@@ -1,5 +1,5 @@
 # ---- builder stage: install deps with build tools ----
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1
@@ -18,7 +18,7 @@ ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 RUN pip install --no-cache-dir --prefix=/install .
 
 # ---- final stage: runtime only (no build tools) ----
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1

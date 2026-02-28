@@ -62,7 +62,7 @@ jobs:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
-          COVERAGE_THRESHOLD: "50"
+          COVERAGE_THRESHOLD: "70"
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs

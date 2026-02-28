@@ -220,7 +220,7 @@ ci_tests() {
   require_cmd mypy
   require_cmd pytest
 
-  local coverage_threshold="${COVERAGE_THRESHOLD:-50}"
+  local coverage_threshold="${COVERAGE_THRESHOLD:-70}"
   local strict_quality_gates="${STRICT_QUALITY_GATES:-0}"
 
   run_step "ruff check (lint)" ruff check .

@@ -20,10 +20,6 @@ run_dev_hops() {
     dev-hops "$@"
     return
   fi
-  if command -v poetry >/dev/null 2>&1; then
-    poetry run dev-hops "$@"
-    return
-  fi
   if command -v uv >/dev/null 2>&1; then
     uv run dev-hops "$@"
     return
@@ -34,9 +30,6 @@ run_dev_hops() {
 exec_dev_hops() {
   if command -v dev-hops >/dev/null 2>&1; then
     exec dev-hops "$@"
-  fi
-  if command -v poetry >/dev/null 2>&1; then
-    exec poetry run dev-hops "$@"
   fi
   if command -v uv >/dev/null 2>&1; then
     exec uv run dev-hops "$@"

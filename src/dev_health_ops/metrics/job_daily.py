@@ -101,7 +101,7 @@ def discover_repos(
 _discover_repos = discover_repos
 
 
-async def _get_loader(db_url: str, backend: str) -> DataLoader:
+async def _get_loader(db_url: str, backend: str, org_id: str = "") -> DataLoader:
     """Factory to create the ClickHouse DataLoader."""
     if backend != "clickhouse":
         raise ValueError(
@@ -111,7 +111,7 @@ async def _get_loader(db_url: str, backend: str) -> DataLoader:
     from dev_health_ops.api.queries.client import get_global_client
 
     client = await get_global_client(db_url)
-    return ClickHouseDataLoader(client)
+    return ClickHouseDataLoader(client, org_id=org_id)
 
 
 def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
@@ -196,7 +196,7 @@ async def run_daily_metrics_job(
         )
     }
 
-    loader = await _get_loader(db_url, backend)
+    loader = await _get_loader(db_url, backend, org_id=org_id)
 
     load_work_items_from_db = provider == "auto"
     load_work_items_enabled = provider != "none"
@@ -447,7 +447,7 @@ async def run_daily_metrics_finalize(
 
     await init_team_resolver(primary_sink)
 
-    loader = await _get_loader(db_url, backend)
+    loader = await _get_loader(db_url, backend, org_id=org_id)
 
     import dataclasses as _dc
 

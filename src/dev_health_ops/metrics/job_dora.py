@@ -12,14 +12,9 @@ from dev_health_ops.connectors import GitLabConnector
 from dev_health_ops.connectors.exceptions import ConnectorException
 from dev_health_ops.metrics.job_daily import (
     _discover_repos,
-    _normalize_sqlite_url,
-    _secondary_uri_from_env,
 )
 from dev_health_ops.metrics.schemas import DORAMetricsRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
-from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.storage import detect_db_type
 
@@ -114,22 +109,14 @@ def run_dora_metrics_job(
     primary_sink: Any
     secondary_sink: Optional[Any] = None
 
-    if backend == "clickhouse":
-        primary_sink = ClickHouseMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = MongoMetricsSink(_secondary_uri_from_env())
-    elif backend == "mongo":
-        primary_sink = MongoMetricsSink(db_url)
-        if sink == "both":
-            secondary_sink = ClickHouseMetricsSink(_secondary_uri_from_env())
-    elif backend == "postgres":
-        primary_sink = PostgresMetricsSink(db_url)
-    else:
-        primary_sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
+    if backend != "clickhouse":
+        raise ValueError(
+            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
+            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
+        )
+    primary_sink = ClickHouseMetricsSink(db_url)
 
-    sinks: List[Any] = [primary_sink] + (
-        [secondary_sink] if secondary_sink is not None else []
-    )
+    sinks: List[Any] = [primary_sink]
 
     connector = GitLabConnector(url=gitlab_url, private_token=token)
 

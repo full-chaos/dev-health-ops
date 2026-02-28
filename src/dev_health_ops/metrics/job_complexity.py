@@ -8,15 +8,7 @@ import git
 from dev_health_ops.analytics.complexity import ComplexityScanner
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
-from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.metrics.db_utils import (
-    normalize_sqlite_url as _normalize_sqlite_url,
-)
-from dev_health_ops.metrics.db_utils import (
-    normalize_postgres_url as _normalize_postgres_url,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +48,11 @@ def run_complexity_scan_job(
         own_sink = True
         if backend == "clickhouse":
             sink = ClickHouseMetricsSink(db_url)
-        elif backend == "sqlite":
-            sink = SQLiteMetricsSink(_normalize_sqlite_url(db_url))
-        elif backend == "mongo":
-            sink = MongoMetricsSink(db_url)
-        elif backend == "postgres":
-            sink = SQLiteMetricsSink(_normalize_postgres_url(db_url))
         else:
-            raise ValueError(f"Unsupported backend for complexity job: {backend}")
+            raise ValueError(
+                f"Unsupported backend '{backend}' for complexity job. "
+                "Only ClickHouse is supported (CHAOS-641)."
+            )
 
     try:
         if own_sink:

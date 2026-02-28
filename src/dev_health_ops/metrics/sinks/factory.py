@@ -1,35 +1,17 @@
 """
 Factory for creating metrics sink instances.
 
-The sink backend is selected by passing a connection string to create_sink()
-or via the DEV_HEALTH_SINK environment variable (factory-specific usage).
-Note: Most parts of the application use DATABASE_URI for database configuration.
-
-Supported backends:
-- clickhouse: ClickHouse (default for analytics)
-- mongo: MongoDB (DEPRECATED for analytics)
-- sqlite: SQLite (DEPRECATED for analytics)
-- postgres: PostgreSQL (DEPRECATED for analytics)
-
-DEPRECATION NOTICE:
-MongoDB, PostgreSQL, and SQLite are deprecated for analytics use. ClickHouse is
-the only supported analytics backend. Migrate to ClickHouse. See
-docs/architecture/database-architecture.md for migration guidance.
+ClickHouse is the only supported analytics backend (CHAOS-641).
+MongoDB, PostgreSQL, and SQLite support was removed.
 
 Example:
-    # Via connection string
     sink = create_sink("clickhouse://localhost:8123/default")
-
-    # Via env var (factory-specific)
-    os.environ["DEV_HEALTH_SINK"] = "mongo://localhost:27017/dev_health"
-    sink = create_sink()
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import warnings
 from enum import Enum
 from typing import Optional
 from urllib.parse import urlparse
@@ -43,9 +25,6 @@ class SinkBackend(str, Enum):
     """Supported sink backend types."""
 
     CLICKHOUSE = "clickhouse"
-    MONGO = "mongo"
-    SQLITE = "sqlite"
-    POSTGRES = "postgres"
 
 
 def detect_backend(dsn: str) -> SinkBackend:
@@ -59,12 +38,11 @@ def detect_backend(dsn: str) -> SinkBackend:
         SinkBackend enum value
 
     Raises:
-        ValueError: If the scheme is not recognized
+        ValueError: If the scheme is not a supported ClickHouse variant
     """
     parsed = urlparse(dsn)
     scheme = parsed.scheme.lower()
 
-    # Handle SQLAlchemy-style schemes
     if scheme in (
         "clickhouse",
         "clickhouse+native",
@@ -72,87 +50,40 @@ def detect_backend(dsn: str) -> SinkBackend:
         "clickhouse+https",
     ):
         return SinkBackend.CLICKHOUSE
-    elif scheme in ("mongodb", "mongodb+srv", "mongo"):
-        return SinkBackend.MONGO
-    elif scheme in ("sqlite", "sqlite+aiosqlite"):
-        return SinkBackend.SQLITE
-    elif scheme in (
-        "postgresql",
-        "postgresql+asyncpg",
-        "postgresql+psycopg2",
-        "postgres",
-    ):
-        return SinkBackend.POSTGRES
-    else:
-        raise ValueError(
-            f"Unknown sink scheme '{scheme}'. Supported: "
-            "clickhouse, mongo/mongodb, sqlite, postgres/postgresql"
-        )
+
+    raise ValueError(
+        f"Unknown or unsupported sink scheme '{scheme}'. "
+        "Only ClickHouse is supported (CHAOS-641). "
+        "Use a clickhouse:// connection string."
+    )
 
 
 def create_sink(dsn: Optional[str] = None) -> BaseMetricsSink:
     """
-    Create a metrics sink instance for the specified backend.
+    Create a ClickHouse metrics sink instance.
 
     Args:
-        dsn: Connection string. If not provided, reads from DEV_HEALTH_SINK
-             environment variable.
+        dsn: ClickHouse connection string. If not provided, reads from
+             CLICKHOUSE_URI or DEV_HEALTH_SINK environment variable.
 
     Returns:
-        A configured BaseMetricsSink implementation.
+        A configured ClickHouseMetricsSink instance.
 
     Raises:
-        ValueError: If no DSN is provided and DEV_HEALTH_SINK is not set.
-        ValueError: If the DSN scheme is not recognized.
-
-    Example:
-        # Explicit DSN
-        sink = create_sink("clickhouse://localhost:8123/default")
-
-        # From environment
-        os.environ["DEV_HEALTH_SINK"] = "mongo://localhost:27017/dev_health"
-        sink = create_sink()
+        ValueError: If no DSN is provided or the DSN is not a ClickHouse URI.
     """
     if dsn is None:
-        dsn = os.environ.get("DEV_HEALTH_SINK")
+        dsn = os.environ.get("CLICKHOUSE_URI") or os.environ.get("DEV_HEALTH_SINK")
 
     if not dsn:
         raise ValueError(
-            "No sink DSN provided. Set DEV_HEALTH_SINK environment variable "
+            "No sink DSN provided. Set CLICKHOUSE_URI environment variable "
             "or pass dsn parameter to create_sink()."
         )
 
     backend = detect_backend(dsn)
     logger.info("Creating %s sink from DSN", backend.value)
 
-    # Emit deprecation warning for non-ClickHouse analytics backends
-    if backend != SinkBackend.CLICKHOUSE:
-        warnings.warn(
-            f"{backend.value} is deprecated for analytics. Migrate to ClickHouse. "
-            "See docs/architecture/database-architecture.md",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
-    if backend == SinkBackend.CLICKHOUSE:
-        from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-
-        return ClickHouseMetricsSink(dsn)
-
-    elif backend == SinkBackend.MONGO:
-        from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
-
-        return MongoMetricsSink(dsn)
-
-    elif backend == SinkBackend.SQLITE:
-        from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
-
-        return SQLiteMetricsSink(dsn)
-
-    elif backend == SinkBackend.POSTGRES:
-        from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
-
-        return PostgresMetricsSink(dsn)
-
-    else:
-        raise ValueError(f"Unsupported backend: {backend}")
+    return ClickHouseMetricsSink(dsn)

@@ -58,6 +58,8 @@ dependencies = [
   "PyNaCl>=1.5.0",
   "stripe>=7.0.0",
   "resend>=2.5.0",
+  # Observability
+  "python-json-logger>=2.0.7",
 ]
 
 [project.optional-dependencies]

@@ -19,8 +19,12 @@ import asyncio
 import json
 
 from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
+from dev_health_ops.logging_config import configure_logging
 
 from .utils.logging import sanitize_for_log
+
+# Configure structured JSON logging as early as possible
+configure_logging()
 
 from .models.filters import (
     DrilldownRequest,

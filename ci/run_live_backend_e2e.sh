@@ -286,7 +286,7 @@ import pathlib
 import sys
 
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
-assert payload.get("backend") == "postgres", payload
+assert payload.get("backend") == "clickhouse", payload
 assert payload.get("limits", {}).get("max_days") == 365, payload
 assert payload.get("limits", {}).get("max_repos") == 1000, payload
 supported = payload.get("supported_endpoints", [])

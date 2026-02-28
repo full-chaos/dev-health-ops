@@ -64,9 +64,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "mypy",
-  "black",
-  "flake8",
-  "isort",
+  "ruff>=0.4.0",
   "pytest",
   "pytest-asyncio",
   "pytest-cov",
@@ -104,18 +102,29 @@ include-package-data = true
 [tool.setuptools.package-data]
 "*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.mako"]
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
-line_length = 88
-
-[tool.black]
+[tool.ruff]
+target-version = "py310"
 line-length = 88
-target-version = ['py310', 'py311', 'py312']
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "F",    # pyflakes
+  "I",    # isort
+  "UP",   # pyupgrade
+  "B",    # flake8-bugbear
+  "SIM",  # flake8-simplify
+]
+ignore = [
+  "E501",   # line too long (handled by formatter)
+  "B008",   # do not perform function calls in argument defaults (FastAPI Depends)
+  "SIM108", # use ternary operator (readability trade-off)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dev_health_ops"]
 
 [tool.poetry]
 name = "dev-health-ops"
@@ -172,9 +181,7 @@ priority = "supplemental"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "*"
-black = "*"
-flake8 = "*"
-isort = "*"
+ruff = ">=0.4.0"
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"

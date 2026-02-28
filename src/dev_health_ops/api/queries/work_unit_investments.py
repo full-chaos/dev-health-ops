@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
+
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_work_unit_investments(
@@ -12,16 +14,16 @@ async def fetch_work_unit_investments(
     *,
     start_ts: datetime,
     end_ts: datetime,
-    repo_ids: Optional[List[str]],
+    repo_ids: list[str] | None,
     limit: int,
-    work_unit_id: Optional[str] = None,
+    work_unit_id: str | None = None,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts, "limit": limit}
     params["org_id"] = org_id
     # ClickHouse may prefer alias over column names in WHERE; always qualify columns
     # to avoid accidentally referencing argMax(...) aliases.
-    filters: List[str] = [
+    filters: list[str] = [
         "work_unit_investments.from_ts < %(end_ts)s",
         "work_unit_investments.to_ts >= %(start_ts)s",
         "work_unit_investments.org_id = %(org_id)s",
@@ -66,7 +68,7 @@ async def fetch_repo_scopes(
     *,
     repo_ids: Iterable[str],
     org_id: str = "",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     ids = [repo_id for repo_id in repo_ids if repo_id]
     if not ids:
         return {}
@@ -93,7 +95,7 @@ async def fetch_work_item_team_assignments(
     *,
     work_item_ids: Iterable[str],
     org_id: str = "",
-) -> Dict[str, Dict[str, str]]:
+) -> dict[str, dict[str, str]]:
     ids = [work_item_id for work_item_id in work_item_ids if work_item_id]
     if not ids:
         return {}
@@ -110,7 +112,7 @@ async def fetch_work_item_team_assignments(
     params = {"work_item_ids": ids}
     params["org_id"] = org_id
     rows = await query_dicts(sink, query, params)
-    result: Dict[str, Dict[str, str]] = {}
+    result: dict[str, dict[str, str]] = {}
     for row in rows:
         work_item_id = str(row.get("work_item_id") or "")
         if not work_item_id:
@@ -124,9 +126,9 @@ async def fetch_work_item_team_assignments(
 async def fetch_work_unit_investment_quotes(
     sink: BaseMetricsSink,
     *,
-    unit_runs: Iterable[Tuple[str, str]],
+    unit_runs: Iterable[tuple[str, str]],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     pairs = [(unit_id, run_id) for unit_id, run_id in unit_runs if unit_id and run_id]
     if not pairs:
         return []

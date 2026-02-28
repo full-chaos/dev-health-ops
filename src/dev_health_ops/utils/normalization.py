@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Dict, Iterable, Tuple
+from collections.abc import Iterable
 
 
 def _sha256_hex(value: str) -> str:
@@ -12,7 +12,7 @@ def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
-def normalize_scores(scores: Dict[str, float], keys: Iterable[str]) -> Dict[str, float]:
+def normalize_scores(scores: dict[str, float], keys: Iterable[str]) -> dict[str, float]:
     key_list = list(keys)
     total = sum(float(scores.get(key, 0.0) or 0.0) for key in key_list)
     if total <= 0.0:
@@ -31,17 +31,17 @@ def evidence_quality_band(value: float) -> str:
     return "very_low"
 
 
-def work_unit_id(nodes: Iterable[Tuple[str, str]]) -> str:
+def work_unit_id(nodes: Iterable[tuple[str, str]]) -> str:
     """Generate a stable ID for a work unit from its constituent nodes."""
     tokens = sorted(f"{node_type}:{node_id}" for node_type, node_id in nodes)
     return _sha256_hex("|".join(tokens))
 
 
 def rollup_subcategories_to_themes(
-    subcategories: Dict[str, float],
-    subcategory_to_theme: Dict[str, str],
+    subcategories: dict[str, float],
+    subcategory_to_theme: dict[str, str],
     themes: Iterable[str],
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Roll up subcategory probabilities to theme probabilities (deterministic)."""
     theme_list = list(themes)
     totals = {theme: 0.0 for theme in theme_list}
@@ -53,9 +53,9 @@ def rollup_subcategories_to_themes(
 
 
 def ensure_full_subcategory_vector(
-    subcategories: Dict[str, float],
+    subcategories: dict[str, float],
     all_subcategories: Iterable[str],
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Ensure a subcategory vector has entries for all known subcategories."""
     subcat_list = sorted(all_subcategories)
     normalized = normalize_scores(subcategories, subcat_list)

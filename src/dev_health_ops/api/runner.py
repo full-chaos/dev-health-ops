@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+
 import uvicorn
 
 from dev_health_ops.logging_config import configure_logging, uvicorn_log_config

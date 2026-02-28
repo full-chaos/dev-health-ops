@@ -1,15 +1,14 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
-from typing_extensions import NotRequired, TypedDict
 
 import pytest
+from typing_extensions import NotRequired, TypedDict
 
 from dev_health_ops.metrics.loaders.validation import (
     ValidationError,
+    validate_or_raise,
     validate_rows,
     validate_typed_dict,
-    validate_or_raise,
 )
 from dev_health_ops.metrics.schemas import CommitStatRow, PullRequestRow
 
@@ -21,7 +20,7 @@ class SimpleTypedDict(TypedDict):
 
 class WithOptional(TypedDict):
     required_field: str
-    optional_field: Optional[int]
+    optional_field: int | None
 
 
 class WithNotRequired(TypedDict):

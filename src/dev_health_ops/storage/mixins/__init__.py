@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from .base import SQLAlchemyStoreMixinProtocol
-from .git import GitDataMixin
-from .pull_request import PullRequestMixin
-from .cicd import CicdMixin
-from .work_item import WorkItemMixin
-from .team import TeamMixin
 from .atlassian_ops import AtlassianOpsMixin
+from .base import SQLAlchemyStoreMixinProtocol
+from .cicd import CicdMixin
+from .git import GitDataMixin
 from .metrics import MetricsMixin
+from .pull_request import PullRequestMixin
+from .team import TeamMixin
+from .work_item import WorkItemMixin
 
 __all__ = [
     "SQLAlchemyStoreMixinProtocol",

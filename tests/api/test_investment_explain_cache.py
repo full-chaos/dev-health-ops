@@ -6,8 +6,9 @@ Tests that explanations are cached and retrieved properly.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from dev_health_ops.api.services.investment_mix_explain import (
     _compute_cache_key,
@@ -111,7 +112,9 @@ async def test_explain_investment_mix_mock_provider_skips_cache():
         patch(
             "dev_health_ops.api.services.investment_mix_explain.build_work_unit_investments"
         ) as mock_units,
-        patch("dev_health_ops.api.services.investment_mix_explain.get_provider") as mock_get_provider,
+        patch(
+            "dev_health_ops.api.services.investment_mix_explain.get_provider"
+        ) as mock_get_provider,
         patch(
             "dev_health_ops.api.services.investment_mix_explain.ClickHouseMetricsSink"
         ) as mock_sink_class,

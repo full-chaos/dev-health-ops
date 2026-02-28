@@ -1,10 +1,12 @@
 """Tests for work graph models."""
 
-import pytest
 import uuid
+
+import pytest
+
 from dev_health_ops.work_graph.models import (
-    NodeType,
     EdgeType,
+    NodeType,
     Provenance,
     WorkGraphEdge,
     WorkGraphIssuePR,

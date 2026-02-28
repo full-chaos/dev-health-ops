@@ -3,9 +3,8 @@ from datetime import date, datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from dev_health_ops.api.main import app
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.main import app
 from dev_health_ops.api.models.schemas import (
     CollaborationItem,
     CollaborationSection,
@@ -28,10 +27,13 @@ from dev_health_ops.api.models.schemas import (
     SummarySentence,
     WorkMixItem,
 )
+from dev_health_ops.api.services.auth import AuthenticatedUser
 
 _FAKE_USER = AuthenticatedUser(
-    user_id="test-user", email="test@example.com",
-    org_id="test-org", role="admin",
+    user_id="test-user",
+    email="test@example.com",
+    org_id="test-org",
+    role="admin",
 )
 
 
@@ -122,7 +124,9 @@ def test_people_summary_schema(client, monkeypatch):
     async def _fake_summary(**_):
         return sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_person_summary_response", _fake_summary)
+    monkeypatch.setattr(
+        "dev_health_ops.api.main.build_person_summary_response", _fake_summary
+    )
 
     response = client.get("/api/v1/people/abc123/summary")
     assert response.status_code == 200
@@ -154,7 +158,9 @@ def test_people_metric_schema(client, monkeypatch):
     async def _fake_metric(**_):
         return sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_person_metric_response", _fake_metric)
+    monkeypatch.setattr(
+        "dev_health_ops.api.main.build_person_metric_response", _fake_metric
+    )
 
     response = client.get(
         "/api/v1/people/abc123/metric", params={"metric": "cycle_time"}
@@ -180,7 +186,9 @@ def test_people_drilldown_limit_is_capped(client, monkeypatch):
         captured["limit"] = kwargs["limit"]
         return {"items": [], "next_cursor": None}
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_person_drilldown_prs_response", _fake_drilldown)
+    monkeypatch.setattr(
+        "dev_health_ops.api.main.build_person_drilldown_prs_response", _fake_drilldown
+    )
 
     response = client.get(
         "/api/v1/people/abc123/drilldown/prs",
@@ -230,12 +238,16 @@ def test_people_responses_do_not_include_forbidden_fields(client, monkeypatch):
     async def _fake_summary(**_):
         return sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_person_summary_response", _fake_summary)
+    monkeypatch.setattr(
+        "dev_health_ops.api.main.build_person_summary_response", _fake_summary
+    )
 
     async def _fake_metric(**_):
         return metric_sample
 
-    monkeypatch.setattr("dev_health_ops.api.main.build_person_metric_response", _fake_metric)
+    monkeypatch.setattr(
+        "dev_health_ops.api.main.build_person_metric_response", _fake_metric
+    )
 
     response = client.get("/api/v1/people/abc123/summary")
     assert response.status_code == 200

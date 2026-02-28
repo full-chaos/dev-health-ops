@@ -38,7 +38,9 @@ def test_github_reset_delay_seconds_parses_header(monkeypatch):
         status_code=403,
         headers={"X-RateLimit-Reset": "110"},
     )
-    monkeypatch.setattr("dev_health_ops.connectors.utils.graphql.time.time", lambda: 100)
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.graphql.time.time", lambda: 100
+    )
 
     assert _github_reset_delay_seconds(response) == pytest.approx(10.0)
 
@@ -89,8 +91,12 @@ def test_query_rate_limit_raises_with_retry_after(monkeypatch):
         "dev_health_ops.connectors.utils.graphql.requests.post",
         MagicMock(return_value=response),
     )
-    monkeypatch.setattr("dev_health_ops.connectors.utils.graphql.time.time", lambda: 100)
-    monkeypatch.setattr("dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.graphql.time.time", lambda: 100
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
+    )
 
     client = GitHubGraphQLClient("token")
     with pytest.raises(RateLimitException) as exc_info:
@@ -108,7 +114,9 @@ def test_query_graphql_errors_raise_api_exception(monkeypatch):
         "dev_health_ops.connectors.utils.graphql.requests.post",
         MagicMock(return_value=response),
     )
-    monkeypatch.setattr("dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
+    )
 
     client = GitHubGraphQLClient("token")
     with pytest.raises(APIException, match="GraphQL errors"):

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
+
+from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 
 from .client import query_dicts
-from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 
 
 async def fetch_filter_options(
     client: Any, *, org_id: str = ""
-) -> Dict[str, List[str]]:
-    options: Dict[str, List[str]] = {
+) -> dict[str, list[str]]:
+    options: dict[str, list[str]] = {
         "teams": [],
         "repos": [],
         "services": [],

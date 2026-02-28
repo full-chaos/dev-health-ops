@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from dev_health_ops.models.atlassian_ops import (
     AtlassianOpsAlertModel,
@@ -10,11 +10,11 @@ from dev_health_ops.models.atlassian_ops import (
 
 
 class AtlassianOpsMixin:
-    async def insert_atlassian_ops_incidents(self, incidents: List[Any]) -> None:
+    async def insert_atlassian_ops_incidents(self, incidents: list[Any]) -> None:
         if not incidents:
             return
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in incidents:
             rows.append(
                 {
@@ -46,11 +46,11 @@ class AtlassianOpsMixin:
             ],
         )
 
-    async def insert_atlassian_ops_alerts(self, alerts: List[Any]) -> None:
+    async def insert_atlassian_ops_alerts(self, alerts: list[Any]) -> None:
         if not alerts:
             return
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in alerts:
             rows.append(
                 {
@@ -80,11 +80,11 @@ class AtlassianOpsMixin:
             ],
         )
 
-    async def insert_atlassian_ops_schedules(self, schedules: List[Any]) -> None:
+    async def insert_atlassian_ops_schedules(self, schedules: list[Any]) -> None:
         if not schedules:
             return
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in schedules:
             rows.append(
                 {

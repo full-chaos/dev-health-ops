@@ -25,7 +25,6 @@ from dev_health_ops.api.admin.impersonation import get_db_session, router
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
 
-
 # ---------------------------------------------------------------------------
 # Helpers — fake DB row factories
 # ---------------------------------------------------------------------------

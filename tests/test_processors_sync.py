@@ -57,9 +57,19 @@ def test_sync_flags_for_target(target, expected):
 
 
 def test_resolve_synthetic_repo_name_defaults_and_variants():
-    assert sync_mod._resolve_synthetic_repo_name(_ns(repo_name="team/repo")) == "team/repo"
-    assert sync_mod._resolve_synthetic_repo_name(_ns(repo_name=None, owner="a", repo="b")) == "a/b"
-    assert sync_mod._resolve_synthetic_repo_name(_ns(repo_name=None, owner=None, repo=None, search="org/repo")) == "org/repo"
+    assert (
+        sync_mod._resolve_synthetic_repo_name(_ns(repo_name="team/repo")) == "team/repo"
+    )
+    assert (
+        sync_mod._resolve_synthetic_repo_name(_ns(repo_name=None, owner="a", repo="b"))
+        == "a/b"
+    )
+    assert (
+        sync_mod._resolve_synthetic_repo_name(
+            _ns(repo_name=None, owner=None, repo=None, search="org/repo")
+        )
+        == "org/repo"
+    )
     assert (
         sync_mod._resolve_synthetic_repo_name(
             _ns(repo_name=None, owner=None, repo=None, search=None)
@@ -85,7 +95,9 @@ async def test_sync_local_target_blame_calls_local_blame(monkeypatch):
         await handler(SimpleNamespace())
 
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse")
+    monkeypatch.setattr(
+        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
+    )
     monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: "2026-01-01")
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
     monkeypatch.setattr(sync_mod, "process_local_blame", process_local_blame)
@@ -106,7 +118,9 @@ async def test_sync_github_target_batch_mode_calls_batch_processor(monkeypatch):
         await handler(SimpleNamespace())
 
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse")
+    monkeypatch.setattr(
+        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
+    )
     monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: "2026-01-01")
     monkeypatch.setattr(sync_mod, "_resolve_max_commits", lambda _ns: 50)
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
@@ -127,7 +141,9 @@ async def test_sync_github_target_requires_owner_repo_without_search(monkeypatch
         await handler(SimpleNamespace())
 
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse")
+    monkeypatch.setattr(
+        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
+    )
     monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "_resolve_max_commits", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
@@ -145,7 +161,9 @@ async def test_sync_gitlab_target_requires_project_id_without_search(monkeypatch
         await handler(SimpleNamespace())
 
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse")
+    monkeypatch.setattr(
+        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
+    )
     monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "_resolve_max_commits", lambda _ns: 10)
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)

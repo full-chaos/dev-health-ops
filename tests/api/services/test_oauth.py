@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
+import pytest
 
 from dev_health_ops.api.services.oauth import (
-    OAuthConfig,
-    OAuthAuthorizationRequest,
-    OAuthProviderType,
-    OAuthTokenError,
     GitHubOAuthProvider,
     GitLabOAuthProvider,
     GoogleOAuthProvider,
+    OAuthAuthorizationRequest,
+    OAuthConfig,
+    OAuthProviderType,
+    OAuthTokenError,
     create_oauth_provider,
     get_default_scopes,
     validate_oauth_config,

@@ -19,7 +19,7 @@ See: https://learn.microsoft.com/en-us/graph/permissions-reference
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -46,8 +46,8 @@ class TeamsUser:
 
     id: str
     display_name: str
-    email: Optional[str] = None
-    user_principal_name: Optional[str] = None
+    email: str | None = None
+    user_principal_name: str | None = None
 
 
 @dataclass
@@ -56,10 +56,10 @@ class TeamsChannel:
 
     id: str
     display_name: str
-    description: Optional[str] = None
+    description: str | None = None
     membership_type: str = "standard"  # standard, private, shared
-    created_datetime: Optional[datetime] = None
-    web_url: Optional[str] = None
+    created_datetime: datetime | None = None
+    web_url: str | None = None
 
 
 @dataclass
@@ -67,15 +67,15 @@ class TeamsMessage:
     """Represents a message in a Teams channel."""
 
     id: str
-    created_datetime: Optional[datetime] = None
-    last_modified_datetime: Optional[datetime] = None
-    subject: Optional[str] = None
-    body_content: Optional[str] = None
+    created_datetime: datetime | None = None
+    last_modified_datetime: datetime | None = None
+    subject: str | None = None
+    body_content: str | None = None
     body_content_type: str = "text"  # text, html
-    from_user: Optional[TeamsUser] = None
+    from_user: TeamsUser | None = None
     importance: str = "normal"  # low, normal, high, urgent
     message_type: str = "message"  # message, chatEventMessage, etc.
-    web_url: Optional[str] = None
+    web_url: str | None = None
     reply_count: int = 0
 
 
@@ -85,12 +85,12 @@ class TeamsTeam:
 
     id: str
     display_name: str
-    description: Optional[str] = None
+    description: str | None = None
     visibility: str = "private"  # private, public
-    created_datetime: Optional[datetime] = None
-    web_url: Optional[str] = None
-    channels: List[TeamsChannel] = field(default_factory=list)
-    members: List[TeamsUser] = field(default_factory=list)
+    created_datetime: datetime | None = None
+    web_url: str | None = None
+    channels: list[TeamsChannel] = field(default_factory=list)
+    members: list[TeamsUser] = field(default_factory=list)
 
 
 @dataclass
@@ -98,15 +98,15 @@ class TeamsMeeting:
     """Represents a Microsoft Teams online meeting."""
 
     id: str
-    subject: Optional[str] = None
-    start_datetime: Optional[datetime] = None
-    end_datetime: Optional[datetime] = None
-    join_web_url: Optional[str] = None
-    organizer: Optional[TeamsUser] = None
+    subject: str | None = None
+    start_datetime: datetime | None = None
+    end_datetime: datetime | None = None
+    join_web_url: str | None = None
+    organizer: TeamsUser | None = None
     participants_count: int = 0
 
 
-def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
+def _parse_datetime(value: str | None) -> datetime | None:
     """Parse ISO 8601 datetime string from Graph API."""
     if not value:
         return None
@@ -117,7 +117,7 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _parse_retry_after(response: httpx.Response) -> Optional[float]:
+def _parse_retry_after(response: httpx.Response) -> float | None:
     """Parse Retry-After header from response."""
     retry_after = response.headers.get("Retry-After")
     if not retry_after:
@@ -158,9 +158,9 @@ class MicrosoftGraphClient:
         self.timeout = timeout
         self.base_url = GRAPH_API_BETA if use_beta else GRAPH_API_BASE
 
-        self._access_token: Optional[str] = None
-        self._token_expires_at: Optional[datetime] = None
-        self._client: Optional[httpx.AsyncClient] = None
+        self._access_token: str | None = None
+        self._token_expires_at: datetime | None = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
@@ -225,8 +225,8 @@ class MicrosoftGraphClient:
         self,
         method: str,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Make an authenticated request to the Graph API.
 
@@ -300,17 +300,17 @@ class MicrosoftGraphClient:
     async def get(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Make a GET request to the Graph API."""
         return await self._request("GET", endpoint, params)
 
     async def get_paginated(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        max_items: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        params: dict[str, Any] | None = None,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Make a paginated GET request, following @odata.nextLink.
 
@@ -319,8 +319,8 @@ class MicrosoftGraphClient:
         :param max_items: Maximum number of items to retrieve.
         :return: List of all items across pages.
         """
-        items: List[Dict[str, Any]] = []
-        next_link: Optional[str] = None
+        items: list[dict[str, Any]] = []
+        next_link: str | None = None
 
         # Initial request
         data = await self.get(endpoint, params)
@@ -348,7 +348,7 @@ class MicrosoftGraphClient:
                         )
                     if status_code == 429:
                         raise RateLimitException(
-                            f"Rate limit exceeded (429) following nextLink"
+                            "Rate limit exceeded (429) following nextLink"
                         )
                     raise APIException(
                         f"Request to nextLink failed ({status_code}): {response.text}"
@@ -454,8 +454,8 @@ class TeamsConnector:
 
     async def list_teams(
         self,
-        max_teams: Optional[int] = None,
-    ) -> List[TeamsTeam]:
+        max_teams: int | None = None,
+    ) -> list[TeamsTeam]:
         """
         List all teams accessible to the application.
 
@@ -514,8 +514,8 @@ class TeamsConnector:
     async def list_channels(
         self,
         team_id: str,
-        max_channels: Optional[int] = None,
-    ) -> List[TeamsChannel]:
+        max_channels: int | None = None,
+    ) -> list[TeamsChannel]:
         """
         List all channels in a team.
 
@@ -552,9 +552,9 @@ class TeamsConnector:
         self,
         team_id: str,
         channel_id: str,
-        max_messages: Optional[int] = None,
-        since: Optional[datetime] = None,
-    ) -> List[TeamsMessage]:
+        max_messages: int | None = None,
+        since: datetime | None = None,
+    ) -> list[TeamsMessage]:
         """
         List messages in a channel.
 
@@ -568,7 +568,7 @@ class TeamsConnector:
         """
         logger.debug("Fetching messages for team %s, channel %s", team_id, channel_id)
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "$select": "id,createdDateTime,lastModifiedDateTime,subject,body,from,importance,messageType,webUrl",
             "$orderby": "createdDateTime desc",
         }
@@ -623,8 +623,8 @@ class TeamsConnector:
     async def list_team_members(
         self,
         team_id: str,
-        max_members: Optional[int] = None,
-    ) -> List[TeamsUser]:
+        max_members: int | None = None,
+    ) -> list[TeamsUser]:
         """
         List members of a team.
 
@@ -678,10 +678,10 @@ class TeamsConnector:
 
     async def list_teams_with_details(
         self,
-        max_teams: Optional[int] = None,
+        max_teams: int | None = None,
         include_channels: bool = True,
         include_members: bool = False,
-    ) -> List[TeamsTeam]:
+    ) -> list[TeamsTeam]:
         """
         List all teams with their channels and optionally members.
 
@@ -704,8 +704,8 @@ class TeamsConnector:
         self,
         team_id: str,
         channel_id: str,
-        since: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+        since: datetime | None = None,
+    ) -> dict[str, Any]:
         """
         Get activity statistics for a channel.
 

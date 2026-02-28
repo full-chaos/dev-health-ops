@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import dev_health_ops.models.users as user_models
 
-LOGIN_ATTEMPT_MODEL: Any = getattr(user_models, "LoginAttempt")
+LOGIN_ATTEMPT_MODEL: Any = user_models.LoginAttempt
 
 LOCKOUT_FAILURE_THRESHOLD = 5
 LOCKOUT_DURATION = timedelta(minutes=15)

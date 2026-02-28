@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any
 
 from dev_health_ops.connectors.utils import retry_with_backoff
 from dev_health_ops.connectors.utils.rate_limit_queue import (
@@ -71,7 +72,7 @@ class JiraClient:
         auth: JiraAuth,
         timeout_seconds: int = 30,
         per_page: int = 100,
-        gate: Optional[RateLimitGate] = None,
+        gate: RateLimitGate | None = None,
     ) -> None:
         import requests
 
@@ -85,7 +86,7 @@ class JiraClient:
         self.session.headers.update({"Accept": "application/json"})
 
     @classmethod
-    def from_env(cls) -> "JiraClient":
+    def from_env(cls) -> JiraClient:
         base_url = os.getenv("JIRA_BASE_URL") or ""
         email = os.getenv("JIRA_EMAIL") or ""
         api_token = os.getenv("JIRA_API_TOKEN") or ""
@@ -110,7 +111,7 @@ class JiraClient:
     def _url(self, path: str) -> str:
         return f"{self.auth.base_url}{path}"
 
-    def _request_json(self, *, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _request_json(self, *, path: str, params: dict[str, Any]) -> dict[str, Any]:
         import requests
 
         url = self._url(path)
@@ -146,11 +147,11 @@ class JiraClient:
         jql: str,
         start_at: int,
         max_results: int,
-        fields: Optional[Iterable[str]] = None,
-        expand: Optional[str] = None,
-        next_page_token: Optional[str] = None,
+        fields: Iterable[str] | None = None,
+        expand: str | None = None,
+        next_page_token: str | None = None,
     ) -> Any:
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "jql": str(jql),
             "maxResults": int(max_results),
         }
@@ -170,10 +171,10 @@ class JiraClient:
         self,
         *,
         jql: str,
-        fields: Optional[Iterable[str]] = None,
+        fields: Iterable[str] | None = None,
         expand_changelog: bool = True,
-        limit: Optional[int] = None,
-    ) -> Iterator[Dict[str, Any]]:
+        limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """
         Iterate issues matching a JQL query with pagination.
 
@@ -183,7 +184,7 @@ class JiraClient:
         start_at = 0
         fetched = 0
         expand = "changelog" if expand_changelog else None
-        next_page_token: Optional[str] = None
+        next_page_token: str | None = None
 
         while True:
             logger.debug(
@@ -226,7 +227,7 @@ class JiraClient:
         start_at: int,
         max_results: int,
     ) -> Any:
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "startAt": int(start_at),
             "maxResults": int(max_results),
         }
@@ -239,8 +240,8 @@ class JiraClient:
         self,
         *,
         issue_id_or_key: str,
-        limit: Optional[int] = None,
-    ) -> Iterator[Dict[str, Any]]:
+        limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
         start_at = 0
         fetched = 0
 
@@ -265,13 +266,13 @@ class JiraClient:
                 break
 
     @retry_with_backoff(max_retries=5, initial_delay=1.0, max_delay=60.0)
-    def get_sprint(self, *, sprint_id: str) -> Dict[str, Any]:
+    def get_sprint(self, *, sprint_id: str) -> dict[str, Any]:
         return self._request_json(
             path=f"/rest/agile/1.0/sprint/{sprint_id}",
             params={},
         )
 
-    def get_all_projects(self) -> List[Dict[str, Any]]:
+    def get_all_projects(self) -> list[dict[str, Any]]:
         """
         Fetch all visible projects from Jira.
         Uses GET /rest/api/3/project/search for pagination.
@@ -320,9 +321,9 @@ class JiraClient:
 
 def build_jira_jql(
     *,
-    project_key: Optional[str] = None,
-    updated_since: Optional[str] = None,
-    active_until: Optional[str] = None,
+    project_key: str | None = None,
+    updated_since: str | None = None,
+    active_until: str | None = None,
 ) -> str:
     """
     Basic JQL builder used by the daily metrics job.

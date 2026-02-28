@@ -194,6 +194,7 @@ def test_jira_comments_limit_no_limit() -> None:
     """Test that without JIRA_COMMENTS_LIMIT, all comments are fetched."""
     import os
     from unittest.mock import MagicMock, patch
+
     from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
 
     with patch.dict(os.environ, {"JIRA_COMMENTS_LIMIT": "0"}, clear=False):
@@ -266,6 +267,7 @@ def test_jira_comments_limit_with_limit() -> None:
     """Test that JIRA_COMMENTS_LIMIT correctly limits the number of comments fetched."""
     import os
     from unittest.mock import MagicMock, patch
+
     from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
 
     with patch.dict(os.environ, {"JIRA_COMMENTS_LIMIT": "3"}, clear=False):
@@ -337,6 +339,7 @@ def test_jira_comments_limit_with_limit() -> None:
 def test_jira_comments_error_handling() -> None:
     """Test that comment fetch errors are handled gracefully and don't halt sync."""
     from unittest.mock import MagicMock, patch
+
     from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
 
     with patch("dev_health_ops.providers.jira.client.JiraClient") as MockClient:

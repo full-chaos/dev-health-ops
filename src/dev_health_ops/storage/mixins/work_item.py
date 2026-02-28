@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 
 class WorkItemMixin:
-    async def insert_work_item_dependencies(self, dependencies: List[Any]) -> None:
+    async def insert_work_item_dependencies(self, dependencies: list[Any]) -> None:
         if not dependencies:
             return
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         synced_at_default = datetime.now(timezone.utc)
         for item in dependencies:
             if isinstance(item, dict):
@@ -25,10 +25,10 @@ class WorkItemMixin:
             else:
                 rows.append(
                     {
-                        "source_work_item_id": getattr(item, "source_work_item_id"),
-                        "target_work_item_id": getattr(item, "target_work_item_id"),
-                        "relationship_type": getattr(item, "relationship_type"),
-                        "relationship_type_raw": getattr(item, "relationship_type_raw"),
+                        "source_work_item_id": item.source_work_item_id,
+                        "target_work_item_id": item.target_work_item_id,
+                        "relationship_type": item.relationship_type,
+                        "relationship_type_raw": item.relationship_type_raw,
                         "org_id": str(getattr(item, "org_id", "") or ""),
                         "last_synced": getattr(item, "last_synced", None)
                         or synced_at_default,
@@ -46,7 +46,7 @@ class WorkItemMixin:
             update_columns=["relationship_type_raw", "last_synced"],
         )
 
-    async def insert_work_graph_issue_pr(self, records: List[Dict[str, Any]]) -> None:
+    async def insert_work_graph_issue_pr(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
         synced_at_default = datetime.now(timezone.utc)
@@ -67,7 +67,7 @@ class WorkItemMixin:
             update_columns=["confidence", "provenance", "evidence", "last_synced"],
         )
 
-    async def insert_work_graph_pr_commit(self, records: List[Dict[str, Any]]) -> None:
+    async def insert_work_graph_pr_commit(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
         synced_at_default = datetime.now(timezone.utc)
@@ -88,12 +88,12 @@ class WorkItemMixin:
             update_columns=["confidence", "provenance", "evidence", "last_synced"],
         )
 
-    async def insert_work_items(self, work_items: List[Any]) -> None:
+    async def insert_work_items(self, work_items: list[Any]) -> None:
         if not work_items:
             return
 
         synced_at_default = datetime.now(timezone.utc)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in work_items:
             is_dict = isinstance(item, dict)
             get = (
@@ -177,12 +177,12 @@ class WorkItemMixin:
             ],
         )
 
-    async def insert_work_item_transitions(self, transitions: List[Any]) -> None:
+    async def insert_work_item_transitions(self, transitions: list[Any]) -> None:
         if not transitions:
             return
 
         synced_at_default = datetime.now(timezone.utc)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in transitions:
             is_dict = isinstance(item, dict)
             get = (

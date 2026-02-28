@@ -17,7 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class RetentionResourceType(str, Enum):

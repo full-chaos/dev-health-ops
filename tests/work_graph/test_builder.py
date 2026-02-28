@@ -1,9 +1,10 @@
 """Tests for work graph builder."""
 
-import pytest
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from dev_health_ops.work_graph.builder import (
     BuildConfig,

@@ -1,12 +1,13 @@
 """Tests for work graph text parser."""
 
 import pytest
+
 from dev_health_ops.work_graph.extractors.text_parser import (
-    extract_jira_keys,
-    extract_github_issue_refs,
-    extract_gitlab_issue_refs,
     ParsedIssueRef,
     RefType,
+    extract_github_issue_refs,
+    extract_gitlab_issue_refs,
+    extract_jira_keys,
 )
 
 

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Entity schemas (provider-agnostic, mirroring internal models)
@@ -17,9 +16,9 @@ class IngestCommit(BaseModel):
     author_name: str
     author_email: str
     author_when: datetime  # UTC ISO-8601
-    committer_name: Optional[str] = None
-    committer_email: Optional[str] = None
-    committer_when: Optional[datetime] = None
+    committer_name: str | None = None
+    committer_email: str | None = None
+    committer_when: datetime | None = None
     parents: int = 1
 
 
@@ -33,18 +32,18 @@ class IngestPullRequestReview(BaseModel):
 class IngestPullRequest(BaseModel):
     number: int
     title: str
-    body: Optional[str] = None
+    body: str | None = None
     state: str  # open, closed, merged
     author_name: str
-    author_email: Optional[str] = None
+    author_email: str | None = None
     created_at: datetime
-    merged_at: Optional[datetime] = None
-    closed_at: Optional[datetime] = None
-    head_branch: Optional[str] = None
-    base_branch: Optional[str] = None
-    additions: Optional[int] = None
-    deletions: Optional[int] = None
-    changed_files: Optional[int] = None
+    merged_at: datetime | None = None
+    closed_at: datetime | None = None
+    head_branch: str | None = None
+    base_branch: str | None = None
+    additions: int | None = None
+    deletions: int | None = None
+    changed_files: int | None = None
     reviews: list[IngestPullRequestReview] = Field(default_factory=list)
 
 
@@ -65,36 +64,36 @@ class IngestWorkItem(BaseModel):
         "canceled",
         "unknown",
     ] = "unknown"
-    status_raw: Optional[str] = None
-    description: Optional[str] = None
-    project_key: Optional[str] = None
+    status_raw: str | None = None
+    description: str | None = None
+    project_key: str | None = None
     assignees: list[str] = Field(default_factory=list)
-    reporter: Optional[str] = None
+    reporter: str | None = None
     created_at: datetime
-    updated_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    updated_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     labels: list[str] = Field(default_factory=list)
-    story_points: Optional[float] = None
-    priority_raw: Optional[str] = None
-    url: Optional[str] = None
+    story_points: float | None = None
+    priority_raw: str | None = None
+    url: str | None = None
 
 
 class IngestDeployment(BaseModel):
     deployment_id: str
     status: str
     environment: str
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    deployed_at: Optional[datetime] = None
-    pull_request_number: Optional[int] = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    deployed_at: datetime | None = None
+    pull_request_number: int | None = None
 
 
 class IngestIncident(BaseModel):
     incident_id: str
     status: str
     started_at: datetime
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------

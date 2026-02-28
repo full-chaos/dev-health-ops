@@ -1,12 +1,14 @@
 import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+
 from dev_health_ops.llm.providers import get_provider
 from dev_health_ops.llm.providers.qwen import (
-    QwenProvider,
-    QwenLocalProvider,
-    QwenLMStudioProvider,
     DEFAULT_DASHSCOPE_BASE_URL,
+    QwenLMStudioProvider,
+    QwenLocalProvider,
+    QwenProvider,
 )
 
 

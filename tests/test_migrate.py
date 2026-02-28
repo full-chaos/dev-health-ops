@@ -21,7 +21,6 @@ from dev_health_ops.migrate import (
     register_commands,
 )
 
-
 # ── alembic directory resolution ───────────────────────────────────
 
 
@@ -43,7 +42,7 @@ class TestAlembicDirResolution:
     def test_alembic_dir_is_relative_to_package(self):
         """The dir must resolve from the installed package, not a hardcoded path."""
         package_dir = Path(migrate_mod.__file__).resolve().parent
-        assert _ALEMBIC_DIR == package_dir / "alembic"
+        assert package_dir / "alembic" == _ALEMBIC_DIR
 
 
 # ── _make_alembic_config ───────────────────────────────────────────
@@ -153,10 +152,15 @@ class TestCommandDispatch:
 
     @patch("dev_health_ops.migrate.command")
     def test_upgrade_uses_db_from_namespace(self, mock_cmd):
-        ns = SimpleNamespace(db="postgresql+asyncpg://custom@host/mydb", revision="abc123")
+        ns = SimpleNamespace(
+            db="postgresql+asyncpg://custom@host/mydb", revision="abc123"
+        )
         _run_upgrade(ns)
         cfg = mock_cmd.upgrade.call_args[0][0]
-        assert cfg.get_main_option("sqlalchemy.url") == "postgresql+asyncpg://custom@host/mydb"
+        assert (
+            cfg.get_main_option("sqlalchemy.url")
+            == "postgresql+asyncpg://custom@host/mydb"
+        )
 
     @patch("dev_health_ops.migrate.command")
     def test_upgrade_without_db_falls_back_to_env(self, mock_cmd, monkeypatch):

@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Optional
 
-from dev_health_ops.work_graph.models import NodeType, EdgeType
+from dev_health_ops.work_graph.models import EdgeType, NodeType
 
 
 def _sha256_hex(data: str) -> str:
@@ -148,7 +147,7 @@ def generate_file_id(
     return f"{repo_id}:{file_path}"
 
 
-def parse_pr_from_id(pr_id: str) -> tuple[Optional[uuid.UUID], Optional[int]]:
+def parse_pr_from_id(pr_id: str) -> tuple[uuid.UUID | None, int | None]:
     """
     Parse repo_id and pr_number from a canonical PR ID.
 
@@ -169,7 +168,7 @@ def parse_pr_from_id(pr_id: str) -> tuple[Optional[uuid.UUID], Optional[int]]:
         return None, None
 
 
-def parse_commit_from_id(commit_id: str) -> tuple[Optional[uuid.UUID], Optional[str]]:
+def parse_commit_from_id(commit_id: str) -> tuple[uuid.UUID | None, str | None]:
     """
     Parse repo_id and commit_hash from a canonical commit ID.
 

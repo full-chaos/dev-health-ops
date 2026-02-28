@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
 
 from dev_health_ops.models.git import GitCommit, GitCommitStat, GitPullRequest
 
@@ -26,10 +25,10 @@ class PRMetric:
     pr_number: int
     author_name: str
     created_at: datetime
-    merged_at: Optional[datetime]
-    cycle_time_hours: Optional[
-        float
-    ]  # merged_at - created_at in hours, None if not merged
+    merged_at: datetime | None
+    cycle_time_hours: (
+        float | None
+    )  # merged_at - created_at in hours, None if not merged
 
 
 @dataclass
@@ -42,7 +41,7 @@ class UserMetrics:
     large_commits_count: int
     avg_commit_size: float
     prs_authored: int
-    avg_pr_cycle_time: Optional[float]
+    avg_pr_cycle_time: float | None
 
 
 @dataclass
@@ -53,10 +52,10 @@ class RepoMetrics:
     avg_commit_size: float
     large_commit_ratio: float
     prs_merged: int
-    median_pr_cycle_time: Optional[float]
+    median_pr_cycle_time: float | None
 
 
-def _normalize_author_name(author_name: Optional[str]) -> str:
+def _normalize_author_name(author_name: str | None) -> str:
     if author_name is None:
         return "unknown"
     normalized = author_name.strip()
@@ -71,7 +70,7 @@ def _size_bucket(total_loc: int) -> str:
     return "large"
 
 
-def _median(values: List[float]) -> Optional[float]:
+def _median(values: list[float]) -> float | None:
     if not values:
         return None
     sorted_vals = sorted(values)
@@ -82,16 +81,16 @@ def _median(values: List[float]) -> Optional[float]:
 
 
 def _aggregate_commit_stats(
-    commit_stats: List[GitCommitStat],
-    allowed_commit_keys: Optional[Set[Tuple[uuid.UUID, str]]] = None,
-) -> Dict[Tuple[uuid.UUID, str], Tuple[int, int, Set[str]]]:
+    commit_stats: list[GitCommitStat],
+    allowed_commit_keys: set[tuple[uuid.UUID, str]] | None = None,
+) -> dict[tuple[uuid.UUID, str], tuple[int, int, set[str]]]:
     """
     Aggregate commit stats keyed by (repo_id, commit_hash).
 
     Returns a mapping of:
       (repo_id, commit_hash) -> (additions, deletions, unique_file_paths)
     """
-    aggregated: Dict[Tuple[uuid.UUID, str], Tuple[int, int, Set[str]]] = {}
+    aggregated: dict[tuple[uuid.UUID, str], tuple[int, int, set[str]]] = {}
     for stat in commit_stats:
         key = (stat.repo_id, stat.commit_hash)
         if allowed_commit_keys is not None and key not in allowed_commit_keys:
@@ -114,8 +113,8 @@ def _aggregate_commit_stats(
 
 
 def compute_commit_metrics(
-    commits: List[GitCommit], commit_stats: List[GitCommitStat]
-) -> List[CommitMetric]:
+    commits: list[GitCommit], commit_stats: list[GitCommitStat]
+) -> list[CommitMetric]:
     """
     Compute per-commit metrics.
 
@@ -133,12 +132,12 @@ def compute_commit_metrics(
 
     The order of the returned list should match the input commits list.
     """
-    commit_keys: Set[Tuple[uuid.UUID, str]] = {
+    commit_keys: set[tuple[uuid.UUID, str]] = {
         (c.repo_id, c.hash) for c in commits if getattr(c, "repo_id", None) and c.hash
     }
     stats_index = _aggregate_commit_stats(commit_stats, allowed_commit_keys=commit_keys)
 
-    metrics: List[CommitMetric] = []
+    metrics: list[CommitMetric] = []
     for commit in commits:
         key = (commit.repo_id, commit.hash)
         additions, deletions, files = stats_index.get(key, (0, 0, set()))
@@ -171,7 +170,7 @@ def compute_commit_metrics(
     return metrics
 
 
-def compute_pr_metrics(prs: List[GitPullRequest]) -> List[PRMetric]:
+def compute_pr_metrics(prs: list[GitPullRequest]) -> list[PRMetric]:
     """
     Compute per-PR metrics. For each PR:
     - If `merged_at` is not None, compute `cycle_time_hours` as
@@ -179,11 +178,11 @@ def compute_pr_metrics(prs: List[GitPullRequest]) -> List[PRMetric]:
     - Otherwise set `cycle_time_hours` to None.
     - Return a list of `PRMetric` objects.
     """
-    metrics: List[PRMetric] = []
+    metrics: list[PRMetric] = []
     for pr in prs:
         created_at = getattr(pr, "created_at", None)
         merged_at = getattr(pr, "merged_at", None)
-        cycle_time_hours: Optional[float] = None
+        cycle_time_hours: float | None = None
         if created_at is not None and merged_at is not None:
             cycle_time_hours = (merged_at - created_at).total_seconds() / 3600.0
 
@@ -202,10 +201,10 @@ def compute_pr_metrics(prs: List[GitPullRequest]) -> List[PRMetric]:
 
 
 def compute_user_metrics(
-    commits: List[GitCommit],
-    commit_stats: List[GitCommitStat],
-    pr_metrics: List[PRMetric],
-) -> Dict[str, UserMetrics]:
+    commits: list[GitCommit],
+    commit_stats: list[GitCommitStat],
+    pr_metrics: list[PRMetric],
+) -> dict[str, UserMetrics]:
     """
     Aggregate per-user metrics based on commit and PR data.
 
@@ -221,24 +220,24 @@ def compute_user_metrics(
         * Compute the average cycle time across their merged PRs (ignore PRs where cycle_time is None).
     Return a dictionary keyed by author_name with `UserMetrics` values.
     """
-    commit_keys: Set[Tuple[uuid.UUID, str]] = {
+    commit_keys: set[tuple[uuid.UUID, str]] = {
         (c.repo_id, c.hash) for c in commits if getattr(c, "repo_id", None) and c.hash
     }
     stats_index = _aggregate_commit_stats(commit_stats, allowed_commit_keys=commit_keys)
 
-    users: Set[str] = set()
+    users: set[str] = set()
     for c in commits:
         users.add(_normalize_author_name(getattr(c, "author_name", None)))
     for pr in pr_metrics:
         users.add(_normalize_author_name(pr.author_name))
 
     # Commit aggregates
-    commits_count: Dict[str, int] = {u: 0 for u in users}
-    total_added: Dict[str, int] = {u: 0 for u in users}
-    total_deleted: Dict[str, int] = {u: 0 for u in users}
-    total_files_changed: Dict[str, int] = {u: 0 for u in users}
-    large_commits: Dict[str, int] = {u: 0 for u in users}
-    total_commit_loc: Dict[str, int] = {u: 0 for u in users}
+    commits_count: dict[str, int] = {u: 0 for u in users}
+    total_added: dict[str, int] = {u: 0 for u in users}
+    total_deleted: dict[str, int] = {u: 0 for u in users}
+    total_files_changed: dict[str, int] = {u: 0 for u in users}
+    large_commits: dict[str, int] = {u: 0 for u in users}
+    total_commit_loc: dict[str, int] = {u: 0 for u in users}
 
     for commit in commits:
         user = _normalize_author_name(getattr(commit, "author_name", None))
@@ -256,9 +255,9 @@ def compute_user_metrics(
             large_commits[user] = large_commits.get(user, 0) + 1
 
     # PR aggregates
-    prs_authored: Dict[str, int] = {u: 0 for u in users}
-    pr_cycle_time_sum: Dict[str, float] = {u: 0.0 for u in users}
-    pr_cycle_time_count: Dict[str, int] = {u: 0 for u in users}
+    prs_authored: dict[str, int] = {u: 0 for u in users}
+    pr_cycle_time_sum: dict[str, float] = {u: 0.0 for u in users}
+    pr_cycle_time_count: dict[str, int] = {u: 0 for u in users}
 
     for pr in pr_metrics:
         user = _normalize_author_name(pr.author_name)
@@ -269,7 +268,7 @@ def compute_user_metrics(
             )
             pr_cycle_time_count[user] = pr_cycle_time_count.get(user, 0) + 1
 
-    result: Dict[str, UserMetrics] = {}
+    result: dict[str, UserMetrics] = {}
     for user in sorted(users):
         c_count = commits_count.get(user, 0)
         avg_commit_size = (total_commit_loc.get(user, 0) / c_count) if c_count else 0.0
@@ -295,10 +294,10 @@ def compute_user_metrics(
 
 
 def compute_repo_metrics(
-    commits: List[GitCommit],
-    commit_stats: List[GitCommitStat],
-    pr_metrics: List[PRMetric],
-) -> Dict[uuid.UUID, RepoMetrics]:
+    commits: list[GitCommit],
+    commit_stats: list[GitCommitStat],
+    pr_metrics: list[PRMetric],
+) -> dict[uuid.UUID, RepoMetrics]:
     """
     Aggregate per-repo metrics.
 
@@ -314,23 +313,23 @@ def compute_repo_metrics(
           (use simple median; if even length, average the two middle values). If no merged PRs, set to None.
     Return a dictionary keyed by repo_id with `RepoMetrics` values.
     """
-    commit_keys: Set[Tuple[uuid.UUID, str]] = {
+    commit_keys: set[tuple[uuid.UUID, str]] = {
         (c.repo_id, c.hash) for c in commits if getattr(c, "repo_id", None) and c.hash
     }
     stats_index = _aggregate_commit_stats(commit_stats, allowed_commit_keys=commit_keys)
 
-    repo_ids: Set[uuid.UUID] = set()
+    repo_ids: set[uuid.UUID] = set()
     for c in commits:
         if getattr(c, "repo_id", None) is not None:
             repo_ids.add(c.repo_id)
     for pr in pr_metrics:
         repo_ids.add(pr.repo_id)
 
-    commits_by_repo: Dict[uuid.UUID, List[Tuple[uuid.UUID, str]]] = {}
+    commits_by_repo: dict[uuid.UUID, list[tuple[uuid.UUID, str]]] = {}
     for c in commits:
         commits_by_repo.setdefault(c.repo_id, []).append((c.repo_id, c.hash))
 
-    repo_result: Dict[uuid.UUID, RepoMetrics] = {}
+    repo_result: dict[uuid.UUID, RepoMetrics] = {}
     for repo_id in repo_ids:
         commit_keys_for_repo = commits_by_repo.get(repo_id, [])
         commits_count = len(commit_keys_for_repo)

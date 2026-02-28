@@ -12,9 +12,9 @@ from unittest.mock import Mock, patch
 import pytest
 
 from dev_health_ops.connectors import (
+    BatchResult,
     GitHubConnector,
     GitLabConnector,
-    BatchResult,
     match_repo_pattern,
 )
 from dev_health_ops.models.git import GitCommit, GitCommitStat, get_repo_uuid_from_repo
@@ -643,7 +643,9 @@ class TestGitHubConnectorBatchProcessing:
     @pytest.fixture
     def mock_graphql_client(self):
         """Create a mock GraphQL client."""
-        with patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as mock_graphql:
+        with patch(
+            "dev_health_ops.connectors.github.GitHubGraphQLClient"
+        ) as mock_graphql:
             yield mock_graphql
 
     def _create_mock_repo(self, name: str, full_name: str):
@@ -832,7 +834,9 @@ class TestGitHubConnectorAsyncBatchProcessing:
     @pytest.fixture
     def mock_graphql_client(self):
         """Create a mock GraphQL client."""
-        with patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as mock_graphql:
+        with patch(
+            "dev_health_ops.connectors.github.GitHubGraphQLClient"
+        ) as mock_graphql:
             yield mock_graphql
 
     def _create_mock_repo(self, name: str, full_name: str):
@@ -971,7 +975,9 @@ class TestBatchProcessingErrorHandling:
     @pytest.fixture
     def mock_graphql_client(self):
         """Create a mock GraphQL client."""
-        with patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as mock_graphql:
+        with patch(
+            "dev_health_ops.connectors.github.GitHubGraphQLClient"
+        ) as mock_graphql:
             yield mock_graphql
 
     def _create_mock_repo(self, name: str, full_name: str):

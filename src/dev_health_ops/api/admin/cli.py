@@ -162,8 +162,10 @@ async def _seed_features_async(ns: argparse.Namespace) -> int:
 def seed_features(ns: argparse.Namespace) -> int:
     return asyncio.run(_seed_features_async(ns))
 
+
 async def _seed_billing_plans_async(ns: argparse.Namespace) -> int:
     from sqlalchemy import select
+
     from dev_health_ops.models.billing import BillingPlan, BillingPrice
 
     STANDARD_PLANS = [
@@ -248,6 +250,7 @@ async def _seed_billing_plans_async(ns: argparse.Namespace) -> int:
 
 def seed_billing_plans(ns: argparse.Namespace) -> int:
     return asyncio.run(_seed_billing_plans_async(ns))
+
 
 def licenses_keygen_cmd(ns: argparse.Namespace) -> int:
     from dev_health_ops.licensing.generator import generate_keypair
@@ -387,11 +390,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     features_seed.set_defaults(func=seed_features)
 
     billing_parser = admin_sub.add_parser("billing", help="Billing plan management.")
-    billing_sub = billing_parser.add_subparsers(
-        dest="billing_command", required=True
-    )
+    billing_sub = billing_parser.add_subparsers(dest="billing_command", required=True)
 
     billing_seed = billing_sub.add_parser(
-        "seed", help="Seed standard billing plans (Community, Team, Enterprise) with prices."
+        "seed",
+        help="Seed standard billing plans (Community, Team, Enterprise) with prices.",
     )
     billing_seed.set_defaults(func=seed_billing_plans)

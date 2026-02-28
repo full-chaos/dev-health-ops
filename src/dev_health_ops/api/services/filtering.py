@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any
+
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from ..models.filters import MetricFilter
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..queries.scopes import (
     build_scope_filter_multi,
     resolve_repo_ids,
@@ -14,7 +15,7 @@ from ..queries.scopes import (
 
 
 def filter_cache_key(
-    prefix: str, org_id: str, filters: MetricFilter, extra: Dict[str, Any] | None = None
+    prefix: str, org_id: str, filters: MetricFilter, extra: dict[str, Any] | None = None
 ) -> str:
     if hasattr(filters, "model_dump"):
         try:
@@ -30,7 +31,7 @@ def filter_cache_key(
     return f"{prefix}:{serialized}"
 
 
-def time_window(filters: MetricFilter) -> Tuple[date, date, date, date]:
+def time_window(filters: MetricFilter) -> tuple[date, date, date, date]:
     range_days = max(1, filters.time.range_days)
     compare_days = max(1, filters.time.compare_days)
     end_date = filters.time.end_date or date.today()
@@ -49,8 +50,8 @@ def time_window(filters: MetricFilter) -> Tuple[date, date, date, date]:
 
 async def resolve_repo_filter_ids(
     sink: BaseMetricsSink, filters: MetricFilter, org_id: str = ""
-) -> List[str]:
-    repo_refs: List[str] = []
+) -> list[str]:
+    repo_refs: list[str] = []
     if filters.scope.level == "repo":
         repo_refs.extend(filters.scope.ids)
     if filters.what.repos:
@@ -67,9 +68,9 @@ async def resolve_repo_filter_ids(
 
 def work_category_filter(
     filters: MetricFilter, column: str = "investment_area"
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     raw_categories = filters.why.work_category or []
-    categories: List[str] = []
+    categories: list[str] = []
     for category in raw_categories:
         if category is None:
             continue
@@ -89,7 +90,7 @@ async def scope_filter_for_metric(
     org_id: str = "",
     team_column: str = "team_id",
     repo_column: str = "repo_id",
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     if metric_scope == "team" and filters.scope.level == "team":
         return build_scope_filter_multi(
             "team", filters.scope.ids, team_column=team_column, repo_column=repo_column

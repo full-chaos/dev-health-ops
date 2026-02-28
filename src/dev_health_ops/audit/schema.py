@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import re
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
 import logging
+import re
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
 
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.models import Base
@@ -33,7 +34,7 @@ def _strip_db_prefix(table: str) -> str:
     return table
 
 
-def _extract_parenthesized(text: str, start: int) -> Optional[Tuple[str, int]]:
+def _extract_parenthesized(text: str, start: int) -> tuple[str, int] | None:
     depth = 0
     for idx in range(start, len(text)):
         ch = text[idx]
@@ -61,7 +62,7 @@ def _extract_type_segment(value: str) -> str:
     return value.strip()
 
 
-def _split_column_definition(definition: str) -> Optional[Tuple[str, str]]:
+def _split_column_definition(definition: str) -> tuple[str, str] | None:
     stripped = definition.strip().rstrip(",")
     if not stripped or stripped.startswith("--"):
         return None
@@ -77,7 +78,7 @@ def _split_column_definition(definition: str) -> Optional[Tuple[str, str]]:
     return name, type_segment
 
 
-def _iter_create_table_blocks(text: str) -> Iterable[Tuple[str, str]]:
+def _iter_create_table_blocks(text: str) -> Iterable[tuple[str, str]]:
     pattern = re.compile(
         r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([`\"\w\.]+)",
         re.IGNORECASE,
@@ -94,8 +95,8 @@ def _iter_create_table_blocks(text: str) -> Iterable[Tuple[str, str]]:
         yield table, columns_block
 
 
-def _iter_clickhouse_add_columns(text: str) -> Iterable[Tuple[str, str, str]]:
-    current_table: Optional[str] = None
+def _iter_clickhouse_add_columns(text: str) -> Iterable[tuple[str, str, str]]:
+    current_table: str | None = None
     for raw_line in text.splitlines():
         line = raw_line.split("--", 1)[0].strip()
         if not line:
@@ -128,10 +129,10 @@ def _normalize_clickhouse_type(type_name: str) -> str:
 
 def _build_clickhouse_expected_schema(
     migrations_dir: Path,
-) -> Tuple[Dict[str, Dict[str, str]], Dict[str, Dict[Any, List[str]]]]:
-    expected: Dict[str, Dict[str, str]] = {}
-    table_migrations: Dict[str, set[str]] = {}
-    column_migrations: Dict[Tuple[str, str], set[str]] = {}
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[Any, list[str]]]]:
+    expected: dict[str, dict[str, str]] = {}
+    table_migrations: dict[str, set[str]] = {}
+    column_migrations: dict[tuple[str, str], set[str]] = {}
 
     for path in sorted(migrations_dir.glob("*.sql")):
         text = _read_text(path)
@@ -162,9 +163,20 @@ def _build_clickhouse_expected_schema(
 
 
 def _normalize_sqlalchemy_type(type_obj: Any, dialect_name: str) -> str:
-    from sqlalchemy import Boolean, Date, DateTime, Float, Integer, JSON, Numeric
-    from sqlalchemy import String, Text, CHAR
+    from sqlalchemy import (
+        CHAR,
+        JSON,
+        Boolean,
+        Date,
+        DateTime,
+        Float,
+        Integer,
+        Numeric,
+        String,
+        Text,
+    )
     from sqlalchemy.dialects.postgresql import UUID as PGUUID
+
     from dev_health_ops.models.git import GUID
 
     if isinstance(type_obj, (Integer,)):
@@ -207,8 +219,8 @@ def _normalize_inspected_type(type_obj: Any, dialect_name: str) -> str:
 
 def _build_sqlalchemy_expected_schema(
     dialect_name: str,
-) -> Dict[str, Dict[str, str]]:
-    expected: Dict[str, Dict[str, str]] = {}
+) -> dict[str, dict[str, str]]:
+    expected: dict[str, dict[str, str]] = {}
     for table in Base.metadata.sorted_tables:
         columns = {}
         for col in table.columns:
@@ -218,8 +230,8 @@ def _build_sqlalchemy_expected_schema(
 
 
 def _query_dicts(
-    client: Any, query: str, parameters: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    client: Any, query: str, parameters: dict[str, Any]
+) -> list[dict[str, Any]]:
     result = client.query(query, parameters=parameters)
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])
@@ -230,7 +242,7 @@ def _query_dicts(
 
 def _fetch_clickhouse_schema(
     client: Any, tables: Iterable[str]
-) -> Tuple[set[str], Dict[str, Dict[str, str]]]:
+) -> tuple[set[str], dict[str, dict[str, str]]]:
     table_list = list(tables)
     if not table_list:
         return set(), {}
@@ -245,7 +257,7 @@ def _fetch_clickhouse_schema(
         {"tables": table_list},
     )
     present_tables = {row.get("name") for row in rows}
-    schema: Dict[str, Dict[str, str]] = {}
+    schema: dict[str, dict[str, str]] = {}
     for table in present_tables:
         col_rows = _query_dicts(
             client,
@@ -263,9 +275,9 @@ def _fetch_clickhouse_schema(
     return present_tables, schema
 
 
-def _find_migration_matches(files: Iterable[Path], tokens: Iterable[str]) -> List[str]:
+def _find_migration_matches(files: Iterable[Path], tokens: Iterable[str]) -> list[str]:
     token_list = [token for token in tokens if token]
-    matches: List[str] = []
+    matches: list[str] = []
     for path in files:
         text = _read_text(path)
         if all(token in text for token in token_list):
@@ -274,14 +286,14 @@ def _find_migration_matches(files: Iterable[Path], tokens: Iterable[str]) -> Lis
 
 
 def _compare_schema(
-    expected: Dict[str, Dict[str, str]],
-    actual: Dict[str, Dict[str, Any]],
+    expected: dict[str, dict[str, str]],
+    actual: dict[str, dict[str, Any]],
     normalize_expected,
     normalize_actual,
-) -> Tuple[List[str], Dict[str, List[str]], Dict[str, Dict[str, Dict[str, str]]]]:
-    missing_tables: List[str] = []
-    missing_columns: Dict[str, List[str]] = {}
-    type_mismatches: Dict[str, Dict[str, Dict[str, str]]] = {}
+) -> tuple[list[str], dict[str, list[str]], dict[str, dict[str, dict[str, str]]]]:
+    missing_tables: list[str] = []
+    missing_columns: dict[str, list[str]] = {}
+    type_mismatches: dict[str, dict[str, dict[str, str]]] = {}
 
     for table, expected_cols in expected.items():
         actual_cols = actual.get(table)
@@ -306,13 +318,13 @@ def _compare_schema(
 
 
 def _build_clickhouse_migration_hints(
-    migrations: Dict[str, Dict[Any, List[str]]],
-    missing_tables: List[str],
-    missing_columns: Dict[str, List[str]],
-    type_mismatches: Dict[str, Dict[str, Dict[str, str]]],
-) -> Dict[str, Dict[str, List[str]]]:
-    table_hints: Dict[str, List[str]] = {}
-    column_hints: Dict[str, List[str]] = {}
+    migrations: dict[str, dict[Any, list[str]]],
+    missing_tables: list[str],
+    missing_columns: dict[str, list[str]],
+    type_mismatches: dict[str, dict[str, dict[str, str]]],
+) -> dict[str, dict[str, list[str]]]:
+    table_hints: dict[str, list[str]] = {}
+    column_hints: dict[str, list[str]] = {}
     for table in missing_tables:
         table_hints[table] = migrations.get("tables", {}).get(table, [])
     for table, columns in missing_columns.items():
@@ -333,14 +345,14 @@ def _build_clickhouse_migration_hints(
 
 def _build_sql_migration_hints(
     repo_root: Path,
-    missing_tables: List[str],
-    missing_columns: Dict[str, List[str]],
-    type_mismatches: Dict[str, Dict[str, Dict[str, str]]],
-) -> Dict[str, Dict[str, List[str]]]:
+    missing_tables: list[str],
+    missing_columns: dict[str, list[str]],
+    type_mismatches: dict[str, dict[str, dict[str, str]]],
+) -> dict[str, dict[str, list[str]]]:
     migrations_dir = repo_root / "alembic" / "versions"
     files = list(migrations_dir.glob("*.py")) if migrations_dir.exists() else []
-    table_hints: Dict[str, List[str]] = {}
-    column_hints: Dict[str, List[str]] = {}
+    table_hints: dict[str, list[str]] = {}
+    column_hints: dict[str, list[str]] = {}
     for table in missing_tables:
         table_hints[table] = _find_migration_matches(files, [table])
     for table, columns in missing_columns.items():
@@ -357,7 +369,7 @@ def _build_sql_migration_hints(
     return {"tables": table_hints, "columns": column_hints}
 
 
-def run_schema_audit(*, db_url: str, org_id: str | None = None) -> Dict[str, Any]:
+def run_schema_audit(*, db_url: str, org_id: str | None = None) -> dict[str, Any]:
     base_report = {
         "status": "unchecked",
         "checked": False,
@@ -443,7 +455,7 @@ def run_schema_audit(*, db_url: str, org_id: str | None = None) -> Dict[str, Any
             with engine.connect() as conn:
                 inspector = inspect(conn)
                 table_names = set(inspector.get_table_names())
-                actual: Dict[str, Dict[str, Any]] = {}
+                actual: dict[str, dict[str, Any]] = {}
                 for table in expected.keys():
                     if table not in table_names:
                         continue
@@ -488,7 +500,7 @@ def run_schema_audit(*, db_url: str, org_id: str | None = None) -> Dict[str, Any
     return base_report
 
 
-def format_schema_report(report: Dict[str, Any]) -> str:
+def format_schema_report(report: dict[str, Any]) -> str:
     status = report.get("status", "unchecked")
     backend = report.get("db_backend") or "unknown"
     lines = [f"status: {status}", f"backend: {backend}"]

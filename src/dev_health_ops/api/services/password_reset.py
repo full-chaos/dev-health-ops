@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import bcrypt
 import hashlib
 import hmac
 import importlib
@@ -9,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
+import bcrypt
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,10 +58,9 @@ async def create_password_reset_token(
     user_id: uuid.UUID,
     ttl_hours: int = 1,
 ) -> str:
-    password_reset_token_model = getattr(
-        importlib.import_module("dev_health_ops.models.password_reset_token"),
-        "PasswordResetToken",
-    )
+    password_reset_token_model = importlib.import_module(
+        "dev_health_ops.models.password_reset_token"
+    ).PasswordResetToken
     token_id = uuid.uuid4()
     token = _build_token(token_id)
 
@@ -87,10 +86,9 @@ async def reset_password_with_token(
     token: str,
     new_password: str,
 ) -> User | None:
-    password_reset_token_model = getattr(
-        importlib.import_module("dev_health_ops.models.password_reset_token"),
-        "PasswordResetToken",
-    )
+    password_reset_token_model = importlib.import_module(
+        "dev_health_ops.models.password_reset_token"
+    ).PasswordResetToken
     validated_token = _validate_signed_token(token)
     if validated_token is None:
         return None
@@ -118,13 +116,12 @@ async def reset_password_with_token(
         new_password.encode("utf-8"),
         bcrypt.gensalt(),
     ).decode("utf-8")
-    setattr(user, "password_hash", password_hash)
-    setattr(user, "updated_at", now)
+    user.password_hash = password_hash
+    user.updated_at = now
 
-    revoke_all_for_user = getattr(
-        importlib.import_module("dev_health_ops.api.services.refresh_tokens"),
-        "revoke_all_for_user",
-    )
+    revoke_all_for_user = importlib.import_module(
+        "dev_health_ops.api.services.refresh_tokens"
+    ).revoke_all_for_user
     await revoke_all_for_user(db, str(user.id))
 
     await db.execute(
@@ -144,10 +141,9 @@ async def send_password_reset_email(
 ) -> None:
     base_url = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
     reset_url = f"{base_url}/reset-password?token={quote(token)}"
-    email_service = getattr(
-        importlib.import_module("dev_health_ops.api.services.email"),
-        "get_email_service",
-    )()
+    email_service = importlib.import_module(
+        "dev_health_ops.api.services.email"
+    ).get_email_service()
     await email_service.send_template_email(
         to_address=to_email,
         subject="Reset your password",

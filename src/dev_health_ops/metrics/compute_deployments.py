@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Sequence, Tuple
 
-from dev_health_ops.metrics.schemas import DeployMetricsDailyRecord, DeploymentRow
+from dev_health_ops.metrics.schemas import DeploymentRow, DeployMetricsDailyRecord
 from dev_health_ops.utils.datetime import to_utc
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
@@ -36,14 +36,14 @@ def compute_deploy_metrics_daily(
     day: date,
     deployments: Sequence[DeploymentRow],
     computed_at: datetime,
-) -> List[DeployMetricsDailyRecord]:
+) -> list[DeployMetricsDailyRecord]:
     """
     Compute per-repo deployment metrics for deployments occurring on the given day.
     """
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
 
-    by_repo: Dict[str, Dict[str, object]] = {}
+    by_repo: dict[str, dict[str, object]] = {}
     for row in deployments:
         deployed_at = row.get("deployed_at") or row.get("started_at")
         if not isinstance(deployed_at, datetime):
@@ -83,12 +83,12 @@ def compute_deploy_metrics_daily(
             if lead_time >= 0:
                 bucket["lead_times"].append(float(lead_time))
 
-    records: List[DeployMetricsDailyRecord] = []
+    records: list[DeployMetricsDailyRecord] = []
     for repo_id, bucket in sorted(by_repo.items(), key=lambda kv: kv[0]):
         deployments_count = int(bucket["deployments"])
         failed_count = int(bucket["failed"])
-        durations: List[float] = list(bucket["durations"])
-        lead_times: List[float] = list(bucket["lead_times"])
+        durations: list[float] = list(bucket["durations"])
+        lead_times: list[float] = list(bucket["lead_times"])
 
         records.append(
             DeployMetricsDailyRecord(

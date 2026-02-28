@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .base import CachedDataLoader
 
@@ -18,8 +18,8 @@ class RepoData:
     repo_id: str
     repo_name: str
     org_id: str
-    default_branch: Optional[str] = None
-    language: Optional[str] = None
+    default_branch: str | None = None
+    language: str | None = None
 
 
 class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
@@ -33,7 +33,7 @@ class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
         self,
         client: Any,
         org_id: str,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
         cache_ttl: int = 300,
     ):
         """
@@ -51,7 +51,7 @@ class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
         self._client = client
         self._org_id = org_id
 
-    async def batch_load(self, keys: List[str]) -> List[Optional[RepoData]]:
+    async def batch_load(self, keys: list[str]) -> list[RepoData | None]:
         """
         Batch load repository data for multiple repo IDs.
 
@@ -83,7 +83,7 @@ class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
             rows = await query_dicts(self._client, sql, params)
 
             # Build lookup map
-            repo_map: Dict[str, RepoData] = {}
+            repo_map: dict[str, RepoData] = {}
             for row in rows:
                 repo_id = str(row.get("repo_id", ""))
                 if repo_id:
@@ -113,7 +113,7 @@ class RepoByNameLoader(CachedDataLoader[str, Optional[RepoData]]):
         self,
         client: Any,
         org_id: str,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
         cache_ttl: int = 300,
     ):
         """
@@ -131,7 +131,7 @@ class RepoByNameLoader(CachedDataLoader[str, Optional[RepoData]]):
         self._client = client
         self._org_id = org_id
 
-    async def batch_load(self, keys: List[str]) -> List[Optional[RepoData]]:
+    async def batch_load(self, keys: list[str]) -> list[RepoData | None]:
         """
         Batch load repository data for multiple repo names.
 
@@ -163,7 +163,7 @@ class RepoByNameLoader(CachedDataLoader[str, Optional[RepoData]]):
             rows = await query_dicts(self._client, sql, params)
 
             # Build lookup map by lowercase name
-            repo_map: Dict[str, RepoData] = {}
+            repo_map: dict[str, RepoData] = {}
             for row in rows:
                 repo_name = str(row.get("repo_name", ""))
                 if repo_name and repo_name.lower() not in repo_map:

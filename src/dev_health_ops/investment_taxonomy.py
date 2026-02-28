@@ -7,11 +7,9 @@ It is intentionally outside `dev_health_ops/` so it can be shared across compute
 
 from __future__ import annotations
 
-from typing import Dict, Set
-
 __all__ = ["THEMES", "SUBCATEGORIES", "SUBCATEGORY_TO_THEME", "theme_of"]
 
-THEMES: Set[str] = {
+THEMES: set[str] = {
     "feature_delivery",
     "operational",
     "maintenance",
@@ -19,7 +17,7 @@ THEMES: Set[str] = {
     "risk",
 }
 
-SUBCATEGORIES: Set[str] = {
+SUBCATEGORIES: set[str] = {
     "feature_delivery.customer",
     "feature_delivery.roadmap",
     "feature_delivery.enablement",
@@ -37,7 +35,7 @@ SUBCATEGORIES: Set[str] = {
     "risk.vulnerability",
 }
 
-SUBCATEGORY_TO_THEME: Dict[str, str] = {
+SUBCATEGORY_TO_THEME: dict[str, str] = {
     subcategory: subcategory.split(".", 1)[0] for subcategory in SUBCATEGORIES
 }
 

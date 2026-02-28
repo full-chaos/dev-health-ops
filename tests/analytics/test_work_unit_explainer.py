@@ -179,7 +179,7 @@ def test_validate_language_allows_approved_words():
 def test_forbidden_words_set_complete():
     """Verify all forbidden words from AGENTS-WG.md are in the set."""
     expected_forbidden = {"is", "was", "detected", "determined"}
-    assert FORBIDDEN_WORDS == expected_forbidden
+    assert expected_forbidden == FORBIDDEN_WORDS
 
 
 def test_categories_sum_approximately_one():

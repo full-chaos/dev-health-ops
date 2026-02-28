@@ -18,7 +18,7 @@ from dev_health_ops.api.services.billing_emails import (
     send_subscription_changed,
 )
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.users import Membership, MemberRole, Organization, User
+from dev_health_ops.models.users import MemberRole, Membership, Organization, User
 
 
 @pytest_asyncio.fixture
@@ -236,9 +236,9 @@ async def test_send_invoice_receipt_email_failure():
             "dev_health_ops.api.services.billing_emails.get_email_service",
             return_value=mock_email_service,
         ),
+        pytest.raises(RuntimeError, match="boom"),
     ):
-        with pytest.raises(RuntimeError, match="boom"):
-            await send_invoice_receipt(org_id, 4900, "usd", "https://example.com")
+        await send_invoice_receipt(org_id, 4900, "usd", "https://example.com")
 
     mock_email_service.send_template_email.assert_awaited_once()
 

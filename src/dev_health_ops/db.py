@@ -13,14 +13,13 @@ Environment Variables:
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
-from typing import AsyncGenerator, Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, AsyncEngine
-from sqlalchemy.orm import sessionmaker, Session
-
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 _postgres_engine: AsyncEngine | None = None
 _clickhouse_engine: AsyncEngine | None = None

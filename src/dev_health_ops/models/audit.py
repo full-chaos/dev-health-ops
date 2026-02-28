@@ -16,19 +16,19 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Column,
     DateTime,
     ForeignKey,
     Index,
-    JSON,
     Text,
 )
 from sqlalchemy.orm import relationship
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class AuditAction(str, Enum):
@@ -255,12 +255,12 @@ class AuditLog(Base):
         action: str,
         resource_type: str,
         resource_id: str,
-        user_id: Optional[uuid.UUID] = None,
-        description: Optional[str] = None,
-        changes: Optional[dict[str, Any]] = None,
-        request_metadata: Optional[dict[str, Any]] = None,
+        user_id: uuid.UUID | None = None,
+        description: str | None = None,
+        changes: dict[str, Any] | None = None,
+        request_metadata: dict[str, Any] | None = None,
         status: str = "success",
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id
@@ -288,14 +288,14 @@ class AuditLog(Base):
         action: AuditAction | str,
         resource_type: AuditResourceType | str,
         resource_id: str,
-        user_id: Optional[uuid.UUID] = None,
-        description: Optional[str] = None,
-        changes: Optional[dict[str, Any]] = None,
-        ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None,
-        request_id: Optional[str] = None,
-        extra_metadata: Optional[dict[str, Any]] = None,
-    ) -> "AuditLog":
+        user_id: uuid.UUID | None = None,
+        description: str | None = None,
+        changes: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        request_id: str | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> AuditLog:
         """Factory method to create an audit log entry with common metadata.
 
         Args:

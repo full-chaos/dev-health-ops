@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -27,10 +26,10 @@ from dev_health_ops.models.checkpoints import CheckpointStatus, MetricCheckpoint
 def get_checkpoint(
     session: Session,
     org_id: str,
-    repo_id: Optional[uuid.UUID],
+    repo_id: uuid.UUID | None,
     metric_type: str,
     day: datetime,
-) -> Optional[MetricCheckpoint]:
+) -> MetricCheckpoint | None:
     """Retrieve a checkpoint by its unique scope.
 
     Args:
@@ -58,7 +57,7 @@ def get_checkpoint(
 def mark_running(
     session: Session,
     org_id: str,
-    repo_id: Optional[uuid.UUID],
+    repo_id: uuid.UUID | None,
     metric_type: str,
     day: datetime,
     worker_id: str,
@@ -157,7 +156,7 @@ def mark_failed(
 def is_completed(
     session: Session,
     org_id: str,
-    repo_id: Optional[uuid.UUID],
+    repo_id: uuid.UUID | None,
     metric_type: str,
     day: datetime,
 ) -> bool:

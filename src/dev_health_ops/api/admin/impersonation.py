@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update

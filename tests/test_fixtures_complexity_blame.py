@@ -16,7 +16,9 @@ def test_fixture_blame_reconstructs_parseable_python():
     lines.sort(key=lambda row: getattr(row, "line_no", 0))
     contents = "\n".join((getattr(row, "line", None) or "") for row in lines)
 
-    scanner = ComplexityScanner(config_path=Path("src/dev_health_ops/config/complexity.yaml"))
+    scanner = ComplexityScanner(
+        config_path=Path("src/dev_health_ops/config/complexity.yaml")
+    )
     results = scanner.scan_file_contents([(target_path, contents)])
 
     assert results

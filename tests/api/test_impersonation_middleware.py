@@ -18,7 +18,6 @@ import pytest
 
 from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.services.auth import (
-    ImpersonationContext,
     _current_org_id,
     _impersonation_ctx,
     get_current_org_id,
@@ -27,7 +26,6 @@ from dev_health_ops.api.services.auth import (
     set_impersonation_context,
 )
 from dev_health_ops.api.services.impersonation_cache import _cache, invalidate
-
 
 # ---------------------------------------------------------------------------
 # Contextvar: is_impersonating

@@ -7,29 +7,28 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional
 
+import dev_health_ops.api.billing.cli as billing_cli
+from dev_health_ops import migrate as migrate_mod
+from dev_health_ops.api import runner as api_runner
+from dev_health_ops.api.admin import cli as admin_cli
+from dev_health_ops.api.services.refresh_tokens import cleanup_expired
+from dev_health_ops.audit import completeness, coverage, perf, schema
+from dev_health_ops.db import get_postgres_session
+from dev_health_ops.fixtures import runner as fixtures_runner
+from dev_health_ops.metrics import (
+    job_capacity,
+    job_complexity_db,
+    job_daily,
+    job_dora,
+    job_work_items,
+)
 
 # Runner and registration modules
 from dev_health_ops.processors import sync as sync_processor
 from dev_health_ops.providers import teams as teams_provider
-from dev_health_ops.api.services.refresh_tokens import cleanup_expired
-from dev_health_ops.fixtures import runner as fixtures_runner
 from dev_health_ops.work_graph import runner as work_graph_runner
 from dev_health_ops.workers import runner as workers_runner
-from dev_health_ops.api import runner as api_runner
-import dev_health_ops.api.billing.cli as billing_cli
-from dev_health_ops.api.admin import cli as admin_cli
-from dev_health_ops.db import get_postgres_session
-from dev_health_ops.metrics import (
-    job_work_items,
-    job_daily,
-    job_complexity_db,
-    job_dora,
-    job_capacity,
-)
-from dev_health_ops.audit import completeness, schema, perf, coverage
-from dev_health_ops import migrate as migrate_mod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -226,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if os.getenv("DISABLE_DOTENV", "").strip().lower() not in {
         "1",
         "true",

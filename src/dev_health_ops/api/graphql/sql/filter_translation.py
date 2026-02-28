@@ -12,7 +12,7 @@ Key semantics:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..models.inputs import FilterInput
@@ -20,11 +20,11 @@ if TYPE_CHECKING:
 
 def translate_scope_filter(
     level: str,
-    ids: List[str],
+    ids: list[str],
     team_column: str = "team_id",
     repo_column: str = "repo_id",
     author_column: str = "author_id",
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     """Translate scope filter to SQL predicate.
 
     Args:
@@ -59,9 +59,9 @@ def translate_scope_filter(
 
 
 def translate_work_category_filter(
-    categories: List[str],
+    categories: list[str],
     use_investment: bool = False,
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     """Translate work category filter to SQL predicate.
 
     Args:
@@ -89,9 +89,9 @@ def translate_work_category_filter(
 
 
 def translate_repo_filter(
-    repos: List[str],
+    repos: list[str],
     repo_column: str = "repo_id",
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     """Translate repo filter to SQL predicate.
 
     Args:
@@ -108,9 +108,9 @@ def translate_repo_filter(
 
 
 def translate_developer_filter(
-    developers: List[str],
+    developers: list[str],
     author_column: str = "author_id",
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     """Translate developer filter to SQL predicate.
 
     Args:
@@ -127,12 +127,12 @@ def translate_developer_filter(
 
 
 def translate_filters(
-    filters: Optional["FilterInput"],
+    filters: FilterInput | None,
     use_investment: bool = False,
     team_column: str = "team_id",
     repo_column: str = "repo_id",
     author_column: str = "author_id",
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     """Translate a complete FilterInput to SQL predicates.
 
     Combines all filter dimensions into a single SQL clause string and
@@ -161,8 +161,8 @@ def translate_filters(
     if filters is None:
         return "", {}
 
-    clauses: List[str] = []
-    params: Dict[str, Any] = {}
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
 
     # Scope filter
     if filters.scope is not None:

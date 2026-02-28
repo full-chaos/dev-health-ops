@@ -52,7 +52,9 @@ def test_make_cacheable_serializes_objects_and_lists():
 @pytest.mark.asyncio
 async def test_cached_resolver_uses_cache_on_second_call():
     cache = _DictCache()
-    context = GraphQLContext(org_id="org-1", db_url="clickhouse://localhost", cache=cache)
+    context = GraphQLContext(
+        org_id="org-1", db_url="clickhouse://localhost", cache=cache
+    )
     calls = {"n": 0}
 
     @cached_resolver(ttl_seconds=60)

@@ -1,4 +1,5 @@
 """Verify SSO secrets are encrypted at rest using Fernet."""
+
 from __future__ import annotations
 
 import os
@@ -31,10 +32,14 @@ def test_decrypt_secret_helper_fallback():
 
     # Encrypted value round-trips
     encrypted = encrypt_value("real-secret")
-    assert _decrypt_secret({"client_secret": encrypted}, "client_secret") == "real-secret"
+    assert (
+        _decrypt_secret({"client_secret": encrypted}, "client_secret") == "real-secret"
+    )
 
     # Legacy plaintext value passes through (fallback)
-    assert _decrypt_secret({"client_secret": "plaintext"}, "client_secret") == "plaintext"
+    assert (
+        _decrypt_secret({"client_secret": "plaintext"}, "client_secret") == "plaintext"
+    )
 
     # Missing key returns default
     assert _decrypt_secret({}, "client_secret") == ""

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -19,7 +19,7 @@ from dev_health_ops.providers.status_mapping import StatusMapping
 
 logger = logging.getLogger(__name__)
 
-LINEAR_PRIORITY_MAP: Dict[int, Tuple[str, str]] = {
+LINEAR_PRIORITY_MAP: dict[int, tuple[str, str]] = {
     0: ("none", "intangible"),
     1: ("urgent", "expedite"),
     2: ("high", "fixed_date"),
@@ -27,7 +27,7 @@ LINEAR_PRIORITY_MAP: Dict[int, Tuple[str, str]] = {
     4: ("low", "intangible"),
 }
 
-LINEAR_STATE_TYPE_MAP: Dict[str, WorkItemStatusCategory] = {
+LINEAR_STATE_TYPE_MAP: dict[str, WorkItemStatusCategory] = {
     "backlog": "backlog",
     "unstarted": "todo",
     "started": "in_progress",
@@ -37,7 +37,7 @@ LINEAR_STATE_TYPE_MAP: Dict[str, WorkItemStatusCategory] = {
 }
 
 
-def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
@@ -58,20 +58,20 @@ def _get(obj: Any, *keys: str) -> Any:
 
 
 def _priority_from_linear(
-    priority: Optional[int],
-) -> Tuple[Optional[str], Optional[str]]:
+    priority: int | None,
+) -> tuple[str | None, str | None]:
     if priority is None:
         return (None, None)
     return LINEAR_PRIORITY_MAP.get(priority, (None, None))
 
 
-def _status_from_state_type(state_type: Optional[str]) -> WorkItemStatusCategory:
+def _status_from_state_type(state_type: str | None) -> WorkItemStatusCategory:
     if not state_type:
         return "unknown"
     return LINEAR_STATE_TYPE_MAP.get(state_type.lower(), "unknown")
 
 
-def _type_from_labels(labels: List[str]) -> WorkItemType:
+def _type_from_labels(labels: list[str]) -> WorkItemType:
     label_lower = [lbl.lower() for lbl in labels]
     if "bug" in label_lower or "type:bug" in label_lower:
         return "bug"
@@ -88,11 +88,11 @@ def _type_from_labels(labels: List[str]) -> WorkItemType:
 
 def linear_issue_to_work_item(
     *,
-    issue: Dict[str, Any],
+    issue: dict[str, Any],
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    history: Optional[List[Dict[str, Any]]] = None,
-) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    history: list[dict[str, Any]] | None = None,
+) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     identifier = _get(issue, "identifier") or ""
     work_item_id = f"linear:{identifier}"
 
@@ -137,7 +137,7 @@ def linear_issue_to_work_item(
         normalized_type = _type_from_labels(labels)
 
     assignee_obj = _get(issue, "assignee")
-    assignees: List[str] = []
+    assignees: list[str] = []
     if assignee_obj:
         resolved = identity.resolve(
             provider="linear",
@@ -218,7 +218,7 @@ def linear_issue_to_work_item(
     return work_item, transitions
 
 
-def linear_cycle_to_sprint(cycle: Dict[str, Any]) -> Sprint:
+def linear_cycle_to_sprint(cycle: dict[str, Any]) -> Sprint:
     cycle_id = _get(cycle, "id") or ""
     sprint_id = f"linear:cycle:{cycle_id}"
 
@@ -252,10 +252,10 @@ def linear_cycle_to_sprint(cycle: Dict[str, Any]) -> Sprint:
 
 def linear_comment_to_interaction_event(
     *,
-    comment: Dict[str, Any],
+    comment: dict[str, Any],
     work_item_id: str,
     identity: IdentityResolver,
-) -> Optional[WorkItemInteractionEvent]:
+) -> WorkItemInteractionEvent | None:
     body = _get(comment, "body") or ""
     if not body:
         return None
@@ -287,10 +287,10 @@ def linear_comment_to_interaction_event(
 def extract_linear_status_transitions(
     *,
     work_item_id: str,
-    history: List[Dict[str, Any]],
+    history: list[dict[str, Any]],
     identity: IdentityResolver,
-) -> List[WorkItemStatusTransition]:
-    transitions: List[WorkItemStatusTransition] = []
+) -> list[WorkItemStatusTransition]:
+    transitions: list[WorkItemStatusTransition] = []
 
     for entry in history:
         from_state = _get(entry, "fromState")
@@ -349,10 +349,10 @@ def extract_linear_status_transitions(
 def detect_linear_reopen_events(
     *,
     work_item_id: str,
-    history: List[Dict[str, Any]],
+    history: list[dict[str, Any]],
     identity: IdentityResolver,
-) -> List[WorkItemReopenEvent]:
-    reopen_events: List[WorkItemReopenEvent] = []
+) -> list[WorkItemReopenEvent]:
+    reopen_events: list[WorkItemReopenEvent] = []
 
     for entry in history:
         from_state = _get(entry, "fromState")

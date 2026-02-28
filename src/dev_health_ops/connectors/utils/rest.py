@@ -7,7 +7,7 @@ particularly for GitLab's REST API.
 
 import logging
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 
@@ -21,7 +21,7 @@ from dev_health_ops.connectors.utils.retry import retry_with_backoff
 logger = logging.getLogger(__name__)
 
 
-def _parse_retry_after_seconds(response: requests.Response) -> Optional[float]:
+def _parse_retry_after_seconds(response: requests.Response) -> float | None:
     retry_after = response.headers.get("Retry-After")
     if not retry_after:
         return None
@@ -39,9 +39,9 @@ class RESTClient:
     def __init__(
         self,
         base_url: str,
-        token: Optional[str] = None,
+        token: str | None = None,
         timeout: int = 30,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ):
         """
         Initialize REST client.
@@ -68,9 +68,9 @@ class RESTClient:
     def get(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Make a GET request to the API.
 
@@ -126,9 +126,9 @@ class RESTClient:
     def get_list(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> List[Dict[str, Any]]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Make a GET request expecting a list response.
 
@@ -188,9 +188,9 @@ class RESTClient:
     def delete(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Make a DELETE request.
 
         Returns a JSON body when present, otherwise an empty dict.
@@ -244,7 +244,7 @@ class GitLabRESTClient(RESTClient):
     def __init__(
         self,
         base_url: str = "https://gitlab.com/api/v4",
-        private_token: Optional[str] = None,
+        private_token: str | None = None,
         timeout: int = 15,
     ):
         """
@@ -270,7 +270,7 @@ class GitLabRESTClient(RESTClient):
         project_id: int,
         file_path: str,
         ref: str = "main",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get blame information for a file in GitLab.
 
@@ -305,9 +305,9 @@ class GitLabRESTClient(RESTClient):
         state: str = "all",
         page: int = 1,
         per_page: int = 100,
-        order_by: Optional[str] = None,
-        sort: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        order_by: str | None = None,
+        sort: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Get merge requests for a project.
 
@@ -347,10 +347,10 @@ class GitLabRESTClient(RESTClient):
         self,
         project_id: int,
         metric: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         interval: str = "daily",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Retrieve DORA metrics for a project."""
         endpoint = f"projects/{project_id}/dora/metrics"
         params = {

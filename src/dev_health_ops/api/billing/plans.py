@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -10,8 +10,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.auth.router import get_current_user, get_current_user_optional
-from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.billing.stripe_client import get_stripe_client
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import postgres_session_dependency
 from dev_health_ops.models.billing import (
     BillingInterval,

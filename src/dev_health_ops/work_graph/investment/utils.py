@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Dict
-
 from dev_health_ops.utils.normalization import (
     clamp,
-    ensure_full_subcategory_vector as _ensure_full_subcategory_vector,
     evidence_quality_band,
-    rollup_subcategories_to_themes as _rollup_subcategories_to_themes,
     work_unit_id,
+)
+from dev_health_ops.utils.normalization import (
+    ensure_full_subcategory_vector as _ensure_full_subcategory_vector,
+)
+from dev_health_ops.utils.normalization import (
+    rollup_subcategories_to_themes as _rollup_subcategories_to_themes,
 )
 from dev_health_ops.work_graph.investment.taxonomy import (
     SUBCATEGORIES,
@@ -27,14 +29,14 @@ __all__ = [
 
 
 def rollup_subcategories_to_themes(
-    subcategories: Dict[str, float],
-) -> Dict[str, float]:
+    subcategories: dict[str, float],
+) -> dict[str, float]:
     return _rollup_subcategories_to_themes(
         subcategories, SUBCATEGORY_TO_THEME, sorted(THEMES)
     )
 
 
 def ensure_full_subcategory_vector(
-    subcategories: Dict[str, float],
-) -> Dict[str, float]:
+    subcategories: dict[str, float],
+) -> dict[str, float]:
     return _ensure_full_subcategory_vector(subcategories, SUBCATEGORIES)

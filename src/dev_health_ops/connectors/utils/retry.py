@@ -6,15 +6,16 @@ import asyncio
 import inspect
 import logging
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
-def _get_retry_after_seconds(exc: Exception) -> Optional[float]:
+def _get_retry_after_seconds(exc: Exception) -> float | None:
     retry_after = getattr(exc, "retry_after_seconds", None)
     if retry_after is None:
         return None
@@ -110,7 +111,7 @@ def retry_with_backoff(
                 max_retries=max_retries,
             )
 
-            last_exception: Optional[Exception] = None
+            last_exception: Exception | None = None
             for attempt in range(max_retries):
                 try:
                     result = await func(*args, **kwargs)
@@ -154,7 +155,7 @@ def retry_with_backoff(
                 max_retries=max_retries,
             )
 
-            last_exception: Optional[Exception] = None
+            last_exception: Exception | None = None
             for attempt in range(max_retries):
                 try:
                     result = func(*args, **kwargs)

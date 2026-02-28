@@ -5,8 +5,6 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from dev_health_ops.models.checkpoints import CheckpointStatus, MetricCheckpoint
-from dev_health_ops.models.git import Base
 from dev_health_ops.metrics.checkpoints import (
     get_checkpoint,
     get_incomplete_repos,
@@ -16,6 +14,8 @@ from dev_health_ops.metrics.checkpoints import (
     mark_running,
     reset_stale_running,
 )
+from dev_health_ops.models.checkpoints import CheckpointStatus, MetricCheckpoint
+from dev_health_ops.models.git import Base
 
 DAY = datetime.combine(date(2025, 1, 15), time.min, tzinfo=timezone.utc)
 ORG_ID = "default"

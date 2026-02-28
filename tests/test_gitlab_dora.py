@@ -2,8 +2,8 @@
 Tests for GitLab DORA metrics integration.
 """
 
-from unittest.mock import Mock, patch
 from datetime import datetime
+from unittest.mock import Mock, patch
 
 import pytest
 

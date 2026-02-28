@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
@@ -15,9 +16,7 @@ OPTIONAL_GIT_TABLES = ("deployments", "incidents", "ci_pipeline_runs")
 ALL_GIT_TABLES = REQUIRED_GIT_TABLES + OPTIONAL_GIT_TABLES
 
 
-def build_window(
-    days: int, now: Optional[datetime] = None
-) -> Tuple[datetime, datetime]:
+def build_window(days: int, now: datetime | None = None) -> tuple[datetime, datetime]:
     window_days = max(1, int(days))
     end = now or datetime.now(timezone.utc)
     if end.tzinfo is None:
@@ -136,8 +135,8 @@ def infer_repo_source(settings_value: Any, tags_value: Any) -> str:
     return "unknown"
 
 
-def build_repo_source_map(repo_rows: Iterable[Dict[str, Any]]) -> Dict[str, str]:
-    mapping: Dict[str, str] = {}
+def build_repo_source_map(repo_rows: Iterable[dict[str, Any]]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
     for row in repo_rows:
         repo_id = row.get("id")
         if not repo_id:
@@ -152,7 +151,7 @@ def _naive_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-def _coerce_dt(value: Any) -> Optional[datetime]:
+def _coerce_dt(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -168,7 +167,7 @@ def _coerce_dt(value: Any) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
-def _max_dt(first: Optional[datetime], second: Any) -> Optional[datetime]:
+def _max_dt(first: datetime | None, second: Any) -> datetime | None:
     second_dt = _coerce_dt(second)
     if first is None:
         return second_dt
@@ -177,7 +176,7 @@ def _max_dt(first: Optional[datetime], second: Any) -> Optional[datetime]:
     return max(first, second_dt)
 
 
-def _build_stat(count: Any, last_synced: Any, window_start: datetime) -> Dict[str, Any]:
+def _build_stat(count: Any, last_synced: Any, window_start: datetime) -> dict[str, Any]:
     count_value = int(count or 0)
     last_synced_dt = _coerce_dt(last_synced)
     stale = last_synced_dt is None or last_synced_dt < window_start
@@ -190,14 +189,14 @@ def _build_stat(count: Any, last_synced: Any, window_start: datetime) -> Dict[st
     }
 
 
-def _empty_stat(window_start: datetime) -> Dict[str, Any]:
+def _empty_stat(window_start: datetime) -> dict[str, Any]:
     return _build_stat(0, None, window_start)
 
 
 def _build_stats_by_provider(
-    rows: Iterable[Dict[str, Any]], window_start: datetime
-) -> Dict[str, Dict[str, Any]]:
-    stats: Dict[str, Dict[str, Any]] = {}
+    rows: Iterable[dict[str, Any]], window_start: datetime
+) -> dict[str, dict[str, Any]]:
+    stats: dict[str, dict[str, Any]] = {}
     for row in rows:
         provider = str(row.get("provider") or "").strip().lower()
         if not provider:
@@ -209,10 +208,10 @@ def _build_stats_by_provider(
 
 
 def _aggregate_git_rows_by_source(
-    rows: Iterable[Dict[str, Any]],
-    repo_sources: Dict[str, str],
+    rows: Iterable[dict[str, Any]],
+    repo_sources: dict[str, str],
     window_start: datetime,
-) -> Dict[str, Dict[str, Any]]:
+) -> dict[str, dict[str, Any]]:
     buckets = {source: {"count": 0, "last_synced": None} for source in SOURCE_KEYS}
     for row in rows:
         repo_id = row.get("repo_id")
@@ -230,14 +229,14 @@ def _aggregate_git_rows_by_source(
     }
 
 
-def _stat_ok(stat: Optional[Dict[str, Any]]) -> bool:
+def _stat_ok(stat: dict[str, Any] | None) -> bool:
     return bool(stat and stat.get("ok"))
 
 
-def _stat_issues(stat: Optional[Dict[str, Any]], label: str) -> List[str]:
+def _stat_issues(stat: dict[str, Any] | None, label: str) -> list[str]:
     if stat is None:
         return [f"{label}_table_missing"]
-    issues: List[str] = []
+    issues: list[str] = []
     if stat.get("count", 0) <= 0:
         issues.append(f"{label}_missing")
     if stat.get("stale"):
@@ -250,17 +249,17 @@ def compile_report(
     window_start: datetime,
     window_end: datetime,
     window_days: int,
-    work_item_rows: Iterable[Dict[str, Any]],
-    transition_rows: Iterable[Dict[str, Any]],
-    repo_rows: Iterable[Dict[str, Any]],
-    git_rows_by_table: Dict[str, Iterable[Dict[str, Any]]],
-    present_tables: Dict[str, bool],
-) -> Dict[str, Any]:
+    work_item_rows: Iterable[dict[str, Any]],
+    transition_rows: Iterable[dict[str, Any]],
+    repo_rows: Iterable[dict[str, Any]],
+    git_rows_by_table: dict[str, Iterable[dict[str, Any]]],
+    present_tables: dict[str, bool],
+) -> dict[str, Any]:
     repo_sources = build_repo_source_map(repo_rows)
     work_items = _build_stats_by_provider(work_item_rows, window_start)
     transitions = _build_stats_by_provider(transition_rows, window_start)
 
-    git_sources: Dict[str, Dict[str, Optional[Dict[str, Any]]]] = {
+    git_sources: dict[str, dict[str, dict[str, Any] | None]] = {
         source: {} for source in SOURCE_KEYS
     }
     for table in ALL_GIT_TABLES:
@@ -275,11 +274,11 @@ def compile_report(
                 source, _empty_stat(window_start)
             )
 
-    providers: Dict[str, Dict[str, Any]] = {}
+    providers: dict[str, dict[str, Any]] = {}
     for provider in AUDIT_PROVIDERS:
         wi_stat = work_items.get(provider, _empty_stat(window_start))
         tr_stat = transitions.get(provider, _empty_stat(window_start))
-        issues: List[str] = []
+        issues: list[str] = []
         wi_ok = _stat_ok(wi_stat)
         tr_ok = _stat_ok(tr_stat)
         if not wi_ok:
@@ -332,8 +331,8 @@ def compile_report(
 
 
 def _query_dicts(
-    client: Any, query: str, parameters: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    client: Any, query: str, parameters: dict[str, Any]
+) -> list[dict[str, Any]]:
     result = client.query(query, parameters=parameters)
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])
@@ -342,7 +341,7 @@ def _query_dicts(
     return [dict(zip(col_names, row)) for row in rows]
 
 
-def _fetch_table_presence(client: Any, tables: Iterable[str]) -> Dict[str, bool]:
+def _fetch_table_presence(client: Any, tables: Iterable[str]) -> dict[str, bool]:
     table_list = list(tables)
     if not table_list:
         return {}
@@ -362,7 +361,7 @@ def _fetch_table_presence(client: Any, tables: Iterable[str]) -> Dict[str, bool]
 
 def run_completeness_audit(
     *, db_url: str, days: int, org_id: str | None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     window_start, window_end = build_window(days)
     params = {
         "start": _naive_utc(window_start),
@@ -380,7 +379,7 @@ def run_completeness_audit(
         }
         present_tables = _fetch_table_presence(client, tables)
 
-        repo_rows: List[Dict[str, Any]] = []
+        repo_rows: list[dict[str, Any]] = []
         if present_tables.get("repos", False):
             repo_rows = _query_dicts(
                 client,
@@ -388,15 +387,15 @@ def run_completeness_audit(
                 {},
             )
 
-        work_item_rows: List[Dict[str, Any]] = []
+        work_item_rows: list[dict[str, Any]] = []
         if present_tables.get("work_items", False):
             work_item_rows = _query_dicts(client, build_work_items_query(), params)
 
-        transition_rows: List[Dict[str, Any]] = []
+        transition_rows: list[dict[str, Any]] = []
         if present_tables.get("work_item_transitions", False):
             transition_rows = _query_dicts(client, build_transitions_query(), params)
 
-        git_rows_by_table: Dict[str, Iterable[Dict[str, Any]]] = {}
+        git_rows_by_table: dict[str, Iterable[dict[str, Any]]] = {}
         if present_tables.get("git_commits", False):
             git_rows_by_table["git_commits"] = _query_dicts(
                 client, build_git_commits_query(), params
@@ -432,7 +431,7 @@ def run_completeness_audit(
         sink.close()
 
 
-def _format_dt(value: Optional[datetime]) -> str:
+def _format_dt(value: datetime | None) -> str:
     if value is None:
         return "-"
     if value.tzinfo is None:
@@ -440,13 +439,13 @@ def _format_dt(value: Optional[datetime]) -> str:
     return value.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _render_table(headers: List[str], rows: List[List[str]]) -> str:
+def _render_table(headers: list[str], rows: list[list[str]]) -> str:
     widths = [len(h) for h in headers]
     for row in rows:
         for idx, cell in enumerate(row):
             widths[idx] = max(widths[idx], len(cell))
 
-    def _row(cells: List[str]) -> str:
+    def _row(cells: list[str]) -> str:
         padded = [cell.ljust(widths[idx]) for idx, cell in enumerate(cells)]
         return f"| {' | '.join(padded)} |"
 
@@ -457,14 +456,14 @@ def _render_table(headers: List[str], rows: List[List[str]]) -> str:
     return "\n".join(lines)
 
 
-def format_completeness_table(report: Dict[str, Any]) -> str:
+def format_completeness_table(report: dict[str, Any]) -> str:
     window = report.get("window") or {}
     days = window.get("days")
     start = _format_dt(window.get("start"))
     end = _format_dt(window.get("end"))
 
     providers = report.get("providers", {})
-    provider_rows: List[List[str]] = []
+    provider_rows: list[list[str]] = []
     for provider in AUDIT_PROVIDERS:
         entry = providers.get(provider, {})
         work_items = entry.get("work_items") or {}
@@ -499,7 +498,7 @@ def format_completeness_table(report: Dict[str, Any]) -> str:
     ]
 
     git_sources = report.get("git_sources", {})
-    git_rows: List[List[str]] = []
+    git_rows: list[list[str]] = []
     for source in SOURCE_KEYS:
         source_entry = git_sources.get(source, {})
 
@@ -558,11 +557,11 @@ def _serialize_report(value: Any) -> Any:
     return value
 
 
-def format_completeness_json(report: Dict[str, Any]) -> str:
+def format_completeness_json(report: dict[str, Any]) -> str:
     return json.dumps(_serialize_report(report), indent=2, sort_keys=True)
 
 
-def completeness_failed(report: Dict[str, Any]) -> bool:
+def completeness_failed(report: dict[str, Any]) -> bool:
     return not bool(report.get("overall_ok"))
 
 

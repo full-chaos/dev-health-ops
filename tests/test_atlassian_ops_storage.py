@@ -1,8 +1,10 @@
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+
 from dev_health_ops.models.atlassian_ops import (
-    AtlassianOpsIncident,
     AtlassianOpsAlert,
+    AtlassianOpsIncident,
     AtlassianOpsSchedule,
 )
 from dev_health_ops.storage import SQLAlchemyStore

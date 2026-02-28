@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List
-
 from ..models.filters import MetricFilter
 from ..models.schemas import Contributor, ExplainResponse
 from ..queries.client import clickhouse_client
@@ -166,7 +164,7 @@ async def build_explain_response(
             scope_params=scope_params,
         )
 
-    driver_models: List[Contributor] = []
+    driver_models: list[Contributor] = []
     for row in drivers:
         raw_value = safe_float(row.get("value"))
         raw_delta = safe_float(row.get("delta_pct"))
@@ -184,7 +182,7 @@ async def build_explain_response(
             )
         )
 
-    contributor_models: List[Contributor] = []
+    contributor_models: list[Contributor] = []
     for row in contributors:
         raw_value = safe_float(row.get("value"))
         contributor_models.append(

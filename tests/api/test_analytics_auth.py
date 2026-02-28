@@ -1,4 +1,5 @@
 """Verify analytics endpoints require authentication (P0 security fix)."""
+
 from __future__ import annotations
 
 import os

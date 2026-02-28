@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import uuid
 import importlib
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,12 +15,12 @@ from dev_health_ops.api.billing.router import router as billing_router
 
 def _subscription_service_cls():
     module = importlib.import_module("dev_health_ops.api.billing.subscription_service")
-    return getattr(module, "SubscriptionService")
+    return module.SubscriptionService
 
 
 def _subscription_models():
     module = importlib.import_module("dev_health_ops.models.subscriptions")
-    return getattr(module, "Subscription"), getattr(module, "SubscriptionEvent")
+    return module.Subscription, module.SubscriptionEvent
 
 
 def _make_stripe_event(event_type: str, event_id: str = "evt_1") -> SimpleNamespace:

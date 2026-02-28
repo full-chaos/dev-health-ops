@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from dev_health_ops.llm.providers.openai import OpenAIProvider

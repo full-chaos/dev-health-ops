@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from dev_health_ops.models.git import GitPullRequest, GitPullRequestReview
 
 
 class PullRequestMixin:
-    async def insert_git_pull_requests(self, pr_data: List[GitPullRequest]) -> None:
+    async def insert_git_pull_requests(self, pr_data: list[GitPullRequest]) -> None:
         if not pr_data:
             return
         synced_at_default = datetime.now(timezone.utc)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in pr_data:
             if isinstance(item, dict):
                 row = {
@@ -39,18 +39,18 @@ class PullRequestMixin:
                 }
             else:
                 row = {
-                    "repo_id": getattr(item, "repo_id"),
-                    "number": getattr(item, "number"),
-                    "title": getattr(item, "title"),
+                    "repo_id": item.repo_id,
+                    "number": item.number,
+                    "title": item.title,
                     "body": getattr(item, "body", None),
-                    "state": getattr(item, "state"),
-                    "author_name": getattr(item, "author_name"),
-                    "author_email": getattr(item, "author_email"),
-                    "created_at": getattr(item, "created_at"),
-                    "merged_at": getattr(item, "merged_at"),
-                    "closed_at": getattr(item, "closed_at"),
-                    "head_branch": getattr(item, "head_branch"),
-                    "base_branch": getattr(item, "base_branch"),
+                    "state": item.state,
+                    "author_name": item.author_name,
+                    "author_email": item.author_email,
+                    "created_at": item.created_at,
+                    "merged_at": item.merged_at,
+                    "closed_at": item.closed_at,
+                    "head_branch": item.head_branch,
+                    "base_branch": item.base_branch,
                     "additions": getattr(item, "additions", None),
                     "deletions": getattr(item, "deletions", None),
                     "changed_files": getattr(item, "changed_files", None),
@@ -94,12 +94,12 @@ class PullRequestMixin:
         )
 
     async def insert_git_pull_request_reviews(
-        self, review_data: List[GitPullRequestReview]
+        self, review_data: list[GitPullRequestReview]
     ) -> None:
         if not review_data:
             return
         synced_at_default = datetime.now(timezone.utc)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in review_data:
             if isinstance(item, dict):
                 row = {
@@ -113,12 +113,12 @@ class PullRequestMixin:
                 }
             else:
                 row = {
-                    "repo_id": getattr(item, "repo_id"),
-                    "number": getattr(item, "number"),
-                    "review_id": getattr(item, "review_id"),
-                    "reviewer": getattr(item, "reviewer"),
-                    "state": getattr(item, "state"),
-                    "submitted_at": getattr(item, "submitted_at"),
+                    "repo_id": item.repo_id,
+                    "number": item.number,
+                    "review_id": item.review_id,
+                    "reviewer": item.reviewer,
+                    "state": item.state,
+                    "submitted_at": item.submitted_at,
                     "last_synced": getattr(item, "last_synced", None)
                     or synced_at_default,
                 }

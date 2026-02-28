@@ -5,8 +5,8 @@ for the GraphQL API and REST endpoints.
 """
 
 from __future__ import annotations
-import contextvars
 
+import contextvars
 import hashlib
 import logging
 import os
@@ -17,7 +17,6 @@ from typing import Any
 
 import jwt
 from jwt.exceptions import InvalidTokenError
-
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +43,7 @@ def get_current_org_id() -> str | None:
 # Tracks the active impersonation session for the current request.
 # Set by ImpersonationMiddleware; read by audit service and permission checks.
 
+
 @dataclass
 class ImpersonationContext:
     target_user_id: str
@@ -53,8 +53,8 @@ class ImpersonationContext:
     is_active: bool = True
 
 
-_impersonation_ctx: contextvars.ContextVar[ImpersonationContext | None] = contextvars.ContextVar(
-    "impersonation_ctx", default=None
+_impersonation_ctx: contextvars.ContextVar[ImpersonationContext | None] = (
+    contextvars.ContextVar("impersonation_ctx", default=None)
 )
 
 
@@ -83,6 +83,7 @@ def is_impersonating() -> bool:
     """Return True if an active impersonation session is set for this request."""
     ctx = _impersonation_ctx.get(None)
     return ctx is not None and ctx.is_active
+
 
 # JWT configuration
 JWT_ALGORITHM = "HS256"

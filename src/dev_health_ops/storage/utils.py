@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 from sqlalchemy.inspection import inspect
 
@@ -19,7 +19,7 @@ def _register_sqlite_datetime_adapters() -> None:
 _register_sqlite_datetime_adapters()
 
 
-def _parse_date_value(value: Any) -> Optional[date]:
+def _parse_date_value(value: Any) -> date | None:
     if value:
         if isinstance(value, date) and not isinstance(value, datetime):
             return value
@@ -32,7 +32,7 @@ def _parse_date_value(value: Any) -> Optional[date]:
     return None
 
 
-def _parse_datetime_value(value: Any) -> Optional[datetime]:
+def _parse_datetime_value(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -50,9 +50,9 @@ def _serialize_value(value: Any) -> Any:
     return value
 
 
-def model_to_dict(model: Any) -> Dict[str, Any]:
+def model_to_dict(model: Any) -> dict[str, Any]:
     mapper = inspect(model.__class__)
-    data: Dict[str, Any] = {}
+    data: dict[str, Any] = {}
     for column in mapper.columns:
         data[column.key] = _serialize_value(getattr(model, column.key))
     return data
@@ -95,7 +95,7 @@ def detect_db_type(conn_string: str) -> str:
     )
 
 
-def resolve_db_type(db_url: str, db_type: Optional[str]) -> str:
+def resolve_db_type(db_url: str, db_type: str | None) -> str:
     if db_type:
         resolved = db_type.lower()
     else:

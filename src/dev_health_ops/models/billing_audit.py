@@ -3,9 +3,9 @@ from __future__ import annotations
 import uuid
 
 import sqlalchemy as sa
-from sqlalchemy import Column, DateTime, ForeignKey, Index, JSON, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Text
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class BillingAuditLog(Base):

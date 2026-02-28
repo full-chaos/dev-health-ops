@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from sqlalchemy import select
 
@@ -8,11 +8,11 @@ from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
 
 
 class TeamMixin:
-    async def insert_teams(self, teams: List[Any]) -> None:
+    async def insert_teams(self, teams: list[Any]) -> None:
         if not teams:
             return
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in teams:
             if isinstance(item, dict):
                 rows.append(item)
@@ -41,11 +41,11 @@ class TeamMixin:
             ],
         )
 
-    async def insert_jira_project_ops_team_links(self, links: List[Any]) -> None:
+    async def insert_jira_project_ops_team_links(self, links: list[Any]) -> None:
         if not links:
             return
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in links:
             if isinstance(item, dict):
                 rows.append(item)
@@ -71,12 +71,12 @@ class TeamMixin:
             ],
         )
 
-    async def get_all_teams(self) -> List[Any]:
+    async def get_all_teams(self) -> list[Any]:
         assert self.session is not None
         result = await self.session.execute(select(Team))
         return list(result.scalars().all())
 
-    async def get_jira_project_ops_team_links(self) -> List[Any]:
+    async def get_jira_project_ops_team_links(self) -> list[Any]:
         assert self.session is not None
         result = await self.session.execute(select(JiraProjectOpsTeamLink))
         return list(result.scalars().all())

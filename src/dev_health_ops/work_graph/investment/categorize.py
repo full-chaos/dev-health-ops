@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List
 
-from dev_health_ops.llm import get_provider, LLMProvider
+from dev_health_ops.llm import LLMProvider, get_provider
 from dev_health_ops.work_graph.investment.llm_schema import (
     EvidenceQuote,
     LLMValidationResult,
@@ -76,14 +75,14 @@ FALLBACK_PRIOR = {
 
 @dataclass(frozen=True)
 class CategorizationOutcome:
-    subcategories: Dict[str, float]
-    evidence_quotes: List[EvidenceQuote]
+    subcategories: dict[str, float]
+    evidence_quotes: list[EvidenceQuote]
     uncertainty: str
     status: str
-    errors: List[str]
+    errors: list[str]
 
 
-def _fallback_distribution() -> Dict[str, float]:
+def _fallback_distribution() -> dict[str, float]:
     return ensure_full_subcategory_vector(FALLBACK_PRIOR)
 
 
@@ -117,7 +116,7 @@ def _build_prompt(source_block: str) -> str:
     return f"{prompt}\n\nSource text (quotes must be exact substrings):\n(EMPTY)"
 
 
-def _build_repair_prompt(errors: List[str], source_block: str) -> str:
+def _build_repair_prompt(errors: list[str], source_block: str) -> str:
     errors_text = "\n".join(f"- {err}" for err in errors)
     repair = REPAIR_PROMPT.format(errors=errors_text)
     return f"{repair}\n\n{_build_prompt(source_block)}"

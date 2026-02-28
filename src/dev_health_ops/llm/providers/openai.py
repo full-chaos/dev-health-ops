@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def categorization_json_schema() -> dict[str, Any]:
 @dataclass(frozen=True)
 class OpenAIProviderConfig:
     api_key: str
-    base_url: Optional[str]
+    base_url: str | None
     model: str
     max_output_tokens: int
     temperature: float
@@ -143,7 +143,7 @@ class OpenAIProvider:
     def __init__(
         self,
         api_key: str,
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
         model: str = "gpt-5-mini",
         max_completion_tokens: int = 4096,
         temperature: float = 0.3,
@@ -183,7 +183,7 @@ def openai_provider_class_for(model: str) -> type[_OpenAIProviderBase]:
 class _OpenAIProviderBase:
     def __init__(self, cfg: OpenAIProviderConfig) -> None:
         self.cfg = cfg
-        self._client: Optional[Any] = None
+        self._client: Any | None = None
 
     def _get_client(self) -> Any:
         if self._client is None:

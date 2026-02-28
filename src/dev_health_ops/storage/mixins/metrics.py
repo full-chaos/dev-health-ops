@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, List, Optional
+from typing import Any
 
 from sqlalchemy import (
     Column,
@@ -29,9 +29,9 @@ class MetricsMixin:
         self,
         *,
         as_of_day: date,
-        repo_id: Optional[uuid.UUID] = None,
-        repo_name: Optional[str] = None,
-    ) -> List[Any]:
+        repo_id: uuid.UUID | None = None,
+        repo_name: str | None = None,
+    ) -> list[Any]:
         assert self.session is not None
         resolved_repo_id = repo_id
         if resolved_repo_id is None and repo_name:
@@ -103,7 +103,7 @@ class MetricsMixin:
         res = await self.session.execute(query)
         rows = res.fetchall()
 
-        snapshots: List[FileComplexitySnapshot] = []
+        snapshots: list[FileComplexitySnapshot] = []
         for r in rows:
             r_id = uuid.UUID(str(r[0]))
             as_of_day_val = _parse_date_value(r[1])
@@ -136,8 +136,8 @@ class MetricsMixin:
         self,
         *,
         day: date,
-        provider: Optional[str] = None,
-    ) -> List[Any]:
+        provider: str | None = None,
+    ) -> list[Any]:
         assert self.session is not None
         table = Table(
             "work_item_user_metrics_daily",
@@ -178,7 +178,7 @@ class MetricsMixin:
         res = await self.session.execute(query)
         rows = res.fetchall()
 
-        out: List[WorkItemUserMetricsDailyRecord] = []
+        out: list[WorkItemUserMetricsDailyRecord] = []
         for r in rows:
             day_val = _parse_date_value(r[0])
             if day_val is None:

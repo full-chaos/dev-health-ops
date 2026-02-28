@@ -9,14 +9,13 @@ These tasks wrap the existing metrics jobs to enable async execution:
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
-
-import fnmatch
+from typing import Any
 
 from celery import chord, group
 
@@ -1122,11 +1121,11 @@ def dispatch_scheduled_metrics(self) -> dict:
 @celery_app.task(bind=True, max_retries=3, queue="metrics")
 def run_daily_metrics(
     self,
-    db_url: Optional[str] = None,
-    day: Optional[str] = None,
+    db_url: str | None = None,
+    day: str | None = None,
     backfill_days: int = 1,
-    repo_id: Optional[str] = None,
-    repo_name: Optional[str] = None,
+    repo_id: str | None = None,
+    repo_name: str | None = None,
     sink: str = "auto",
     provider: str = "auto",
 ) -> dict:
@@ -1189,8 +1188,8 @@ def run_daily_metrics(
 def dispatch_daily_metrics_partitioned(
     self,
     org_id: str | None = None,
-    db_url: Optional[str] = None,
-    day: Optional[str] = None,
+    db_url: str | None = None,
+    day: str | None = None,
     backfill_days: int = 1,
     batch_size: int = 5,
     sink: str = "auto",
@@ -1289,7 +1288,7 @@ def run_daily_metrics_batch(
     repo_ids: list[str],
     day: str,
     org_id: str | None = None,
-    db_url: Optional[str] = None,
+    db_url: str | None = None,
     sink: str = "auto",
     provider: str = "auto",
 ) -> dict:
@@ -1400,7 +1399,7 @@ def run_daily_metrics_finalize_task(
     batch_results: list,
     day: str,
     org_id: str | None = None,
-    db_url: Optional[str] = None,
+    db_url: str | None = None,
     sink: str = "auto",
 ) -> dict:
     """Chord callback: finalize daily metrics after all batches complete.
@@ -1520,14 +1519,14 @@ def _invalidate_sync_cache(sync_type: str, org_id: str) -> None:
 @celery_app.task(bind=True, max_retries=3, queue="metrics")
 def run_complexity_job(
     self,
-    db_url: Optional[str] = None,
-    day: Optional[str] = None,
+    db_url: str | None = None,
+    day: str | None = None,
     backfill_days: int = 1,
-    repo_id: Optional[str] = None,
-    search_pattern: Optional[str] = None,
-    language_globs: Optional[list[str]] = None,
-    exclude_globs: Optional[list[str]] = None,
-    max_files: Optional[int] = None,
+    repo_id: str | None = None,
+    search_pattern: str | None = None,
+    language_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
+    max_files: int | None = None,
 ) -> dict:
     """
     Compute code complexity metrics from ClickHouse git_files/git_blame.
@@ -1586,7 +1585,7 @@ def run_complexity_job(
 @celery_app.task(bind=True, max_retries=3, queue="sync")
 def run_work_items_sync(
     self,
-    db_url: Optional[str] = None,
+    db_url: str | None = None,
     provider: str = "auto",
     since_days: int = 30,
 ) -> dict:
@@ -1793,13 +1792,13 @@ def sync_teams_to_analytics(self, org_id: str | None = None) -> dict:
 @celery_app.task(bind=True, max_retries=3, queue="metrics")
 def run_dora_metrics(
     self,
-    db_url: Optional[str] = None,
-    day: Optional[str] = None,
+    db_url: str | None = None,
+    day: str | None = None,
     backfill_days: int = 1,
-    repo_id: Optional[str] = None,
-    repo_name: Optional[str] = None,
+    repo_id: str | None = None,
+    repo_name: str | None = None,
     sink: str = "auto",
-    metrics: Optional[str] = None,
+    metrics: str | None = None,
     interval: str = "daily",
 ) -> dict:
     """
@@ -1856,10 +1855,10 @@ def run_dora_metrics(
 @celery_app.task(bind=True, max_retries=3, queue="metrics")
 def run_work_graph_build(
     self,
-    db_url: Optional[str] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    repo_id: Optional[str] = None,
+    db_url: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    repo_id: str | None = None,
     heuristic_window: int = 7,
     heuristic_confidence: float = 0.3,
 ) -> dict:
@@ -1925,14 +1924,14 @@ def run_work_graph_build(
 @celery_app.task(bind=True, max_retries=2, queue="metrics")
 def run_investment_materialize(
     self,
-    db_url: Optional[str] = None,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
+    db_url: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     window_days: int = 30,
-    repo_ids: Optional[list[str]] = None,
-    team_ids: Optional[list[str]] = None,
+    repo_ids: list[str] | None = None,
+    team_ids: list[str] | None = None,
     llm_provider: str = "auto",
-    llm_model: Optional[str] = None,
+    llm_model: str | None = None,
     force: bool = False,
 ) -> dict:
     """Materialize investment distributions from work graph.
@@ -1951,11 +1950,12 @@ def run_investment_materialize(
     Returns:
         dict with materialization status and stats
     """
+    from datetime import time as dt_time
+
     from dev_health_ops.work_graph.investment.materialize import (
         MaterializeConfig,
         materialize_investments,
     )
-    from datetime import time as dt_time
 
     db_url = db_url or _get_db_url()
     now = datetime.now(timezone.utc)
@@ -2010,11 +2010,11 @@ def run_investment_materialize(
 @celery_app.task(bind=True, max_retries=2, queue="metrics")
 def run_capacity_forecast_job(
     self,
-    db_url: Optional[str] = None,
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
-    target_items: Optional[int] = None,
-    target_date: Optional[str] = None,
+    db_url: str | None = None,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
+    target_items: int | None = None,
+    target_date: str | None = None,
     history_days: int = 90,
     simulations: int = 10000,
     all_teams: bool = False,
@@ -2086,7 +2086,6 @@ def health_check(self) -> dict:
     }
 
 
-
 @celery_app.task(bind=True, max_retries=3, queue="webhooks")
 def send_billing_notification(
     self,
@@ -2127,8 +2126,8 @@ def send_billing_notification(
     from dev_health_ops.api.services.billing_emails import (
         send_invoice_receipt,
         send_payment_failed,
-        send_subscription_changed,
         send_subscription_cancelled,
+        send_subscription_changed,
     )
 
     dispatch = {
@@ -2162,7 +2161,7 @@ def send_billing_notification(
             self.max_retries + 1,
             exc,
         )
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+        raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
 
 
 @celery_app.task(bind=True, max_retries=3, queue="webhooks")
@@ -2170,10 +2169,10 @@ def process_webhook_event(
     self,
     provider: str,
     event_type: str,
-    delivery_id: Optional[str] = None,
-    payload: Optional[dict] = None,
-    org_id: Optional[str] = None,
-    repo_name: Optional[str] = None,
+    delivery_id: str | None = None,
+    payload: dict | None = None,
+    org_id: str | None = None,
+    repo_name: str | None = None,
 ) -> dict:
     """
     Process a webhook event asynchronously.
@@ -2293,7 +2292,7 @@ def _process_github_event(
 
     # Import specialized sync processors
     from dev_health_ops.processors.github import process_github_repo
-    from dev_health_ops.storage import run_with_store, resolve_db_type
+    from dev_health_ops.storage import resolve_db_type, run_with_store
 
     db_url = _get_db_url()
     db_type = resolve_db_type(db_url, None)
@@ -2386,7 +2385,7 @@ def _process_gitlab_event(
         return {"processed": False, "reason": "empty_payload"}
 
     from dev_health_ops.processors.gitlab import process_gitlab_project
-    from dev_health_ops.storage import run_with_store, resolve_db_type
+    from dev_health_ops.storage import resolve_db_type, run_with_store
 
     db_url = _get_db_url()
     db_type = resolve_db_type(db_url, None)

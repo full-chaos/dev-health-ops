@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -16,7 +16,7 @@ from ..queries.flame import (
 from ..queries.scopes import parse_uuid
 
 
-def _now_like(reference: Optional[datetime]) -> datetime:
+def _now_like(reference: datetime | None) -> datetime:
     now = datetime.now(timezone.utc)
     if reference and reference.tzinfo is not None:
         return now
@@ -26,13 +26,13 @@ def _now_like(reference: Optional[datetime]) -> datetime:
 def _frame(
     *,
     frame_id: str,
-    parent_id: Optional[str],
+    parent_id: str | None,
     label: str,
-    start: Optional[datetime],
-    end: Optional[datetime],
+    start: datetime | None,
+    end: datetime | None,
     state: str,
     category: str,
-) -> Optional[FlameFrame]:
+) -> FlameFrame | None:
     if start is None or end is None:
         return None
     if end <= start:
@@ -48,7 +48,7 @@ def _frame(
     )
 
 
-def _parse_repo_entity(entity_id: str) -> Tuple[str, str]:
+def _parse_repo_entity(entity_id: str) -> tuple[str, str]:
     if ":" not in entity_id:
         raise HTTPException(
             status_code=400, detail="Entity id must include repo_id prefix"
@@ -61,7 +61,7 @@ def _parse_repo_entity(entity_id: str) -> Tuple[str, str]:
     return repo_id, item_id
 
 
-def validate_flame_frames(timeline: FlameTimeline, frames: List[FlameFrame]) -> bool:
+def validate_flame_frames(timeline: FlameTimeline, frames: list[FlameFrame]) -> bool:
     if not frames:
         return False
     top_level = [frame for frame in frames if frame.parent_id is None]
@@ -82,17 +82,17 @@ def validate_flame_frames(timeline: FlameTimeline, frames: List[FlameFrame]) -> 
     return current_end >= timeline.end
 
 
-def _review_state(value: Optional[str]) -> str:
+def _review_state(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
 def _rework_windows(
-    reviews: List[Dict[str, Any]],
+    reviews: list[dict[str, Any]],
     *,
     review_start: datetime,
     review_end: datetime,
-) -> List[Tuple[datetime, datetime]]:
-    windows: List[Tuple[datetime, datetime]] = []
+) -> list[tuple[datetime, datetime]]:
+    windows: list[tuple[datetime, datetime]] = []
     if not reviews:
         return windows
 
@@ -161,7 +161,7 @@ async def build_flame_response(
                 raise HTTPException(status_code=404, detail="PR timeline unavailable")
 
             root_id = f"pr:{repo_id}:{number}"
-            frames: List[FlameFrame] = []
+            frames: list[FlameFrame] = []
             root = _frame(
                 frame_id=root_id,
                 parent_id=None,
@@ -241,7 +241,7 @@ async def build_flame_response(
             end = issue.get("completed_at") or _now_like(start)
 
             root_id = f"issue:{entity_id}"
-            frames: List[FlameFrame] = []
+            frames: list[FlameFrame] = []
             root = _frame(
                 frame_id=root_id,
                 parent_id=None,
@@ -320,7 +320,7 @@ async def build_flame_response(
             )
 
             root_id = f"deploy:{repo_id}:{deployment_id}"
-            frames: List[FlameFrame] = []
+            frames: list[FlameFrame] = []
             root = _frame(
                 frame_id=root_id,
                 parent_id=None,

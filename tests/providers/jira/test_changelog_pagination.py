@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from atlassian import JiraChangelogEvent, JiraChangelogItem, JiraUser
+
 from dev_health_ops.providers.jira.normalize import (
     canonical_changelog_to_transitions,
 )

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Optional, Sequence, Tuple, TypedDict
+from typing import TypedDict
 
 from dev_health_ops.metrics.schemas import (
     WorkItemCycleTimeRecord,
@@ -16,10 +18,9 @@ from dev_health_ops.providers.teams import (
     normalize_team_name,
 )
 from dev_health_ops.utils.datetime import to_utc
-import logging
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
@@ -43,8 +44,8 @@ def _percentile(values: Sequence[float], percentile: float) -> float:
 
 
 def _resolve_team(
-    team_resolver: Optional[TeamResolver], identity: Optional[str]
-) -> Tuple[Optional[str], Optional[str]]:
+    team_resolver: TeamResolver | None, identity: str | None
+) -> tuple[str | None, str | None]:
     if team_resolver is None:
         return None, None
     return team_resolver.resolve(identity)
@@ -61,8 +62,8 @@ WAIT_STATUSES = {
 
 
 def _calculate_flow_breakdown(
-    item: WorkItem, transitions: List[WorkItemStatusTransition]
-) -> Tuple[float, float]:
+    item: WorkItem, transitions: list[WorkItemStatusTransition]
+) -> tuple[float, float]:
     if not item.started_at or not item.completed_at:
         return 0.0, 0.0
 
@@ -141,9 +142,9 @@ class GroupBucket(TypedDict):
     items_completed_unassigned: int
     wip_count: int
     wip_unassigned: int
-    wip_age_hours: List[float]
-    lead_hours: List[float]
-    cycle_hours: List[float]
+    wip_age_hours: list[float]
+    lead_hours: list[float]
+    cycle_hours: list[float]
     bug_completed: int
     story_points_completed: float
     new_bugs: int
@@ -157,7 +158,7 @@ class UserBucket(TypedDict):
     items_started: int
     items_completed: int
     wip_count: int
-    cycle_hours: List[float]
+    cycle_hours: list[float]
 
 
 def compute_work_item_metrics_daily(
@@ -166,12 +167,12 @@ def compute_work_item_metrics_daily(
     work_items: Sequence[WorkItem],
     transitions: Sequence[WorkItemStatusTransition],
     computed_at: datetime,
-    team_resolver: Optional[TeamResolver] = None,
-    project_key_resolver: Optional[ProjectKeyTeamResolver] = None,
-) -> Tuple[
-    List[WorkItemMetricsDailyRecord],
-    List[WorkItemUserMetricsDailyRecord],
-    List[WorkItemCycleTimeRecord],
+    team_resolver: TeamResolver | None = None,
+    project_key_resolver: ProjectKeyTeamResolver | None = None,
+) -> tuple[
+    list[WorkItemMetricsDailyRecord],
+    list[WorkItemUserMetricsDailyRecord],
+    list[WorkItemCycleTimeRecord],
 ]:
     """
     Compute work tracking metrics for a single UTC day.
@@ -188,13 +189,13 @@ def compute_work_item_metrics_daily(
     computed_at_utc = to_utc(computed_at)
 
     # Aggregations keyed by (provider, work_scope_id, team_id).
-    by_group: Dict[Tuple[str, str, Optional[str]], GroupBucket] = {}
-    by_user: Dict[Tuple[str, str, str, Optional[str]], UserBucket] = {}
+    by_group: dict[tuple[str, str, str | None], GroupBucket] = {}
+    by_user: dict[tuple[str, str, str, str | None], UserBucket] = {}
 
-    cycle_time_records: List[WorkItemCycleTimeRecord] = []
+    cycle_time_records: list[WorkItemCycleTimeRecord] = []
 
     # Pre-index transitions by work_item_id for faster lookup
-    transitions_by_item: Dict[str, List[WorkItemStatusTransition]] = {}
+    transitions_by_item: dict[str, list[WorkItemStatusTransition]] = {}
     for t in transitions:
         transitions_by_item.setdefault(t.work_item_id, []).append(t)
 
@@ -399,7 +400,7 @@ def compute_work_item_metrics_daily(
             if ub is not None:
                 ub["wip_count"] += 1
 
-    group_records: List[WorkItemMetricsDailyRecord] = []
+    group_records: list[WorkItemMetricsDailyRecord] = []
     for (provider, work_scope_id, team_id), bucket in sorted(
         by_group.items(), key=lambda kv: (kv[0][0], kv[0][1], str(kv[0][2] or ""))
     ):
@@ -471,7 +472,7 @@ def compute_work_item_metrics_daily(
             )
         )
 
-    user_records: List[WorkItemUserMetricsDailyRecord] = []
+    user_records: list[WorkItemUserMetricsDailyRecord] = []
     for (provider, work_scope_id, user_identity, team_id), bucket in sorted(
         by_user.items(),
         key=lambda kv: (kv[0][0], kv[0][1], kv[0][2], str(kv[0][3] or "")),

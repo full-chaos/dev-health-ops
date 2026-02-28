@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import HTTPException, Request
 from strawberry.fastapi import GraphQLRouter
@@ -13,16 +13,15 @@ from .context import GraphQLContext, build_context
 from .persisted import get_schema_version
 from .schema import schema
 
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_CLICKHOUSE_URI = "clickhouse://localhost:8123/default"
 
 # Global cache instance for cross-request caching
-_graphql_cache: Optional[Any] = None
+_graphql_cache: Any | None = None
 
 
-def _get_cache() -> Optional[Any]:
+def _get_cache() -> Any | None:
     """Get or create the shared cache instance."""
     global _graphql_cache
     if _graphql_cache is None:
@@ -87,8 +86,10 @@ async def get_context(request: Request) -> GraphQLContext:
     # --- Build context -------------------------------------------------------
     client = None
     try:
-        from dev_health_ops.api.queries.client import get_global_client
         import asyncio
+
+        from dev_health_ops.api.queries.client import get_global_client
+
         logger.debug("Getting ClickHouse client for %s", db_url)
         client = await asyncio.wait_for(get_global_client(db_url), timeout=5.0)
     except Exception as e:
@@ -106,7 +107,7 @@ async def get_context(request: Request) -> GraphQLContext:
 
 
 def create_graphql_app(
-    db_url: Optional[str] = None,
+    db_url: str | None = None,
 ) -> GraphQLRouter[GraphQLContext, None]:
     """
     Create the GraphQL router for the analytics API.

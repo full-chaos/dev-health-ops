@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Sequence,
-    Tuple,
 )
 
 from dev_health_ops.metrics.schemas import (
@@ -46,9 +42,9 @@ class DataLoader(Protocol):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[CommitStatRow], List[PullRequestRow], List[PullRequestReviewRow]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[CommitStatRow], list[PullRequestRow], list[PullRequestReviewRow]]:
         """Load commit stats, pull requests, and reviews."""
         raise NotImplementedError()
 
@@ -56,9 +52,9 @@ class DataLoader(Protocol):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[Any], List[Any]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[Any], list[Any]]:
         """Load work items and transitions."""
         raise NotImplementedError()
 
@@ -66,9 +62,9 @@ class DataLoader(Protocol):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[PipelineRunRow], List[DeploymentRow]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[PipelineRunRow], list[DeploymentRow]]:
         """Load CI pipeline runs and deployments."""
         raise NotImplementedError()
 
@@ -76,9 +72,9 @@ class DataLoader(Protocol):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> List[IncidentRow]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> list[IncidentRow]:
         """Load incident records."""
         raise NotImplementedError()
 
@@ -86,7 +82,7 @@ class DataLoader(Protocol):
         self,
         repo_id: uuid.UUID,
         as_of: datetime,
-    ) -> Dict[uuid.UUID, float]:
+    ) -> dict[uuid.UUID, float]:
         """Load blame concentration stats for code ownership metrics."""
         raise NotImplementedError()
 
@@ -94,7 +90,7 @@ class DataLoader(Protocol):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsIncident]:
+    ) -> list[AtlassianOpsIncident]:
         """Load Atlassian Ops incidents."""
         raise NotImplementedError()
 
@@ -102,26 +98,26 @@ class DataLoader(Protocol):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsAlert]:
+    ) -> list[AtlassianOpsAlert]:
         """Load Atlassian Ops alerts."""
         raise NotImplementedError()
 
     async def load_atlassian_ops_schedules(
         self,
-    ) -> List[AtlassianOpsSchedule]:
+    ) -> list[AtlassianOpsSchedule]:
         """Load Atlassian Ops schedules."""
         raise NotImplementedError()
 
     async def load_jira_project_ops_team_links(
         self,
-    ) -> List[JiraProjectOpsTeamLink]:
+    ) -> list[JiraProjectOpsTeamLink]:
         """Load Jira project to Ops team mappings."""
         raise NotImplementedError()
 
     async def load_user_metrics_rolling_30d(
         self,
         as_of: date,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Load 30-day rolling user metrics for IC landscape."""
         raise NotImplementedError()
 
@@ -138,7 +134,7 @@ __all__ = [
 ]
 
 
-def parse_uuid(value: Any) -> Optional[uuid.UUID]:
+def parse_uuid(value: Any) -> uuid.UUID | None:
     """Parse a value into a UUID, returning None on failure."""
     if value is None:
         return None
@@ -162,12 +158,12 @@ def safe_json_loads(value: Any) -> Any:
         return None
 
 
-def chunked(values: Sequence[str], chunk_size: int) -> List[List[str]]:
+def chunked(values: Sequence[str], chunk_size: int) -> list[list[str]]:
     """Split a sequence into chunks of the given size."""
     return [list(values[i : i + chunk_size]) for i in range(0, len(values), chunk_size)]
 
 
-def to_dataclass(cls: Any, row_map: Dict[str, Any]) -> Any:
+def to_dataclass(cls: Any, row_map: dict[str, Any]) -> Any:
     """Instantiate a dataclass from a dict, filtering unknown fields and parsing datetimes."""
     import dataclasses
 
@@ -200,8 +196,8 @@ def to_dataclass(cls: Any, row_map: Dict[str, Any]) -> Any:
 
 
 def clickhouse_query_dicts(
-    client: Any, query: str, parameters: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    client: Any, query: str, parameters: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Execute a ClickHouse query and return results as list of dicts."""
     result = client.query(query, parameters=parameters)
     col_names = list(getattr(result, "column_names", []) or [])

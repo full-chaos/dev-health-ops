@@ -5,10 +5,9 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import dataclass
-from typing import Any, Generic, List, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 import strawberry
-
 
 T = TypeVar("T")
 
@@ -52,7 +51,7 @@ def offset_cursor(offset: int) -> str:
     return encode_cursor({"offset": offset})
 
 
-def get_offset_from_cursor(cursor: Optional[str]) -> int:
+def get_offset_from_cursor(cursor: str | None) -> int:
     """Extract offset from cursor, defaulting to 0."""
     if cursor is None:
         return 0
@@ -70,8 +69,8 @@ class PageInfo:
 
     has_next_page: bool
     has_previous_page: bool
-    start_cursor: Optional[str] = None
-    end_cursor: Optional[str] = None
+    start_cursor: str | None = None
+    end_cursor: str | None = None
 
 
 @strawberry.input
@@ -83,10 +82,10 @@ class PaginationInput:
     Only one direction should be used at a time.
     """
 
-    first: Optional[int] = None
-    after: Optional[str] = None
-    last: Optional[int] = None
-    before: Optional[str] = None
+    first: int | None = None
+    after: str | None = None
+    last: int | None = None
+    before: str | None = None
 
 
 @dataclass
@@ -99,8 +98,8 @@ class PaginationParams:
 
     @classmethod
     def from_input(
-        cls, pagination: Optional[PaginationInput], default_limit: int = 20
-    ) -> "PaginationParams":
+        cls, pagination: PaginationInput | None, default_limit: int = 20
+    ) -> PaginationParams:
         """
         Parse pagination input into query parameters.
 
@@ -133,7 +132,7 @@ class PaginationParams:
 
 
 def create_page_info(
-    items: List[Any],
+    items: list[Any],
     total_count: int,
     params: PaginationParams,
 ) -> PageInfo:
@@ -167,7 +166,7 @@ def create_page_info(
     )
 
 
-def make_edge(node: T, index: int, base_offset: int) -> "Edge[T]":
+def make_edge(node: T, index: int, base_offset: int) -> Edge[T]:
     """
     Create an edge for a connection.
 
@@ -192,10 +191,10 @@ class Edge(Generic[T]):
 
 
 def create_connection(
-    items: List[T],
+    items: list[T],
     total_count: int,
     params: PaginationParams,
-) -> "Connection[T]":
+) -> Connection[T]:
     """
     Create a Relay-style connection from query results.
 
@@ -225,7 +224,7 @@ class Connection(Generic[T]):
     Provides edges (with cursors), pagination info, and total count.
     """
 
-    edges: List[Edge[T]]
+    edges: list[Edge[T]]
     page_info: PageInfo
     total_count: int
 
@@ -237,7 +236,7 @@ class Connection(Generic[T]):
 class BreakdownItemEdge:
     """Edge for breakdown item connection."""
 
-    node: "BreakdownItemNode"
+    node: BreakdownItemNode
     cursor: str
 
 
@@ -253,7 +252,7 @@ class BreakdownItemNode:
 class BreakdownConnection:
     """Paginated connection for breakdown results."""
 
-    edges: List[BreakdownItemEdge]
+    edges: list[BreakdownItemEdge]
     page_info: PageInfo
     total_count: int
     dimension: str
@@ -264,7 +263,7 @@ class BreakdownConnection:
 class CatalogValueEdge:
     """Edge for catalog value connection."""
 
-    node: "CatalogValueNode"
+    node: CatalogValueNode
     cursor: str
 
 
@@ -280,6 +279,6 @@ class CatalogValueNode:
 class CatalogValueConnection:
     """Paginated connection for catalog dimension values."""
 
-    edges: List[CatalogValueEdge]
+    edges: list[CatalogValueEdge]
     page_info: PageInfo
     total_count: int

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,36 +9,36 @@ from pydantic import BaseModel, Field
 class TimeFilter(BaseModel):
     range_days: int = 14
     compare_days: int = 14
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 class ScopeFilter(BaseModel):
     level: Literal["org", "team", "repo", "service", "developer"] = "org"
-    ids: List[str] = Field(default_factory=list)
+    ids: list[str] = Field(default_factory=list)
 
 
 class WhoFilter(BaseModel):
-    developers: Optional[List[str]] = None
-    roles: Optional[List[str]] = None
+    developers: list[str] | None = None
+    roles: list[str] | None = None
 
 
 class WhatFilter(BaseModel):
-    repos: Optional[List[str]] = None
-    services: Optional[List[str]] = None
-    artifacts: Optional[List[Literal["pr", "issue", "commit", "pipeline"]]] = None
+    repos: list[str] | None = None
+    services: list[str] | None = None
+    artifacts: list[Literal["pr", "issue", "commit", "pipeline"]] | None = None
 
 
 class WhyFilter(BaseModel):
-    work_category: Optional[List[str]] = None
-    issue_type: Optional[List[str]] = None
-    initiative: Optional[List[str]] = None
+    work_category: list[str] | None = None
+    issue_type: list[str] | None = None
+    initiative: list[str] | None = None
 
 
 class HowFilter(BaseModel):
-    flow_stage: Optional[List[str]] = None
-    blocked: Optional[bool] = None
-    wip_state: Optional[List[str]] = None
+    flow_stage: list[str] | None = None
+    blocked: bool | None = None
+    wip_state: list[str] | None = None
 
 
 class MetricFilter(BaseModel):
@@ -60,56 +60,57 @@ class ExplainRequest(BaseModel):
 
 
 class InvestmentExplainRequest(BaseModel):
-    theme: Optional[str] = None
-    subcategory: Optional[str] = None
+    theme: str | None = None
+    subcategory: str | None = None
     filters: MetricFilter = Field(default_factory=MetricFilter)
-    llm_model: Optional[str] = None
+    llm_model: str | None = None
 
 
 class InvestmentFlowRequest(BaseModel):
     filters: MetricFilter = Field(default_factory=MetricFilter)
-    theme: Optional[str] = None
-    flow_mode: Optional[
+    theme: str | None = None
+    flow_mode: (
         Literal[
             "team_category_repo",
             "team_subcategory_repo",
             "team_category_subcategory_repo",
         ]
-    ] = None
-    drill_category: Optional[str] = None
+        | None
+    ) = None
+    drill_category: str | None = None
     top_n_repos: int = 12
 
 
 class DrilldownRequest(BaseModel):
     filters: MetricFilter
-    sort: Optional[str] = None
-    limit: Optional[int] = None
+    sort: str | None = None
+    limit: int | None = None
 
 
 class WorkUnitRequest(BaseModel):
     filters: MetricFilter
-    limit: Optional[int] = None
-    include_textual: Optional[bool] = None
+    limit: int | None = None
+    include_textual: bool | None = None
 
 
 class FilterOptionsResponse(BaseModel):
-    teams: List[str]
-    repos: List[str]
-    services: List[str]
-    developers: List[str]
-    work_category: List[str]
-    issue_type: List[str]
-    flow_stage: List[str]
+    teams: list[str]
+    repos: list[str]
+    services: list[str]
+    developers: list[str]
+    work_category: list[str]
+    issue_type: list[str]
+    flow_stage: list[str]
 
 
 class SankeyContext(BaseModel):
-    entity_id: Optional[str] = None
-    entity_label: Optional[str] = None
+    entity_id: str | None = None
+    entity_label: str | None = None
 
 
 class SankeyRequest(BaseModel):
     mode: Literal["investment", "expense", "state", "hotspot"]
     filters: MetricFilter
-    context: Optional[SankeyContext] = None
-    window_start: Optional[date] = None
-    window_end: Optional[date] = None
+    context: SankeyContext | None = None
+    window_start: date | None = None
+    window_end: date | None = None

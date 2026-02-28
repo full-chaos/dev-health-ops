@@ -11,7 +11,7 @@ No real database — the SQLAlchemy session is mocked.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

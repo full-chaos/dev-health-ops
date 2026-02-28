@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..sql.compiler import CatalogValuesRequest, compile_catalog_values
 from ..sql.validate import Dimension
@@ -21,8 +21,8 @@ async def load_dimension_values(
     org_id: str,
     limit: int = 100,
     timeout: int = 30,
-    filters: Optional["FilterInput"] = None,  # NEW: Filter support
-) -> List[Dict[str, Any]]:
+    filters: FilterInput | None = None,  # NEW: Filter support
+) -> list[dict[str, Any]]:
     """
     Load distinct values for a dimension.
 
@@ -65,7 +65,7 @@ async def load_dimension_values(
         return []
 
 
-def get_dimension_descriptions() -> Dict[str, str]:
+def get_dimension_descriptions() -> dict[str, str]:
     """Get descriptions for all available dimensions."""
     return {
         Dimension.TEAM.value: "Team identifier for grouping work",
@@ -77,7 +77,7 @@ def get_dimension_descriptions() -> Dict[str, str]:
     }
 
 
-def get_measure_descriptions() -> Dict[str, str]:
+def get_measure_descriptions() -> dict[str, str]:
     """Get descriptions for all available measures."""
     from ..sql.validate import Measure
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -16,7 +17,11 @@ from dev_health_ops.models.work_items import (
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import (
     parse_iso_datetime as _parse_iso,
+)
+from dev_health_ops.providers.normalize_common import (
     priority_from_labels as _priority_from_labels,
+)
+from dev_health_ops.providers.normalize_common import (
     to_utc as _to_utc,
 )
 from dev_health_ops.providers.status_mapping import StatusMapping
@@ -34,11 +39,11 @@ def gitlab_issue_to_work_item(
     *,
     issue: Any,
     project_full_path: str,
-    repo_id: Optional[Any],
+    repo_id: Any | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    label_events: Optional[Sequence[Any]] = None,
-) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    label_events: Sequence[Any] | None = None,
+) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     iid = int(_get(issue, "iid") or 0)
     work_item_id = f"gitlab:{project_full_path}#{iid}"
 
@@ -66,7 +71,7 @@ def gitlab_issue_to_work_item(
         labels=labels,
     )
 
-    assignees: List[str] = []
+    assignees: list[str] = []
     for a in _get(issue, "assignees") or []:
         assignees.append(
             identity.resolve(
@@ -90,7 +95,7 @@ def gitlab_issue_to_work_item(
     url = _get(issue, "web_url") or _get(issue, "url")
 
     # Best-effort transitions from label events + state.
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
     started_at = None
     completed_at = None
 
@@ -186,11 +191,11 @@ def gitlab_mr_to_work_item(
     *,
     mr: Any,
     project_full_path: str,
-    repo_id: Optional[Any],
+    repo_id: Any | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    state_events: Optional[Sequence[Any]] = None,
-) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    state_events: Sequence[Any] | None = None,
+) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     """
     Convert a GitLab merge request to a normalized WorkItem.
 
@@ -227,7 +232,7 @@ def gitlab_mr_to_work_item(
     # Priority from labels
     priority_raw, service_class = _priority_from_labels(labels)
 
-    assignees: List[str] = []
+    assignees: list[str] = []
     for a in _get(mr, "assignees") or []:
         assignees.append(
             identity.resolve(
@@ -251,7 +256,7 @@ def gitlab_mr_to_work_item(
     url = _get(mr, "web_url") or _get(mr, "url")
 
     # Transitions from state events
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
     started_at = created_at  # MRs start when opened
     completed_at = merged_at or closed_at
 
@@ -271,9 +276,7 @@ def gitlab_mr_to_work_item(
                 to_status = "done"
             elif ev_state == "closed":
                 to_status = "canceled"
-            elif ev_state == "opened":
-                to_status = "in_progress"
-            elif ev_state == "reopened":
+            elif ev_state == "opened" or ev_state == "reopened":
                 to_status = "in_progress"
             else:
                 continue
@@ -343,13 +346,13 @@ def detect_gitlab_reopen_events(
     work_item_id: str,
     state_events: Sequence[Any],
     identity: IdentityResolver,
-) -> List[WorkItemReopenEvent]:
+) -> list[WorkItemReopenEvent]:
     """
     Detect reopen events from GitLab resource_state_events.
 
     A reopen occurs when state changes to "reopened".
     """
-    events: List[WorkItemReopenEvent] = []
+    events: list[WorkItemReopenEvent] = []
     for ev in state_events:
         ev_state = str(_get(ev, "state") or "").lower()
         if ev_state != "reopened":
@@ -388,7 +391,7 @@ def gitlab_note_to_interaction_event(
     note: Any,
     work_item_id: str,
     identity: IdentityResolver,
-) -> Optional[WorkItemInteractionEvent]:
+) -> WorkItemInteractionEvent | None:
     """
     Convert a GitLab note (comment/discussion) to an interaction event.
 
@@ -436,14 +439,14 @@ def extract_gitlab_dependencies(
     work_item_id: str,
     issue: Any,
     project_full_path: str,
-    linked_issues: Optional[Sequence[Any]] = None,
-) -> List[WorkItemDependency]:
+    linked_issues: Sequence[Any] | None = None,
+) -> list[WorkItemDependency]:
     """
     Extract dependency edges from GitLab issue links and description.
 
     GitLab has explicit issue links (via API) and implicit references in description.
     """
-    dependencies: List[WorkItemDependency] = []
+    dependencies: list[WorkItemDependency] = []
     seen_targets: set[str] = set()
 
     # Process explicit links from API
@@ -608,8 +611,8 @@ def gitlab_epic_to_work_item(
     group_full_path: str,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    state_events: Optional[Sequence[Any]] = None,
-) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    state_events: Sequence[Any] | None = None,
+) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     """Convert a GitLab Epic to a normalized WorkItem. Epics are group-level."""
     iid = int(_get(epic, "iid") or 0)
     work_item_id = f"gitlab:{group_full_path}:epic:{iid}"
@@ -647,7 +650,7 @@ def gitlab_epic_to_work_item(
 
     url = _get(epic, "web_url") or _get(epic, "url")
 
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
     started_at = start_date
     completed_at = closed_at
 
@@ -665,9 +668,7 @@ def gitlab_epic_to_work_item(
 
             if ev_state == "closed":
                 to_status = "done"
-            elif ev_state == "opened":
-                to_status = "todo"
-            elif ev_state == "reopened":
+            elif ev_state == "opened" or ev_state == "reopened":
                 to_status = "todo"
             else:
                 continue
@@ -738,7 +739,7 @@ def build_epic_id_for_issue(
     *,
     issue: Any,
     group_full_path: str,
-) -> Optional[str]:
+) -> str | None:
     """Build epic_id for an issue that belongs to an epic."""
     epic = _get(issue, "epic")
     if epic is None:

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
-import logging
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Literal, cast
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+
 from ..models.filters import MetricFilter, SankeyContext
 from ..models.schemas import SankeyLink, SankeyNode, SankeyResponse
 from ..queries.client import clickhouse_client, query_dicts, require_clickhouse_backend
@@ -29,7 +30,7 @@ class SankeyDefinition:
     unit: str
 
 
-SANKEY_DEFINITIONS: Dict[str, SankeyDefinition] = {
+SANKEY_DEFINITIONS: dict[str, SankeyDefinition] = {
     "investment": SankeyDefinition(
         label="Investment flow",
         description=(
@@ -60,8 +61,8 @@ MAX_HOTSPOT_ROWS = 150
 
 def _apply_window_to_filters(
     filters: MetricFilter,
-    window_start: Optional[date],
-    window_end: Optional[date],
+    window_start: date | None,
+    window_end: date | None,
 ) -> MetricFilter:
     if not window_start and not window_end:
         return filters
@@ -90,7 +91,7 @@ def _normalize_label(value: Any, fallback: str) -> str:
 
 
 def _add_edge(
-    edges: Dict[Tuple[str, str], float],
+    edges: dict[tuple[str, str], float],
     source: str,
     target: str,
     value: float,
@@ -102,16 +103,16 @@ def _add_edge(
 
 
 def _touch_node(
-    nodes: Dict[str, SankeyNode],
+    nodes: dict[str, SankeyNode],
     name: str,
-    group: Optional[str],
+    group: str | None,
 ) -> None:
     if name in nodes:
         return
     nodes[name] = SankeyNode(name=name, group=group)
 
 
-def _links_from_edges(edges: Dict[Tuple[str, str], float]) -> List[SankeyLink]:
+def _links_from_edges(edges: dict[tuple[str, str], float]) -> list[SankeyLink]:
     links = [
         SankeyLink(source=source, target=target, value=value)
         for (source, target), value in edges.items()
@@ -121,7 +122,7 @@ def _links_from_edges(edges: Dict[Tuple[str, str], float]) -> List[SankeyLink]:
     return links
 
 
-async def _tables_present(sink: BaseMetricsSink, tables: List[str]) -> bool:
+async def _tables_present(sink: BaseMetricsSink, tables: list[str]) -> bool:
     if not tables:
         return True
     try:
@@ -149,7 +150,7 @@ async def _tables_present(sink: BaseMetricsSink, tables: List[str]) -> bool:
 async def _columns_present(
     sink: BaseMetricsSink,
     table: str,
-    columns: List[str],
+    columns: list[str],
 ) -> bool:
     if not columns:
         return True
@@ -181,7 +182,7 @@ async def _repo_scope_filter(
     filters: MetricFilter,
     org_id: str = "",
     repo_column: str = "repo_id",
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
     if not repo_ids:
         return "", {}
@@ -191,15 +192,15 @@ async def _repo_scope_filter(
 def _team_scope_filter(
     filters: MetricFilter,
     team_column: str = "team_id",
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     if filters.scope.level != "team" or not filters.scope.ids:
         return "", {}
     return build_scope_filter_multi("team", filters.scope.ids, team_column=team_column)
 
 
-def _category_theme_filters(filters: MetricFilter) -> List[str]:
+def _category_theme_filters(filters: MetricFilter) -> list[str]:
     raw_categories = filters.why.work_category or []
-    themes: List[str] = []
+    themes: list[str] = []
     for category in raw_categories:
         if not category:
             continue
@@ -218,8 +219,8 @@ def _category_theme_filters(filters: MetricFilter) -> List[str]:
 def _work_scope_filter(
     filters: MetricFilter,
     work_scope_column: str = "work_scope_id",
-) -> Tuple[str, Dict[str, Any]]:
-    scope_ids: List[str] = []
+) -> tuple[str, dict[str, Any]]:
+    scope_ids: list[str] = []
     if filters.scope.level == "repo":
         scope_ids.extend(filters.scope.ids)
     if filters.what.repos:
@@ -239,7 +240,7 @@ async def _build_investment_flow(
     end_day: date,
     filters: MetricFilter,
     org_id: str = "",
-) -> Tuple[List[SankeyNode], List[SankeyLink]]:
+) -> tuple[list[SankeyNode], list[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(sink, ["work_unit_investments"]):
         return [], []
@@ -279,8 +280,8 @@ async def _build_investment_flow(
         limit=MAX_INVESTMENT_ITEMS,
         org_id=org_id,
     )
-    nodes: Dict[str, SankeyNode] = {}
-    edges: Dict[Tuple[str, str], float] = {}
+    nodes: dict[str, SankeyNode] = {}
+    edges: dict[tuple[str, str], float] = {}
     for row in rows:
         value = float(row.get("value") or 0.0)
         if value <= 0:
@@ -303,7 +304,7 @@ async def _build_expense_flow(
     end_day: date,
     filters: MetricFilter,
     org_id: str = "",
-) -> Tuple[List[SankeyNode], List[SankeyLink]]:
+) -> tuple[list[SankeyNode], list[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(
         sink, ["work_item_metrics_daily", "work_item_cycle_times"]
@@ -368,8 +369,8 @@ async def _build_expense_flow(
     rework = max(0.0, min(unplanned, bug_completed))
     abandoned = max(0.0, min(rework, canceled_items))
 
-    nodes: Dict[str, SankeyNode] = {}
-    edges: Dict[Tuple[str, str], float] = {}
+    nodes: dict[str, SankeyNode] = {}
+    edges: dict[tuple[str, str], float] = {}
 
     _touch_node(nodes, "Planned work", "planned")
     _touch_node(nodes, "Unplanned work", "unplanned")
@@ -390,7 +391,7 @@ async def _build_state_flow(
     end_day: date,
     filters: MetricFilter,
     org_id: str = "",
-) -> Tuple[List[SankeyNode], List[SankeyLink]]:
+) -> tuple[list[SankeyNode], list[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(sink, ["work_item_state_durations_daily"]):
         return [], []
@@ -417,10 +418,10 @@ async def _build_state_flow(
         scope_params=scope_params,
         org_id=org_id,
     )
-    nodes: Dict[str, SankeyNode] = {}
-    edges: Dict[Tuple[str, str], float] = {}
+    nodes: dict[str, SankeyNode] = {}
+    edges: dict[tuple[str, str], float] = {}
 
-    status_counts: Dict[str, float] = {}
+    status_counts: dict[str, float] = {}
     for row in rows:
         value = float(row.get("items_touched") or 0.0)
         if value <= 0:
@@ -479,7 +480,7 @@ async def _build_hotspot_flow(
     end_day: date,
     filters: MetricFilter,
     org_id: str = "",
-) -> Tuple[List[SankeyNode], List[SankeyLink]]:
+) -> tuple[list[SankeyNode], list[SankeyLink]]:
     require_clickhouse_backend(sink)
     if not await _tables_present(sink, ["file_metrics_daily", "repos"]):
         return [], []
@@ -507,8 +508,8 @@ async def _build_hotspot_flow(
         limit=MAX_HOTSPOT_ROWS,
         org_id=org_id,
     )
-    nodes: Dict[str, SankeyNode] = {}
-    edges: Dict[Tuple[str, str], float] = {}
+    nodes: dict[str, SankeyNode] = {}
+    edges: dict[tuple[str, str], float] = {}
     for row in rows:
         churn = float(row.get("churn") or 0.0)
         if churn <= 0:
@@ -539,9 +540,9 @@ async def build_sankey_response(
     mode: str,
     filters: MetricFilter,
     org_id: str = "",
-    context: Optional[SankeyContext] = None,
-    window_start: Optional[date] = None,
-    window_end: Optional[date] = None,
+    context: SankeyContext | None = None,
+    window_start: date | None = None,
+    window_end: date | None = None,
 ) -> SankeyResponse:
     if mode == "hotpot":
         mode = "hotspot"

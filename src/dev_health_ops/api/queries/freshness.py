@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Dict, Optional
+
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_last_ingested_at(
     sink: BaseMetricsSink, org_id: str = ""
-) -> Optional[datetime]:
+) -> datetime | None:
     query = """
         SELECT max(computed_at) AS last_ingested_at
         FROM repo_metrics_daily
@@ -36,7 +36,7 @@ async def fetch_coverage(
     start_day: date,
     end_day: date,
     org_id: str = "",
-) -> Dict[str, float]:
+) -> dict[str, float]:
     repos_query = """
         SELECT countDistinct(id) AS total
         FROM repos

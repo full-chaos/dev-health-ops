@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from dev_health_ops.metrics.schemas import (
     CommitMetricsRecord,
@@ -14,8 +14,8 @@ from dev_health_ops.metrics.schemas import (
     RepoMetricsDailyRecord,
     UserMetricsDailyRecord,
 )
-from dev_health_ops.providers.teams import RepoPatternTeamResolver, TeamResolver
 from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
+from dev_health_ops.providers.teams import RepoPatternTeamResolver, TeamResolver
 from dev_health_ops.utils.datetime import to_utc
 
 
@@ -34,7 +34,7 @@ def commit_size_bucket(total_loc: int) -> str:
     return "large"
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
@@ -88,7 +88,7 @@ class _CommitAgg:
     committer_when: datetime
     additions: int = 0
     deletions: int = 0
-    files: Set[str] = None  # type: ignore[assignment]
+    files: set[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.files is None:
@@ -111,19 +111,19 @@ class _UserAgg:
     commits_count: int = 0
     loc_added: int = 0
     loc_deleted: int = 0
-    files: Set[str] = None  # type: ignore[assignment]
+    files: set[str] = None  # type: ignore[assignment]
     large_commits_count: int = 0
     prs_authored: int = 0
     prs_merged: int = 0
-    pr_cycle_times: List[float] = None  # type: ignore[assignment]
-    pr_first_review_times: List[float] = None  # type: ignore[assignment]
-    pr_review_times: List[float] = None  # type: ignore[assignment]
-    pr_pickup_times: List[float] = None  # type: ignore[assignment]
+    pr_cycle_times: list[float] = None  # type: ignore[assignment]
+    pr_first_review_times: list[float] = None  # type: ignore[assignment]
+    pr_review_times: list[float] = None  # type: ignore[assignment]
+    pr_pickup_times: list[float] = None  # type: ignore[assignment]
     prs_with_first_review: int = 0
     reviews_given: int = 0
     changes_requested_given: int = 0
     reviews_received: int = 0
-    activity_timestamps: List[datetime] = None  # type: ignore[assignment]
+    activity_timestamps: list[datetime] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.files is None:
@@ -143,21 +143,21 @@ class _UserAgg:
 def compute_daily_metrics(
     *,
     day: date,
-    commit_stat_rows: List[CommitStatRow],
-    pull_request_rows: List[PullRequestRow],
-    pull_request_review_rows: Optional[List[PullRequestReviewRow]] = None,
+    commit_stat_rows: list[CommitStatRow],
+    pull_request_rows: list[PullRequestRow],
+    pull_request_review_rows: list[PullRequestReviewRow] | None = None,
     computed_at: datetime,
     include_commit_metrics: bool = True,
     large_pr_total_loc_threshold: int = 1000,
-    team_resolver: Optional[TeamResolver] = None,
-    repo_team_resolver: Optional[RepoPatternTeamResolver] = None,
-    repo_names_by_id: Optional[Dict[uuid.UUID, str]] = None,
-    identity_resolver: Optional[IdentityResolver] = None,
-    mttr_by_repo: Optional[Dict[uuid.UUID, float]] = None,
-    rework_churn_ratio_by_repo: Optional[Dict[uuid.UUID, float]] = None,
-    single_owner_file_ratio_by_repo: Optional[Dict[uuid.UUID, float]] = None,
-    bus_factor_by_repo: Optional[Dict[uuid.UUID, int]] = None,
-    code_ownership_gini_by_repo: Optional[Dict[uuid.UUID, float]] = None,
+    team_resolver: TeamResolver | None = None,
+    repo_team_resolver: RepoPatternTeamResolver | None = None,
+    repo_names_by_id: dict[uuid.UUID, str] | None = None,
+    identity_resolver: IdentityResolver | None = None,
+    mttr_by_repo: dict[uuid.UUID, float] | None = None,
+    rework_churn_ratio_by_repo: dict[uuid.UUID, float] | None = None,
+    single_owner_file_ratio_by_repo: dict[uuid.UUID, float] | None = None,
+    bus_factor_by_repo: dict[uuid.UUID, int] | None = None,
+    code_ownership_gini_by_repo: dict[uuid.UUID, float] | None = None,
 ) -> DailyMetricsResult:
     """
     Compute daily commit/user/repo metrics for a single UTC day.
@@ -175,7 +175,7 @@ def compute_daily_metrics(
     computed_at_utc = to_utc(computed_at)
 
     # 1) Build per-commit aggregates from commit_stat_rows.
-    commit_aggs: Dict[Tuple[uuid.UUID, str], _CommitAgg] = {}
+    commit_aggs: dict[tuple[uuid.UUID, str], _CommitAgg] = {}
     for row in commit_stat_rows:
         key = (row["repo_id"], row["commit_hash"])
         agg = commit_aggs.get(key)
@@ -202,7 +202,7 @@ def compute_daily_metrics(
             agg.files.add(str(file_path))
 
     # 2) Roll up commit aggregates to per-user.
-    user_aggs: Dict[Tuple[uuid.UUID, str], _UserAgg] = {}
+    user_aggs: dict[tuple[uuid.UUID, str], _UserAgg] = {}
     for agg in commit_aggs.values():
         user_key = (agg.repo_id, agg.author_identity)
         ua = user_aggs.get(user_key)
@@ -222,21 +222,21 @@ def compute_daily_metrics(
 
     # 3) Process PR rows for the day window.
     # 3) Process PR rows for the day window.
-    repo_cycle_times: Dict[uuid.UUID, List[float]] = {}
-    repo_first_review_times: Dict[uuid.UUID, List[float]] = {}
-    repo_review_times: Dict[uuid.UUID, List[float]] = {}
-    repo_pickup_times: Dict[uuid.UUID, List[float]] = {}
-    repo_large_prs: Dict[uuid.UUID, int] = {}
-    repo_rework_prs: Dict[uuid.UUID, int] = {}
-    repo_revert_prs: Dict[uuid.UUID, int] = {}
-    repo_prs_with_first_review: Dict[uuid.UUID, int] = {}
-    repo_pr_sizes: Dict[uuid.UUID, List[int]] = {}
-    repo_pr_loc_totals: Dict[uuid.UUID, int] = {}
-    repo_pr_comment_totals: Dict[uuid.UUID, int] = {}
-    repo_pr_review_totals: Dict[uuid.UUID, int] = {}
-    repo_reviewers: Dict[uuid.UUID, Dict[str, int]] = {}
+    repo_cycle_times: dict[uuid.UUID, list[float]] = {}
+    repo_first_review_times: dict[uuid.UUID, list[float]] = {}
+    repo_review_times: dict[uuid.UUID, list[float]] = {}
+    repo_pickup_times: dict[uuid.UUID, list[float]] = {}
+    repo_large_prs: dict[uuid.UUID, int] = {}
+    repo_rework_prs: dict[uuid.UUID, int] = {}
+    repo_revert_prs: dict[uuid.UUID, int] = {}
+    repo_prs_with_first_review: dict[uuid.UUID, int] = {}
+    repo_pr_sizes: dict[uuid.UUID, list[int]] = {}
+    repo_pr_loc_totals: dict[uuid.UUID, int] = {}
+    repo_pr_comment_totals: dict[uuid.UUID, int] = {}
+    repo_pr_review_totals: dict[uuid.UUID, int] = {}
+    repo_reviewers: dict[uuid.UUID, dict[str, int]] = {}
 
-    pr_author_map: Dict[Tuple[uuid.UUID, int], str] = {}
+    pr_author_map: dict[tuple[uuid.UUID, int], str] = {}
     for pr in pull_request_rows:
         author_identity = normalize_git_identity(
             pr.get("author_email"),
@@ -380,7 +380,7 @@ def compute_daily_metrics(
             reviewers[reviewer_identity] = int(reviewers.get(reviewer_identity, 0)) + 1
 
     # 4) Finalize user metrics records.
-    user_metrics: List[UserMetricsDailyRecord] = []
+    user_metrics: list[UserMetricsDailyRecord] = []
     for (repo_id, author_identity), ua in sorted(
         user_aggs.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])
     ):
@@ -489,10 +489,10 @@ def compute_daily_metrics(
         )
 
     # 5) Roll up to per-repo metrics.
-    repos: Set[uuid.UUID] = set()
-    repos.update(repo_id for (repo_id, _author) in user_aggs.keys())
+    repos: set[uuid.UUID] = set()
+    repos.update(repo_id for (repo_id, _author) in user_aggs)
     repos.update(pr["repo_id"] for pr in pull_request_rows)
-    repo_metrics: List[RepoMetricsDailyRecord] = []
+    repo_metrics: list[RepoMetricsDailyRecord] = []
     for repo_id in sorted(repos, key=str):
         repo_users = [u for u in user_metrics if u.repo_id == repo_id]
         commits_count = sum(u.commits_count for u in repo_users)
@@ -607,7 +607,7 @@ def compute_daily_metrics(
         )
 
     # 6) Optional per-commit metrics.
-    commit_metrics: List[CommitMetricsRecord] = []
+    commit_metrics: list[CommitMetricsRecord] = []
     if include_commit_metrics:
         for agg in sorted(
             commit_aggs.values(), key=lambda a: (str(a.repo_id), a.commit_hash)

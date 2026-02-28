@@ -1,14 +1,15 @@
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
+from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
 from dev_health_ops.processors.gitlab import (
-    process_gitlab_project,
-    _fetch_gitlab_pipelines_sync,
     _fetch_gitlab_deployments_sync,
     _fetch_gitlab_incidents_sync,
+    _fetch_gitlab_pipelines_sync,
+    process_gitlab_project,
 )
-from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
 
 
 @pytest.mark.asyncio
@@ -53,9 +54,17 @@ async def test_process_gitlab_project_sync_flags(monkeypatch):
             "dev_health_ops.processors.gitlab._fetch_gitlab_project_info_sync",
             return_value=mock_gl_project,
         ),
-        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync", return_value=([], [])),
-        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync", return_value=[]),
-        patch("dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync",
+            return_value=([], []),
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync",
+            return_value=[],
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0
+        ),
         patch(
             "dev_health_ops.processors.gitlab._fetch_gitlab_pipelines_sync",
             return_value=mock_pipelines,
@@ -68,7 +77,9 @@ async def test_process_gitlab_project_sync_flags(monkeypatch):
             "dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync",
             return_value=mock_incidents,
         ) as mock_fetch_incidents,
-        patch("dev_health_ops.processors.gitlab._fetch_gitlab_blame_sync", return_value=[]),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_blame_sync", return_value=[]
+        ),
     ):
         # Call the function with all sync flags enabled
         await process_gitlab_project(
@@ -108,14 +119,26 @@ async def test_process_gitlab_project_no_sync_flags(monkeypatch):
             "dev_health_ops.processors.gitlab._fetch_gitlab_project_info_sync",
             return_value=mock_gl_project,
         ),
-        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync", return_value=([], [])),
-        patch("dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync", return_value=[]),
-        patch("dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0),
-        patch("dev_health_ops.processors.gitlab._fetch_gitlab_pipelines_sync") as mock_fetch_pipelines,
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commits_sync",
+            return_value=([], []),
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_commit_stats_sync",
+            return_value=[],
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._sync_gitlab_mrs_to_store", return_value=0
+        ),
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_pipelines_sync"
+        ) as mock_fetch_pipelines,
         patch(
             "dev_health_ops.processors.gitlab._fetch_gitlab_deployments_sync"
         ) as mock_fetch_deployments,
-        patch("dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync") as mock_fetch_incidents,
+        patch(
+            "dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync"
+        ) as mock_fetch_incidents,
     ):
         # Call with flags False
         await process_gitlab_project(

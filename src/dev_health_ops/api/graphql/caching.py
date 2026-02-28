@@ -6,7 +6,8 @@ import functools
 import hashlib
 import json
 import logging
-from typing import Any, Callable, Dict, Optional, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from .context import GraphQLContext
 
@@ -65,7 +66,7 @@ def build_cache_key(
 
 def cached_resolver(
     ttl_seconds: int = 300,
-    key_prefix: Optional[str] = None,
+    key_prefix: str | None = None,
 ) -> Callable[[F], F]:
     """
     Decorator to cache GraphQL resolver results.
@@ -92,7 +93,7 @@ def cached_resolver(
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Extract context from args or kwargs
-            context: Optional[GraphQLContext] = None
+            context: GraphQLContext | None = None
             for arg in args:
                 if isinstance(arg, GraphQLContext):
                     context = arg
@@ -148,7 +149,7 @@ def _make_cacheable(value: Any) -> Any:
         return {k: _make_cacheable(v) for k, v in value.items()}
     if hasattr(value, "__dict__"):
         # Handle dataclasses and Strawberry types
-        result: Dict[str, Any] = {"__type__": type(value).__name__}
+        result: dict[str, Any] = {"__type__": type(value).__name__}
         for k, v in vars(value).items():
             if not k.startswith("_"):
                 result[k] = _make_cacheable(v)

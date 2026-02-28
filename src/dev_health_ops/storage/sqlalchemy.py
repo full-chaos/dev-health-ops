@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    JSON,
     Column,
     DateTime,
     Float,
     Integer,
-    JSON,
     MetaData,
     String,
     Table,
@@ -44,7 +44,7 @@ class SQLAlchemyStore(
     """Async storage implementation backed by SQLAlchemy."""
 
     def __init__(self, conn_string: str, echo: bool = False) -> None:
-        engine_kwargs: Dict[str, Any] = {"echo": echo}
+        engine_kwargs: dict[str, Any] = {"echo": echo}
 
         if "sqlite" not in conn_string.lower():
             engine_kwargs.update(
@@ -60,7 +60,7 @@ class SQLAlchemyStore(
         self.session_factory = async_sessionmaker(
             self.engine, expire_on_commit=False, class_=AsyncSession
         )
-        self.session: Optional[AsyncSession] = None
+        self.session: AsyncSession | None = None
         self._work_item_metadata = MetaData()
         self._work_items_table = Table(
             "work_items",
@@ -156,9 +156,9 @@ class SQLAlchemyStore(
     async def _upsert_many(
         self,
         model: Any,
-        rows: List[Dict[str, Any]],
-        conflict_columns: List[str],
-        update_columns: List[str],
+        rows: list[dict[str, Any]],
+        conflict_columns: list[str],
+        update_columns: list[str],
     ) -> None:
         if not rows:
             return
@@ -177,7 +177,7 @@ class SQLAlchemyStore(
         await self.session.execute(stmt, rows)
         await self.session.commit()
 
-    async def __aenter__(self) -> "SQLAlchemyStore":
+    async def __aenter__(self) -> SQLAlchemyStore:
         self.session = self.session_factory()
 
         if "sqlite" in str(self.engine.url):
@@ -205,7 +205,7 @@ class SQLAlchemyStore(
             self.session.add(repo)
         await self.session.commit()
 
-    async def get_all_repos(self) -> List[Repo]:
+    async def get_all_repos(self) -> list[Repo]:
         from sqlalchemy import select
 
         assert self.session is not None

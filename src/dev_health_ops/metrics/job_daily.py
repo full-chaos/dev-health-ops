@@ -8,21 +8,24 @@ import os
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
 from dev_health_ops.metrics.compute_ic import (
-    compute_ic_metrics_daily,
     compute_ic_landscape_rolling,
+    compute_ic_metrics_daily,
 )
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.db_utils import (
+    normalize_sqlite_url as _normalize_sqlite_url,
+)
 from dev_health_ops.metrics.hotspots import compute_file_hotspots
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
@@ -56,9 +59,9 @@ _to_utc = to_utc
 def discover_repos(
     backend: str,
     primary_sink: Any,
-    repo_id: Optional[uuid.UUID] = None,
-    repo_name: Optional[str] = None,
-) -> List[Any]:
+    repo_id: uuid.UUID | None = None,
+    repo_name: str | None = None,
+) -> list[Any]:
     """Discover repositories from the database."""
     from dev_health_ops.metrics.work_items import DiscoveredRepo
 
@@ -114,13 +117,13 @@ async def _get_loader(db_url: str, backend: str, org_id: str = "") -> DataLoader
     return ClickHouseDataLoader(client, org_id=org_id)
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
 
 
-def _date_range(end_day: date, backfill_days: int) -> List[date]:
+def _date_range(end_day: date, backfill_days: int) -> list[date]:
     if backfill_days <= 1:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
@@ -136,11 +139,11 @@ def _secondary_uri_from_env() -> str:
 
 async def run_daily_metrics_job(
     *,
-    db_url: Optional[str] = None,
+    db_url: str | None = None,
     day: date,
     backfill_days: int,
-    repo_id: Optional[uuid.UUID] = None,
-    repo_name: Optional[str] = None,
+    repo_id: uuid.UUID | None = None,
+    repo_name: str | None = None,
     include_commit_metrics: bool = True,
     sink: str = "auto",
     provider: str = "auto",
@@ -163,7 +166,7 @@ async def run_daily_metrics_job(
     identity = load_identity_resolver()
 
     primary_sink: Any
-    secondary_sink: Optional[Any] = None
+    secondary_sink: Any | None = None
 
     if backend != "clickhouse":
         raise ValueError(
@@ -205,11 +208,11 @@ async def run_daily_metrics_job(
     business_start = int(os.getenv("BUSINESS_HOURS_START", "9"))
     business_end = int(os.getenv("BUSINESS_HOURS_END", "17"))
 
-    daily_commit_cache: Dict[date, List[Any]] = {}
+    daily_commit_cache: dict[date, list[Any]] = {}
 
     async def _get_cached_commits_for_window(
         window_start: date, window_end: date
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Load commits for date range using per-day cache to avoid redundant fetches."""
         result = []
         current = window_start
@@ -244,15 +247,15 @@ async def run_daily_metrics_job(
         h_start_date = d - timedelta(days=29)
         h_commit_rows = await _get_cached_commits_for_window(h_start_date, d)
 
-        work_items: List[Any] = []
-        work_item_transitions: List[Any] = []
+        work_items: list[Any] = []
+        work_item_transitions: list[Any] = []
         if load_work_items_enabled and load_work_items_from_db:
             work_items, work_item_transitions = await loader.load_work_items(
                 start, end, repo_id, repo_name
             )
 
-        mttr_by_repo: Dict[uuid.UUID, float] = {}
-        bug_times: Dict[uuid.UUID, List[float]] = {}
+        mttr_by_repo: dict[uuid.UUID, float] = {}
+        bug_times: dict[uuid.UUID, list[float]] = {}
         for item in work_items:
             if item.type == "bug" and item.completed_at and item.started_at:
                 comp_dt = _to_utc(item.completed_at)
@@ -269,13 +272,13 @@ async def run_daily_metrics_job(
         # Build active_repos from ALL data sources, not just commits.
         # Repos with CI/CD or deployment data but no commits in the window
         # were previously excluded, causing missing metrics (gh-377).
-        active_repos: Set[uuid.UUID] = {r["repo_id"] for r in commit_rows}
+        active_repos: set[uuid.UUID] = {r["repo_id"] for r in commit_rows}
         active_repos |= {r["repo_id"] for r in pipeline_rows if "repo_id" in r}
         active_repos |= {r["repo_id"] for r in deployment_rows if "repo_id" in r}
-        rework_ratio_by_repo: Dict[uuid.UUID, float] = {}
-        single_owner_ratio_by_repo: Dict[uuid.UUID, float] = {}
-        bus_factor_by_repo: Dict[uuid.UUID, int] = {}
-        gini_by_repo: Dict[uuid.UUID, float] = {}
+        rework_ratio_by_repo: dict[uuid.UUID, float] = {}
+        single_owner_ratio_by_repo: dict[uuid.UUID, float] = {}
+        bus_factor_by_repo: dict[uuid.UUID, int] = {}
+        gini_by_repo: dict[uuid.UUID, float] = {}
 
         all_file_metrics = []
         for r_id in active_repos:
@@ -426,7 +429,7 @@ async def run_daily_metrics_finalize(
         sink = backend
 
     primary_sink: Any
-    secondary_sink: Optional[Any] = None
+    secondary_sink: Any | None = None
 
     if backend != "clickhouse":
         raise ValueError(
@@ -457,8 +460,8 @@ async def run_daily_metrics_finalize(
         WorkItemUserMetricsDailyRecord,
     )
 
-    git_metrics: List[Any] = []
-    wi_user_metrics: List[Any] = []
+    git_metrics: list[Any] = []
+    wi_user_metrics: list[Any] = []
 
     if backend == "clickhouse":
         from dev_health_ops.api.queries.client import get_global_client
@@ -590,7 +593,7 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
     try:
         db_url = resolve_sink_uri(ns)
         org_id = getattr(ns, "org", None)
-        repo_ids: List[uuid.UUID] = ns.repo_ids or []
+        repo_ids: list[uuid.UUID] = ns.repo_ids or []
         days = _date_range(ns.day, ns.backfill)
 
         for d in days:

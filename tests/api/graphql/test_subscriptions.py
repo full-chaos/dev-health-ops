@@ -52,7 +52,11 @@ async def test_publish_helpers_emit_expected_channels(monkeypatch):
 async def test_subscription_metrics_updated_yields_valid_messages(monkeypatch):
     fake = _FakePubSub(
         messages=[
-            {"day": "2026-02-18", "updated_at": "2026-02-18T12:00:00+00:00", "message": "ok"},
+            {
+                "day": "2026-02-18",
+                "updated_at": "2026-02-18T12:00:00+00:00",
+                "message": "ok",
+            },
             {"day": "bad", "updated_at": "not-a-date", "message": "skip"},
         ]
     )

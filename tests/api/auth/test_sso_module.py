@@ -3,11 +3,10 @@
 Verifies that the SSO sub-package loads correctly and registers
 the expected endpoints on the parent auth router.
 """
+
 from __future__ import annotations
 
 import importlib
-
-import pytest
 
 
 class TestSSOModuleStructure:

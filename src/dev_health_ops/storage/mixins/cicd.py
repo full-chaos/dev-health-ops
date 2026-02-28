@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
 
 
 class CicdMixin:
-    async def insert_ci_pipeline_runs(self, runs: List[CiPipelineRun]) -> None:
+    async def insert_ci_pipeline_runs(self, runs: list[CiPipelineRun]) -> None:
         if not runs:
             return
         synced_at_default = datetime.now(timezone.utc)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in runs:
             if isinstance(item, dict):
                 row = {
@@ -25,11 +25,11 @@ class CicdMixin:
                 }
             else:
                 row = {
-                    "repo_id": getattr(item, "repo_id"),
-                    "run_id": getattr(item, "run_id"),
-                    "status": getattr(item, "status"),
+                    "repo_id": item.repo_id,
+                    "run_id": item.run_id,
+                    "status": item.status,
                     "queued_at": getattr(item, "queued_at", None),
-                    "started_at": getattr(item, "started_at"),
+                    "started_at": item.started_at,
                     "finished_at": getattr(item, "finished_at", None),
                     "last_synced": getattr(item, "last_synced", None)
                     or synced_at_default,
@@ -49,11 +49,11 @@ class CicdMixin:
             ],
         )
 
-    async def insert_deployments(self, deployments: List[Deployment]) -> None:
+    async def insert_deployments(self, deployments: list[Deployment]) -> None:
         if not deployments:
             return
         synced_at_default = datetime.now(timezone.utc)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in deployments:
             if isinstance(item, dict):
                 row = {
@@ -70,9 +70,9 @@ class CicdMixin:
                 }
             else:
                 row = {
-                    "repo_id": getattr(item, "repo_id"),
-                    "deployment_id": getattr(item, "deployment_id"),
-                    "status": getattr(item, "status"),
+                    "repo_id": item.repo_id,
+                    "deployment_id": item.deployment_id,
+                    "status": item.status,
                     "environment": getattr(item, "environment", None),
                     "started_at": getattr(item, "started_at", None),
                     "finished_at": getattr(item, "finished_at", None),
@@ -100,11 +100,11 @@ class CicdMixin:
             ],
         )
 
-    async def insert_incidents(self, incidents: List[Incident]) -> None:
+    async def insert_incidents(self, incidents: list[Incident]) -> None:
         if not incidents:
             return
         synced_at_default = datetime.now(timezone.utc)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in incidents:
             if isinstance(item, dict):
                 row = {
@@ -117,10 +117,10 @@ class CicdMixin:
                 }
             else:
                 row = {
-                    "repo_id": getattr(item, "repo_id"),
-                    "incident_id": getattr(item, "incident_id"),
-                    "status": getattr(item, "status"),
-                    "started_at": getattr(item, "started_at"),
+                    "repo_id": item.repo_id,
+                    "incident_id": item.incident_id,
+                    "status": item.status,
+                    "started_at": item.started_at,
                     "resolved_at": getattr(item, "resolved_at", None),
                     "last_synced": getattr(item, "last_synced", None)
                     or synced_at_default,

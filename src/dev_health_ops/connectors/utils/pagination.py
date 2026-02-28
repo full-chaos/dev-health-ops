@@ -2,7 +2,8 @@
 Pagination utilities for handling paginated API responses.
 """
 
-from typing import Callable, Generator, List, Optional, TypeVar
+from collections.abc import Callable, Generator
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -20,8 +21,8 @@ class PaginationHandler:
     def __init__(
         self,
         per_page: int = 100,
-        max_pages: Optional[int] = None,
-        max_items: Optional[int] = None,
+        max_pages: int | None = None,
+        max_items: int | None = None,
     ):
         """
         Initialize pagination handler.
@@ -46,7 +47,7 @@ class PaginationHandler:
 
     def paginate(
         self,
-        fetch_func: Callable[[int, int], List[T]],
+        fetch_func: Callable[[int, int], list[T]],
         start_page: int = 1,
     ) -> Generator[T, None, None]:
         """
@@ -81,9 +82,9 @@ class PaginationHandler:
 
     def paginate_all(
         self,
-        fetch_func: Callable[[int, int], List[T]],
+        fetch_func: Callable[[int, int], list[T]],
         start_page: int = 1,
-    ) -> List[T]:
+    ) -> list[T]:
         """
         Fetch all paginated results and return as a list.
 
@@ -104,8 +105,8 @@ class AsyncPaginationHandler:
     def __init__(
         self,
         per_page: int = 100,
-        max_pages: Optional[int] = None,
-        max_items: Optional[int] = None,
+        max_pages: int | None = None,
+        max_items: int | None = None,
     ):
         """
         Initialize async pagination handler.
@@ -167,7 +168,7 @@ class AsyncPaginationHandler:
         self,
         fetch_func: Callable,
         start_page: int = 1,
-    ) -> List[T]:
+    ) -> list[T]:
         """
         Async fetch all paginated results and return as a list.
 

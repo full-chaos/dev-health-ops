@@ -7,13 +7,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from dev_health_ops.models.checkpoints import CheckpointStatus
-from dev_health_ops.models.git import Base
 from dev_health_ops.metrics.checkpoints import (
     get_checkpoint,
     mark_completed,
     mark_running,
 )
+from dev_health_ops.models.checkpoints import CheckpointStatus
+from dev_health_ops.models.git import Base
 
 
 @pytest.fixture

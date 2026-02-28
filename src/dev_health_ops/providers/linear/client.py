@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 import httpx
 
@@ -257,7 +258,7 @@ class LinearClient:
     ) -> None:
         self.auth = auth
         self.per_page = max(1, min(100, int(per_page)))
-        self._rate_limit: Optional[RateLimitInfo] = None
+        self._rate_limit: RateLimitInfo | None = None
         self._client = httpx.Client(
             headers={
                 "Content-Type": "application/json",
@@ -267,7 +268,7 @@ class LinearClient:
         )
 
     @classmethod
-    def from_env(cls) -> "LinearClient":
+    def from_env(cls) -> LinearClient:
         api_key = os.getenv("LINEAR_API_KEY") or ""
         if not api_key:
             raise ValueError("Linear API key required (set LINEAR_API_KEY)")
@@ -276,11 +277,11 @@ class LinearClient:
     def _execute(
         self,
         query: str,
-        variables: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._wait_for_rate_limit()
 
-        payload: Dict[str, Any] = {"query": query}
+        payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
@@ -343,15 +344,15 @@ class LinearClient:
     def iter_issues(
         self,
         *,
-        team_keys: Optional[List[str]] = None,
-        updated_after: Optional[datetime] = None,
+        team_keys: list[str] | None = None,
+        updated_after: datetime | None = None,
         include_archived: bool = False,
-        limit: Optional[int] = None,
-    ) -> Iterable[Dict[str, Any]]:
-        cursor: Optional[str] = None
+        limit: int | None = None,
+    ) -> Iterable[dict[str, Any]]:
+        cursor: str | None = None
         count = 0
 
-        filter_obj: Dict[str, Any] = {}
+        filter_obj: dict[str, Any] = {}
         if team_keys:
             filter_obj["team"] = {"key": {"in": team_keys}}
         if updated_after:
@@ -360,7 +361,7 @@ class LinearClient:
             filter_obj["archivedAt"] = {"null": True}
 
         while True:
-            variables: Dict[str, Any] = {
+            variables: dict[str, Any] = {
                 "first": self.per_page,
                 "after": cursor,
             }
@@ -387,9 +388,9 @@ class LinearClient:
         issue_id: str,
         *,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        cursor: Optional[str] = None
-        comments: List[Dict[str, Any]] = []
+    ) -> list[dict[str, Any]]:
+        cursor: str | None = None
+        comments: list[dict[str, Any]] = []
 
         while len(comments) < limit:
             variables = {
@@ -410,14 +411,14 @@ class LinearClient:
 
         return comments[:limit]
 
-    def get_issue_history(self, issue_id: str) -> List[Dict[str, Any]]:
+    def get_issue_history(self, issue_id: str) -> list[dict[str, Any]]:
         data = self._execute(ISSUE_HISTORY_QUERY, {"issueId": issue_id})
         issue_data = data.get("issue", {})
         history_data = issue_data.get("history", {})
         return history_data.get("nodes", [])
 
-    def iter_teams(self) -> Iterable[Dict[str, Any]]:
-        cursor: Optional[str] = None
+    def iter_teams(self) -> Iterable[dict[str, Any]]:
+        cursor: str | None = None
 
         while True:
             variables = {"first": self.per_page, "after": cursor}
@@ -436,16 +437,16 @@ class LinearClient:
     def iter_cycles(
         self,
         *,
-        team_id: Optional[str] = None,
-    ) -> Iterable[Dict[str, Any]]:
-        cursor: Optional[str] = None
+        team_id: str | None = None,
+    ) -> Iterable[dict[str, Any]]:
+        cursor: str | None = None
 
-        filter_obj: Dict[str, Any] = {}
+        filter_obj: dict[str, Any] = {}
         if team_id:
             filter_obj["team"] = {"id": {"eq": team_id}}
 
         while True:
-            variables: Dict[str, Any] = {"first": self.per_page, "after": cursor}
+            variables: dict[str, Any] = {"first": self.per_page, "after": cursor}
             if filter_obj:
                 variables["filter"] = filter_obj
 
@@ -461,8 +462,8 @@ class LinearClient:
                 break
             cursor = page_info.get("endCursor")
 
-    def iter_projects(self) -> Iterable[Dict[str, Any]]:
-        cursor: Optional[str] = None
+    def iter_projects(self) -> Iterable[dict[str, Any]]:
+        cursor: str | None = None
 
         while True:
             variables = {"first": self.per_page, "after": cursor}
@@ -478,8 +479,8 @@ class LinearClient:
                 break
             cursor = page_info.get("endCursor")
 
-    def iter_workflow_states(self) -> Iterable[Dict[str, Any]]:
-        cursor: Optional[str] = None
+    def iter_workflow_states(self) -> Iterable[dict[str, Any]]:
+        cursor: str | None = None
 
         while True:
             variables = {"first": self.per_page, "after": cursor}
@@ -498,7 +499,7 @@ class LinearClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "LinearClient":
+    def __enter__(self) -> LinearClient:
         return self
 
     def __exit__(self, *args: Any) -> None:

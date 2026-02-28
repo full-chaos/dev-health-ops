@@ -6,7 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .base import SimpleDataLoader
 
@@ -59,7 +59,7 @@ class TimeseriesResultData:
     dimension: str
     dimension_value: str
     measure: str
-    buckets: List[TimeseriesBucketData]
+    buckets: list[TimeseriesBucketData]
 
 
 @dataclass
@@ -76,10 +76,10 @@ class BreakdownResultData:
 
     dimension: str
     measure: str
-    items: List[BreakdownItemData]
+    items: list[BreakdownItemData]
 
 
-def _hash_filters(filters: Optional["FilterInput"]) -> str:
+def _hash_filters(filters: FilterInput | None) -> str:
     """Generate a stable hash for filters to group compatible queries."""
     if filters is None:
         return "none"
@@ -120,7 +120,7 @@ def _hash_filters(filters: Optional["FilterInput"]) -> str:
     return hashlib.sha256(filter_json.encode()).hexdigest()[:12]
 
 
-class TimeseriesLoader(SimpleDataLoader[TimeseriesKey, List[TimeseriesResultData]]):
+class TimeseriesLoader(SimpleDataLoader[TimeseriesKey, list[TimeseriesResultData]]):
     """
     DataLoader for timeseries analytics queries.
 
@@ -141,17 +141,18 @@ class TimeseriesLoader(SimpleDataLoader[TimeseriesKey, List[TimeseriesResultData
         self._timeout = timeout
 
     async def batch_load(
-        self, keys: List[TimeseriesKey]
-    ) -> List[List[TimeseriesResultData]]:
+        self, keys: list[TimeseriesKey]
+    ) -> list[list[TimeseriesResultData]]:
         """
         Batch load timeseries data for multiple keys.
 
         Executes queries in parallel using asyncio.gather for better performance.
         """
         from dev_health_ops.api.queries.client import query_dicts
+
         from ..sql.compiler import TimeseriesRequest, compile_timeseries
 
-        async def load_single(key: TimeseriesKey) -> List[TimeseriesResultData]:
+        async def load_single(key: TimeseriesKey) -> list[TimeseriesResultData]:
             """Load a single timeseries query."""
             request = TimeseriesRequest(
                 dimension=key.dimension,
@@ -170,7 +171,7 @@ class TimeseriesLoader(SimpleDataLoader[TimeseriesKey, List[TimeseriesResultData
 
             try:
                 rows = await query_dicts(self._client, sql, params)
-                grouped: Dict[str, List[TimeseriesBucketData]] = {}
+                grouped: dict[str, list[TimeseriesBucketData]] = {}
 
                 for row in rows:
                     dim_val = str(row.get("dimension_value", ""))
@@ -230,13 +231,14 @@ class BreakdownLoader(SimpleDataLoader[BreakdownKey, BreakdownResultData]):
         self._client = client
         self._timeout = timeout
 
-    async def batch_load(self, keys: List[BreakdownKey]) -> List[BreakdownResultData]:
+    async def batch_load(self, keys: list[BreakdownKey]) -> list[BreakdownResultData]:
         """
         Batch load breakdown data for multiple keys.
 
         Executes queries in parallel using asyncio.gather.
         """
         from dev_health_ops.api.queries.client import query_dicts
+
         from ..sql.compiler import BreakdownRequest, compile_breakdown
 
         async def load_single(key: BreakdownKey) -> BreakdownResultData:
@@ -304,7 +306,7 @@ class DataLoaders:
     breakdown: BreakdownLoader
 
     @classmethod
-    def create(cls, client: Any, timeout: int = 30) -> "DataLoaders":
+    def create(cls, client: Any, timeout: int = 30) -> DataLoaders:
         """
         Create a new DataLoaders instance.
 

@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class InvestmentClassification:
     investment_area: str
-    project_stream: Optional[str]
+    project_stream: str | None
     confidence: float
     rule_id: str
 
@@ -20,16 +20,16 @@ class InvestmentClassifier:
     def __init__(self, config_path: Path):
         self.rules = self._load_rules(config_path)
 
-    def _load_rules(self, path: Path) -> List[Dict]:
+    def _load_rules(self, path: Path) -> list[dict]:
         if not path.exists():
             logger.warning(f"Investment config not found at {path}, using defaults")
             return []
-        with open(path, "r") as f:
+        with open(path) as f:
             data = yaml.safe_load(f)
             # Sort by priority (lower is higher priority)
             return sorted(data.get("rules", []), key=lambda x: x.get("priority", 100))
 
-    def classify(self, artifact: Dict[str, Any]) -> InvestmentClassification:
+    def classify(self, artifact: dict[str, Any]) -> InvestmentClassification:
         """
         Artifact dictionary expectations:
         - labels: List[str]
@@ -57,7 +57,7 @@ class InvestmentClassifier:
             rule_id="unassigned",
         )
 
-    def _matches(self, match_criteria: Dict, artifact: Dict) -> bool:
+    def _matches(self, match_criteria: dict, artifact: dict) -> bool:
         if match_criteria.get("always"):
             return True
 

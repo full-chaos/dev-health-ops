@@ -8,10 +8,10 @@ import pytest
 
 import dev_health_ops.connectors.utils.rate_limit_queue as rate_limit_queue_mod
 from dev_health_ops.connectors.utils.rate_limit_queue import (
+    _PENALIZE_LUA,
     DistributedRateLimitGate,
     RateLimitConfig,
     RateLimitGate,
-    _PENALIZE_LUA,
     _token_hash,
     create_rate_limit_gate,
 )
@@ -347,13 +347,15 @@ class TestFactory:
         mock_redis = _make_redis_mock()
         mock_redis.ping.return_value = True
 
-        with patch.dict(
-            "os.environ",
-            {"CELERY_BROKER_URL": "redis://localhost:6379"},
-            clear=True,
+        with (
+            patch.dict(
+                "os.environ",
+                {"CELERY_BROKER_URL": "redis://localhost:6379"},
+                clear=True,
+            ),
+            patch("redis.from_url", return_value=mock_redis),
         ):
-            with patch("redis.from_url", return_value=mock_redis):
-                gate = create_rate_limit_gate("github")
+            gate = create_rate_limit_gate("github")
 
         assert isinstance(gate, DistributedRateLimitGate)
 

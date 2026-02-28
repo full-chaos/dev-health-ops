@@ -4,9 +4,9 @@ import logging
 import os
 import random
 import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from dev_health_ops.models.git import get_repo_uuid_from_repo
 from dev_health_ops.models.work_items import (
@@ -29,7 +29,7 @@ class DiscoveredRepo:
     repo_id: uuid.UUID
     full_name: str
     source: str  # github|gitlab|local|...
-    settings: Dict[str, object]
+    settings: dict[str, object]
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -48,14 +48,14 @@ def fetch_synthetic_work_items(
     *,
     repos: Sequence[DiscoveredRepo],
     days: int = 30,
-) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+) -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
     """
     Generate synthetic work items for testing/demo purposes.
     """
     from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
-    all_items: List[WorkItem] = []
-    all_transitions: List[WorkItemStatusTransition] = []
+    all_items: list[WorkItem] = []
+    all_transitions: list[WorkItemStatusTransition] = []
 
     for repo in repos:
         if repo.source != "synthetic":
@@ -79,17 +79,17 @@ def fetch_synthetic_work_items(
 def fetch_jira_work_items_with_extras(
     *,
     since: datetime,
-    until: Optional[datetime] = None,
+    until: datetime | None = None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    project_keys: Optional[Sequence[str]] = None,
-) -> Tuple[
-    List[WorkItem],
-    List[WorkItemStatusTransition],
-    List[WorkItemDependency],
-    List[WorkItemReopenEvent],
-    List[WorkItemInteractionEvent],
-    List[Sprint],
+    project_keys: Sequence[str] | None = None,
+) -> tuple[
+    list[WorkItem],
+    list[WorkItemStatusTransition],
+    list[WorkItemDependency],
+    list[WorkItemReopenEvent],
+    list[WorkItemInteractionEvent],
+    list[Sprint],
 ]:
     """
     Fetch Jira issues updated since `since` and normalize into WorkItems.
@@ -162,22 +162,22 @@ def fetch_jira_work_items_with_extras(
         )
 
     client = JiraClient.from_env()
-    work_items: List[WorkItem] = []
-    transitions: List[WorkItemStatusTransition] = []
-    dependencies: List[WorkItemDependency] = []
-    reopen_events: List[WorkItemReopenEvent] = []
-    interactions: List[WorkItemInteractionEvent] = []
-    sprints: List[Sprint] = []
+    work_items: list[WorkItem] = []
+    transitions: list[WorkItemStatusTransition] = []
+    dependencies: list[WorkItemDependency] = []
+    reopen_events: list[WorkItemReopenEvent] = []
+    interactions: list[WorkItemInteractionEvent] = []
+    sprints: list[Sprint] = []
 
     fetch_comments = _env_flag("JIRA_FETCH_COMMENTS", True)
     comments_limit = int(os.getenv("JIRA_COMMENTS_LIMIT", "0"))  # 0 means no limit
-    sprint_cache: Dict[str, Sprint] = {}
+    sprint_cache: dict[str, Sprint] = {}
     sprint_ids: set[str] = set()
 
     updated_since = to_utc(since).date().isoformat()
     active_until = to_utc(until).date().isoformat() if until is not None else None
     logger.info("Jira: fetching work items updated since %s", updated_since)
-    jqls: List[str] = []
+    jqls: list[str] = []
     if jql_override:
         jqls = [jql_override]
         logger.info("Jira: using JIRA_JQL override")
@@ -288,11 +288,11 @@ def fetch_jira_work_items_with_extras(
 def fetch_jira_work_items(
     *,
     since: datetime,
-    until: Optional[datetime] = None,
+    until: datetime | None = None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    project_keys: Optional[Sequence[str]] = None,
-) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+    project_keys: Sequence[str] | None = None,
+) -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
     work_items, transitions, _, _, _, _ = fetch_jira_work_items_with_extras(
         since=since,
         until=until,
@@ -311,7 +311,7 @@ def fetch_github_work_items(
     identity: IdentityResolver,
     include_issue_events: bool = True,
     max_events_per_issue: int = 300,
-) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+) -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
     """
     Fetch GitHub issues updated since `since` for the given repos and normalize into WorkItems.
 
@@ -325,8 +325,8 @@ def fetch_github_work_items(
     from dev_health_ops.providers.github.normalize import github_issue_to_work_item
 
     client = GitHubWorkClient(auth=GitHubAuth(token=token))
-    work_items: Dict[str, WorkItem] = {}
-    transitions: List[WorkItemStatusTransition] = []
+    work_items: dict[str, WorkItem] = {}
+    transitions: list[WorkItemStatusTransition] = []
 
     since_utc = to_utc(since)
     github_repos = [r for r in repos if r.source == "github"]
@@ -375,10 +375,10 @@ def fetch_github_work_items(
 
 def fetch_github_project_v2_items(
     *,
-    projects: Sequence[Tuple[str, int]],
+    projects: Sequence[tuple[str, int]],
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+) -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
     """
     Fetch GitHub Projects v2 items for (org_login, project_number).
 
@@ -395,8 +395,8 @@ def fetch_github_project_v2_items(
     )
 
     client = GitHubWorkClient(auth=GitHubAuth(token=token))
-    items: Dict[str, WorkItem] = {}
-    transitions: List[WorkItemStatusTransition] = []
+    items: dict[str, WorkItem] = {}
+    transitions: list[WorkItemStatusTransition] = []
     for org_login, project_number in projects:
         project_scope_id = f"ghprojv2:{org_login}#{int(project_number)}"
         logger.info("GitHub: fetching Projects v2 items for %s", project_scope_id)
@@ -418,9 +418,9 @@ def fetch_github_project_v2_items(
     return list(items.values()), transitions
 
 
-def parse_github_projects_v2_env() -> List[Tuple[str, int]]:
+def parse_github_projects_v2_env() -> list[tuple[str, int]]:
     raw = os.getenv("GITHUB_PROJECTS_V2") or ""
-    projects: List[Tuple[str, int]] = []
+    projects: list[tuple[str, int]] = []
     for part in raw.split(","):
         part = part.strip()
         if not part:
@@ -441,7 +441,7 @@ def fetch_gitlab_work_items(
     identity: IdentityResolver,
     include_label_events: bool = True,
     max_label_events: int = 300,
-) -> Tuple[List[WorkItem], List[WorkItemStatusTransition]]:
+) -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
     """
     Fetch GitLab issues updated since `since` for the given projects and normalize into WorkItems.
 
@@ -451,8 +451,8 @@ def fetch_gitlab_work_items(
     from dev_health_ops.providers.gitlab.normalize import gitlab_issue_to_work_item
 
     client = GitLabWorkClient.from_env()
-    work_items: Dict[str, WorkItem] = {}
-    transitions: List[WorkItemStatusTransition] = []
+    work_items: dict[str, WorkItem] = {}
+    transitions: list[WorkItemStatusTransition] = []
 
     since_utc = to_utc(since)
     gitlab_repos = [r for r in repos if r.source == "gitlab"]
@@ -500,12 +500,12 @@ def fetch_gitlab_work_items(
 
 
 def discover_repos_from_records(
-    records: Iterable[Tuple[str, Dict[str, object]]],
-) -> List[DiscoveredRepo]:
+    records: Iterable[tuple[str, dict[str, object]]],
+) -> list[DiscoveredRepo]:
     """
     Convert (repo_full_name, settings) tuples into DiscoveredRepo rows.
     """
-    repos: List[DiscoveredRepo] = []
+    repos: list[DiscoveredRepo] = []
     for full_name, settings in records:
         source = str((settings or {}).get("source") or "").strip().lower()
         if not source:

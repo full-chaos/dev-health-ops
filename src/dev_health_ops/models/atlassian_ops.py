@@ -2,22 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import Column, DateTime, Text
+
 from dev_health_ops.models.git import Base
 
 
 @dataclass(frozen=True)
 class AtlassianOpsIncident:
     id: str
-    url: Optional[str]
+    url: str | None
     summary: str
-    description: Optional[str]
+    description: str | None
     status: str
     severity: str
     created_at: datetime
-    provider_id: Optional[str] = None
+    provider_id: str | None = None
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -27,9 +27,9 @@ class AtlassianOpsAlert:
     status: str
     priority: str
     created_at: datetime
-    acknowledged_at: Optional[datetime] = None
-    snoozed_at: Optional[datetime] = None
-    closed_at: Optional[datetime] = None
+    acknowledged_at: datetime | None = None
+    snoozed_at: datetime | None = None
+    closed_at: datetime | None = None
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -37,7 +37,7 @@ class AtlassianOpsAlert:
 class AtlassianOpsSchedule:
     id: str
     name: str
-    timezone: Optional[str] = None
+    timezone: str | None = None
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

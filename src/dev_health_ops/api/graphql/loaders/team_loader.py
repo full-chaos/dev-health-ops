@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .base import CachedDataLoader
 
@@ -32,7 +32,7 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
         self,
         client: Any,
         org_id: str,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
         cache_ttl: int = 300,
     ):
         """
@@ -50,7 +50,7 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
         self._client = client
         self._org_id = org_id
 
-    async def batch_load(self, keys: List[str]) -> List[Optional[TeamData]]:
+    async def batch_load(self, keys: list[str]) -> list[TeamData | None]:
         """
         Batch load team data for multiple team IDs.
 
@@ -83,7 +83,7 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
             rows = await query_dicts(self._client, sql, params)
 
             # Build lookup map
-            team_map: Dict[str, TeamData] = {}
+            team_map: dict[str, TeamData] = {}
             for row in rows:
                 team_id = str(row.get("team_id", ""))
                 if team_id and team_id not in team_map:
@@ -113,7 +113,7 @@ class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
         self,
         client: Any,
         org_id: str,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
         cache_ttl: int = 300,
     ):
         """
@@ -131,7 +131,7 @@ class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
         self._client = client
         self._org_id = org_id
 
-    async def batch_load(self, keys: List[str]) -> List[Optional[TeamData]]:
+    async def batch_load(self, keys: list[str]) -> list[TeamData | None]:
         """
         Batch load team data for multiple team names.
 
@@ -163,7 +163,7 @@ class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
             rows = await query_dicts(self._client, sql, params)
 
             # Build lookup map by lowercase name
-            team_map: Dict[str, TeamData] = {}
+            team_map: dict[str, TeamData] = {}
             for row in rows:
                 team_name = str(row.get("team_name", ""))
                 if team_name and team_name.lower() not in team_map:

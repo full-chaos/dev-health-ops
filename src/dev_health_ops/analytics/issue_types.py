@@ -1,7 +1,6 @@
 import logging
 import warnings
 from pathlib import Path
-from typing import Dict
 
 import yaml
 
@@ -24,13 +23,13 @@ class IssueTypeNormalizer:
         )
         self.mapping = self._load_config(config_path)
 
-    def _load_config(self, path: Path) -> Dict:
+    def _load_config(self, path: Path) -> dict:
         if not path.exists():
             logger.warning(
                 f"Issue type mapping config not found at {path}, using defaults"
             )
             return {}
-        with open(path, "r") as f:
+        with open(path) as f:
             return yaml.safe_load(f)
 
     def normalize(self, provider: str, raw_type: str, labels: list[str]) -> str:

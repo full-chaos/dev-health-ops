@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class CredentialSource(str, Enum):
@@ -49,12 +49,12 @@ class GitHubCredentials(ProviderCredentials):
     """
 
     provider: str = "github"
-    token: Optional[str] = None
+    token: str | None = None
 
-    app_id: Optional[str] = None
-    private_key: Optional[str] = None
-    installation_id: Optional[str] = None
-    base_url: Optional[str] = None
+    app_id: str | None = None
+    private_key: str | None = None
+    installation_id: str | None = None
+    base_url: str | None = None
 
     def __post_init__(self) -> None:
         if not self.token and not (self.app_id and self.private_key):
@@ -131,7 +131,7 @@ class AtlassianCredentials(ProviderCredentials):
     provider: str = "atlassian"
     api_token: str = ""
     email: str = ""
-    cloud_id: Optional[str] = None
+    cloud_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.api_token:

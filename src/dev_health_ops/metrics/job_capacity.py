@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import logging
 from datetime import date, timedelta
-from typing import Any, List, Optional
+from typing import Any
 
 from dev_health_ops.metrics.compute_capacity import (
     ForecastResult,
@@ -47,8 +47,8 @@ def _result_to_record(result: ForecastResult) -> CapacityForecastRecord:
 
 async def load_throughput_from_sink(
     sink: Any,
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
     history_days: int = 90,
 ) -> ThroughputHistory:
     backend = sink.backend_type
@@ -102,8 +102,8 @@ async def load_throughput_from_sink(
 
 async def get_backlog_from_sink(
     sink: Any,
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
 ) -> int:
     backend = sink.backend_type
     conditions = []
@@ -144,7 +144,7 @@ async def get_backlog_from_sink(
         return 0
 
 
-async def discover_team_scopes(sink: Any) -> List[tuple[Optional[str], Optional[str]]]:
+async def discover_team_scopes(sink: Any) -> list[tuple[str | None, str | None]]:
     backend = sink.backend_type
 
     query = """
@@ -164,19 +164,19 @@ async def discover_team_scopes(sink: Any) -> List[tuple[Optional[str], Optional[
 async def run_capacity_forecast(
     db_url: str,
     org_id: str,
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
-    target_items: Optional[int] = None,
-    target_date: Optional[date] = None,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
+    target_items: int | None = None,
+    target_date: date | None = None,
     history_days: int = 90,
     simulations: int = 10000,
     all_teams: bool = False,
     persist: bool = True,
-) -> List[ForecastResult]:
+) -> list[ForecastResult]:
     sink = create_sink(db_url)
     try:
         logger.info("Running capacity forecast for org_id=%s", org_id)
-        results: List[ForecastResult] = []
+        results: list[ForecastResult] = []
 
         if all_teams:
             scopes = await discover_team_scopes(sink)

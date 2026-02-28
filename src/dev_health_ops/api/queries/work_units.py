@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from .client import query_dicts
 
@@ -8,12 +9,12 @@ from .client import query_dicts
 async def fetch_work_graph_edges(
     client: Any,
     *,
-    repo_id: Optional[str] = None,
-    repo_ids: Optional[List[str]] = None,
+    repo_id: str | None = None,
+    repo_ids: list[str] | None = None,
     limit: int = 50000,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
-    params: Dict[str, Any] = {"limit": int(limit)}
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"limit": int(limit)}
     filters = ["org_id = %(org_id)s"]
     params["org_id"] = org_id
     if repo_ids:
@@ -49,11 +50,11 @@ async def fetch_work_items(
     *,
     work_item_ids: Iterable[str],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return []
-    params: Dict[str, Any] = {"work_item_ids": ids, "org_id": org_id}
+    params: dict[str, Any] = {"work_item_ids": ids, "org_id": org_id}
     query = """
         SELECT
             work_item_id,
@@ -77,11 +78,11 @@ async def fetch_work_item_active_hours(
     *,
     work_item_ids: Iterable[str],
     org_id: str = "",
-) -> Dict[str, float]:
+) -> dict[str, float]:
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return {}
-    params: Dict[str, Any] = {"work_item_ids": ids, "org_id": org_id}
+    params: dict[str, Any] = {"work_item_ids": ids, "org_id": org_id}
     query = """
         SELECT
             work_item_id,
@@ -101,10 +102,10 @@ async def fetch_work_item_active_hours(
 async def fetch_pull_requests(
     client: Any,
     *,
-    repo_numbers: Dict[str, List[int]],
+    repo_numbers: dict[str, list[int]],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for repo_id, numbers in repo_numbers.items():
         if not numbers:
             continue
@@ -133,10 +134,10 @@ async def fetch_pull_requests(
 async def fetch_commits(
     client: Any,
     *,
-    repo_commits: Dict[str, List[str]],
+    repo_commits: dict[str, list[str]],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for repo_id, hashes in repo_commits.items():
         if not hashes:
             continue
@@ -161,10 +162,10 @@ async def fetch_commits(
 async def fetch_commit_churn(
     client: Any,
     *,
-    repo_commits: Dict[str, List[str]],
+    repo_commits: dict[str, list[str]],
     org_id: str = "",
-) -> Dict[str, float]:
-    churn: Dict[str, float] = {}
+) -> dict[str, float]:
+    churn: dict[str, float] = {}
     for repo_id, hashes in repo_commits.items():
         if not hashes:
             continue

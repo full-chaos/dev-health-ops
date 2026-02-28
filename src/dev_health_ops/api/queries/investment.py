@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_investment_breakdown(
@@ -13,13 +14,13 @@ async def fetch_investment_breakdown(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -53,12 +54,12 @@ async def fetch_investment_edges(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
+    themes: list[str] | None = None,
+) -> list[dict[str, Any]]:
     theme_filter = ""
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -89,13 +90,13 @@ async def fetch_investment_subcategory_edges(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -130,13 +131,13 @@ async def fetch_investment_team_edges(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -177,13 +178,13 @@ async def fetch_investment_repo_team_edges(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -247,13 +248,13 @@ async def fetch_investment_team_category_repo_edges(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -317,13 +318,13 @@ async def fetch_investment_team_subcategory_repo_edges(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -387,13 +388,13 @@ async def fetch_investment_unassigned_counts(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> Dict[str, int]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> dict[str, int]:
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:
@@ -466,14 +467,14 @@ async def fetch_investment_sunburst(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
     limit: int = 500,
-) -> List[Dict[str, Any]]:
-    filters: List[str] = []
-    params: Dict[str, Any] = {
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: dict[str, Any] = {
         "start_ts": start_ts,
         "end_ts": end_ts,
         "limit": limit,
@@ -514,14 +515,14 @@ async def fetch_investment_quality_stats(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-    themes: Optional[List[str]] = None,
-    subcategories: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    themes: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> dict[str, Any]:
     """Fetch aggregated evidence quality stats: mean, stddev, band counts."""
-    filters: List[str] = []
-    params: Dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
+    filters: list[str] = []
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     if themes:

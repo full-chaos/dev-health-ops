@@ -122,9 +122,7 @@ async def test_verified_local_user_can_login(app):
         result = MagicMock()
         if call_count == 1:
             result.scalar_one_or_none.return_value = existing_user
-        elif call_count in (2, 4):
-            result.scalar_one_or_none.return_value = None
-        elif call_count == 3:
+        elif call_count in (2, 4) or call_count == 3:
             result.scalar_one_or_none.return_value = None
         elif call_count == 5:
             result.scalar_one_or_none.return_value = membership
@@ -179,9 +177,7 @@ async def test_oauth_user_bypasses_verification(app):
         result = MagicMock()
         if call_count == 1:
             result.scalar_one_or_none.return_value = existing_user
-        elif call_count in (2, 4):
-            result.scalar_one_or_none.return_value = None
-        elif call_count == 3:
+        elif call_count in (2, 4) or call_count == 3:
             result.scalar_one_or_none.return_value = None
         elif call_count == 5:
             result.scalar_one_or_none.return_value = membership

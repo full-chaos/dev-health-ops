@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 from dev_health_ops.llm.errors import classify_provider_error
 from .openai import (
-    OpenAIProviderConfig,
     OpenAIGPT5Provider,
+    OpenAIProviderConfig,
     categorization_json_schema,
     is_json_schema_prompt,
     system_message,
@@ -49,9 +48,9 @@ class LocalProvider:
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
         max_completion_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:
@@ -72,7 +71,7 @@ class LocalProvider:
         self.api_key = api_key or os.getenv("LOCAL_LLM_API_KEY", "not-needed")
         self.max_completion_tokens = max_completion_tokens
         self.temperature = temperature
-        self._client: Optional[object] = None
+        self._client: object | None = None
 
     def _get_client(self) -> object:
         """Lazy initialize OpenAI client pointing to local server."""
@@ -110,7 +109,7 @@ class LocalProvider:
         sys_msg = system_message(prompt)
 
         # Start with a modern response_format if it's a JSON prompt
-        response_format: Optional[dict] = None
+        response_format: dict | None = None
         if is_schema_prompt:
             # Try Structured Outputs if the server supports it
             response_format = {
@@ -170,8 +169,8 @@ class OllamaProvider(LocalProvider):
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        base_url: Optional[str] = None,
+        model: str | None = None,
+        base_url: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -187,8 +186,8 @@ class LMStudioProvider(LocalProvider):
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        base_url: Optional[str] = None,
+        model: str | None = None,
+        base_url: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -209,7 +208,7 @@ class LMStudioGPT5Provider(OpenAIGPT5Provider):
     def __init__(
         self,
         model: str,
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
         max_completion_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> None:

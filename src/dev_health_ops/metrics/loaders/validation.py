@@ -21,6 +21,7 @@ Performance note:
 from __future__ import annotations
 
 import os
+import types
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime
@@ -75,6 +76,9 @@ def _is_optional(type_hint: Any) -> bool:
     if origin is Union:
         args = get_args(type_hint)
         return type(None) in args
+    # PEP 604: int | None creates types.UnionType in Python 3.10+
+    if isinstance(type_hint, types.UnionType):
+        return type(None) in type_hint.__args__
     return False
 
 
@@ -92,6 +96,11 @@ def _unwrap_optional(type_hint: Any) -> Any:
     if origin is Union:
         args = get_args(type_hint)
         non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    # PEP 604: int | None creates types.UnionType
+    if isinstance(type_hint, types.UnionType):
+        non_none = [a for a in type_hint.__args__ if a is not type(None)]
         if len(non_none) == 1:
             return non_none[0]
     return type_hint

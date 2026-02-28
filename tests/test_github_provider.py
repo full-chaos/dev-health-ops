@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,7 +42,6 @@ from dev_health_ops.providers.github.provider import GitHubProvider
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.registry import get_provider, is_registered
 from dev_health_ops.providers.status_mapping import StatusMapping
-
 
 # ============================================================================
 # Fixtures
@@ -72,11 +70,11 @@ def _mock_issue(
     number: int = 1,
     title: str = "Test Issue",
     state: str = "open",
-    labels: Optional[List[str]] = None,
+    labels: list[str] | None = None,
     body: str = "",
-    created_at: Optional[datetime] = None,
-    updated_at: Optional[datetime] = None,
-    closed_at: Optional[datetime] = None,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
+    closed_at: datetime | None = None,
 ) -> MagicMock:
     """Create a mock GitHub issue."""
     issue = MagicMock()
@@ -122,12 +120,12 @@ def _mock_pr(
     state: str = "open",
     merged: bool = False,
     draft: bool = False,
-    labels: Optional[List[str]] = None,
+    labels: list[str] | None = None,
     body: str = "",
-    created_at: Optional[datetime] = None,
-    updated_at: Optional[datetime] = None,
-    closed_at: Optional[datetime] = None,
-    merged_at: Optional[datetime] = None,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
+    closed_at: datetime | None = None,
+    merged_at: datetime | None = None,
 ) -> MagicMock:
     """Create a mock GitHub pull request."""
     pr = MagicMock()
@@ -170,8 +168,8 @@ def _mock_pr(
 
 def _mock_event(
     event_type: str,
-    created_at: Optional[datetime] = None,
-    label_name: Optional[str] = None,
+    created_at: datetime | None = None,
+    label_name: str | None = None,
 ) -> MagicMock:
     """Create a mock GitHub event."""
     ev = MagicMock()
@@ -199,7 +197,7 @@ def _mock_comment(
     *,
     comment_id: int = 1,
     body: str = "Test comment",
-    created_at: Optional[datetime] = None,
+    created_at: datetime | None = None,
 ) -> MagicMock:
     """Create a mock GitHub comment."""
     comment = MagicMock()
@@ -224,8 +222,8 @@ def _mock_milestone(
     number: int = 1,
     title: str = "Sprint 1",
     state: str = "open",
-    created_at: Optional[datetime] = None,
-    due_on: Optional[datetime] = None,
+    created_at: datetime | None = None,
+    due_on: datetime | None = None,
 ) -> MagicMock:
     """Create a mock GitHub milestone."""
     ms = MagicMock()

@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from uuid import UUID
 from datetime import date, datetime
-from typing import Dict, List, Optional, TypedDict
+from typing import TypedDict
+from uuid import UUID
+
 from typing_extensions import NotRequired
 
 
 class CommitStatRow(TypedDict):
     repo_id: uuid.UUID
     commit_hash: str
-    author_email: Optional[str]
-    author_name: Optional[str]
+    author_email: str | None
+    author_name: str | None
     committer_when: datetime
-    file_path: Optional[str]
+    file_path: str | None
     additions: int
     deletions: int
 
@@ -24,12 +25,12 @@ class PullRequestRow(TypedDict):
 
     repo_id: uuid.UUID
     number: int
-    author_email: Optional[str]
-    author_name: Optional[str]
+    author_email: str | None
+    author_name: str | None
     created_at: datetime
-    merged_at: Optional[datetime]
-    first_review_at: NotRequired[Optional[datetime]]
-    first_comment_at: NotRequired[Optional[datetime]]
+    merged_at: datetime | None
+    first_review_at: NotRequired[datetime | None]
+    first_comment_at: NotRequired[datetime | None]
     reviews_count: NotRequired[int]
     changes_requested_count: NotRequired[int]
     comments_count: NotRequired[int]
@@ -56,10 +57,10 @@ class PullRequestCommentRow(TypedDict):
 class PipelineRunRow(TypedDict):
     repo_id: uuid.UUID
     run_id: str
-    status: Optional[str]
-    queued_at: Optional[datetime]
+    status: str | None
+    queued_at: datetime | None
     started_at: datetime
-    finished_at: Optional[datetime]
+    finished_at: datetime | None
 
 
 class DeploymentRow(TypedDict):
@@ -67,21 +68,21 @@ class DeploymentRow(TypedDict):
 
     repo_id: uuid.UUID
     deployment_id: str
-    status: Optional[str]
-    environment: Optional[str]
-    started_at: Optional[datetime]
-    finished_at: Optional[datetime]
-    deployed_at: Optional[datetime]
-    merged_at: NotRequired[Optional[datetime]]
-    pull_request_number: NotRequired[Optional[int]]
+    status: str | None
+    environment: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    deployed_at: datetime | None
+    merged_at: NotRequired[datetime | None]
+    pull_request_number: NotRequired[int | None]
 
 
 class IncidentRow(TypedDict):
     repo_id: uuid.UUID
     incident_id: str
-    status: Optional[str]
+    status: str | None
     started_at: datetime
-    resolved_at: Optional[datetime]
+    resolved_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -120,10 +121,10 @@ class UserMetricsDailyRecord:
 
     # Review / collaboration signals (best-effort, requires review/comment facts).
     prs_with_first_review: int = 0
-    pr_first_review_p50_hours: Optional[float] = None
-    pr_first_review_p90_hours: Optional[float] = None
-    pr_review_time_p50_hours: Optional[float] = None
-    pr_pickup_time_p50_hours: Optional[float] = None
+    pr_first_review_p50_hours: float | None = None
+    pr_first_review_p90_hours: float | None = None
+    pr_review_time_p50_hours: float | None = None
+    pr_pickup_time_p50_hours: float | None = None
     reviews_given: int = 0
     changes_requested_given: int = 0
     reviews_received: int = 0
@@ -134,8 +135,8 @@ class UserMetricsDailyRecord:
     weekend_days: int = 0  # 1 if this day is a weekend and user was active, else 0
 
     # Team dimension (optional).
-    team_id: Optional[str] = None
-    team_name: Optional[str] = None
+    team_id: str | None = None
+    team_name: str | None = None
 
     # New IC/Landscape fields
     identity_id: str = ""
@@ -154,7 +155,7 @@ class ICLandscapeRollingRecord:
     repo_id: uuid.UUID
     as_of_day: date
     identity_id: str
-    team_id: Optional[str]
+    team_id: str | None
     map_name: str
     x_raw: float
     y_raw: float
@@ -186,18 +187,18 @@ class RepoMetricsDailyRecord:
 
     # Review / collaboration signals.
     prs_with_first_review: int = 0
-    pr_first_review_p50_hours: Optional[float] = None
-    pr_first_review_p90_hours: Optional[float] = None
-    pr_review_time_p50_hours: Optional[float] = None
-    pr_pickup_time_p50_hours: Optional[float] = None
+    pr_first_review_p50_hours: float | None = None
+    pr_first_review_p90_hours: float | None = None
+    pr_review_time_p50_hours: float | None = None
+    pr_pickup_time_p50_hours: float | None = None
 
     # Quality signals.
     large_pr_ratio: float = 0.0
     pr_rework_ratio: float = 0.0
-    pr_size_p50_loc: Optional[float] = None
-    pr_size_p90_loc: Optional[float] = None
-    pr_comments_per_100_loc: Optional[float] = None
-    pr_reviews_per_100_loc: Optional[float] = None
+    pr_size_p50_loc: float | None = None
+    pr_size_p90_loc: float | None = None
+    pr_comments_per_100_loc: float | None = None
+    pr_reviews_per_100_loc: float | None = None
     rework_churn_ratio_30d: float = 0.0
     single_owner_file_ratio_30d: float = 0.0
     review_load_top_reviewer_ratio: float = 0.0
@@ -207,7 +208,7 @@ class RepoMetricsDailyRecord:
     code_ownership_gini: float = 0.0
 
     # DORA proxies.
-    mttr_hours: Optional[float] = None
+    mttr_hours: float | None = None
     change_failure_rate: float = 0.0
     org_id: str = ""
 
@@ -245,19 +246,19 @@ class WorkItemCycleTimeRecord:
     provider: str
     day: date  # completed day (UTC) when completed_at is present, else created day
     work_scope_id: str
-    team_id: Optional[str]
-    team_name: Optional[str]
-    assignee: Optional[str]
+    team_id: str | None
+    team_name: str | None
+    assignee: str | None
     type: str
     status: str
     created_at: datetime
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    cycle_time_hours: Optional[float]
-    lead_time_hours: Optional[float]
-    active_time_hours: Optional[float]
-    wait_time_hours: Optional[float]
-    flow_efficiency: Optional[float]
+    started_at: datetime | None
+    completed_at: datetime | None
+    cycle_time_hours: float | None
+    lead_time_hours: float | None
+    active_time_hours: float | None
+    wait_time_hours: float | None
+    flow_efficiency: float | None
     computed_at: datetime
     org_id: str = ""
 
@@ -267,20 +268,20 @@ class WorkItemMetricsDailyRecord:
     day: date
     provider: str
     work_scope_id: str
-    team_id: Optional[str]
-    team_name: Optional[str]
+    team_id: str | None
+    team_name: str | None
     items_started: int
     items_completed: int
     items_started_unassigned: int
     items_completed_unassigned: int
     wip_count_end_of_day: int
     wip_unassigned_end_of_day: int
-    cycle_time_p50_hours: Optional[float]
-    cycle_time_p90_hours: Optional[float]
-    lead_time_p50_hours: Optional[float]
-    lead_time_p90_hours: Optional[float]
-    wip_age_p50_hours: Optional[float]
-    wip_age_p90_hours: Optional[float]
+    cycle_time_p50_hours: float | None
+    cycle_time_p90_hours: float | None
+    lead_time_p50_hours: float | None
+    lead_time_p90_hours: float | None
+    wip_age_p50_hours: float | None
+    wip_age_p90_hours: float | None
     bug_completed_ratio: float
     story_points_completed: float
     computed_at: datetime
@@ -299,13 +300,13 @@ class WorkItemUserMetricsDailyRecord:
     provider: str
     work_scope_id: str
     user_identity: str
-    team_id: Optional[str]
-    team_name: Optional[str]
+    team_id: str | None
+    team_name: str | None
     items_started: int
     items_completed: int
     wip_count_end_of_day: int
-    cycle_time_p50_hours: Optional[float]
-    cycle_time_p90_hours: Optional[float]
+    cycle_time_p50_hours: float | None
+    cycle_time_p90_hours: float | None
     computed_at: datetime
     org_id: str = ""
 
@@ -342,9 +343,9 @@ class CICDMetricsDailyRecord:
     day: date
     pipelines_count: int
     success_rate: float
-    avg_duration_minutes: Optional[float]
-    p90_duration_minutes: Optional[float]
-    avg_queue_minutes: Optional[float]
+    avg_duration_minutes: float | None
+    p90_duration_minutes: float | None
+    avg_queue_minutes: float | None
     computed_at: datetime
     org_id: str = ""
 
@@ -355,8 +356,8 @@ class DeployMetricsDailyRecord:
     day: date
     deployments_count: int
     failed_deployments_count: int
-    deploy_time_p50_hours: Optional[float]
-    lead_time_p50_hours: Optional[float]
+    deploy_time_p50_hours: float | None
+    lead_time_p50_hours: float | None
     computed_at: datetime
     org_id: str = ""
 
@@ -366,8 +367,8 @@ class IncidentMetricsDailyRecord:
     repo_id: uuid.UUID
     day: date
     incidents_count: int
-    mttr_p50_hours: Optional[float]
-    mttr_p90_hours: Optional[float]
+    mttr_p50_hours: float | None
+    mttr_p90_hours: float | None
     computed_at: datetime
     org_id: str = ""
 
@@ -421,7 +422,7 @@ class FileHotspotDaily:
     churn_commits_30d: int
     cyclomatic_total: int
     cyclomatic_avg: float
-    blame_concentration: Optional[float]
+    blame_concentration: float | None
     risk_score: float
     computed_at: datetime
     org_id: str = ""
@@ -429,13 +430,13 @@ class FileHotspotDaily:
 
 @dataclass(frozen=True)
 class InvestmentClassificationRecord:
-    repo_id: Optional[uuid.UUID]
+    repo_id: uuid.UUID | None
     day: date
     artifact_type: str
     artifact_id: str
     provider: str
     investment_area: str
-    project_stream: Optional[str]
+    project_stream: str | None
     confidence: float
     rule_id: str
     computed_at: datetime
@@ -444,11 +445,11 @@ class InvestmentClassificationRecord:
 
 @dataclass(frozen=True)
 class InvestmentMetricsRecord:
-    repo_id: Optional[uuid.UUID]
+    repo_id: uuid.UUID | None
     day: date
-    team_id: Optional[str]
+    team_id: str | None
     investment_area: str
-    project_stream: Optional[str]
+    project_stream: str | None
     delivery_units: int
     work_items_completed: int
     prs_merged: int
@@ -460,7 +461,7 @@ class InvestmentMetricsRecord:
 
 @dataclass(frozen=True)
 class IssueTypeMetricsRecord:
-    repo_id: Optional[uuid.UUID]
+    repo_id: uuid.UUID | None
     day: date
     provider: str
     team_id: str
@@ -483,8 +484,8 @@ class WorkGraphEdgeRecord:
     target_type: str
     target_id: str
     edge_type: str
-    repo_id: Optional[UUID]
-    provider: Optional[str]
+    repo_id: UUID | None
+    provider: str | None
     provenance: str
     confidence: float
     evidence: str
@@ -522,16 +523,16 @@ class WorkGraphPRCommitRecord:
 @dataclass(frozen=True)
 class WorkUnitInvestmentRecord:
     work_unit_id: str
-    work_unit_type: Optional[str]
-    work_unit_name: Optional[str]
+    work_unit_type: str | None
+    work_unit_name: str | None
     from_ts: datetime
     to_ts: datetime
-    repo_id: Optional[uuid.UUID]
-    provider: Optional[str]
+    repo_id: uuid.UUID | None
+    provider: str | None
     effort_metric: str
     effort_value: float
-    theme_distribution_json: Dict[str, float]
-    subcategory_distribution_json: Dict[str, float]
+    theme_distribution_json: dict[str, float]
+    subcategory_distribution_json: dict[str, float]
     structural_evidence_json: str
     evidence_quality: float
     evidence_quality_band: str
@@ -562,7 +563,7 @@ class InvestmentExplanationRecord:
     cache_key: str  # Hash of (filter_context + theme + subcategory)
     explanation_json: str  # Full JSON of InvestmentMixExplanation
     llm_provider: str
-    llm_model: Optional[str]
+    llm_model: str | None
     computed_at: datetime
     org_id: str = ""
 
@@ -570,44 +571,44 @@ class InvestmentExplanationRecord:
 @dataclass(frozen=True)
 class DailyMetricsResult:
     day: date
-    repo_metrics: List[RepoMetricsDailyRecord]
-    user_metrics: List[UserMetricsDailyRecord]
-    commit_metrics: List[CommitMetricsRecord]
+    repo_metrics: list[RepoMetricsDailyRecord]
+    user_metrics: list[UserMetricsDailyRecord]
+    commit_metrics: list[CommitMetricsRecord]
 
     # Optional expanded outputs (may be empty depending on available inputs).
-    team_metrics: List[TeamMetricsDailyRecord] = field(default_factory=list)
-    file_metrics: List[FileMetricsRecord] = field(default_factory=list)
-    work_item_metrics: List[WorkItemMetricsDailyRecord] = field(default_factory=list)
-    work_item_user_metrics: List[WorkItemUserMetricsDailyRecord] = field(
+    team_metrics: list[TeamMetricsDailyRecord] = field(default_factory=list)
+    file_metrics: list[FileMetricsRecord] = field(default_factory=list)
+    work_item_metrics: list[WorkItemMetricsDailyRecord] = field(default_factory=list)
+    work_item_user_metrics: list[WorkItemUserMetricsDailyRecord] = field(
         default_factory=list
     )
-    work_item_cycle_times: List[WorkItemCycleTimeRecord] = field(default_factory=list)
-    work_item_state_durations: List[WorkItemStateDurationDailyRecord] = field(
+    work_item_cycle_times: list[WorkItemCycleTimeRecord] = field(default_factory=list)
+    work_item_state_durations: list[WorkItemStateDurationDailyRecord] = field(
         default_factory=list
     )
-    review_edges: List[ReviewEdgeDailyRecord] = field(default_factory=list)
+    review_edges: list[ReviewEdgeDailyRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class CapacityForecastRecord:
     forecast_id: str
     computed_at: datetime
-    team_id: Optional[str]
-    work_scope_id: Optional[str]
+    team_id: str | None
+    work_scope_id: str | None
     backlog_size: int
-    target_items: Optional[int]
-    target_date: Optional[date]
+    target_items: int | None
+    target_date: date | None
     history_days: int
     simulation_count: int
-    p50_days: Optional[int]
-    p85_days: Optional[int]
-    p95_days: Optional[int]
-    p50_date: Optional[date]
-    p85_date: Optional[date]
-    p95_date: Optional[date]
-    p50_items: Optional[int]
-    p85_items: Optional[int]
-    p95_items: Optional[int]
+    p50_days: int | None
+    p85_days: int | None
+    p95_days: int | None
+    p50_date: date | None
+    p85_date: date | None
+    p95_date: date | None
+    p50_items: int | None
+    p85_items: int | None
+    p95_items: int | None
     throughput_mean: float
     throughput_stddev: float
     insufficient_history: bool = False

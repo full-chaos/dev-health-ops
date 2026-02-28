@@ -3,7 +3,6 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 from radon.complexity import cc_visit
@@ -31,11 +30,11 @@ class ComplexityScanner:
         self.include_globs = self.config.get("include_globs", ["**/*.py"])
         self.exclude_globs = self.config.get("exclude_globs", [])
 
-    def _load_config(self, path: Path) -> Dict:
+    def _load_config(self, path: Path) -> dict:
         if not path.exists():
             logger.warning(f"Complexity config not found at {path}, using defaults")
             return {}
-        with open(path, "r") as f:
+        with open(path) as f:
             return yaml.safe_load(f)
 
     def should_process(self, file_path: str) -> bool:
@@ -49,7 +48,7 @@ class ComplexityScanner:
                 return True
         return False
 
-    def scan_repo(self, repo_root: Path) -> List[FileComplexity]:
+    def scan_repo(self, repo_root: Path) -> list[FileComplexity]:
         results = []
         repo_root = repo_root.resolve()
 
@@ -73,7 +72,7 @@ class ComplexityScanner:
 
         return results
 
-    def scan_git_ref(self, repo_root: Path, ref: str) -> List[FileComplexity]:
+    def scan_git_ref(self, repo_root: Path, ref: str) -> list[FileComplexity]:
         """Scan files at a specific git reference/commit using GitPython."""
         import git
 
@@ -114,7 +113,7 @@ class ComplexityScanner:
 
         return results
 
-    def scan_file_contents(self, files: List[tuple[str, str]]) -> List[FileComplexity]:
+    def scan_file_contents(self, files: list[tuple[str, str]]) -> list[FileComplexity]:
         results = []
         for file_path, contents in files:
             if not self.should_process(file_path):
@@ -128,20 +127,20 @@ class ComplexityScanner:
 
         return results
 
-    def _analyze_file(self, file_path: Path) -> Optional[FileComplexity]:
+    def _analyze_file(self, file_path: Path) -> FileComplexity | None:
         # Currently only Python is supported via radon
         if not file_path.suffix == ".py":
             return None
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 code = f.read()
             return self._analyze_content(code, str(file_path))
         except Exception:
             # Syntax errors or other issues
             return None
 
-    def _analyze_content(self, code: str, file_path: str) -> Optional[FileComplexity]:
+    def _analyze_content(self, code: str, file_path: str) -> FileComplexity | None:
         if not file_path.endswith(".py"):
             return None
 

@@ -3,21 +3,21 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     ForeignKey,
     Index,
-    JSON,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class SSOProtocol(str, Enum):
@@ -146,14 +146,14 @@ class SSOProvider(Base):
         org_id: uuid.UUID,
         name: str,
         protocol: str,
-        config: Optional[dict[str, Any]] = None,
-        encrypted_secrets: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
+        encrypted_secrets: dict[str, Any] | None = None,
         status: str = SSOProviderStatus.PENDING_SETUP.value,
         is_default: bool = False,
         allow_idp_initiated: bool = False,
         auto_provision_users: bool = True,
         default_role: str = "member",
-        allowed_domains: Optional[list[str]] = None,
+        allowed_domains: list[str] | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id
@@ -221,7 +221,7 @@ class SSOProvider(Base):
         )
 
     @property
-    def oauth_provider_type(self) -> Optional[str]:
+    def oauth_provider_type(self) -> str | None:
         if self.protocol == SSOProtocol.OAUTH_GITHUB.value:
             return "github"
         elif self.protocol == SSOProtocol.OAUTH_GITLAB.value:

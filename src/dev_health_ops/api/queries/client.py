@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any
 
-from dev_health_ops.metrics.sinks.factory import create_sink
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
-from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.api.services.auth import get_current_org_id
+from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.sinks.factory import create_sink
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def get_global_sink(dsn: str) -> BaseMetricsSink:
 async def get_global_client(dsn: str) -> Any:
     sink = await get_global_sink(dsn)
     if hasattr(sink, "client"):
-        return getattr(sink, "client")
+        return sink.client
     return sink
 
 
@@ -70,8 +71,8 @@ def require_clickhouse_backend(sink: BaseMetricsSink) -> None:
 
 
 async def query_dicts(
-    sink: Any, query: str, params: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    sink: Any, query: str, params: dict[str, Any]
+) -> list[dict[str, Any]]:
     if sink is None:
         raise RuntimeError("ClickHouse client is None")
 

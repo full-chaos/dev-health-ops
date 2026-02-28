@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .client import query_dicts
 
@@ -13,17 +13,17 @@ async def fetch_cycle_breakdown(
     *,
     start_day: date,
     end_day: date,
-    team_id: Optional[str] = None,
-    provider: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    team_id: str | None = None,
+    provider: str | None = None,
+    work_scope_id: str | None = None,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Fetch aggregated state durations for cycle-time breakdown.
 
     Returns rows with (status, total_duration_hours, items_touched).
     """
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "start_day": start_day,
         "end_day": end_day,
     }
@@ -60,17 +60,17 @@ async def fetch_code_hotspots(
     *,
     start_day: date,
     end_day: date,
-    repo_id: Optional[str] = None,
+    repo_id: str | None = None,
     limit: int = 500,
     min_churn: int = 1,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Fetch aggregated file churn for code hotspot flame.
 
     Returns rows with (repo_id, file_path, total_churn).
     """
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "start_day": start_day,
         "end_day": end_day,
         "limit": limit,
@@ -103,9 +103,9 @@ async def fetch_code_hotspots(
 async def fetch_repo_names(
     client: Any,
     *,
-    repo_ids: List[str],
+    repo_ids: list[str],
     org_id: str = "",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Fetch repo names for given repo IDs."""
     if not repo_ids:
         return {}
@@ -129,20 +129,20 @@ async def fetch_throughput(
     *,
     start_day: date,
     end_day: date,
-    team_id: Optional[str] = None,
-    repo_id: Optional[str] = None,
-    provider: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    team_id: str | None = None,
+    repo_id: str | None = None,
+    provider: str | None = None,
+    work_scope_id: str | None = None,
     limit: int = 500,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Fetch throughput data for work items completed in window.
 
     Returns rows with (type, repo_name, items_completed).
     If work item type not available, falls back to 'unclassified'.
     """
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "start_day": start_day,
         "end_day": end_day,
         "limit": limit,
@@ -185,15 +185,15 @@ async def fetch_throughput_by_type(
     *,
     start_day: date,
     end_day: date,
-    team_id: Optional[str] = None,
-    repo_id: Optional[str] = None,
+    team_id: str | None = None,
+    repo_id: str | None = None,
     limit: int = 500,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Fetch throughput by work item type from work_item_cycle_times.
     """
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "start_day": start_day,
         "end_day": end_day,
         "limit": limit,
@@ -233,16 +233,16 @@ async def fetch_cycle_milestones(
     *,
     start_day: date,
     end_day: date,
-    team_id: Optional[str] = None,
-    provider: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    team_id: str | None = None,
+    provider: str | None = None,
+    work_scope_id: str | None = None,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Fetch aggregated cycle time by milestone as a fallback.
     Returns (milestone, avg_hours, total_items).
     """
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "start_day": start_day,
         "end_day": end_day,
     }

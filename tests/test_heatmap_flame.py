@@ -108,9 +108,10 @@ def test_flame_frames_gap_detection():
 def test_aggregated_flame_empty_response_shape():
     """Verify empty aggregated flame response has valid structure."""
     from datetime import date
+
     from dev_health_ops.api.models.schemas import (
-        AggregatedFlameNode,
         AggregatedFlameMeta,
+        AggregatedFlameNode,
         AggregatedFlameResponse,
     )
 
@@ -193,9 +194,10 @@ def test_aggregated_flame_code_hotspots_hierarchy():
 def test_aggregated_flame_filter_propagation():
     """Verify filters are included in meta."""
     from datetime import date
+
     from dev_health_ops.api.models.schemas import (
-        AggregatedFlameNode,
         AggregatedFlameMeta,
+        AggregatedFlameNode,
         AggregatedFlameResponse,
     )
 
@@ -237,8 +239,9 @@ def test_aggregated_flame_throughput_tree_structure():
 
 def test_aggregated_flame_milestone_approximation():
     """Verify cycle_breakdown fallback to milestones when status durations are missing."""
-    from unittest.mock import patch, MagicMock
     from datetime import date
+    from unittest.mock import MagicMock, patch
+
     from dev_health_ops.api.services.aggregated_flame import (
         build_aggregated_flame_response,
     )

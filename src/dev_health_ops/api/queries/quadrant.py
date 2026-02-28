@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any
+
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 def _bucket_expr(bucket: str) -> str:
@@ -26,9 +27,9 @@ async def fetch_quadrant_metric(
     join_clause: str = "",
     where_clause: str = "",
     scope_filter: str = "",
-    scope_params: Dict[str, Any] | None = None,
+    scope_params: dict[str, Any] | None = None,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     bucket_expr = _bucket_expr(bucket)
     join_sql = f"\n{join_clause}" if join_clause else ""
     where_sql = f"\n{where_clause}" if where_clause else ""
@@ -48,7 +49,7 @@ async def fetch_quadrant_metric(
         GROUP BY bucket, entity_id, entity_label
         ORDER BY bucket
     """
-    params: Dict[str, Any] = {"start_day": start_day, "end_day": end_day}
+    params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     if scope_params:
         params.update(scope_params)
     params["org_id"] = org_id

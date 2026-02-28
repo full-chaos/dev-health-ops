@@ -14,7 +14,7 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dev_health_ops.connectors import GitHubConnector, BatchResult  # noqa: E402
+from dev_health_ops.connectors import BatchResult, GitHubConnector  # noqa: E402
 
 
 def on_repo_processed(result: BatchResult) -> None:

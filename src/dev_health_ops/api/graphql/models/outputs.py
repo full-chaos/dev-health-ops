@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import List, Optional
 
 import strawberry
 
@@ -24,7 +23,7 @@ class TimeseriesResult:
     dimension: str
     dimension_value: str
     measure: str
-    buckets: List[TimeseriesBucket]
+    buckets: list[TimeseriesBucket]
 
 
 @strawberry.type
@@ -41,7 +40,7 @@ class BreakdownResult:
 
     dimension: str
     measure: str
-    items: List[BreakdownItem]
+    items: list[BreakdownItem]
 
 
 @strawberry.type
@@ -75,18 +74,18 @@ class SankeyCoverage:
 class SankeyResult:
     """Result of a Sankey flow query."""
 
-    nodes: List[SankeyNode]
-    edges: List[SankeyEdge]
-    coverage: Optional[SankeyCoverage] = None
+    nodes: list[SankeyNode]
+    edges: list[SankeyEdge]
+    coverage: SankeyCoverage | None = None
 
 
 @strawberry.type
 class AnalyticsResult:
     """Combined result of a batch analytics request."""
 
-    timeseries: List[TimeseriesResult]
-    breakdowns: List[BreakdownResult]
-    sankey: Optional[SankeyResult] = None
+    timeseries: list[TimeseriesResult]
+    breakdowns: list[BreakdownResult]
+    sankey: SankeyResult | None = None
 
 
 @strawberry.type
@@ -129,10 +128,10 @@ class CatalogValueItem:
 class CatalogResult:
     """Result of a catalog query."""
 
-    dimensions: List[CatalogDimension]
-    measures: List[CatalogMeasure]
+    dimensions: list[CatalogDimension]
+    measures: list[CatalogMeasure]
     limits: CatalogLimits
-    values: Optional[List[CatalogValueItem]] = None
+    values: list[CatalogValueItem] | None = None
 
 
 # =============================================================================
@@ -150,8 +149,8 @@ class PageInfo:
 
     has_next_page: bool
     has_previous_page: bool
-    start_cursor: Optional[str] = None
-    end_cursor: Optional[str] = None
+    start_cursor: str | None = None
+    end_cursor: str | None = None
 
 
 @strawberry.type
@@ -166,7 +165,7 @@ class BreakdownItemEdge:
 class BreakdownConnection:
     """Paginated connection for breakdown results."""
 
-    edges: List[BreakdownItemEdge]
+    edges: list[BreakdownItemEdge]
     page_info: PageInfo
     total_count: int
     dimension: str
@@ -185,7 +184,7 @@ class CatalogValueEdge:
 class CatalogValueConnection:
     """Paginated connection for catalog dimension values."""
 
-    edges: List[CatalogValueEdge]
+    edges: list[CatalogValueEdge]
     page_info: PageInfo
     total_count: int
 
@@ -212,7 +211,7 @@ class MetricDelta:
     value: float
     unit: str
     delta_pct: float
-    spark: List[SparkPoint]
+    spark: list[SparkPoint]
 
 
 @strawberry.type
@@ -228,8 +227,8 @@ class Coverage:
 class Freshness:
     """Data freshness information."""
 
-    last_ingested_at: Optional[str] = None
-    coverage: Optional[Coverage] = None
+    last_ingested_at: str | None = None
+    coverage: Coverage | None = None
 
 
 @strawberry.type
@@ -237,7 +236,7 @@ class HomeResult:
     """Result for home dashboard query."""
 
     freshness: Freshness
-    deltas: List[MetricDelta]
+    deltas: list[MetricDelta]
 
 
 # =============================================================================
@@ -252,15 +251,15 @@ class OpportunityCard:
     id: str
     title: str
     rationale: str
-    evidence_links: List[str]
-    suggested_experiments: List[str]
+    evidence_links: list[str]
+    suggested_experiments: list[str]
 
 
 @strawberry.type
 class OpportunitiesResult:
     """Result for opportunities query."""
 
-    items: List[OpportunityCard]
+    items: list[OpportunityCard]
 
 
 # =============================================================================
@@ -274,8 +273,8 @@ class PersonSearchResult:
 
     id: str
     name: str
-    email: Optional[str] = None
-    team: Optional[str] = None
+    email: str | None = None
+    team: str | None = None
 
 
 @strawberry.type
@@ -293,9 +292,9 @@ class PersonResult:
 
     id: str
     name: str
-    email: Optional[str] = None
-    team: Optional[str] = None
-    metrics: List[PersonMetric]
+    email: str | None = None
+    team: str | None = None
+    metrics: list[PersonMetric]
 
 
 # =============================================================================
@@ -317,11 +316,11 @@ class PullRequestItem:
 
     repo_id: str
     number: int
-    title: Optional[str] = None
-    author: Optional[str] = None
+    title: str | None = None
+    author: str | None = None
     created_at: str
-    merged_at: Optional[str] = None
-    link: Optional[str] = None
+    merged_at: str | None = None
+    link: str | None = None
 
 
 @strawberry.type
@@ -331,17 +330,17 @@ class IssueItem:
     work_item_id: str
     provider: str
     status: str
-    team_id: Optional[str] = None
-    cycle_time_hours: Optional[float] = None
-    link: Optional[str] = None
+    team_id: str | None = None
+    cycle_time_hours: float | None = None
+    link: str | None = None
 
 
 @strawberry.type
 class DrilldownResult:
     """Result for drilldown query."""
 
-    prs: Optional[List[PullRequestItem]] = None
-    issues: Optional[List[IssueItem]] = None
+    prs: list[PullRequestItem] | None = None
+    issues: list[IssueItem] | None = None
 
 
 # =============================================================================
@@ -407,15 +406,15 @@ class WorkGraphEdgeResult:
     provenance: WorkGraphProvenance
     confidence: float
     evidence: str
-    repo_id: Optional[str] = None
-    provider: Optional[str] = None
+    repo_id: str | None = None
+    provider: str | None = None
 
 
 @strawberry.type
 class WorkGraphEdgesResult:
     """Result for work graph edges query."""
 
-    edges: List[WorkGraphEdgeResult]
+    edges: list[WorkGraphEdgeResult]
     total_count: int
     page_info: PageInfo
 
@@ -431,20 +430,20 @@ class CapacityForecast:
 
     forecast_id: str
     computed_at: str
-    team_id: Optional[str] = None
-    work_scope_id: Optional[str] = None
+    team_id: str | None = None
+    work_scope_id: str | None = None
     backlog_size: int
-    target_items: Optional[int] = None
-    target_date: Optional[date] = None
-    p50_date: Optional[date] = None
-    p85_date: Optional[date] = None
-    p95_date: Optional[date] = None
-    p50_days: Optional[int] = None
-    p85_days: Optional[int] = None
-    p95_days: Optional[int] = None
-    p50_items: Optional[int] = None
-    p85_items: Optional[int] = None
-    p95_items: Optional[int] = None
+    target_items: int | None = None
+    target_date: date | None = None
+    p50_date: date | None = None
+    p85_date: date | None = None
+    p95_date: date | None = None
+    p50_days: int | None = None
+    p85_days: int | None = None
+    p95_days: int | None = None
+    p50_items: int | None = None
+    p85_items: int | None = None
+    p95_items: int | None = None
     throughput_mean: float
     throughput_stddev: float
     history_days: int
@@ -464,6 +463,6 @@ class CapacityForecastEdge:
 class CapacityForecastConnection:
     """Paginated connection for capacity forecasts."""
 
-    edges: List[CapacityForecastEdge]
+    edges: list[CapacityForecastEdge]
     page_info: PageInfo
     total_count: int

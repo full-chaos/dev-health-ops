@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -16,7 +16,6 @@ from ..models.outputs import (
     WorkGraphNodeType,
     WorkGraphProvenance,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ def _map_provenance(value: str) -> WorkGraphProvenance:
         return WorkGraphProvenance.HEURISTIC
 
 
-def _row_to_edge(row: Dict[str, Any]) -> WorkGraphEdgeResult:
+def _row_to_edge(row: dict[str, Any]) -> WorkGraphEdgeResult:
     return WorkGraphEdgeResult(
         edge_id=str(row.get("edge_id", "")),
         source_type=_map_node_type(str(row.get("source_type", "issue"))),
@@ -60,7 +59,7 @@ def _row_to_edge(row: Dict[str, Any]) -> WorkGraphEdgeResult:
 
 async def resolve_work_graph_edges(
     context: GraphQLContext,
-    filters: Optional[WorkGraphEdgeFilterInput] = None,
+    filters: WorkGraphEdgeFilterInput | None = None,
 ) -> WorkGraphEdgesResult:
     from dev_health_ops.api.queries.client import query_dicts
 
@@ -71,8 +70,8 @@ async def resolve_work_graph_edges(
         raise RuntimeError("Database client not available")
 
     limit = filters.limit if filters else 1000
-    params: Dict[str, Any] = {"limit": int(limit)}
-    where_clauses: List[str] = []
+    params: dict[str, Any] = {"limit": int(limit)}
+    where_clauses: list[str] = []
 
     if filters:
         if filters.repo_ids:

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
-from typing import Annotated, AsyncGenerator
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession

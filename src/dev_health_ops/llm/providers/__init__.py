@@ -7,7 +7,7 @@ Provides a unified interface for LLM completion, supporting multiple backends.
 from __future__ import annotations
 
 import os
-from typing import Protocol, runtime_checkable, Optional
+from typing import Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -68,7 +68,7 @@ def is_llm_available(name: str = "auto") -> bool:
     return True
 
 
-def get_provider(name: str = "auto", model: Optional[str] = None) -> LLMProvider:
+def get_provider(name: str = "auto", model: str | None = None) -> LLMProvider:
     """
     Get an LLM provider by name.
 

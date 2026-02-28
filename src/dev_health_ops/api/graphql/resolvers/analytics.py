@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from datetime import date
-from typing import Any, Coroutine, Dict, List, Optional
+from typing import Any
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -42,7 +43,6 @@ from ..sql.compiler import (
     compile_timeseries,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -52,8 +52,8 @@ async def _execute_timeseries_query(
     org_id: str,
     timeout: int,
     use_investment: bool,
-    filters: Optional[Any],
-) -> List[TimeseriesResult]:
+    filters: Any | None,
+) -> list[TimeseriesResult]:
     """Execute a single timeseries query and return results."""
     from dev_health_ops.api.queries.client import query_dicts
 
@@ -72,7 +72,7 @@ async def _execute_timeseries_query(
     sql, params = compile_timeseries(request, org_id, timeout, filters=filters)
 
     rows = await query_dicts(client, sql, params)
-    grouped: Dict[str, List[TimeseriesBucket]] = {}
+    grouped: dict[str, list[TimeseriesBucket]] = {}
 
     for row in rows:
         dim_val = str(row.get("dimension_value", ""))
@@ -102,7 +102,7 @@ async def _execute_breakdown_query(
     org_id: str,
     timeout: int,
     use_investment: bool,
-    filters: Optional[Any],
+    filters: Any | None,
 ) -> BreakdownResult:
     """Execute a single breakdown query and return results."""
     from dev_health_ops.api.queries.client import query_dicts
@@ -195,7 +195,7 @@ async def resolve_analytics(
         validate_sankey_limits(batch.sankey.max_nodes, batch.sankey.max_edges)
 
     # Build list of all query coroutines for parallel execution
-    timeseries_coros: List[Coroutine[Any, Any, List[TimeseriesResult]]] = [
+    timeseries_coros: list[Coroutine[Any, Any, list[TimeseriesResult]]] = [
         _execute_timeseries_query(
             client,
             ts_req,
@@ -207,7 +207,7 @@ async def resolve_analytics(
         for ts_req in batch.timeseries
     ]
 
-    breakdown_coros: List[Coroutine[Any, Any, BreakdownResult]] = [
+    breakdown_coros: list[Coroutine[Any, Any, BreakdownResult]] = [
         _execute_breakdown_query(
             client,
             bd_req,
@@ -232,7 +232,7 @@ async def resolve_analytics(
     breakdown_raw = all_results[num_timeseries:]
 
     # Process timeseries results (flatten nested lists)
-    timeseries_results: List[TimeseriesResult] = []
+    timeseries_results: list[TimeseriesResult] = []
     for i, result in enumerate(timeseries_raw):
         if isinstance(result, Exception):
             logger.error("Timeseries query %d failed: %s", i, result)
@@ -240,14 +240,14 @@ async def resolve_analytics(
         timeseries_results.extend(result)
 
     # Process breakdown results
-    breakdown_results: List[BreakdownResult] = []
+    breakdown_results: list[BreakdownResult] = []
     for i, result in enumerate(breakdown_raw):
         if isinstance(result, Exception):
             logger.error("Breakdown query %d failed: %s", i, result)
             raise result
         breakdown_results.append(result)
 
-    sankey_result: Optional[SankeyResult] = None
+    sankey_result: SankeyResult | None = None
 
     # Execute sankey query (already validated above)
     if batch.sankey is not None:
@@ -271,13 +271,13 @@ async def resolve_analytics(
             request, org_id, timeout, filters=batch.filters
         )
 
-        nodes: List[SankeyNode] = []
-        edges: List[SankeyEdge] = []
+        nodes: list[SankeyNode] = []
+        edges: list[SankeyEdge] = []
 
         try:
             # Execute nodes and edges queries in parallel
-            async def fetch_nodes() -> List[SankeyNode]:
-                result_nodes: List[SankeyNode] = []
+            async def fetch_nodes() -> list[SankeyNode]:
+                result_nodes: list[SankeyNode] = []
                 for sql, params in nodes_queries:
                     rows = await query_dicts(client, sql, params)
                     if not rows:
@@ -296,8 +296,8 @@ async def resolve_analytics(
                         )
                 return result_nodes
 
-            async def fetch_edges() -> List[SankeyEdge]:
-                result_edges: List[SankeyEdge] = []
+            async def fetch_edges() -> list[SankeyEdge]:
+                result_edges: list[SankeyEdge] = []
                 for sql, params in edges_queries:
                     rows = await query_dicts(client, sql, params)
                     if not rows:
@@ -336,7 +336,7 @@ async def resolve_analytics(
                 edges = edges_result
 
             # Calculate coverage metrics if requested
-            coverage: Optional[SankeyCoverage] = None
+            coverage: SankeyCoverage | None = None
             if batch.sankey is not None:
                 # Use a specific coverage query
                 # We need to calculate % of units with assigned team and assigned repo

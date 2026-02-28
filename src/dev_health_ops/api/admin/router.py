@@ -2,20 +2,34 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, AsyncGenerator, Optional
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.admin.middleware import (
+    get_admin_org_id,
+    require_admin,
+    require_superuser,
+)
+from dev_health_ops.api.middleware.rate_limit import (
+    ADMIN_PASSWORD_LIMIT,
+    get_admin_user_key,
+    limiter,
+)
 from dev_health_ops.api.services.audit import (
-    AuditService,
     AuditLogFilter as ServiceAuditLogFilter,
 )
+from dev_health_ops.api.services.audit import (
+    AuditService,
+)
+from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.invites import create_invite, send_invite_email
 from dev_health_ops.api.services.ip_allowlist import IPAllowlistService
 from dev_health_ops.api.services.retention import RetentionService
-from dev_health_ops.licensing import require_feature
 from dev_health_ops.api.services.settings import (
     IdentityMappingService,
     IntegrationCredentialsService,
@@ -23,46 +37,36 @@ from dev_health_ops.api.services.settings import (
     SettingsService,
     SyncConfigurationService,
     TeamDiscoveryService,
-    TeamMembershipService,
     TeamMappingService,
-)
-from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.api.middleware.rate_limit import (
-    ADMIN_PASSWORD_LIMIT,
-    get_admin_user_key,
-    limiter,
+    TeamMembershipService,
 )
 from dev_health_ops.api.services.users import (
     MembershipService,
     OrganizationService,
     UserService,
 )
-from dev_health_ops.api.services.invites import create_invite, send_invite_email
-from dev_health_ops.db import get_postgres_session
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.password_policy import validate_password
+from dev_health_ops.db import get_postgres_session
+from dev_health_ops.licensing import require_feature
+from dev_health_ops.models.audit import AuditAction, AuditLog, AuditResourceType
+from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.settings import (
     JobRun,
     ScheduledJob,
     SettingCategory,
     SyncConfiguration,
 )
-from dev_health_ops.models.audit import AuditAction, AuditLog, AuditResourceType
-from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
 from dev_health_ops.models.users import Membership, Organization, User
 
-from dev_health_ops.api.admin.middleware import (
-    get_admin_org_id,
-    require_admin,
-    require_superuser,
-)
 from .schemas import (
+    JOB_RUN_STATUS_LABELS,
     AuditLogListResponse,
     AuditLogResponse,
-    ConfirmMembersRequest,
-    ConfirmMembersResponse,
     ConfirmInferredMembersRequest,
     ConfirmInferredMembersResponse,
+    ConfirmMembersRequest,
+    ConfirmMembersResponse,
     FeatureFlagResponse,
     FeatureOverrideCreate,
     FeatureOverrideResponse,
@@ -71,25 +75,24 @@ from .schemas import (
     IntegrationCredentialCreate,
     IntegrationCredentialResponse,
     IntegrationCredentialUpdate,
-    JOB_RUN_STATUS_LABELS,
-    JobRunResponse,
     IPAllowlistCreate,
     IPAllowlistListResponse,
     IPAllowlistResponse,
     IPAllowlistUpdate,
     IPCheckRequest,
     IPCheckResponse,
+    JiraActivityInferenceResponse,
+    JobRunResponse,
     MembershipCreate,
-    OrgInviteCreate,
-    OrgInviteResponse,
     MembershipResponse,
     MembershipUpdateRole,
     OrganizationCreate,
     OrganizationResponse,
     OrganizationUpdate,
+    OrgInviteCreate,
+    OrgInviteResponse,
     OwnershipTransfer,
     PlatformStatsResponse,
-    JiraActivityInferenceResponse,
     RetentionExecuteResponse,
     RetentionPolicyCreate,
     RetentionPolicyListResponse,
@@ -105,10 +108,10 @@ from .schemas import (
     TeamDiscoverResponse,
     TeamImportRequest,
     TeamImportResponse,
-    TeamMembersDiscoverResponse,
     TeamMappingCreate,
     TeamMappingResponse,
     TeamMappingUpdate,
+    TeamMembersDiscoverResponse,
     TestConnectionRequest,
     TestConnectionResponse,
     UserCreate,
@@ -141,8 +144,8 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 def get_user_id(
-    x_user_id: Annotated[Optional[str], Header(alias="X-User-Id")] = None,
-) -> Optional[str]:
+    x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None,
+) -> str | None:
     return x_user_id
 
 
@@ -470,8 +473,9 @@ async def test_connection(
 
 
 async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
-    import httpx
     from urllib.parse import urlparse
+
+    import httpx
 
     token = creds.get("token")
     if not token:
@@ -497,8 +501,9 @@ async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
 
 
 async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
-    import httpx
     from urllib.parse import urlparse
+
+    import httpx
 
     token = creds.get("token")
     if not token:
@@ -521,8 +526,9 @@ async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
 
 
 async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
-    import httpx
     from urllib.parse import urlparse
+
+    import httpx
 
     email = creds.get("email")
     api_token = creds.get("token") or creds.get("api_token")
@@ -2123,19 +2129,15 @@ async def transfer_ownership(
 async def list_audit_logs(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    user_id: Optional[str] = Query(None, description="Filter by user ID"),
-    action: Optional[str] = Query(None, description="Filter by action type"),
-    resource_type: Optional[str] = Query(None, description="Filter by resource type"),
-    resource_id: Optional[str] = Query(None, description="Filter by resource ID"),
-    status: Optional[str] = Query(
-        None, description="Filter by status (success/failure)"
-    ),
-    start_date: Optional[datetime] = Query(
+    user_id: str | None = Query(None, description="Filter by user ID"),
+    action: str | None = Query(None, description="Filter by action type"),
+    resource_type: str | None = Query(None, description="Filter by resource type"),
+    resource_id: str | None = Query(None, description="Filter by resource ID"),
+    status: str | None = Query(None, description="Filter by status (success/failure)"),
+    start_date: datetime | None = Query(
         None, description="Filter logs after this date"
     ),
-    end_date: Optional[datetime] = Query(
-        None, description="Filter logs before this date"
-    ),
+    end_date: datetime | None = Query(None, description="Filter logs before this date"),
     limit: int = Query(50, ge=1, le=500, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ) -> AuditLogListResponse:
@@ -2190,19 +2192,15 @@ async def list_audit_logs(
 async def list_platform_audit_logs(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(require_superuser),
-    user_id: Optional[str] = Query(None, description="Filter by user ID"),
-    action: Optional[str] = Query(None, description="Filter by action type"),
-    resource_type: Optional[str] = Query(None, description="Filter by resource type"),
-    resource_id: Optional[str] = Query(None, description="Filter by resource ID"),
-    status: Optional[str] = Query(
-        None, description="Filter by status (success/failure)"
-    ),
-    start_date: Optional[datetime] = Query(
+    user_id: str | None = Query(None, description="Filter by user ID"),
+    action: str | None = Query(None, description="Filter by action type"),
+    resource_type: str | None = Query(None, description="Filter by resource type"),
+    resource_id: str | None = Query(None, description="Filter by resource ID"),
+    status: str | None = Query(None, description="Filter by status (success/failure)"),
+    start_date: datetime | None = Query(
         None, description="Filter logs after this date"
     ),
-    end_date: Optional[datetime] = Query(
-        None, description="Filter logs before this date"
-    ),
+    end_date: datetime | None = Query(None, description="Filter logs before this date"),
     limit: int = Query(50, ge=1, le=500, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ) -> AuditLogListResponse:
@@ -2425,7 +2423,7 @@ async def create_ip_allowlist_entry(
     payload: IPAllowlistCreate,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    user_id: Optional[str] = Depends(get_user_id),
+    user_id: str | None = Depends(get_user_id),
 ) -> IPAllowlistResponse:
     svc = IPAllowlistService(session)
     try:
@@ -2602,7 +2600,7 @@ async def create_retention_policy(
     payload: RetentionPolicyCreate,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    user_id: Optional[str] = Depends(get_user_id),
+    user_id: str | None = Depends(get_user_id),
 ) -> RetentionPolicyResponse:
     svc = RetentionService(session)
     try:

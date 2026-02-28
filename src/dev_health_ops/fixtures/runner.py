@@ -1,22 +1,22 @@
 import argparse
-import uuid
 import asyncio
 import logging
 import os
 import random
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
-from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
 from dev_health_ops.licensing.gating import LicenseManager
-from dev_health_ops.work_graph.runner import materialize_fixture_investments
-from dev_health_ops.metrics.job_daily import run_daily_metrics_job
+from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
+from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 from dev_health_ops.providers.teams import load_team_resolver
 from dev_health_ops.storage import SQLAlchemyStore, resolve_db_type, run_with_store
 from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS
+from dev_health_ops.work_graph.runner import materialize_fixture_investments
 
 
 async def _insert_batches(
@@ -110,9 +110,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     fixture_data = {"work_items": [], "transitions": []}
 
     # Default to the fixture org UUID so demo data is queryable out of the box.
-    _default_org = str(uuid.uuid5(
-        uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "default-org"
-    ))
+    _default_org = str(
+        uuid.uuid5(uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "default-org")
+    )
     org_id = getattr(ns, "org", None) or _default_org
     logging.info("Generating fixtures for org_id=%s", org_id)
 
@@ -151,9 +151,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             _pg_uri = get_postgres_uri()
             if _pg_uri:
                 from sqlalchemy.ext.asyncio import (
-                    create_async_engine,
-                    async_sessionmaker,
                     AsyncSession,
+                    async_sessionmaker,
+                    create_async_engine,
                 )
 
                 _pg_engine = create_async_engine(_pg_uri, pool_pre_ping=True)
@@ -437,13 +437,17 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 # Generate and write worklogs
                 all_worklogs = []
                 wl_gen = SyntheticDataGenerator(repo_name=ns.repo_name, seed=ns.seed)
-                all_worklogs.extend(wl_gen.generate_worklogs(fixture_data["work_items"]))
-                if hasattr(sink, 'write_worklogs') and all_worklogs:
+                all_worklogs.extend(
+                    wl_gen.generate_worklogs(fixture_data["work_items"])
+                )
+                if hasattr(sink, "write_worklogs") and all_worklogs:
                     sink.write_worklogs(all_worklogs)
                     logging.info("Wrote %d worklogs.", len(all_worklogs))
 
                 # Generate and write sprints
-                sprint_gen = SyntheticDataGenerator(repo_name=ns.repo_name, seed=ns.seed)
+                sprint_gen = SyntheticDataGenerator(
+                    repo_name=ns.repo_name, seed=ns.seed
+                )
                 sprints = sprint_gen.generate_sprints(days=ns.days)
                 if hasattr(sink, "write_sprints") and sprints:
                     sink.write_sprints(sprints)
@@ -453,9 +457,13 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 # and file hotspot daily records for each repo.
                 _repo_count = max(1, ns.repo_count)
                 for i in range(_repo_count):
-                    r_name = ns.repo_name if _repo_count == 1 else f"{ns.repo_name}-{i + 1}"
+                    r_name = (
+                        ns.repo_name if _repo_count == 1 else f"{ns.repo_name}-{i + 1}"
+                    )
                     seed_value = (int(ns.seed) + i) if ns.seed is not None else None
-                    metric_gen = SyntheticDataGenerator(repo_name=r_name, seed=seed_value)
+                    metric_gen = SyntheticDataGenerator(
+                        repo_name=r_name, seed=seed_value
+                    )
 
                     dora_records = metric_gen.generate_dora_metrics(days=ns.days)
                     if hasattr(sink, "write_dora_metrics") and dora_records:
@@ -471,7 +479,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     if hasattr(sink, "write_investment_metrics") and inv_metrics:
                         sink.write_investment_metrics(inv_metrics)
 
-                    hotspot_records = metric_gen.generate_file_hotspot_daily(days=ns.days)
+                    hotspot_records = metric_gen.generate_file_hotspot_daily(
+                        days=ns.days
+                    )
                     if hasattr(sink, "write_file_hotspot_daily") and hotspot_records:
                         sink.write_file_hotspot_daily(hotspot_records)
 

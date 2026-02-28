@@ -39,12 +39,11 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.models.work_items import (
     Sprint,
-    Worklog,
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
+    Worklog,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. All schema dataclasses have org_id with correct default

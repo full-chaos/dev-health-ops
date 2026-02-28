@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict
 
 PROMPT_PATH = (
     Path(__file__).parent.parent / "prompts" / "investment_mix_explain_prompt.txt"
@@ -13,11 +13,11 @@ logger = logging.getLogger(__name__)
 
 class FindingEvidence(TypedDict):
     theme: str
-    subcategory: Optional[str]
+    subcategory: str | None
     share_pct: float
-    delta_pct_points: Optional[float]
-    evidence_quality_mean: Optional[float]
-    evidence_quality_band: Optional[str]
+    delta_pct_points: float | None
+    evidence_quality_mean: float | None
+    evidence_quality_band: str | None
 
 
 class Finding(TypedDict):
@@ -27,10 +27,10 @@ class Finding(TypedDict):
 
 class Confidence(TypedDict):
     level: Literal["high", "moderate", "low", "unknown"]
-    quality_mean: Optional[float]
-    quality_stddev: Optional[float]
-    band_mix: Dict[str, int]
-    drivers: List[str]
+    quality_mean: float | None
+    quality_stddev: float | None
+    band_mix: dict[str, int]
+    drivers: list[str]
 
 
 class ActionItem(TypedDict):
@@ -41,13 +41,13 @@ class ActionItem(TypedDict):
 
 class InvestmentMixExplainOutput(TypedDict):
     summary: str
-    top_findings: List[Finding]
+    top_findings: list[Finding]
     confidence: Confidence
-    what_to_check_next: List[ActionItem]
-    anti_claims: List[str]
-    status: Optional[
-        Literal["valid", "invalid_json", "invalid_llm_output", "llm_unavailable"]
-    ]
+    what_to_check_next: list[ActionItem]
+    anti_claims: list[str]
+    status: (
+        Literal["valid", "invalid_json", "invalid_llm_output", "llm_unavailable"] | None
+    )
 
 
 _FORBIDDEN_WORDS = (" should ", " should.", " should,", " determined ", " detected ")
@@ -61,7 +61,7 @@ def load_prompt() -> str:
         return ""
 
 
-def build_prompt(*, base_prompt: str, payload: Dict[str, Any]) -> str:
+def build_prompt(*, base_prompt: str, payload: dict[str, Any]) -> str:
     return (
         base_prompt.rstrip()
         + "\n\n---\nPRECOMPUTED DATA (do not recalculate):\n"
@@ -71,7 +71,7 @@ def build_prompt(*, base_prompt: str, payload: Dict[str, Any]) -> str:
     )
 
 
-def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json_object(text: str) -> dict[str, Any] | None:
     if not text or not text.strip():
         logger.warning("LLM response is empty or whitespace-only")
         return None
@@ -112,10 +112,10 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     return parsed
 
 
-def _as_string_list(value: Any) -> List[str]:
+def _as_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    out: List[str] = []
+    out: list[str] = []
     for item in value:
         if isinstance(item, str) and item.strip():
             out.append(item.strip())
@@ -131,7 +131,7 @@ def _contains_forbidden_language(text: str) -> bool:
     return False
 
 
-def _parse_finding(raw: Any) -> Optional[Finding]:
+def _parse_finding(raw: Any) -> Finding | None:
     if not isinstance(raw, dict):
         return None
     finding_text = raw.get("finding")
@@ -167,7 +167,7 @@ def _parse_finding(raw: Any) -> Optional[Finding]:
     }
 
 
-def _parse_action_item(raw: Any) -> Optional[ActionItem]:
+def _parse_action_item(raw: Any) -> ActionItem | None:
     if not isinstance(raw, dict):
         return None
     action = raw.get("action")
@@ -180,10 +180,10 @@ def _parse_action_item(raw: Any) -> Optional[ActionItem]:
 
 def _parse_confidence(
     raw: Any,
-    fallback_band_mix: Dict[str, int],
-    fallback_drivers: List[str],
-    fallback_mean: Optional[float],
-    fallback_stddev: Optional[float],
+    fallback_band_mix: dict[str, int],
+    fallback_drivers: list[str],
+    fallback_mean: float | None,
+    fallback_stddev: float | None,
 ) -> Confidence:
     if not isinstance(raw, dict):
         return {
@@ -214,11 +214,11 @@ def _parse_confidence(
 def parse_and_validate_response(
     text: str,
     *,
-    fallback_band_mix: Optional[Dict[str, int]] = None,
-    fallback_drivers: Optional[List[str]] = None,
-    fallback_mean: Optional[float] = None,
-    fallback_stddev: Optional[float] = None,
-) -> Optional[InvestmentMixExplainOutput]:
+    fallback_band_mix: dict[str, int] | None = None,
+    fallback_drivers: list[str] | None = None,
+    fallback_mean: float | None = None,
+    fallback_stddev: float | None = None,
+) -> InvestmentMixExplainOutput | None:
     parsed = _extract_json_object(text)
     if not parsed:
         return None
@@ -232,7 +232,7 @@ def parse_and_validate_response(
         return None
 
     # Parse findings
-    top_findings: List[Finding] = []
+    top_findings: list[Finding] = []
     for raw_finding in parsed.get("top_findings") or []:
         finding = _parse_finding(raw_finding)
         if finding:
@@ -248,7 +248,7 @@ def parse_and_validate_response(
     )
 
     # Parse action items
-    what_to_check_next: List[ActionItem] = []
+    what_to_check_next: list[ActionItem] = []
     for raw_action in parsed.get("what_to_check_next") or []:
         action = _parse_action_item(raw_action)
         if action:

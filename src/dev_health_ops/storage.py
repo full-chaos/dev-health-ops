@@ -5,7 +5,6 @@ import sys
 import warnings
 from pathlib import Path
 
-
 warnings.warn(
     "dev_health_ops.storage is now a package; import from dev_health_ops.storage instead.",
     DeprecationWarning,

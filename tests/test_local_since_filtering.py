@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List
 from unittest.mock import Mock
 
 import pytest
@@ -25,7 +24,7 @@ class DummyCommit:
         self.committer = DummyPerson("Committer", "committer@example.com")
         self.authored_datetime = committed_at
         self.committed_datetime = committed_at
-        self.parents: List = []
+        self.parents: list = []
 
     def diff(self, *_args, **_kwargs):
         return []

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from typing import Dict, List
 
 from dev_health_ops.metrics.schemas import CommitStatRow
 
 
 def compute_bus_factor(
     repo_id: str,
-    window_stats: List[CommitStatRow],
+    window_stats: list[CommitStatRow],
     threshold_percent: float = 0.5,
 ) -> int:
     """
@@ -26,7 +25,7 @@ def compute_bus_factor(
     repo_uuid = uuid.UUID(repo_id)
 
     # Aggregate churn by author
-    author_churn: Dict[str, int] = defaultdict(int)
+    author_churn: dict[str, int] = defaultdict(int)
     total_churn = 0
 
     for row in window_stats:
@@ -62,7 +61,7 @@ def compute_bus_factor(
 
 def compute_code_ownership_gini(
     repo_id: str,
-    window_stats: List[CommitStatRow],
+    window_stats: list[CommitStatRow],
 ) -> float:
     """
     Compute the Gini coefficient of code contribution (churn) distribution.
@@ -76,7 +75,7 @@ def compute_code_ownership_gini(
     repo_uuid = uuid.UUID(repo_id)
 
     # Aggregate churn by author
-    author_churn: Dict[str, int] = defaultdict(int)
+    author_churn: dict[str, int] = defaultdict(int)
 
     for row in window_stats:
         if row["repo_id"] != repo_uuid:

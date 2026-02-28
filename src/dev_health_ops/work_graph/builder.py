@@ -14,11 +14,9 @@ import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Set, Tuple
 
-from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.metrics.schemas import WorkGraphEdgeRecord, WorkGraphIssuePRRecord
-
+from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.extractors.text_parser import (
     RefType,
     extract_github_issue_refs,
@@ -26,8 +24,8 @@ from dev_health_ops.work_graph.extractors.text_parser import (
     extract_jira_keys,
 )
 from dev_health_ops.work_graph.ids import (
-    generate_edge_id,
     generate_commit_id,
+    generate_edge_id,
     generate_pr_id,
 )
 from dev_health_ops.work_graph.models import (
@@ -48,7 +46,7 @@ def _format_datetime_for_clickhouse(dt: datetime) -> str:
 
 
 # Mapping from work_item_dependencies relationship types to EdgeType
-DEPENDENCY_TYPE_MAP: Dict[str, EdgeType] = {
+DEPENDENCY_TYPE_MAP: dict[str, EdgeType] = {
     "blocks": EdgeType.BLOCKS,
     "is_blocked_by": EdgeType.IS_BLOCKED_BY,
     "relates": EdgeType.RELATES,
@@ -67,9 +65,9 @@ class BuildConfig:
     """Configuration for work graph build."""
 
     dsn: str
-    from_date: Optional[datetime] = None
-    to_date: Optional[datetime] = None
-    repo_id: Optional[uuid.UUID] = None
+    from_date: datetime | None = None
+    to_date: datetime | None = None
+    repo_id: uuid.UUID | None = None
     heuristic_days_window: int = 7
     heuristic_confidence: float = 0.3
 
@@ -137,7 +135,7 @@ class WorkGraphBuilder:
             last_synced=link.last_synced or self._now,
         )
 
-    def _write_edges(self, edges: List[WorkGraphEdge]) -> int:
+    def _write_edges(self, edges: list[WorkGraphEdge]) -> int:
         """Write edges via the sink."""
         if not edges:
             return 0
@@ -145,7 +143,7 @@ class WorkGraphBuilder:
         self.sink.write_work_graph_edges(records)
         return len(records)
 
-    def _write_issue_pr_links(self, links: List[WorkGraphIssuePR]) -> None:
+    def _write_issue_pr_links(self, links: list[WorkGraphIssuePR]) -> None:
         """Write issue-PR links via the sink."""
         if not links:
             return
@@ -153,7 +151,7 @@ class WorkGraphBuilder:
         self.sink.write_work_graph_issue_pr(records)
 
     @staticmethod
-    def _parse_provenance(value: Optional[str]) -> Provenance:
+    def _parse_provenance(value: str | None) -> Provenance:
         raw = str(value or "").strip().lower()
         if raw == Provenance.NATIVE.value:
             return Provenance.NATIVE
@@ -301,7 +299,7 @@ class WorkGraphBuilder:
         logger.info("Created %d issue->issue edges", count)
         return count
 
-    def _build_issue_pr_edges(self) -> Tuple[Set[Tuple[str, int]], int]:
+    def _build_issue_pr_edges(self) -> tuple[set[tuple[str, int]], int]:
         """
         Build issue->PR edges from PR title and body text parsing.
 
@@ -357,10 +355,10 @@ class WorkGraphBuilder:
 
         # Build work item lookups
         # For Jira: key -> work_item_id
-        jira_key_lookup: Dict[str, str] = {}
+        jira_key_lookup: dict[str, str] = {}
         # For GitHub/GitLab: (repo_id, issue_number) -> work_item_id
-        gh_issue_lookup: Dict[Tuple[str, str], str] = {}
-        gl_issue_lookup: Dict[Tuple[str, str], str] = {}
+        gh_issue_lookup: dict[tuple[str, str], str] = {}
+        gl_issue_lookup: dict[tuple[str, str], str] = {}
 
         for wi_row in wi_rows:
             repo_id = wi_row.get("repo_id")
@@ -401,9 +399,9 @@ class WorkGraphBuilder:
         logger.debug("Repo ID overlap: %s", pr_repo_ids & wi_repo_ids)
 
         # Process PRs and extract references
-        edges: List[WorkGraphEdge] = []
-        fast_path_links: List[WorkGraphIssuePR] = []
-        explicit_links: Set[Tuple[str, int]] = set()
+        edges: list[WorkGraphEdge] = []
+        fast_path_links: list[WorkGraphIssuePR] = []
+        explicit_links: set[tuple[str, int]] = set()
         jira_refs_found = 0
         gh_refs_found = 0
         gl_refs_found = 0
@@ -646,9 +644,9 @@ class WorkGraphBuilder:
         """
         wi_rows = self.sink.query_dicts(wi_query, {})
 
-        jira_key_lookup: Dict[str, str] = {}
-        gh_issue_lookup: Dict[Tuple[str, str], str] = {}
-        gl_issue_lookup: Dict[Tuple[str, str], str] = {}
+        jira_key_lookup: dict[str, str] = {}
+        gh_issue_lookup: dict[tuple[str, str], str] = {}
+        gl_issue_lookup: dict[tuple[str, str], str] = {}
 
         for wi_row in wi_rows:
             repo_id = wi_row.get("repo_id")
@@ -675,11 +673,11 @@ class WorkGraphBuilder:
             len(gl_issue_lookup),
         )
 
-        edges: List[WorkGraphEdge] = []
+        edges: list[WorkGraphEdge] = []
         jira_refs_found = 0
         gh_refs_found = 0
         gl_refs_found = 0
-        seen_edges: Set[str] = set()
+        seen_edges: set[str] = set()
 
         for commit_row in commit_rows:
             repo_id = commit_row.get("repo_id")
@@ -836,7 +834,7 @@ class WorkGraphBuilder:
         return edge_count
 
     def _build_heuristic_issue_pr_edges(
-        self, explicit_links: Set[Tuple[str, int]]
+        self, explicit_links: set[tuple[str, int]]
     ) -> int:
         """
         Build heuristic issue->PR edges for items not linked explicitly.
@@ -908,7 +906,7 @@ class WorkGraphBuilder:
 
         # Group PRs by repo with sorted timestamps for O(log n) binary search
         # Data structure: {repo_key: (sorted_timestamps, [(pr_number, created_at), ...])}
-        prs_by_repo: Dict[str, Tuple[List[float], List[Tuple[int, datetime]]]] = {}
+        prs_by_repo: dict[str, tuple[list[float], list[tuple[int, datetime]]]] = {}
         for row in pr_rows:
             repo_id = row.get("repo_id")
             pr_number = row.get("number")
@@ -934,8 +932,8 @@ class WorkGraphBuilder:
         window_seconds = timedelta(
             days=self.config.heuristic_days_window
         ).total_seconds()
-        edges: List[WorkGraphEdge] = []
-        fast_path_links: List[WorkGraphIssuePR] = []
+        edges: list[WorkGraphEdge] = []
+        fast_path_links: list[WorkGraphIssuePR] = []
 
         linked_work_items = {work_item_id for work_item_id, _ in explicit_links}
 
@@ -963,7 +961,7 @@ class WorkGraphBuilder:
             left_idx = bisect.bisect_left(timestamps, updated_ts - window_seconds)
             right_idx = bisect.bisect_right(timestamps, updated_ts + window_seconds)
 
-            best: Optional[Tuple[int, datetime, float]] = None
+            best: tuple[int, datetime, float] | None = None
             for idx in range(left_idx, right_idx):
                 pr_number, pr_created_at = prs_list[idx]
                 if (work_item_id, pr_number) in explicit_links:
@@ -1028,7 +1026,7 @@ class WorkGraphBuilder:
         logger.info("Created %d heuristic issue->PR edges", count)
         return count
 
-    def _build_issue_pr_edges_from_fast_path(self) -> Tuple[Set[Tuple[str, int]], int]:
+    def _build_issue_pr_edges_from_fast_path(self) -> tuple[set[tuple[str, int]], int]:
         logger.info(
             "Building issue->PR edges from dev_health_ops.work_graph_issue_pr..."
         )
@@ -1046,7 +1044,7 @@ class WorkGraphBuilder:
         FROM work_graph_issue_pr AS p
         INNER JOIN git_pull_requests AS pr ON (toString(p.repo_id) = toString(pr.repo_id) AND p.pr_number = pr.number)
         """
-        where_parts: List[str] = []
+        where_parts: list[str] = []
         if self.config.repo_id:
             where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
         if self.config.from_date:
@@ -1065,8 +1063,8 @@ class WorkGraphBuilder:
         if not rows:
             return set(), 0
 
-        edges: List[WorkGraphEdge] = []
-        links: Set[Tuple[str, int]] = set()
+        edges: list[WorkGraphEdge] = []
+        links: set[tuple[str, int]] = set()
         for row in rows:
             repo_id = row.get("repo_id")
             work_item_id = str(row.get("work_item_id"))
@@ -1136,7 +1134,7 @@ class WorkGraphBuilder:
         FROM work_graph_pr_commit AS p
         INNER JOIN git_commits AS c ON (toString(p.repo_id) = toString(c.repo_id) AND p.commit_hash = c.hash)
         """
-        where_parts: List[str] = []
+        where_parts: list[str] = []
         if self.config.repo_id:
             where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
         if self.config.from_date:
@@ -1155,7 +1153,7 @@ class WorkGraphBuilder:
         if not rows:
             return 0
 
-        edges: List[WorkGraphEdge] = []
+        edges: list[WorkGraphEdge] = []
         for row in rows:
             repo_id = row.get("repo_id")
             pr_number = int(row.get("pr_number") or 0)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any
 
 from .client import query_dicts
 
@@ -15,10 +15,10 @@ async def fetch_metric_contributors(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int = 6,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             {group_by} AS id,
@@ -48,10 +48,10 @@ async def fetch_metric_driver_delta(
     compare_start: date,
     compare_end: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int = 3,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         WITH
             current AS (

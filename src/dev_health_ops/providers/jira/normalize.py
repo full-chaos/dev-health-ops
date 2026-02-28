@@ -3,16 +3,16 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from dev_health_ops.models.work_items import (
     Sprint,
-    Worklog,
     WorkItem,
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
     WorkItemStatusTransition,
+    Worklog,
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import (
@@ -36,7 +36,7 @@ def _get_field(issue: Any, field_name: str) -> Any:
     return getattr(fields, field_name, None)
 
 
-def _parse_sprint(value: Any) -> Tuple[Optional[str], Optional[str]]:
+def _parse_sprint(value: Any) -> tuple[str | None, str | None]:
     """
     Jira sprint fields vary by instance. Best-effort parsing:
     - list of strings with "id=...,name=..."
@@ -65,14 +65,14 @@ def _parse_sprint(value: Any) -> Tuple[Optional[str], Optional[str]]:
     return sid, name
 
 
-def _service_class_from_priority(priority_raw: Optional[str]) -> str:
+def _service_class_from_priority(priority_raw: str | None) -> str:
     if not priority_raw:
         return "standard"
     normalized = str(priority_raw).strip().lower()
     expedite_markers = ("highest", "critical", "blocker", "urgent", "p0", "p1")
     background_markers = ("low", "lowest", "p4", "p5")
 
-    def _matches_marker(text: str, markers: Tuple[str, ...]) -> bool:
+    def _matches_marker(text: str, markers: tuple[str, ...]) -> bool:
         """
         Return True if `text` matches any marker exactly or contains it as a whole word.
 
@@ -95,7 +95,7 @@ def _service_class_from_priority(priority_raw: Optional[str]) -> str:
     return "standard"
 
 
-def _normalize_relationship_type(raw_value: Optional[str]) -> str:
+def _normalize_relationship_type(raw_value: str | None) -> str:
     if not raw_value:
         return "other"
     normalized = str(raw_value).strip().lower()
@@ -118,9 +118,9 @@ def extract_jira_issue_dependencies(
     *,
     issue: Any,
     work_item_id: str,
-) -> List[WorkItemDependency]:
+) -> list[WorkItemDependency]:
     links = _get_field(issue, "issuelinks") or []
-    dependencies: List[WorkItemDependency] = []
+    dependencies: list[WorkItemDependency] = []
     for link in links:
         if not isinstance(link, dict):
             continue
@@ -167,9 +167,9 @@ def extract_jira_issue_dependencies(
 def detect_reopen_events(
     *,
     work_item_id: str,
-    transitions: List[WorkItemStatusTransition],
-) -> List[WorkItemReopenEvent]:
-    events: List[WorkItemReopenEvent] = []
+    transitions: list[WorkItemStatusTransition],
+) -> list[WorkItemReopenEvent]:
+    events: list[WorkItemReopenEvent] = []
     for transition in transitions:
         if transition.from_status in {
             "done",
@@ -197,7 +197,7 @@ def jira_comment_to_interaction_event(
     work_item_id: str,
     comment: Any,
     identity: IdentityResolver,
-) -> Optional[WorkItemInteractionEvent]:
+) -> WorkItemInteractionEvent | None:
     if not isinstance(comment, dict):
         return None
     created_at = _parse_datetime(comment.get("created"))
@@ -224,7 +224,7 @@ def jira_comment_to_interaction_event(
     )
 
 
-def jira_sprint_payload_to_model(payload: Any) -> Optional[Sprint]:
+def jira_sprint_payload_to_model(payload: Any) -> Sprint | None:
     if not isinstance(payload, dict):
         return None
     sprint_id = payload.get("id")
@@ -246,11 +246,11 @@ def jira_issue_to_work_item(
     issue: Any,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    repo_id: Optional[Any] = None,
-    story_points_field: Optional[str] = None,
-    sprint_field: Optional[str] = None,
-    epic_link_field: Optional[str] = None,
-) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    repo_id: Any | None = None,
+    story_points_field: str | None = None,
+    sprint_field: str | None = None,
+    epic_link_field: str | None = None,
+) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     """
     Normalize a Jira issue into a WorkItem and status transitions.
 
@@ -335,7 +335,7 @@ def jira_issue_to_work_item(
         labels=labels,
     )
 
-    assignees: List[str] = []
+    assignees: list[str] = []
     assignee_obj = _get_field(issue, "assignee")
     if assignee_obj is not None:
         assignees.append(
@@ -394,7 +394,7 @@ def jira_issue_to_work_item(
             epic_id = f"jira:{str(epic_val)}"
 
     # Changelog transitions for started/completed derivation.
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
     if isinstance(issue, dict):
         changelog = (
             issue.get("changelog") if isinstance(issue.get("changelog"), dict) else None
@@ -531,7 +531,7 @@ def canonical_jira_issue_to_work_item(
     issue: JiraIssue,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    repo_id: Optional[Any] = None,
+    repo_id: Any | None = None,
 ) -> WorkItem:
     work_item_id = f"jira:{issue.key}"
 
@@ -546,7 +546,7 @@ def canonical_jira_issue_to_work_item(
         labels=list(issue.labels),
     )
 
-    assignees: List[str] = []
+    assignees: list[str] = []
     if issue.assignee is not None:
         resolved = identity.resolve(
             provider="jira",
@@ -608,13 +608,13 @@ def canonical_jira_issue_to_work_item(
 def canonical_changelog_to_transitions(
     *,
     issue_key: str,
-    changelog_events: List[JiraChangelogEvent],
+    changelog_events: list[JiraChangelogEvent],
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    labels: List[str],
-) -> List[WorkItemStatusTransition]:
+    labels: list[str],
+) -> list[WorkItemStatusTransition]:
     work_item_id = f"jira:{issue_key}"
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
 
     sorted_events = sorted(changelog_events, key=lambda e: e.created_at)
 
@@ -663,11 +663,11 @@ def canonical_changelog_to_transitions(
 
 
 def derive_started_completed_from_transitions(
-    transitions: List[WorkItemStatusTransition],
+    transitions: list[WorkItemStatusTransition],
     normalized_status: str,
-    resolved_at: Optional[datetime],
+    resolved_at: datetime | None,
     updated_at: datetime,
-) -> Tuple[Optional[datetime], Optional[datetime]]:
+) -> tuple[datetime | None, datetime | None]:
     started_at = None
     completed_at = None
 

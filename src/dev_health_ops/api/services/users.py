@@ -5,12 +5,11 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-
-import bcrypt
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import bcrypt
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 

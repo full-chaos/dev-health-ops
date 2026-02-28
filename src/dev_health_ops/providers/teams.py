@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 import yaml
 
@@ -22,21 +23,21 @@ UNASSIGNED_TEAM_ID = "unassigned"
 UNASSIGNED_TEAM_NAME = "Unassigned"
 
 
-def normalize_team_id(team_id: Optional[str]) -> str:
+def normalize_team_id(team_id: str | None) -> str:
     """Normalize team_id: None/empty -> 'unassigned'. Single source of truth for PK safety."""
     if not team_id or not team_id.strip():
         return UNASSIGNED_TEAM_ID
     return team_id.strip()
 
 
-def normalize_team_name(team_name: Optional[str]) -> str:
+def normalize_team_name(team_name: str | None) -> str:
     """Normalize team_name: None/empty -> 'Unassigned'."""
     if not team_name or not team_name.strip():
         return UNASSIGNED_TEAM_NAME
     return team_name.strip()
 
 
-def _parse_project_types(value: Optional[str]) -> List[str]:
+def _parse_project_types(value: str | None) -> list[str]:
     raw = value or ""
     items = [item.strip().upper() for item in raw.split(",") if item.strip()]
     return items or ["SERVICE_DESK"]
@@ -45,10 +46,10 @@ def _parse_project_types(value: Optional[str]) -> List[str]:
 @dataclass(frozen=True)
 class TeamResolver:
     member_to_team: Mapping[
-        str, Tuple[str, str]
+        str, tuple[str, str]
     ]  # member_identity -> (team_id, team_name)
 
-    def resolve(self, identity: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    def resolve(self, identity: str | None) -> tuple[str | None, str | None]:
         if not identity:
             return None, None
         key = _norm_key(identity)
@@ -60,11 +61,9 @@ class TeamResolver:
 
 @dataclass(frozen=True)
 class ProjectKeyTeamResolver:
-    project_key_to_team: Mapping[str, Tuple[str, str]]
+    project_key_to_team: Mapping[str, tuple[str, str]]
 
-    def resolve(
-        self, work_scope_id: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+    def resolve(self, work_scope_id: str | None) -> tuple[str | None, str | None]:
         if not work_scope_id:
             return None, None
         return self.project_key_to_team.get(work_scope_id.strip(), (None, None))
@@ -72,10 +71,10 @@ class ProjectKeyTeamResolver:
 
 @dataclass(frozen=True)
 class RepoPatternTeamResolver:
-    _exact: Mapping[str, Tuple[str, str]]
-    _prefixes: Sequence[Tuple[str, str, str]]
+    _exact: Mapping[str, tuple[str, str]]
+    _prefixes: Sequence[tuple[str, str, str]]
 
-    def resolve(self, repo_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    def resolve(self, repo_name: str | None) -> tuple[str | None, str | None]:
         if not repo_name:
             return None, None
         key = repo_name.strip().lower()
@@ -87,9 +86,9 @@ class RepoPatternTeamResolver:
         return None, None
 
 
-def _build_member_to_team(teams_data: List) -> Dict[str, Tuple[str, str]]:
+def _build_member_to_team(teams_data: list) -> dict[str, tuple[str, str]]:
     """Shared helper to build identity map from a list of team-like objects or dicts."""
-    member_to_team: Dict[str, Tuple[str, str]] = {}
+    member_to_team: dict[str, tuple[str, str]] = {}
     for team in teams_data:
         # Handle both objects (models) and dicts (from YAML)
         team_id = str(
@@ -112,7 +111,7 @@ def _build_member_to_team(teams_data: List) -> Dict[str, Tuple[str, str]]:
             or (team.get("members") if isinstance(team, dict) else None)
             or []
         )
-        members_list: List[Any] = list(members_raw)
+        members_list: list[Any] = list(members_raw)
         for member in members_list:
             key = _norm_key(str(member))
             if not key:
@@ -121,7 +120,7 @@ def _build_member_to_team(teams_data: List) -> Dict[str, Tuple[str, str]]:
     return member_to_team
 
 
-def load_team_resolver(path: Optional[Path] = None) -> TeamResolver:
+def load_team_resolver(path: Path | None = None) -> TeamResolver:
     raw_path = os.getenv("TEAM_MAPPING_PATH")
     if raw_path:
         path = Path(raw_path)
@@ -151,8 +150,8 @@ async def load_team_resolver_from_store(store: Any) -> TeamResolver:
         return TeamResolver(member_to_team={})
 
 
-def build_project_key_resolver(teams_data: List) -> ProjectKeyTeamResolver:
-    mapping: Dict[str, Tuple[str, str]] = {}
+def build_project_key_resolver(teams_data: list) -> ProjectKeyTeamResolver:
+    mapping: dict[str, tuple[str, str]] = {}
     for team in teams_data:
         team_id = str(
             team.get("id") if isinstance(team, dict) else getattr(team, "id", "")
@@ -189,9 +188,9 @@ async def load_project_key_resolver_from_store(store: Any) -> ProjectKeyTeamReso
         return ProjectKeyTeamResolver(project_key_to_team={})
 
 
-def build_repo_pattern_resolver(teams_data: List) -> RepoPatternTeamResolver:
-    exact: Dict[str, Tuple[str, str]] = {}
-    prefixes: List[Tuple[str, str, str]] = []
+def build_repo_pattern_resolver(teams_data: list) -> RepoPatternTeamResolver:
+    exact: dict[str, tuple[str, str]] = {}
+    prefixes: list[tuple[str, str, str]] = []
     for team in teams_data:
         team_id = str(
             team.get("id") if isinstance(team, dict) else getattr(team, "id", "")
@@ -228,12 +227,13 @@ def sync_teams(ns: argparse.Namespace) -> int:
     """
     import asyncio
     import logging
+
     from dev_health_ops.models.teams import Team
     from dev_health_ops.storage import resolve_db_type, run_with_store
 
     provider = (ns.provider or "config").lower()
-    teams_data: List[Team] = []
-    ops_links: List[JiraProjectOpsTeamLink] = []
+    teams_data: list[Team] = []
+    ops_links: list[JiraProjectOpsTeamLink] = []
 
     if provider == "config":
         import yaml
@@ -321,7 +321,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
             return 1
 
         project_types = _parse_project_types(os.getenv("JIRA_OPS_PROJECT_TYPES"))
-        ops_team_cache: Dict[str, Team] = {}
+        ops_team_cache: dict[str, Team] = {}
 
         client = build_atlassian_graphql_client()
         try:
@@ -517,7 +517,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
     return 0
 
 
-def _bridge_teams_to_postgres(teams_data: List, ns: argparse.Namespace) -> None:
+def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> None:
     """Upsert Team records into PostgreSQL TeamMapping table for multi-tenant bridge."""
     import logging
 

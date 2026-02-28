@@ -44,7 +44,7 @@ def _dispatch_webhook_task(event: WebhookEvent) -> None:
     try:
         from dev_health_ops.workers.tasks import process_webhook_event
 
-        getattr(process_webhook_event, "delay")(
+        process_webhook_event.delay(
             provider=event.provider,
             event_type=event.event_type,
             delivery_id=event.delivery_id,

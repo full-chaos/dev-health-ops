@@ -11,10 +11,12 @@ import json
 import logging
 import threading
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from queue import Empty as QueueEmpty
 from queue import Queue
-from typing import Callable, List, Optional, Any
+from typing import Any
+
 import redis
 
 from dev_health_ops.connectors.models import (
@@ -37,7 +39,7 @@ logger = logging.getLogger(__name__)
 class RateLimitException(Exception):
     """Exception raised when API rate limit is reached."""
 
-    def __init__(self, message: str, retry_after_seconds: Optional[float] = None):
+    def __init__(self, message: str, retry_after_seconds: float | None = None):
         super().__init__(message)
         self.retry_after_seconds = retry_after_seconds
 
@@ -47,8 +49,8 @@ class BatchResult:
     """Result of a batch repository processing operation."""
 
     repository: Repository
-    stats: Optional[RepoStats] = None
-    error: Optional[str] = None
+    stats: RepoStats | None = None
+    error: str | None = None
     success: bool = True
 
 
@@ -64,7 +66,7 @@ class GitConnector(ABC):
         self,
         per_page: int = 100,
         max_workers: int = 4,
-        cache: Optional[redis.Redis] = None,
+        cache: redis.Redis | None = None,
         cache_prefix: str = "git:",
         cache_ttl: int = 3600,
     ):
@@ -86,8 +88,8 @@ class GitConnector(ABC):
     @abstractmethod
     def list_organizations(
         self,
-        max_orgs: Optional[int] = None,
-    ) -> List[Organization]:
+        max_orgs: int | None = None,
+    ) -> list[Organization]:
         """
         List organizations/groups accessible to the authenticated user.
 
@@ -99,12 +101,12 @@ class GitConnector(ABC):
     @abstractmethod
     def list_repositories(
         self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        search: Optional[str] = None,
-        pattern: Optional[str] = None,
-        max_repos: Optional[int] = None,
-    ) -> List[Repository]:
+        org_name: str | None = None,
+        user_name: str | None = None,
+        search: str | None = None,
+        pattern: str | None = None,
+        max_repos: int | None = None,
+    ) -> list[Repository]:
         """
         List repositories for an organization, user, or search query.
 
@@ -122,8 +124,8 @@ class GitConnector(ABC):
         self,
         owner: str,
         repo: str,
-        max_contributors: Optional[int] = None,
-    ) -> List[Author]:
+        max_contributors: int | None = None,
+    ) -> list[Author]:
         """
         Get contributors for a repository.
 
@@ -156,7 +158,7 @@ class GitConnector(ABC):
         self,
         owner: str,
         repo: str,
-        max_commits: Optional[int] = None,
+        max_commits: int | None = None,
     ) -> RepoStats:
         """
         Get aggregated statistics for a repository.
@@ -174,8 +176,8 @@ class GitConnector(ABC):
         owner: str,
         repo: str,
         state: str = "all",
-        max_prs: Optional[int] = None,
-    ) -> List[PullRequest]:
+        max_prs: int | None = None,
+    ) -> list[PullRequest]:
         """
         Get pull requests/merge requests for a repository.
 
@@ -221,7 +223,7 @@ class GitConnector(ABC):
         args_hash = hashlib.md5(args_str.encode()).hexdigest()
         return f"{self.cache_prefix}{method}:{args_hash}"
 
-    def _get_cached_item(self, key: str, model_class: Any) -> Optional[Any]:
+    def _get_cached_item(self, key: str, model_class: Any) -> Any | None:
         """Retrieve and deserialize an item from cache."""
         if not self.cache:
             return None
@@ -261,11 +263,11 @@ class GitConnector(ABC):
 
     def _get_repositories_for_processing(
         self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
-        max_repos: Optional[int] = None,
-    ) -> List[Repository]:
+        org_name: str | None = None,
+        user_name: str | None = None,
+        pattern: str | None = None,
+        max_repos: int | None = None,
+    ) -> list[Repository]:
         """Standard implementation of repository discovery for batch processing."""
         effective_org = org_name
         effective_user = user_name
@@ -290,7 +292,7 @@ class GitConnector(ABC):
     def _process_single_repo_stats(
         self,
         repo: Repository,
-        max_commits: Optional[int] = None,
+        max_commits: int | None = None,
     ) -> BatchResult:
         """Standard implementation of single repository processing."""
         try:
@@ -322,16 +324,16 @@ class GitConnector(ABC):
 
     def get_repos_with_stats(
         self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
+        org_name: str | None = None,
+        user_name: str | None = None,
+        pattern: str | None = None,
         batch_size: int = 10,
         max_concurrent: int = 4,
         rate_limit_delay: float = 1.0,
-        max_commits_per_repo: Optional[int] = None,
-        max_repos: Optional[int] = None,
-        on_repo_complete: Optional[Callable[[BatchResult], None]] = None,
-    ) -> List[BatchResult]:
+        max_commits_per_repo: int | None = None,
+        max_repos: int | None = None,
+        on_repo_complete: Callable[[BatchResult], None] | None = None,
+    ) -> list[BatchResult]:
         """Standard implementation of batch repository processing."""
         repos = self._get_repositories_for_processing(
             org_name=org_name,
@@ -343,7 +345,7 @@ class GitConnector(ABC):
         logger.info(
             f"Processing {len(repos)} repositories with batch_size={batch_size}"
         )
-        results: List[BatchResult] = []
+        results: list[BatchResult] = []
 
         for batch_start in range(0, len(repos), batch_size):
             batch_end = min(batch_start + batch_size, len(repos))
@@ -404,16 +406,16 @@ class GitConnector(ABC):
 
     async def get_repos_with_stats_async(
         self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
+        org_name: str | None = None,
+        user_name: str | None = None,
+        pattern: str | None = None,
         batch_size: int = 10,
         max_concurrent: int = 4,
         rate_limit_delay: float = 1.0,
-        max_commits_per_repo: Optional[int] = None,
-        max_repos: Optional[int] = None,
-        on_repo_complete: Optional[Callable[[BatchResult], None]] = None,
-    ) -> List[BatchResult]:
+        max_commits_per_repo: int | None = None,
+        max_repos: int | None = None,
+        on_repo_complete: Callable[[BatchResult], None] | None = None,
+    ) -> list[BatchResult]:
         """Async implementation of batch repository processing."""
         # For base implementation, we'll wrap the sync one but in a real provider
         # this might use aiohttp or similar.

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from atlassian import JiraChangelogEvent, JiraChangelogItem, JiraIssue, JiraUser
+
 from dev_health_ops.providers.jira.normalize import (
     canonical_changelog_to_transitions,
     canonical_jira_issue_to_work_item,

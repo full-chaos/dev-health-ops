@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 FORBIDDEN_PATTERNS = [
     re.compile(r"open\([^)]*['\"]w"),
     re.compile(r"open\([^)]*['\"]a"),

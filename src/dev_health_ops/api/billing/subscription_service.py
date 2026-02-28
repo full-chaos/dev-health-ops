@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +10,6 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-
 
 logger = logging.getLogger(__name__)
 
@@ -259,18 +258,18 @@ class SubscriptionService:
         for item in getattr(items, "data", []) or []:
             price = getattr(item, "price", None)
             if price is not None and getattr(price, "id", None):
-                return str(getattr(price, "id"))
+                return str(price.id)
         return None
 
     @staticmethod
     def _subscription_cls() -> Any:
         module = importlib.import_module("dev_health_ops.models.subscriptions")
-        return getattr(module, "Subscription")
+        return module.Subscription
 
     @staticmethod
     def _subscription_event_cls() -> Any:
         module = importlib.import_module("dev_health_ops.models.subscriptions")
-        return getattr(module, "SubscriptionEvent")
+        return module.SubscriptionEvent
 
     @staticmethod
     def _to_dt(value: Any, nullable: bool = False) -> datetime | None:

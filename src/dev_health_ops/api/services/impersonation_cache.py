@@ -9,21 +9,21 @@ max-size eviction); entries are evicted only when their TTL expires.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dev_health_ops.models.impersonation import ImpersonationSession
 
 _TTL_SECONDS: float = 30.0
 # {admin_user_id: (session_or_none, expiry_timestamp)}
-_cache: dict[str, tuple[Optional["ImpersonationSession"], float]] = {}
+_cache: dict[str, tuple[ImpersonationSession | None, float]] = {}
 
 
 def _is_expired(expiry: float) -> bool:
     return time.monotonic() > expiry
 
 
-async def get_active_session(admin_user_id: str) -> Optional["ImpersonationSession"]:
+async def get_active_session(admin_user_id: str) -> ImpersonationSession | None:
     """Return the active ImpersonationSession for admin_user_id, or None.
 
     Checks in-memory cache first; falls back to DB on miss.
@@ -43,13 +43,15 @@ async def get_active_session(admin_user_id: str) -> Optional["ImpersonationSessi
     return session
 
 
-async def _load_from_db(admin_user_id: str) -> Optional["ImpersonationSession"]:
+async def _load_from_db(admin_user_id: str) -> ImpersonationSession | None:
     """Query Postgres for an active impersonation session. Fail-open on error."""
     try:
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
         from dev_health_ops.db import get_postgres_session
         from dev_health_ops.models.impersonation import ImpersonationSession
-        from sqlalchemy import select
-        from datetime import datetime, timezone
 
         async with get_postgres_session() as session:
             now = datetime.now(timezone.utc)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,10 +18,10 @@ class SSOProviderResponse(BaseModel):
     default_role: str
     config: dict[str, Any]
     allowed_domains: list[str]
-    last_metadata_sync_at: Optional[datetime]
-    last_login_at: Optional[datetime]
-    last_error: Optional[str]
-    last_error_at: Optional[datetime]
+    last_metadata_sync_at: datetime | None
+    last_login_at: datetime | None
+    last_error: str | None
+    last_error_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -39,7 +39,7 @@ class SAMLConfigInput(BaseModel):
     entity_id: str = Field(..., description="IdP Entity ID")
     sso_url: str = Field(..., description="IdP SSO URL")
     certificate: str = Field(..., description="IdP signing certificate (PEM format)")
-    slo_url: Optional[str] = Field(default=None, description="IdP SLO URL")
+    slo_url: str | None = Field(default=None, description="IdP SLO URL")
     name_id_format: str = Field(
         default="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
         description="SAML NameID format",
@@ -54,16 +54,16 @@ class OIDCConfigInput(BaseModel):
     client_id: str = Field(..., description="OIDC Client ID")
     client_secret: str = Field(..., description="OIDC Client Secret")
     issuer: str = Field(..., description="OIDC Issuer URL")
-    authorization_endpoint: Optional[str] = Field(
+    authorization_endpoint: str | None = Field(
         default=None, description="Authorization endpoint (auto-discovered if not set)"
     )
-    token_endpoint: Optional[str] = Field(
+    token_endpoint: str | None = Field(
         default=None, description="Token endpoint (auto-discovered if not set)"
     )
-    userinfo_endpoint: Optional[str] = Field(
+    userinfo_endpoint: str | None = Field(
         default=None, description="UserInfo endpoint (auto-discovered if not set)"
     )
-    jwks_uri: Optional[str] = Field(
+    jwks_uri: str | None = Field(
         default=None, description="JWKS URI (auto-discovered if not set)"
     )
     scopes: list[str] = Field(
@@ -79,10 +79,10 @@ class OIDCConfigInput(BaseModel):
 class SSOProviderCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     protocol: str = Field(..., pattern="^(saml|oidc)$")
-    saml_config: Optional[SAMLConfigInput] = Field(
+    saml_config: SAMLConfigInput | None = Field(
         default=None, description="SAML configuration (required if protocol=saml)"
     )
-    oidc_config: Optional[OIDCConfigInput] = Field(
+    oidc_config: OIDCConfigInput | None = Field(
         default=None, description="OIDC configuration (required if protocol=oidc)"
     )
     is_default: bool = False
@@ -93,14 +93,14 @@ class SSOProviderCreate(BaseModel):
 
 
 class SSOProviderUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, max_length=255)
-    saml_config: Optional[SAMLConfigInput] = None
-    oidc_config: Optional[OIDCConfigInput] = None
-    is_default: Optional[bool] = None
-    allow_idp_initiated: Optional[bool] = None
-    auto_provision_users: Optional[bool] = None
-    default_role: Optional[str] = None
-    allowed_domains: Optional[list[str]] = None
+    name: str | None = Field(default=None, max_length=255)
+    saml_config: SAMLConfigInput | None = None
+    oidc_config: OIDCConfigInput | None = None
+    is_default: bool | None = None
+    allow_idp_initiated: bool | None = None
+    auto_provision_users: bool | None = None
+    default_role: str | None = None
+    allowed_domains: list[str] | None = None
 
 
 class SSOProviderActivate(BaseModel):
@@ -114,7 +114,7 @@ class SAMLMetadataResponse(BaseModel):
 
 
 class SAMLAuthRequest(BaseModel):
-    relay_state: Optional[str] = None
+    relay_state: str | None = None
 
 
 class SAMLAuthResponse(BaseModel):
@@ -123,13 +123,13 @@ class SAMLAuthResponse(BaseModel):
 
 class SAMLCallbackRequest(BaseModel):
     saml_response: str = Field(..., alias="SAMLResponse")
-    relay_state: Optional[str] = Field(default=None, alias="RelayState")
+    relay_state: str | None = Field(default=None, alias="RelayState")
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class OIDCAuthRequest(BaseModel):
-    redirect_uri: Optional[str] = None
+    redirect_uri: str | None = None
     use_pkce: bool = True
 
 
@@ -141,7 +141,7 @@ class OIDCAuthResponse(BaseModel):
 class OIDCCallbackRequest(BaseModel):
     code: str
     state: str
-    code_verifier: Optional[str] = None
+    code_verifier: str | None = None
 
 
 class SSOLoginResponse(BaseModel):
@@ -162,7 +162,7 @@ class OAuthConfigInput(BaseModel):
         default_factory=list,
         description="OAuth scopes (uses provider defaults if empty)",
     )
-    base_url: Optional[str] = Field(
+    base_url: str | None = Field(
         default=None,
         description="Base URL for self-hosted instances (GitLab only)",
     )
@@ -183,16 +183,16 @@ class OAuthProviderCreate(BaseModel):
 
 
 class OAuthProviderUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, max_length=255)
-    oauth_config: Optional[OAuthConfigInput] = None
-    is_default: Optional[bool] = None
-    auto_provision_users: Optional[bool] = None
-    default_role: Optional[str] = None
-    allowed_domains: Optional[list[str]] = None
+    name: str | None = Field(default=None, max_length=255)
+    oauth_config: OAuthConfigInput | None = None
+    is_default: bool | None = None
+    auto_provision_users: bool | None = None
+    default_role: str | None = None
+    allowed_domains: list[str] | None = None
 
 
 class OAuthAuthRequest(BaseModel):
-    redirect_uri: Optional[str] = Field(
+    redirect_uri: str | None = Field(
         default=None,
         description="Custom redirect URI (uses default if not provided)",
     )

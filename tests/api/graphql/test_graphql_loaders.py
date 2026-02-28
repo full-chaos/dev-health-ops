@@ -54,7 +54,9 @@ async def test_load_dimension_values_maps_rows(monkeypatch):
     async def fake_query_dicts(_client, _sql, _params):
         return [{"value": "team-a", "count": 3}]
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     rows = await load_dimension_values(
         client=object(),
@@ -76,12 +78,28 @@ async def test_repo_and_team_loaders_return_data_in_key_order(monkeypatch):
         if "repo_names" in params:
             return [{"repo_id": "r1", "repo_name": "Repo-One", "org_id": "org-1"}]
         if "team_ids" in params:
-            return [{"team_id": "t1", "team_name": "Team One", "org_id": "org-1", "member_count": 2}]
+            return [
+                {
+                    "team_id": "t1",
+                    "team_name": "Team One",
+                    "org_id": "org-1",
+                    "member_count": 2,
+                }
+            ]
         if "team_names" in params:
-            return [{"team_id": "t2", "team_name": "Core", "org_id": "org-1", "member_count": 4}]
+            return [
+                {
+                    "team_id": "t2",
+                    "team_name": "Core",
+                    "org_id": "org-1",
+                    "member_count": 4,
+                }
+            ]
         return []
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     repo_loader = RepoLoader(client=object(), org_id="org-1")
     repo_by_name_loader = RepoByNameLoader(client=object(), org_id="org-1")

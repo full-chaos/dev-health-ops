@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Optional, Sequence, Tuple
-
 from zoneinfo import ZoneInfo
 
 from dev_health_ops.metrics.schemas import CommitStatRow, TeamMetricsDailyRecord
@@ -12,7 +11,7 @@ from dev_health_ops.providers.teams import RepoPatternTeamResolver, TeamResolver
 from dev_health_ops.utils.datetime import to_utc
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
@@ -33,17 +32,17 @@ def compute_team_wellbeing_metrics_daily(
     *,
     day: date,
     commit_stat_rows: Sequence[CommitStatRow],
-    team_resolver: Optional[TeamResolver],
+    team_resolver: TeamResolver | None,
     computed_at: datetime,
-    repo_team_resolver: Optional[RepoPatternTeamResolver] = None,
-    repo_names_by_id: Optional[Dict[uuid.UUID, str]] = None,
+    repo_team_resolver: RepoPatternTeamResolver | None = None,
+    repo_names_by_id: dict[uuid.UUID, str] | None = None,
     business_timezone: str = "UTC",
     business_hours_start: int = 9,
     business_hours_end: int = 17,
     unknown_team_id: str = "unassigned",
     unknown_team_name: str = "Unassigned",
-    identity_resolver: Optional[IdentityResolver] = None,
-) -> List[TeamMetricsDailyRecord]:
+    identity_resolver: IdentityResolver | None = None,
+) -> list[TeamMetricsDailyRecord]:
     """
     Compute team-level (non-individual) after-hours + weekend activity ratios.
 
@@ -55,7 +54,7 @@ def compute_team_wellbeing_metrics_daily(
     computed_at_utc = to_utc(computed_at)
 
     # Deduplicate commits.
-    commits: Dict[Tuple[uuid.UUID, str], Tuple[str, datetime]] = {}
+    commits: dict[tuple[uuid.UUID, str], tuple[str, datetime]] = {}
     for row in commit_stat_rows:
         key = (row["repo_id"], row["commit_hash"])
         if key in commits:
@@ -68,7 +67,7 @@ def compute_team_wellbeing_metrics_daily(
         )
 
     # Aggregate by team.
-    by_team: Dict[str, Dict[str, object]] = {}
+    by_team: dict[str, dict[str, object]] = {}
     for _key, (identity, committed_at) in commits.items():
         if not (start <= committed_at < end):
             continue
@@ -102,7 +101,7 @@ def compute_team_wellbeing_metrics_daily(
         ):
             bucket["after_hours"] = int(bucket["after_hours"]) + 1
 
-    records: List[TeamMetricsDailyRecord] = []
+    records: list[TeamMetricsDailyRecord] = []
     for team_id, bucket in sorted(by_team.items(), key=lambda kv: kv[0]):
         commits_count = int(bucket["commits"])
         after_hours_count = int(bucket["after_hours"])

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, AsyncGenerator, Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel

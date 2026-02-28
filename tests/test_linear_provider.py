@@ -5,7 +5,7 @@ Unit tests for Linear provider and normalize functions.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -51,30 +51,30 @@ def _mock_linear_issue(
     *,
     identifier: str = "ENG-123",
     title: str = "Test Issue",
-    description: Optional[str] = None,
+    description: str | None = None,
     priority: int = 2,
-    estimate: Optional[float] = None,
+    estimate: float | None = None,
     state_name: str = "In Progress",
     state_type: str = "started",
-    labels: Optional[List[str]] = None,
-    assignee_email: Optional[str] = "dev@example.com",
-    assignee_name: Optional[str] = "Developer",
-    creator_email: Optional[str] = "creator@example.com",
-    creator_name: Optional[str] = "Creator",
+    labels: list[str] | None = None,
+    assignee_email: str | None = "dev@example.com",
+    assignee_name: str | None = "Developer",
+    creator_email: str | None = "creator@example.com",
+    creator_name: str | None = "Creator",
     team_key: str = "ENG",
-    project_name: Optional[str] = None,
-    cycle_id: Optional[str] = None,
-    cycle_name: Optional[str] = None,
-    parent_identifier: Optional[str] = None,
+    project_name: str | None = None,
+    cycle_id: str | None = None,
+    cycle_name: str | None = None,
+    parent_identifier: str | None = None,
     created_at: str = "2025-01-01T10:00:00Z",
     updated_at: str = "2025-01-15T12:00:00Z",
-    started_at: Optional[str] = None,
-    completed_at: Optional[str] = None,
-    canceled_at: Optional[str] = None,
-    due_date: Optional[str] = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    canceled_at: str | None = None,
+    due_date: str | None = None,
     url: str = "https://linear.app/team/issue/ENG-123",
-) -> Dict[str, Any]:
-    issue: Dict[str, Any] = {
+) -> dict[str, Any]:
+    issue: dict[str, Any] = {
         "id": f"issue-{identifier}",
         "identifier": identifier,
         "title": title,
@@ -149,12 +149,12 @@ def _mock_linear_cycle(
     *,
     cycle_id: str = "cycle-1",
     number: int = 1,
-    name: Optional[str] = None,
+    name: str | None = None,
     starts_at: str = "2025-01-01T00:00:00Z",
     ends_at: str = "2025-01-14T23:59:59Z",
-    completed_at: Optional[str] = None,
+    completed_at: str | None = None,
     progress: float = 0.5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "id": cycle_id,
         "number": number,
@@ -174,7 +174,7 @@ def _mock_linear_comment(
     created_at: str = "2025-01-10T14:30:00Z",
     user_email: str = "commenter@example.com",
     user_name: str = "Commenter",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "id": comment_id,
         "body": body,
@@ -189,15 +189,15 @@ def _mock_linear_comment(
 
 def _mock_linear_history_entry(
     *,
-    from_state_name: Optional[str] = "Todo",
-    from_state_type: Optional[str] = "unstarted",
+    from_state_name: str | None = "Todo",
+    from_state_type: str | None = "unstarted",
     to_state_name: str = "In Progress",
     to_state_type: str = "started",
     created_at: str = "2025-01-05T10:00:00Z",
     actor_email: str = "actor@example.com",
     actor_name: str = "Actor",
-) -> Dict[str, Any]:
-    entry: Dict[str, Any] = {
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
         "id": "history-1",
         "createdAt": created_at,
         "toState": {"id": "state-to", "name": to_state_name, "type": to_state_type},

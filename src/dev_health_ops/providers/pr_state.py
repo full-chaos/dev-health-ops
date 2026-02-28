@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 
 class PRState(str, Enum):
@@ -12,8 +11,8 @@ class PRState(str, Enum):
 
 
 def normalize_pr_state(
-    raw_state: Optional[str],
-    merged_at: Optional[datetime] = None,
+    raw_state: str | None,
+    merged_at: datetime | None = None,
 ) -> str:
     """Normalize PR state to canonical values: open, closed, merged.
 

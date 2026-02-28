@@ -3,22 +3,23 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
 
 AUDIT_PROVIDERS = ("jira", "github", "gitlab", "synthetic")
 
-REQUIRED_CONFIG_KEYS: Dict[str, Sequence[str]] = {
+REQUIRED_CONFIG_KEYS: dict[str, Sequence[str]] = {
     "jira": ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"),
     "github": ("GITHUB_TOKEN",),
     "gitlab": ("GITLAB_TOKEN",),
     "synthetic": (),
 }
 
-COLLECTOR_SPECS: Dict[str, Dict[str, Sequence[str]]] = {
+COLLECTOR_SPECS: dict[str, dict[str, Sequence[str]]] = {
     "jira": {
         "modules": ("providers/jira/client.py",),
         "entrypoints": ("fetch_jira_work_items_with_extras", "fetch_jira_work_items"),
@@ -80,7 +81,7 @@ REQUIRED_COLUMNS = {
 }
 
 
-def parse_provider_list(raw: Optional[str]) -> List[str]:
+def parse_provider_list(raw: str | None) -> list[str]:
     if raw is None or not str(raw).strip():
         return list(AUDIT_PROVIDERS)
     normalized = str(raw).strip().lower()
@@ -111,15 +112,15 @@ def _find_in_files(token: str, files: Iterable[Path]) -> bool:
     return False
 
 
-def _list_files(root: Path, suffix: str) -> List[Path]:
+def _list_files(root: Path, suffix: str) -> list[Path]:
     if not root.exists():
         return []
     return [p for p in root.rglob(f"*{suffix}") if p.is_file()]
 
 
-def _collector_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
+def _collector_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     work_items_text = _read_text(repo_root / "metrics/work_items.py")
-    results: Dict[str, Dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
     for provider, spec in COLLECTOR_SPECS.items():
         modules = [repo_root / path for path in spec.get("modules", [])]
         missing_modules = [str(path) for path in modules if not path.exists()]
@@ -135,14 +136,14 @@ def _collector_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
     return results
 
 
-def _config_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
+def _config_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     code_files = (
         _list_files(repo_root / "providers", ".py")
         + _list_files(repo_root / "metrics", ".py")
         + [repo_root / "cli.py"]
     )
     doc_files = [repo_root / "README.md"] + _list_files(repo_root / "docs", ".md")
-    results: Dict[str, Dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
     for provider, keys in REQUIRED_CONFIG_KEYS.items():
         missing_code = [k for k in keys if not _find_in_files(k, code_files)]
         missing_docs = [k for k in keys if not _find_in_files(k, doc_files)]
@@ -155,7 +156,7 @@ def _config_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
     return results
 
 
-def _sink_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
+def _sink_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     sink_text = _read_text(repo_root / "metrics/sinks/clickhouse.py")
     writers_ok = all(
         _has_def(sink_text, name)
@@ -166,7 +167,7 @@ def _sink_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
         missing_writers = ["write_work_items", "write_work_item_transitions"]
 
     job_text = _read_text(repo_root / "metrics/job_work_items.py")
-    results: Dict[str, Dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
     for provider in AUDIT_PROVIDERS:
         mapping_ok = provider in job_text
         missing = []
@@ -182,7 +183,7 @@ def _sink_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
     return results
 
 
-def _extract_work_item_provider_choices(cli_text: str) -> List[str]:
+def _extract_work_item_provider_choices(cli_text: str) -> list[str]:
     match = re.search(
         r"wi\.add_argument\([\s\S]*?--provider[\s\S]*?choices=\[(.*?)\]",
         cli_text,
@@ -193,13 +194,13 @@ def _extract_work_item_provider_choices(cli_text: str) -> List[str]:
     return re.findall(r"[\"']([a-zA-Z0-9_]+)[\"']", choices)
 
 
-def _commands_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
+def _commands_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     cli_text = _read_text(repo_root / "cli.py")
     provider_choices = set(_extract_work_item_provider_choices(cli_text))
     job_text = _read_text(repo_root / "metrics/job_work_items.py")
     job_entrypoint_ok = _has_def(job_text, "run_work_items_sync_job")
 
-    results: Dict[str, Dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
     for provider in AUDIT_PROVIDERS:
         cli_ok = provider in provider_choices
         job_ok = job_entrypoint_ok and provider in job_text
@@ -214,12 +215,12 @@ def _commands_check(repo_root: Path) -> Dict[str, Dict[str, Any]]:
     return results
 
 
-def _migration_tables(repo_root: Path, tables: Sequence[str]) -> List[str]:
+def _migration_tables(repo_root: Path, tables: Sequence[str]) -> list[str]:
     migrations_dir = repo_root / "migrations/clickhouse"
     if not migrations_dir.exists():
         return list(tables)
     files = _list_files(migrations_dir, ".sql")
-    found: Dict[str, bool] = {table: False for table in tables}
+    found: dict[str, bool] = {table: False for table in tables}
     patterns = {
         table: re.compile(
             rf"CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?{re.escape(table)}\b",
@@ -238,8 +239,8 @@ def _migration_tables(repo_root: Path, tables: Sequence[str]) -> List[str]:
 
 
 def _query_dicts(
-    client: Any, query: str, parameters: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    client: Any, query: str, parameters: dict[str, Any]
+) -> list[dict[str, Any]]:
     result = client.query(query, parameters=parameters)
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])
@@ -248,9 +249,9 @@ def _query_dicts(
     return [dict(zip(col_names, row)) for row in rows]
 
 
-def _schema_check(db_url: str, repo_root: Path) -> Dict[str, Any]:
+def _schema_check(db_url: str, repo_root: Path) -> dict[str, Any]:
     missing_migrations = _migration_tables(repo_root, REQUIRED_TABLES)
-    info: Dict[str, Any] = {
+    info: dict[str, Any] = {
         "status": "unchecked",
         "checked": False,
         "missing_tables": [],
@@ -297,7 +298,7 @@ def _schema_check(db_url: str, repo_root: Path) -> Dict[str, Any]:
         missing_tables = [t for t in REQUIRED_TABLES if t not in present_tables]
         info["missing_tables"] = missing_tables
 
-        missing_columns: Dict[str, List[str]] = {}
+        missing_columns: dict[str, list[str]] = {}
         for table in REQUIRED_TABLES:
             if table in missing_tables:
                 continue
@@ -335,13 +336,13 @@ def _schema_check(db_url: str, repo_root: Path) -> Dict[str, Any]:
 def compile_coverage_report(
     *,
     providers: Sequence[str],
-    collector: Dict[str, Dict[str, Any]],
-    config: Dict[str, Dict[str, Any]],
-    schema: Dict[str, Any],
-    sink: Dict[str, Dict[str, Any]],
-    commands: Dict[str, Dict[str, Any]],
-) -> Dict[str, Any]:
-    report: Dict[str, Any] = {
+    collector: dict[str, dict[str, Any]],
+    config: dict[str, dict[str, Any]],
+    schema: dict[str, Any],
+    sink: dict[str, dict[str, Any]],
+    commands: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
         "providers": {},
         "schema": schema,
         "overall_ok": True,
@@ -381,7 +382,7 @@ def compile_coverage_report(
 
 def run_coverage_audit(
     *, db_url: str, providers: Sequence[str], org_id: str | None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[3]
     collector = _collector_check(repo_root)
     config = _config_check(repo_root)
@@ -398,13 +399,13 @@ def run_coverage_audit(
     )
 
 
-def _render_table(headers: List[str], rows: List[List[str]]) -> str:
+def _render_table(headers: list[str], rows: list[list[str]]) -> str:
     widths = [len(h) for h in headers]
     for row in rows:
         for idx, cell in enumerate(row):
             widths[idx] = max(widths[idx], len(cell))
 
-    def _row(cells: List[str]) -> str:
+    def _row(cells: list[str]) -> str:
         padded = [cell.ljust(widths[idx]) for idx, cell in enumerate(cells)]
         return f"| {' | '.join(padded)} |"
 
@@ -415,9 +416,9 @@ def _render_table(headers: List[str], rows: List[List[str]]) -> str:
     return "\n".join(lines)
 
 
-def format_coverage_table(report: Dict[str, Any]) -> str:
+def format_coverage_table(report: dict[str, Any]) -> str:
     providers = report.get("providers", {})
-    rows: List[List[str]] = []
+    rows: list[list[str]] = []
     for provider in providers:
         entry = providers.get(provider, {})
         rows.append(
@@ -454,11 +455,11 @@ def _serialize_report(value: Any) -> Any:
     return value
 
 
-def format_coverage_json(report: Dict[str, Any]) -> str:
+def format_coverage_json(report: dict[str, Any]) -> str:
     return json.dumps(_serialize_report(report), indent=2, sort_keys=True)
 
 
-def coverage_failed(report: Dict[str, Any]) -> bool:
+def coverage_failed(report: dict[str, Any]) -> bool:
     return not bool(report.get("overall_ok"))
 
 

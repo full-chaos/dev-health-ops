@@ -14,10 +14,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
-from dev_health_ops.api.services.auth import (
-    AuthenticatedUser,
-    get_auth_service,
-)
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.auth.schemas import (
     OAuthAuthRequest,
@@ -39,6 +35,10 @@ from dev_health_ops.api.auth.schemas import (
     SSOProviderUpdate,
 )
 from dev_health_ops.api.services.audit import AuditService
+from dev_health_ops.api.services.auth import (
+    AuthenticatedUser,
+    get_auth_service,
+)
 from dev_health_ops.api.services.settings import decrypt_value
 from dev_health_ops.api.services.sso import SSOProcessingError, SSOService
 from dev_health_ops.api.utils.logging import sanitize_for_log
@@ -46,7 +46,7 @@ from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing import require_feature
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.sso import SSOProvider
-from dev_health_ops.models.users import User, Membership
+from dev_health_ops.models.users import Membership, User
 
 logger = logging.getLogger(__name__)
 
@@ -331,8 +331,8 @@ async def deactivate_sso_provider(
 @sso_router.get("/saml/{provider_id}/metadata", response_model=SAMLMetadataResponse)
 @require_feature("sso", required_tier="enterprise")
 async def get_saml_metadata(provider_id: str) -> SAMLMetadataResponse:
-    import uuid as uuid_mod
     import os
+    import uuid as uuid_mod
 
     base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
@@ -373,8 +373,8 @@ async def initiate_saml_auth(
     provider_id: str,
     payload: SAMLAuthRequest,
 ) -> SAMLAuthResponse:
-    import uuid as uuid_mod
     import os
+    import uuid as uuid_mod
 
     base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
@@ -554,8 +554,8 @@ async def initiate_oidc_auth(
     provider_id: str,
     payload: OIDCAuthRequest,
 ) -> OIDCAuthResponse:
-    import uuid as uuid_mod
     import os
+    import uuid as uuid_mod
 
     base_url = os.environ.get("APP_BASE_URL", "http://localhost:8000")
 
@@ -743,8 +743,8 @@ async def create_oauth_provider(
     payload: OAuthProviderCreate,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> SSOProviderResponse:
-    import uuid as uuid_mod
     import os
+    import uuid as uuid_mod
 
     from dev_health_ops.api.services.oauth import (
         get_default_scopes,
@@ -891,12 +891,14 @@ async def initiate_oauth_auth(
     provider_id: str,
     payload: OAuthAuthRequest,
 ) -> OAuthAuthResponse:
-    import uuid as uuid_mod
     import os
+    import uuid as uuid_mod
 
     from dev_health_ops.api.services.oauth import (
-        create_oauth_provider as create_oauth_provider_instance,
         OAuthConfig,
+    )
+    from dev_health_ops.api.services.oauth import (
+        create_oauth_provider as create_oauth_provider_instance,
     )
     from dev_health_ops.models.sso import SSOProvider
 
@@ -952,14 +954,16 @@ async def oauth_callback(
     provider_id: str,
     payload: OAuthCallbackRequest,
 ) -> SSOLoginResponse:
-    import uuid as uuid_mod
     import os
+    import uuid as uuid_mod
     from datetime import datetime, timezone
 
     from dev_health_ops.api.services.oauth import (
-        create_oauth_provider as create_oauth_provider_instance,
         OAuthConfig,
         OAuthProviderError,
+    )
+    from dev_health_ops.api.services.oauth import (
+        create_oauth_provider as create_oauth_provider_instance,
     )
     from dev_health_ops.models.sso import SSOProvider
     from dev_health_ops.models.users import AuthProvider
@@ -1136,14 +1140,16 @@ async def initiate_oauth_by_type(
     org_id: str,
     redirect_uri: str | None = None,
 ) -> OAuthAuthResponse:
-    import uuid as uuid_mod
     import os
+    import uuid as uuid_mod
 
     from dev_health_ops.api.services.oauth import (
-        create_oauth_provider as create_oauth_provider_instance,
         OAuthConfig,
     )
-    from dev_health_ops.models.sso import SSOProvider, SSOProtocol
+    from dev_health_ops.api.services.oauth import (
+        create_oauth_provider as create_oauth_provider_instance,
+    )
+    from dev_health_ops.models.sso import SSOProtocol, SSOProvider
 
     if provider_type not in ("github", "gitlab", "google"):
         raise HTTPException(status_code=400, detail="Invalid OAuth provider type")

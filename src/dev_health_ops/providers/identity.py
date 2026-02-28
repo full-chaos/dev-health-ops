@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence
 
 import yaml
 
@@ -37,10 +37,10 @@ class IdentityResolver:
         self,
         *,
         provider: WorkItemProvider,
-        email: Optional[str] = None,
-        username: Optional[str] = None,
-        account_id: Optional[str] = None,
-        display_name: Optional[str] = None,
+        email: str | None = None,
+        username: str | None = None,
+        account_id: str | None = None,
+        display_name: str | None = None,
     ) -> str:
         if email:
             normalized = _norm_email(email)
@@ -74,7 +74,7 @@ class IdentityResolver:
         return "unknown"
 
 
-def load_identity_resolver(path: Optional[Path] = None) -> IdentityResolver:
+def load_identity_resolver(path: Path | None = None) -> IdentityResolver:
     raw_path = os.getenv("IDENTITY_MAPPING_PATH")
     if raw_path:
         path = Path(raw_path)
@@ -86,7 +86,7 @@ def load_identity_resolver(path: Optional[Path] = None) -> IdentityResolver:
     except FileNotFoundError:
         payload = {}
 
-    alias_to_canonical: Dict[str, str] = {}
+    alias_to_canonical: dict[str, str] = {}
     for entry in payload.get("identities") or []:
         canonical = entry.get("canonical")
         if not canonical:
@@ -105,9 +105,9 @@ def load_identity_resolver(path: Optional[Path] = None) -> IdentityResolver:
 
 
 def normalize_git_identity(
-    email: Optional[str],
-    display_name: Optional[str],
-    resolver: Optional[IdentityResolver] = None,
+    email: str | None,
+    display_name: str | None,
+    resolver: IdentityResolver | None = None,
 ) -> str:
     """Normalize a Git author identity to a canonical string.
 

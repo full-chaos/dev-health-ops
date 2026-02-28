@@ -5,9 +5,10 @@ import hashlib
 import logging
 import secrets
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any
 from urllib.parse import urlencode, urlparse
 from xml.etree import ElementTree
 
@@ -17,14 +18,14 @@ from jwt import PyJWKClient
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.services.settings import decrypt_value, encrypt_value
+from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.models.sso import (
     SSOProtocol,
     SSOProvider,
     SSOProviderStatus,
 )
 from dev_health_ops.models.users import AuthProvider, Membership, User
-from dev_health_ops.api.services.settings import decrypt_value, encrypt_value
-from dev_health_ops.api.utils.logging import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,9 @@ class SAMLConfig:
     entity_id: str
     sso_url: str
     certificate: str
-    slo_url: Optional[str] = None
-    sp_entity_id: Optional[str] = None
-    sp_acs_url: Optional[str] = None
+    slo_url: str | None = None
+    sp_entity_id: str | None = None
+    sp_acs_url: str | None = None
     name_id_format: str = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
     attribute_mapping: dict[str, str] = field(default_factory=dict)
 
@@ -57,10 +58,10 @@ class SAMLConfig:
 class OIDCConfig:
     client_id: str
     issuer: str
-    authorization_endpoint: Optional[str] = None
-    token_endpoint: Optional[str] = None
-    userinfo_endpoint: Optional[str] = None
-    jwks_uri: Optional[str] = None
+    authorization_endpoint: str | None = None
+    token_endpoint: str | None = None
+    userinfo_endpoint: str | None = None
+    jwks_uri: str | None = None
     scopes: list[str] = field(default_factory=lambda: ["openid", "profile", "email"])
     claim_mapping: dict[str, str] = field(default_factory=dict)
 
@@ -78,10 +79,10 @@ class SSOProviderEntry:
     default_role: str
     config: dict[str, Any]
     allowed_domains: list[str]
-    last_metadata_sync_at: Optional[datetime]
-    last_login_at: Optional[datetime]
-    last_error: Optional[str]
-    last_error_at: Optional[datetime]
+    last_metadata_sync_at: datetime | None
+    last_login_at: datetime | None
+    last_error: str | None
+    last_error_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -91,7 +92,7 @@ class OIDCAuthorizationRequest:
     authorization_url: str
     state: str
     nonce: str
-    code_verifier: Optional[str] = None
+    code_verifier: str | None = None
 
 
 class SSOService:
@@ -110,12 +111,12 @@ class SSOService:
         name: str,
         protocol: SSOProtocol | str,
         config: dict[str, Any],
-        encrypted_secrets: Optional[dict[str, Any]] = None,
+        encrypted_secrets: dict[str, Any] | None = None,
         is_default: bool = False,
         allow_idp_initiated: bool = False,
         auto_provision_users: bool = True,
         default_role: str = "member",
-        allowed_domains: Optional[list[str]] = None,
+        allowed_domains: list[str] | None = None,
     ) -> SSOProvider:
         protocol_str = protocol.value if isinstance(protocol, SSOProtocol) else protocol
 
@@ -156,7 +157,7 @@ class SSOService:
 
     async def get_provider(
         self, org_id: uuid.UUID, provider_id: uuid.UUID
-    ) -> Optional[SSOProvider]:
+    ) -> SSOProvider | None:
         stmt = select(SSOProvider).where(
             and_(SSOProvider.id == provider_id, SSOProvider.org_id == org_id)
         )
@@ -165,7 +166,7 @@ class SSOService:
 
     async def get_provider_by_name(
         self, org_id: uuid.UUID, name: str
-    ) -> Optional[SSOProvider]:
+    ) -> SSOProvider | None:
         stmt = select(SSOProvider).where(
             and_(SSOProvider.org_id == org_id, SSOProvider.name == name)
         )
@@ -173,8 +174,8 @@ class SSOService:
         return result.scalar_one_or_none()
 
     async def get_default_provider(
-        self, org_id: uuid.UUID, protocol: Optional[str] = None
-    ) -> Optional[SSOProvider]:
+        self, org_id: uuid.UUID, protocol: str | None = None
+    ) -> SSOProvider | None:
         conditions = [
             SSOProvider.org_id == org_id,
             SSOProvider.is_default == True,  # noqa: E712
@@ -190,8 +191,8 @@ class SSOService:
     async def list_providers(
         self,
         org_id: uuid.UUID,
-        protocol: Optional[str] = None,
-        status: Optional[str] = None,
+        protocol: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[Sequence[SSOProvider], int]:
@@ -222,16 +223,16 @@ class SSOService:
         self,
         org_id: uuid.UUID,
         provider_id: uuid.UUID,
-        name: Optional[str] = None,
-        config: Optional[dict[str, Any]] = None,
-        encrypted_secrets: Optional[dict[str, Any]] = None,
-        status: Optional[str] = None,
-        is_default: Optional[bool] = None,
-        allow_idp_initiated: Optional[bool] = None,
-        auto_provision_users: Optional[bool] = None,
-        default_role: Optional[str] = None,
-        allowed_domains: Optional[list[str]] = None,
-    ) -> Optional[SSOProvider]:
+        name: str | None = None,
+        config: dict[str, Any] | None = None,
+        encrypted_secrets: dict[str, Any] | None = None,
+        status: str | None = None,
+        is_default: bool | None = None,
+        allow_idp_initiated: bool | None = None,
+        auto_provision_users: bool | None = None,
+        default_role: str | None = None,
+        allowed_domains: list[str] | None = None,
+    ) -> SSOProvider | None:
         provider = await self.get_provider(org_id, provider_id)
         if not provider:
             return None
@@ -280,14 +281,14 @@ class SSOService:
 
     async def activate_provider(
         self, org_id: uuid.UUID, provider_id: uuid.UUID
-    ) -> Optional[SSOProvider]:
+    ) -> SSOProvider | None:
         return await self.update_provider(
             org_id, provider_id, status=SSOProviderStatus.ACTIVE.value
         )
 
     async def deactivate_provider(
         self, org_id: uuid.UUID, provider_id: uuid.UUID
-    ) -> Optional[SSOProvider]:
+    ) -> SSOProvider | None:
         return await self.update_provider(
             org_id, provider_id, status=SSOProviderStatus.INACTIVE.value
         )
@@ -337,7 +338,7 @@ class SSOService:
     def generate_saml_auth_request_url(
         self,
         provider: SSOProvider,
-        relay_state: Optional[str] = None,
+        relay_state: str | None = None,
     ) -> str:
         if not provider.is_saml:
             raise ValueError("Provider is not SAML")
@@ -380,7 +381,7 @@ class SSOService:
     def generate_oidc_authorization_request(
         self,
         provider: SSOProvider,
-        redirect_uri: Optional[str] = None,
+        redirect_uri: str | None = None,
         use_pkce: bool = True,
     ) -> OIDCAuthorizationRequest:
         if not provider.is_oidc:
@@ -402,7 +403,7 @@ class SSOService:
             "nonce": nonce,
         }
 
-        code_verifier: Optional[str] = None
+        code_verifier: str | None = None
         if use_pkce:
             code_verifier = secrets.token_urlsafe(64)
             code_challenge = (

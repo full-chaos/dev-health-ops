@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,8 +13,8 @@ class Coverage(BaseModel):
 
 
 class Freshness(BaseModel):
-    last_ingested_at: Optional[datetime]
-    sources: Dict[str, str]
+    last_ingested_at: datetime | None
+    sources: dict[str, str]
     coverage: Coverage
 
 
@@ -29,7 +29,7 @@ class MetricDelta(BaseModel):
     value: float
     unit: str
     delta_pct: float
-    spark: List[SparkPoint]
+    spark: list[SparkPoint]
 
 
 class SummarySentence(BaseModel):
@@ -46,8 +46,8 @@ class ConstraintEvidence(BaseModel):
 class ConstraintCard(BaseModel):
     title: str
     claim: str
-    evidence: List[ConstraintEvidence]
-    experiments: List[str]
+    evidence: list[ConstraintEvidence]
+    experiments: list[str]
 
 
 class EventItem(BaseModel):
@@ -59,11 +59,11 @@ class EventItem(BaseModel):
 
 class HomeResponse(BaseModel):
     freshness: Freshness
-    deltas: List[MetricDelta]
-    summary: List[SummarySentence]
-    tiles: Dict[str, Any]
+    deltas: list[MetricDelta]
+    summary: list[SummarySentence]
+    tiles: dict[str, Any]
     constraint: ConstraintCard
-    events: List[EventItem]
+    events: list[EventItem]
 
 
 class Contributor(BaseModel):
@@ -80,54 +80,54 @@ class ExplainResponse(BaseModel):
     unit: str
     value: float
     delta_pct: float
-    drivers: List[Contributor]
-    contributors: List[Contributor]
-    drilldown_links: Dict[str, str]
+    drivers: list[Contributor]
+    contributors: list[Contributor]
+    drilldown_links: dict[str, str]
 
 
 class PullRequestRow(BaseModel):
     repo_id: str
     number: int
-    title: Optional[str]
-    author: Optional[str]
+    title: str | None
+    author: str | None
     created_at: datetime
-    merged_at: Optional[datetime]
-    first_review_at: Optional[datetime]
-    review_latency_hours: Optional[float]
-    link: Optional[str]
+    merged_at: datetime | None
+    first_review_at: datetime | None
+    review_latency_hours: float | None
+    link: str | None
 
 
 class IssueRow(BaseModel):
     work_item_id: str
     provider: str
     status: str
-    team_id: Optional[str]
-    cycle_time_hours: Optional[float]
-    lead_time_hours: Optional[float]
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    link: Optional[str]
+    team_id: str | None
+    cycle_time_hours: float | None
+    lead_time_hours: float | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    link: str | None
 
 
 class DrilldownResponse(BaseModel):
-    items: List[Any]
+    items: list[Any]
 
 
 class OpportunityCard(BaseModel):
     id: str
     title: str
     rationale: str
-    evidence_links: List[str]
-    suggested_experiments: List[str]
+    evidence_links: list[str]
+    suggested_experiments: list[str]
 
 
 class OpportunitiesResponse(BaseModel):
-    items: List[OpportunityCard]
+    items: list[OpportunityCard]
 
 
 class HealthResponse(BaseModel):
     status: str
-    services: Dict[str, str]
+    services: dict[str, str]
 
 
 class MetaResponse(BaseModel):
@@ -135,10 +135,10 @@ class MetaResponse(BaseModel):
 
     backend: str
     version: str
-    last_ingest_at: Optional[datetime]
-    coverage: Dict[str, Any]
-    limits: Dict[str, int]
-    supported_endpoints: List[str]
+    last_ingest_at: datetime | None
+    coverage: dict[str, Any]
+    limits: dict[str, int]
+    supported_endpoints: list[str]
 
 
 class InvestmentCategory(BaseModel):
@@ -156,23 +156,23 @@ class InvestmentSubtype(BaseModel):
 
 
 class InvestmentResponse(BaseModel):
-    theme_distribution: Dict[str, float]
-    subcategory_distribution: Dict[str, float]
-    evidence_quality_distribution: Optional[Dict[str, float]] = None
-    evidence_quality_stats: Optional["EvidenceQualityStats"] = None
-    unit: Optional[str] = None
-    edges: Optional[List[Dict[str, Any]]] = None
+    theme_distribution: dict[str, float]
+    subcategory_distribution: dict[str, float]
+    evidence_quality_distribution: dict[str, float] | None = None
+    evidence_quality_stats: EvidenceQualityStats | None = None
+    unit: str | None = None
+    edges: list[dict[str, Any]] | None = None
 
 
 class InvestmentFindingEvidence(BaseModel):
     """Evidence backing a single finding."""
 
     theme: str
-    subcategory: Optional[str] = None
+    subcategory: str | None = None
     share_pct: float
-    delta_pct_points: Optional[float] = None
-    evidence_quality_mean: Optional[float] = None
-    evidence_quality_band: Optional[str] = None
+    delta_pct_points: float | None = None
+    evidence_quality_mean: float | None = None
+    evidence_quality_band: str | None = None
 
 
 class InvestmentFinding(BaseModel):
@@ -186,10 +186,10 @@ class InvestmentConfidence(BaseModel):
     """Confidence metadata for the explanation."""
 
     level: Literal["high", "moderate", "low", "unknown"]
-    quality_mean: Optional[float] = None
-    quality_stddev: Optional[float] = None
-    band_mix: Dict[str, int] = Field(default_factory=dict)
-    drivers: List[str] = Field(default_factory=list)
+    quality_mean: float | None = None
+    quality_stddev: float | None = None
+    band_mix: dict[str, int] = Field(default_factory=dict)
+    drivers: list[str] = Field(default_factory=list)
 
 
 class InvestmentActionItem(BaseModel):
@@ -204,13 +204,13 @@ class InvestmentMixExplanation(BaseModel):
     """Structured explanation for an investment mix view."""
 
     summary: str
-    top_findings: List[InvestmentFinding] = Field(default_factory=list)
+    top_findings: list[InvestmentFinding] = Field(default_factory=list)
     confidence: InvestmentConfidence
-    what_to_check_next: List[InvestmentActionItem] = Field(default_factory=list)
-    anti_claims: List[str] = Field(default_factory=list)
-    status: Optional[
-        Literal["valid", "invalid_json", "invalid_llm_output", "llm_unavailable"]
-    ] = None
+    what_to_check_next: list[InvestmentActionItem] = Field(default_factory=list)
+    anti_claims: list[str] = Field(default_factory=list)
+    status: (
+        Literal["valid", "invalid_json", "invalid_llm_output", "llm_unavailable"] | None
+    ) = None
 
 
 class WorkUnitTimeRange(BaseModel):
@@ -224,34 +224,34 @@ class WorkUnitEffort(BaseModel):
 
 
 class EvidenceQuality(BaseModel):
-    value: Optional[float] = None
-    band: Optional[Literal["high", "moderate", "low", "very_low", "unknown"]] = None
+    value: float | None = None
+    band: Literal["high", "moderate", "low", "very_low", "unknown"] | None = None
 
 
 class EvidenceQualityStats(BaseModel):
     """Aggregated evidence quality statistics for a slice."""
 
-    mean: Optional[float] = None
-    stddev: Optional[float] = None
-    band_counts: Dict[str, int] = Field(default_factory=dict)
-    quality_drivers: List[str] = Field(default_factory=list)
+    mean: float | None = None
+    stddev: float | None = None
+    band_counts: dict[str, int] = Field(default_factory=dict)
+    quality_drivers: list[str] = Field(default_factory=list)
 
 
 class WorkUnitEvidence(BaseModel):
-    textual: List[Dict[str, Any]] = Field(default_factory=list)
-    structural: List[Dict[str, Any]] = Field(default_factory=list)
-    contextual: List[Dict[str, Any]] = Field(default_factory=list)
+    textual: list[dict[str, Any]] = Field(default_factory=list)
+    structural: list[dict[str, Any]] = Field(default_factory=list)
+    contextual: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class InvestmentBreakdown(BaseModel):
-    themes: Dict[str, float]
-    subcategories: Dict[str, float]
+    themes: dict[str, float]
+    subcategories: dict[str, float]
 
 
 class WorkUnitInvestment(BaseModel):
     work_unit_id: str
-    work_unit_type: Optional[str] = None
-    work_unit_name: Optional[str] = None
+    work_unit_type: str | None = None
+    work_unit_name: str | None = None
     time_range: WorkUnitTimeRange
     effort: WorkUnitEffort
     investment: InvestmentBreakdown
@@ -265,8 +265,8 @@ class WorkUnitExplanation(BaseModel):
     work_unit_id: str
     ai_generated: bool = True
     summary: str  # Plain text explanation narrative
-    category_rationale: Dict[str, str]  # Why each category leans that way
-    evidence_highlights: List[str]  # Which evidence mattered most
+    category_rationale: dict[str, str]  # Why each category leans that way
+    evidence_highlights: list[str]  # Which evidence mattered most
     uncertainty_disclosure: str  # Where uncertainty exists
     evidence_quality_limits: str  # Evidence quality statement
 
@@ -286,7 +286,7 @@ class PersonIdentity(BaseModel):
 class PersonSummaryPerson(BaseModel):
     person_id: str
     display_name: str
-    identities: List[PersonIdentity]
+    identities: list[PersonIdentity]
 
 
 class PersonSearchResult(PersonSummaryPerson):
@@ -299,7 +299,7 @@ class PersonDelta(BaseModel):
     value: float
     unit: str
     delta_pct: float
-    spark: List[SparkPoint]
+    spark: list[SparkPoint]
 
 
 class WorkMixItem(BaseModel):
@@ -320,13 +320,13 @@ class CollaborationItem(BaseModel):
 
 
 class CollaborationSection(BaseModel):
-    review_load: List[CollaborationItem]
-    handoff_points: List[CollaborationItem]
+    review_load: list[CollaborationItem]
+    handoff_points: list[CollaborationItem]
 
 
 class PersonSummarySections(BaseModel):
-    work_mix: List[WorkMixItem]
-    flow_breakdown: List[FlowStageItem]
+    work_mix: list[WorkMixItem]
+    flow_breakdown: list[FlowStageItem]
     collaboration: CollaborationSection
 
 
@@ -334,8 +334,8 @@ class PersonSummaryResponse(BaseModel):
     person: PersonSummaryPerson
     freshness: Freshness
     identity_coverage_pct: float
-    deltas: List[PersonDelta]
-    narrative: List[SummarySentence]
+    deltas: list[PersonDelta]
+    narrative: list[SummarySentence]
     sections: PersonSummarySections
 
 
@@ -355,9 +355,9 @@ class MetricBreakdownItem(BaseModel):
 
 
 class PersonMetricBreakdowns(BaseModel):
-    by_repo: List[MetricBreakdownItem]
-    by_work_type: List[MetricBreakdownItem]
-    by_stage: List[MetricBreakdownItem]
+    by_repo: list[MetricBreakdownItem]
+    by_work_type: list[MetricBreakdownItem]
+    by_stage: list[MetricBreakdownItem]
 
 
 class DriverStatement(BaseModel):
@@ -369,19 +369,19 @@ class PersonMetricResponse(BaseModel):
     metric: str
     label: str
     definition: MetricDefinition
-    timeseries: List[MetricTimeseriesPoint]
+    timeseries: list[MetricTimeseriesPoint]
     breakdowns: PersonMetricBreakdowns
-    drivers: List[DriverStatement]
+    drivers: list[DriverStatement]
 
 
 class PersonDrilldownResponse(BaseModel):
-    items: List[Any]
-    next_cursor: Optional[datetime] = None
+    items: list[Any]
+    next_cursor: datetime | None = None
 
 
 class HeatmapAxes(BaseModel):
-    x: List[str]
-    y: List[str]
+    x: list[str]
+    y: list[str]
 
 
 class HeatmapCell(BaseModel):
@@ -397,9 +397,9 @@ class HeatmapLegend(BaseModel):
 
 class HeatmapResponse(BaseModel):
     axes: HeatmapAxes
-    cells: List[HeatmapCell]
+    cells: list[HeatmapCell]
     legend: HeatmapLegend
-    evidence: Optional[List[Dict[str, Any]]] = None
+    evidence: list[dict[str, Any]] | None = None
 
 
 class FlameTimeline(BaseModel):
@@ -409,7 +409,7 @@ class FlameTimeline(BaseModel):
 
 class FlameFrame(BaseModel):
     id: str
-    parent_id: Optional[str]
+    parent_id: str | None
     label: str
     start: datetime
     end: datetime
@@ -418,9 +418,9 @@ class FlameFrame(BaseModel):
 
 
 class FlameResponse(BaseModel):
-    entity: Dict[str, Any]
+    entity: dict[str, Any]
     timeline: FlameTimeline
-    frames: List[FlameFrame]
+    frames: list[FlameFrame]
 
 
 class QuadrantAxis(BaseModel):
@@ -448,26 +448,26 @@ class QuadrantPoint(BaseModel):
     window_start: date
     window_end: date
     evidence_link: str
-    trajectory: Optional[List[QuadrantPointTrajectory]] = None
+    trajectory: list[QuadrantPointTrajectory] | None = None
 
 
 class QuadrantAnnotation(BaseModel):
     type: str
     description: str
-    x_range: List[float]
-    y_range: List[float]
+    x_range: list[float]
+    y_range: list[float]
 
 
 class QuadrantResponse(BaseModel):
     axes: QuadrantAxes
-    points: List[QuadrantPoint]
-    annotations: List[QuadrantAnnotation]
+    points: list[QuadrantPoint]
+    annotations: list[QuadrantAnnotation]
 
 
 class SankeyNode(BaseModel):
     name: str
-    group: Optional[str] = None
-    value: Optional[float] = None
+    group: str | None = None
+    value: float | None = None
 
 
 class SankeyLink(BaseModel):
@@ -478,21 +478,21 @@ class SankeyLink(BaseModel):
 
 class SankeyResponse(BaseModel):
     mode: Literal["investment", "expense", "state", "hotspot"]
-    nodes: List[SankeyNode]
-    links: List[SankeyLink]
-    unit: Optional[str] = None
-    label: Optional[str] = None
-    description: Optional[str] = None
-    team_coverage: Optional[float] = None
-    repo_coverage: Optional[float] = None
-    distinct_team_targets: Optional[int] = None
-    distinct_repo_targets: Optional[int] = None
-    chosen_mode: Optional[str] = None
-    coverage: Optional[Dict[str, float]] = None
-    unassigned_reasons: Optional[Dict[str, int]] = None
-    flow_mode: Optional[str] = None
-    drill_category: Optional[str] = None
-    top_n_repos: Optional[int] = None
+    nodes: list[SankeyNode]
+    links: list[SankeyLink]
+    unit: str | None = None
+    label: str | None = None
+    description: str | None = None
+    team_coverage: float | None = None
+    repo_coverage: float | None = None
+    distinct_team_targets: int | None = None
+    distinct_repo_targets: int | None = None
+    chosen_mode: str | None = None
+    coverage: dict[str, float] | None = None
+    unassigned_reasons: dict[str, int] | None = None
+    flow_mode: str | None = None
+    drill_category: str | None = None
+    top_n_repos: int | None = None
 
 
 # Aggregated flame graph models (hierarchical tree format)
@@ -503,14 +503,14 @@ class AggregatedFlameNode(BaseModel):
 
     name: str
     value: float
-    children: List["AggregatedFlameNode"] = []
+    children: list[AggregatedFlameNode] = []
 
 
 class ApproximationInfo(BaseModel):
     """Info about data approximation when exact data unavailable."""
 
     used: bool = False
-    method: Optional[str] = None
+    method: str | None = None
 
 
 class AggregatedFlameMeta(BaseModel):
@@ -518,8 +518,8 @@ class AggregatedFlameMeta(BaseModel):
 
     window_start: date
     window_end: date
-    filters: Dict[str, Any] = {}
-    notes: List[str] = []
+    filters: dict[str, Any] = {}
+    notes: list[str] = []
     approximation: ApproximationInfo = Field(default_factory=ApproximationInfo)
 
 

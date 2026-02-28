@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,7 +37,7 @@ PROVIDER_ENV_VARS: dict[str, dict[str, str]] = {
     },
 }
 
-PROVIDER_CREDENTIAL_TYPES: dict[str, Type[ProviderCredentials]] = {
+PROVIDER_CREDENTIAL_TYPES: dict[str, type[ProviderCredentials]] = {
     "github": GitHubCredentials,
     "gitlab": GitLabCredentials,
     "jira": JiraCredentials,
@@ -122,7 +122,7 @@ class CredentialResolver:
         self,
         provider: str,
         credential_name: str,
-    ) -> Optional[ProviderCredentials]:
+    ) -> ProviderCredentials | None:
         try:
             from dev_health_ops.api.services.settings import (
                 IntegrationCredentialsService,
@@ -154,7 +154,7 @@ class CredentialResolver:
         self,
         provider: str,
         credential_name: str,
-    ) -> Optional[ProviderCredentials]:
+    ) -> ProviderCredentials | None:
         env_map = PROVIDER_ENV_VARS.get(provider, {})
         if not env_map:
             return None
@@ -187,7 +187,7 @@ class CredentialResolver:
 
     def _build_credential(
         self,
-        cred_type: Type[T],
+        cred_type: type[T],
         cred_dict: dict[str, Any],
         source: CredentialSource,
         credential_name: str,
@@ -204,7 +204,7 @@ def resolve_credentials_sync(
     provider: str,
     org_id: str | None = None,
     credential_name: str = "default",
-    db_url: Optional[str] = None,
+    db_url: str | None = None,
     allow_env_fallback: bool = True,
 ) -> ProviderCredentials:
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -265,7 +265,7 @@ class _EnvOnlyResolver:
         self,
         provider: str,
         credential_name: str = "default",
-    ) -> Optional[ProviderCredentials]:
+    ) -> ProviderCredentials | None:
         provider = provider.lower()
         if provider not in PROVIDER_CREDENTIAL_TYPES:
             return None

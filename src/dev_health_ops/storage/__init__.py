@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional, Union, Callable
+from collections.abc import Callable
+from typing import Optional, Union
 
 from .clickhouse import ClickHouseStore
 from .mongo import MongoStore
@@ -65,10 +66,10 @@ def detect_db_type(conn_string: str) -> str:
 
 def create_store(
     conn_string: str,
-    db_type: Optional[str] = None,
-    db_name: Optional[str] = None,
+    db_type: str | None = None,
+    db_name: str | None = None,
     echo: bool = False,
-) -> Union["SQLAlchemyStore", "MongoStore", "ClickHouseStore"]:
+) -> SQLAlchemyStore | MongoStore | ClickHouseStore:
     """
     Create a storage backend based on the connection string.
 
@@ -115,7 +116,7 @@ def create_store(
         )
 
 
-def resolve_db_type(db_url: str, db_type: Optional[str]) -> str:
+def resolve_db_type(db_url: str, db_type: str | None) -> str:
     """
     Resolve database type from URL or explicit type.
     """

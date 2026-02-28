@@ -27,7 +27,6 @@ from dev_health_ops.credentials import (
     resolve_credentials_sync,
 )
 
-
 # ---------------------------------------------------------------------------
 # Credential Type Validation Tests
 # ---------------------------------------------------------------------------

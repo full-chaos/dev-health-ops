@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Text
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class RefreshToken(Base):

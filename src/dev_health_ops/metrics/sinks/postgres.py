@@ -5,9 +5,10 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import date, datetime, timezone
-from typing import Any, List, Sequence, TypeVar
+from typing import Any, TypeVar
 
 from sqlalchemy import inspect
 
@@ -60,8 +61,8 @@ class PostgresMetricsSink(SQLAlchemyMetricsSink):
     def _copy_upsert(
         self,
         table: str,
-        columns: List[str],
-        primary_keys: List[str],
+        columns: list[str],
+        primary_keys: list[str],
         rows: Sequence[Any],
     ) -> None:
         """

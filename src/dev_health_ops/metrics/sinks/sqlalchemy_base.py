@@ -1,42 +1,45 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Sequence
 from dataclasses import asdict
-from datetime import date, datetime, timezone, timedelta
-from typing import Sequence, List, Dict, Any, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from dev_health_ops.metrics.loaders.base import to_dataclass
 from dev_health_ops.metrics.schemas import (
+    CICDMetricsDailyRecord,
     CommitMetricsRecord,
+    DeployMetricsDailyRecord,
+    DORAMetricsRecord,
+    FileComplexitySnapshot,
+    FileHotspotDaily,
+    FileMetricsRecord,
+    ICLandscapeRollingRecord,
+    IncidentMetricsDailyRecord,
+    InvestmentClassificationRecord,
+    InvestmentExplanationRecord,
+    InvestmentMetricsRecord,
+    IssueTypeMetricsRecord,
+    RepoComplexityDaily,
     RepoMetricsDailyRecord,
+    ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
     UserMetricsDailyRecord,
-    FileMetricsRecord,
+    WorkGraphEdgeRecord,
+    WorkGraphIssuePRRecord,
+    WorkGraphPRCommitRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
     WorkItemUserMetricsDailyRecord,
-    ReviewEdgeDailyRecord,
-    CICDMetricsDailyRecord,
-    DeployMetricsDailyRecord,
-    DORAMetricsRecord,
-    IncidentMetricsDailyRecord,
-    ICLandscapeRollingRecord,
-    FileComplexitySnapshot,
-    RepoComplexityDaily,
-    FileHotspotDaily,
-    InvestmentClassificationRecord,
-    InvestmentMetricsRecord,
-    InvestmentExplanationRecord,
-    IssueTypeMetricsRecord,
-    WorkGraphEdgeRecord,
-    WorkGraphIssuePRRecord,
-    WorkGraphPRCommitRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -46,8 +49,6 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
     Worklog,
 )
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
-from dev_health_ops.metrics.loaders.base import to_dataclass
 from dev_health_ops.providers.teams import normalize_team_id, normalize_team_name
 
 
@@ -66,8 +67,8 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     """
 
     def query_dicts(
-        self, query: str, parameters: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, query: str, parameters: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         import re
 
         sql = re.sub(r"%\((.*?)\)s", r":\1", query)
@@ -1512,10 +1513,9 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     def get_rolling_30d_user_stats(
         self,
         as_of_day: date,
-        repo_id: Optional[
-            str
-        ] = None,  # repo_id in sqlite sink is usually handled upstream but we support filtering
-    ) -> List[Dict[str, Any]]:
+        repo_id: str
+        | None = None,  # repo_id in sqlite sink is usually handled upstream but we support filtering
+    ) -> list[dict[str, Any]]:
         """
         Compute rolling 30d stats by aggregating daily rows in Python.
         """
@@ -1535,7 +1535,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
         FROM user_metrics_daily
         WHERE day >= :start AND day <= :end
         """
-        params: Dict[str, Any] = {"start": start_str, "end": end_str}
+        params: dict[str, Any] = {"start": start_str, "end": end_str}
 
         if repo_id:
             query += " AND repo_id = :repo_id"
@@ -1546,7 +1546,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
             rows = conn.execute(text(query), params).fetchall()
 
         # Aggregate in Python
-        aggs: Dict[str, Dict[str, Any]] = {}
+        aggs: dict[str, dict[str, Any]] = {}
 
         for r in rows:
             identity_id = r[0]
@@ -2395,7 +2395,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
 
     def read_investment_explanation(
         self, cache_key: str
-    ) -> Optional[InvestmentExplanationRecord]:
+    ) -> InvestmentExplanationRecord | None:
         """Read a cached investment explanation by cache_key."""
         with self.engine.connect() as conn:
             row = (
@@ -2788,7 +2788,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
     # Team resolution / identity support
     # -------------------------------------------------------------------------
 
-    async def get_all_teams(self) -> List[Dict[str, Any]]:
+    async def get_all_teams(self) -> list[dict[str, Any]]:
         """Fetch all teams from the database for identity resolution."""
         with self.engine.connect() as conn:
             result = conn.execute(text("SELECT id, name, members FROM teams"))
@@ -2805,7 +2805,7 @@ class SQLAlchemyMetricsSink(BaseMetricsSink):
                 teams.append({"id": row[0], "name": row[1], "members": members})
             return teams
 
-    async def insert_teams(self, teams: List[Any]) -> None:
+    async def insert_teams(self, teams: list[Any]) -> None:
         """Insert or update teams in the database."""
         import json
 

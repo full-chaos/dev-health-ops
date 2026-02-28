@@ -14,23 +14,22 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
 from dev_health_ops.licensing.types import LicenseTier
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class FeatureCategory(str, Enum):
@@ -122,13 +121,13 @@ class FeatureFlag(Base):
         self,
         key: str,
         name: str,
-        description: Optional[str] = None,
+        description: str | None = None,
         category: str = FeatureCategory.CORE.value,
         min_tier: str = LicenseTier.COMMUNITY.value,
         is_enabled: bool = True,
         is_beta: bool = False,
         is_deprecated: bool = False,
-        config_schema: Optional[dict] = None,
+        config_schema: dict | None = None,
     ):
         self.id = uuid.uuid4()
         self.key = key
@@ -230,10 +229,10 @@ class OrgFeatureOverride(Base):
         org_id: uuid.UUID,
         feature_id: uuid.UUID,
         is_enabled: bool = True,
-        expires_at: Optional[datetime] = None,
-        config: Optional[dict] = None,
-        reason: Optional[str] = None,
-        created_by: Optional[uuid.UUID] = None,
+        expires_at: datetime | None = None,
+        config: dict | None = None,
+        reason: str | None = None,
+        created_by: uuid.UUID | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id
@@ -360,15 +359,15 @@ class OrgLicense(Base):
         self,
         org_id: uuid.UUID,
         tier: str = LicenseTier.COMMUNITY.value,
-        license_key: Optional[str] = None,
-        licensed_users: Optional[int] = None,
-        licensed_repos: Optional[int] = None,
-        issued_at: Optional[datetime] = None,
-        expires_at: Optional[datetime] = None,
+        license_key: str | None = None,
+        licensed_users: int | None = None,
+        licensed_repos: int | None = None,
+        issued_at: datetime | None = None,
+        expires_at: datetime | None = None,
         license_type: str = "saas",
-        customer_id: Optional[str] = None,
-        features_override: Optional[dict] = None,
-        limits_override: Optional[dict] = None,
+        customer_id: str | None = None,
+        features_override: dict | None = None,
+        limits_override: dict | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id

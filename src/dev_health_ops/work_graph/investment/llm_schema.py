@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 from dev_health_ops.work_graph.investment.taxonomy import SUBCATEGORIES
 from dev_health_ops.work_graph.investment.utils import ensure_full_subcategory_vector
@@ -32,13 +31,13 @@ class EvidenceQuote:
 @dataclass(frozen=True)
 class LLMValidationResult:
     ok: bool
-    errors: List[str]
-    subcategories: Dict[str, float]
-    evidence_quotes: List[EvidenceQuote]
+    errors: list[str]
+    subcategories: dict[str, float]
+    evidence_quotes: list[EvidenceQuote]
     uncertainty: str
 
 
-def parse_llm_json(raw_text: str) -> tuple[Optional[Dict[str, object]], List[str]]:
+def parse_llm_json(raw_text: str) -> tuple[dict[str, object] | None, list[str]]:
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError as exc:
@@ -49,10 +48,10 @@ def parse_llm_json(raw_text: str) -> tuple[Optional[Dict[str, object]], List[str
 
 
 def validate_llm_payload(
-    payload: Dict[str, object],
-    source_texts: Dict[str, Dict[str, str]],
+    payload: dict[str, object],
+    source_texts: dict[str, dict[str, str]],
 ) -> LLMValidationResult:
-    errors: List[str] = []
+    errors: list[str] = []
 
     keys = set(payload.keys())
     if keys != ALLOWED_TOP_LEVEL_KEYS:
@@ -68,7 +67,7 @@ def validate_llm_payload(
         errors.append("subcategories_not_object")
         raw_subcategories = {}
 
-    cleaned: Dict[str, float] = {}
+    cleaned: dict[str, float] = {}
     for key, value in raw_subcategories.items():
         if key not in SUBCATEGORIES:
             errors.append(f"unknown_subcategory:{key}")
@@ -88,7 +87,7 @@ def validate_llm_payload(
         errors.append(f"probability_sum_out_of_range:{total:.4f}")
 
     evidence_quotes_raw = payload.get("evidence_quotes")
-    evidence_quotes: List[EvidenceQuote] = []
+    evidence_quotes: list[EvidenceQuote] = []
     if not isinstance(evidence_quotes_raw, list):
         errors.append("evidence_quotes_not_list")
         evidence_quotes_raw = []

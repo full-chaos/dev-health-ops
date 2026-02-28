@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dev_health_ops.llm.providers.openai import (
-    OpenAIProvider,
     OpenAIGPT5Provider,
     OpenAIGPTLegacyProvider,
+    OpenAIProvider,
     openai_provider_class_for,
 )
 

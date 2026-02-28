@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
-from typing import AsyncGenerator, Optional
 
 import strawberry
 from strawberry.types import Info
 
-from .pubsub import get_pubsub, metrics_channel, task_channel, sync_channel
+from .pubsub import get_pubsub, metrics_channel, sync_channel, task_channel
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,8 @@ class TaskStatus:
     task_id: str
     status: str
     progress: float
-    message: Optional[str] = None
-    result: Optional[str] = None
+    message: str | None = None
+    result: str | None = None
     updated_at: datetime = strawberry.field(default_factory=_utc_now)
 
 
@@ -49,7 +49,7 @@ class SyncProgress:
     status: str
     items_processed: int
     items_total: int
-    message: Optional[str] = None
+    message: str | None = None
     updated_at: datetime = strawberry.field(default_factory=_utc_now)
 
 
@@ -203,8 +203,8 @@ async def publish_task_status(
     task_id: str,
     status: str,
     progress: float = 0.0,
-    message: Optional[str] = None,
-    result: Optional[str] = None,
+    message: str | None = None,
+    result: str | None = None,
 ) -> None:
     """
     Publish a task status update.
@@ -237,7 +237,7 @@ async def publish_sync_progress(
     status: str,
     items_processed: int = 0,
     items_total: int = 0,
-    message: Optional[str] = None,
+    message: str | None = None,
 ) -> None:
     """
     Publish a sync progress update.

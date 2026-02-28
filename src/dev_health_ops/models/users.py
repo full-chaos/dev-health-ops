@@ -13,20 +13,21 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class MemberRole(str, Enum):

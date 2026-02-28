@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable, Iterable
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 from pymongo.errors import ConfigurationError
 
+from dev_health_ops.metrics.schemas import (
+    FileComplexitySnapshot,
+    WorkItemUserMetricsDailyRecord,
+)
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -22,9 +27,6 @@ from dev_health_ops.models.git import (
     Repo,
 )
 from dev_health_ops.models.work_items import WorkItemDependency
-
-from dev_health_ops.metrics.schemas import FileComplexitySnapshot
-from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
 
 from .utils import (
     _parse_date_value,
@@ -49,14 +51,14 @@ class MongoStore:
         _normalize_uuid: Callable[[Any], Any]
         _normalize_datetime: Callable[[Any], Any]
 
-    def __init__(self, conn_string: str, db_name: Optional[str] = None) -> None:
+    def __init__(self, conn_string: str, db_name: str | None = None) -> None:
         if not conn_string:
             raise ValueError("MongoDB connection string is required")
         self.client = AsyncIOMotorClient(conn_string)
         self.db_name = db_name
         self.db = None
 
-    async def __aenter__(self) -> "MongoStore":
+    async def __aenter__(self) -> MongoStore:
         if self.db_name:
             self.db = self.client[self.db_name]
         else:
@@ -84,7 +86,7 @@ class MongoStore:
             {"_id": doc["_id"]}, {"$set": doc}, upsert=True
         )
 
-    async def get_all_repos(self) -> List[Repo]:
+    async def get_all_repos(self) -> list[Repo]:
         assert self.db is not None
         cursor = self.db["repos"].find({})
         repos = []
@@ -98,16 +100,16 @@ class MongoStore:
         self,
         *,
         as_of_day: date,
-        repo_id: Optional[uuid.UUID] = None,
-        repo_name: Optional[str] = None,
-    ) -> List["FileComplexitySnapshot"]:
+        repo_id: uuid.UUID | None = None,
+        repo_name: str | None = None,
+    ) -> list[FileComplexitySnapshot]:
         assert self.db is not None
         from dev_health_ops.metrics.schemas import FileComplexitySnapshot
 
         as_of_dt = datetime(
             as_of_day.year, as_of_day.month, as_of_day.day, tzinfo=timezone.utc
         )
-        query: Dict[str, Any] = {"as_of_day": {"$lte": as_of_dt}}
+        query: dict[str, Any] = {"as_of_day": {"$lte": as_of_dt}}
 
         resolved_repo_id = repo_id
         if resolved_repo_id is None and repo_name:
@@ -148,7 +150,7 @@ class MongoStore:
             cursor = self.db["file_complexity_snapshots"].find({"$or": or_clauses})
 
         docs = [doc async for doc in cursor]
-        snapshots: List[FileComplexitySnapshot] = []
+        snapshots: list[FileComplexitySnapshot] = []
         for doc in docs:
             file_path = doc.get("file_path")
             if not file_path:
@@ -189,20 +191,20 @@ class MongoStore:
         self,
         *,
         day: date,
-        provider: Optional[str] = None,
-    ) -> List["WorkItemUserMetricsDailyRecord"]:
+        provider: str | None = None,
+    ) -> list[WorkItemUserMetricsDailyRecord]:
         assert self.db is not None
         from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
 
         # Mongo sink stores day as naive UTC datetime at midnight.
         day_dt = datetime(day.year, day.month, day.day)
-        query: Dict[str, Any] = {"day": day_dt}
+        query: dict[str, Any] = {"day": day_dt}
         if provider:
             query["provider"] = provider
 
         cursor = self.db["work_item_user_metrics_daily"].find(query)
 
-        out: List[WorkItemUserMetricsDailyRecord] = []
+        out: list[WorkItemUserMetricsDailyRecord] = []
         async for doc in cursor:
             day_val = _parse_date_value(doc.get("day"))
             if day_val is None:
@@ -263,65 +265,55 @@ class MongoStore:
         )
         return count > 0
 
-    async def insert_git_file_data(self, file_data: List[GitFile]) -> None:
+    async def insert_git_file_data(self, file_data: list[GitFile]) -> None:
         await self._upsert_many(
             "git_files",
             file_data,
-            lambda obj: f"{getattr(obj, 'repo_id')}:{getattr(obj, 'path')}",
+            lambda obj: f"{obj.repo_id}:{obj.path}",
         )
 
-    async def insert_git_commit_data(self, commit_data: List[GitCommit]) -> None:
+    async def insert_git_commit_data(self, commit_data: list[GitCommit]) -> None:
         await self._upsert_many(
             "git_commits",
             commit_data,
-            lambda obj: f"{getattr(obj, 'repo_id')}:{getattr(obj, 'hash')}",
+            lambda obj: f"{obj.repo_id}:{obj.hash}",
         )
 
-    async def insert_git_commit_stats(self, commit_stats: List[GitCommitStat]) -> None:
+    async def insert_git_commit_stats(self, commit_stats: list[GitCommitStat]) -> None:
         await self._upsert_many(
             "git_commit_stats",
             commit_stats,
-            lambda obj: (
-                f"{getattr(obj, 'repo_id')}:"
-                f"{getattr(obj, 'commit_hash')}:"
-                f"{getattr(obj, 'file_path')}"
-            ),
+            lambda obj: f"{obj.repo_id}:{obj.commit_hash}:{obj.file_path}",
         )
 
-    async def insert_blame_data(self, data_batch: List[GitBlame]) -> None:
+    async def insert_blame_data(self, data_batch: list[GitBlame]) -> None:
         await self._upsert_many(
             "git_blame",
             data_batch,
-            lambda obj: (
-                f"{getattr(obj, 'repo_id')}:"
-                f"{getattr(obj, 'path')}:"
-                f"{getattr(obj, 'line_no')}"
-            ),
+            lambda obj: f"{obj.repo_id}:{obj.path}:{obj.line_no}",
         )
 
-    async def insert_git_pull_requests(self, pr_data: List[GitPullRequest]) -> None:
+    async def insert_git_pull_requests(self, pr_data: list[GitPullRequest]) -> None:
         await self._upsert_many(
             "git_pull_requests",
             pr_data,
-            lambda obj: f"{getattr(obj, 'repo_id')}:{getattr(obj, 'number')}",
+            lambda obj: f"{obj.repo_id}:{obj.number}",
         )
 
     async def insert_git_pull_request_reviews(
-        self, review_data: List[GitPullRequestReview]
+        self, review_data: list[GitPullRequestReview]
     ) -> None:
         await self._upsert_many(
             "git_pull_request_reviews",
             review_data,
-            lambda obj: (
-                f"{getattr(obj, 'repo_id')}:{getattr(obj, 'number')}:{getattr(obj, 'review_id')}"
-            ),
+            lambda obj: f"{obj.repo_id}:{obj.number}:{obj.review_id}",
         )
 
-    async def insert_ci_pipeline_runs(self, runs: List[CiPipelineRun]) -> None:
+    async def insert_ci_pipeline_runs(self, runs: list[CiPipelineRun]) -> None:
         if not runs:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in runs:
             if isinstance(item, dict):
                 rows.append(
@@ -342,15 +334,13 @@ class MongoStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "run_id": getattr(item, "run_id"),
-                        "status": getattr(item, "status"),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "run_id": item.run_id,
+                        "status": item.status,
                         "queued_at": self._normalize_datetime(
                             getattr(item, "queued_at", None)
                         ),
-                        "started_at": self._normalize_datetime(
-                            getattr(item, "started_at")
-                        ),
+                        "started_at": self._normalize_datetime(item.started_at),
                         "finished_at": self._normalize_datetime(
                             getattr(item, "finished_at", None)
                         ),
@@ -374,11 +364,11 @@ class MongoStore:
             rows,
         )
 
-    async def insert_deployments(self, deployments: List[Deployment]) -> None:
+    async def insert_deployments(self, deployments: list[Deployment]) -> None:
         if not deployments:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in deployments:
             if isinstance(item, dict):
                 rows.append(
@@ -404,9 +394,9 @@ class MongoStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "deployment_id": getattr(item, "deployment_id"),
-                        "status": getattr(item, "status"),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "deployment_id": item.deployment_id,
+                        "status": item.status,
                         "environment": getattr(item, "environment", None),
                         "started_at": self._normalize_datetime(
                             getattr(item, "started_at", None)
@@ -446,58 +436,58 @@ class MongoStore:
             rows,
         )
 
-    async def insert_incidents(self, incidents: List[Incident]) -> None:
+    async def insert_incidents(self, incidents: list[Incident]) -> None:
         await self._upsert_many(
             "incidents",
             incidents,
-            lambda obj: f"{getattr(obj, 'repo_id')}:{getattr(obj, 'incident_id')}",
+            lambda obj: f"{obj.repo_id}:{obj.incident_id}",
         )
 
-    async def insert_teams(self, teams: List["Team"]) -> None:
+    async def insert_teams(self, teams: list[Team]) -> None:
         await self._upsert_many(
             "teams",
             teams,
-            lambda obj: str(getattr(obj, "id")),
+            lambda obj: str(obj.id),
         )
 
     async def insert_jira_project_ops_team_links(
-        self, links: List[JiraProjectOpsTeamLink]
+        self, links: list[JiraProjectOpsTeamLink]
     ) -> None:
         await self._upsert_many(
             "jira_project_ops_team_links",
             links,
-            lambda obj: f"{getattr(obj, 'project_key')}:{getattr(obj, 'ops_team_id')}",
+            lambda obj: f"{obj.project_key}:{obj.ops_team_id}",
         )
 
     async def insert_atlassian_ops_incidents(
-        self, incidents: List[AtlassianOpsIncident]
+        self, incidents: list[AtlassianOpsIncident]
     ) -> None:
         await self._upsert_many(
             "atlassian_ops_incidents",
             incidents,
-            lambda obj: str(getattr(obj, "id")),
+            lambda obj: str(obj.id),
         )
 
     async def insert_atlassian_ops_alerts(
-        self, alerts: List[AtlassianOpsAlert]
+        self, alerts: list[AtlassianOpsAlert]
     ) -> None:
         await self._upsert_many(
             "atlassian_ops_alerts",
             alerts,
-            lambda obj: str(getattr(obj, "id")),
+            lambda obj: str(obj.id),
         )
 
     async def insert_atlassian_ops_schedules(
-        self, schedules: List[AtlassianOpsSchedule]
+        self, schedules: list[AtlassianOpsSchedule]
     ) -> None:
         await self._upsert_many(
             "atlassian_ops_schedules",
             schedules,
-            lambda obj: str(getattr(obj, "id")),
+            lambda obj: str(obj.id),
         )
 
     async def insert_work_item_dependencies(
-        self, dependencies: List[WorkItemDependency]
+        self, dependencies: list[WorkItemDependency]
     ) -> None:
         if not dependencies:
             return
@@ -507,7 +497,7 @@ class MongoStore:
         # ClickHouseStore has _insert_rows.
 
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in dependencies:
             if isinstance(item, dict):
                 rows.append(
@@ -524,10 +514,10 @@ class MongoStore:
             else:
                 rows.append(
                     {
-                        "source_work_item_id": getattr(item, "source_work_item_id"),
-                        "target_work_item_id": getattr(item, "target_work_item_id"),
-                        "relationship_type": getattr(item, "relationship_type"),
-                        "relationship_type_raw": getattr(item, "relationship_type_raw"),
+                        "source_work_item_id": item.source_work_item_id,
+                        "target_work_item_id": item.target_work_item_id,
+                        "relationship_type": item.relationship_type,
+                        "relationship_type_raw": item.relationship_type_raw,
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -546,7 +536,7 @@ class MongoStore:
             rows,
         )
 
-    async def insert_work_graph_pr_commit(self, records: List[Dict[str, Any]]) -> None:
+    async def insert_work_graph_pr_commit(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
 
@@ -563,7 +553,7 @@ class MongoStore:
             "last_synced",
         ]
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
 
         for item in records:
@@ -584,7 +574,7 @@ class MongoStore:
 
         await self._insert_rows("work_graph_pr_commit", columns, rows)
 
-    async def get_all_teams(self) -> List["Team"]:
+    async def get_all_teams(self) -> list[Team]:
         from dev_health_ops.models.teams import Team
 
         assert self.db is not None
@@ -603,7 +593,7 @@ class MongoStore:
             )
         return teams
 
-    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+    async def get_jira_project_ops_team_links(self) -> list[JiraProjectOpsTeamLink]:
         from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
         assert self.db is not None
@@ -643,7 +633,7 @@ class MongoStore:
         await self.db[collection].bulk_write(operations, ordered=False)
 
     async def _insert_rows(
-        self, collection: str, columns: List[str], rows: List[Dict[str, Any]]
+        self, collection: str, columns: list[str], rows: list[dict[str, Any]]
     ) -> None:
         assert self.db is not None
         if not rows:

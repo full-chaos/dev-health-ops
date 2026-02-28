@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import uuid
 import importlib
+import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dev_health_ops.api.services.auth import AuthService, AuthenticatedUser
+from dev_health_ops.api.services.auth import AuthenticatedUser, AuthService
 from dev_health_ops.models.users import Membership, Organization
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
@@ -46,7 +46,7 @@ class FakeSession:
     async def flush(self):
         for obj in self.added:
             if getattr(obj, "id", None) is None:
-                setattr(obj, "id", uuid.uuid4())
+                obj.id = uuid.uuid4()
 
     async def commit(self):
         self.commit_count += 1

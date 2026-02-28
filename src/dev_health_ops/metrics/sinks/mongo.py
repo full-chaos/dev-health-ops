@@ -1,40 +1,46 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Sequence
 from dataclasses import asdict
-from datetime import date, datetime, timezone, timedelta
-from typing import List, Optional, Sequence, Dict, Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from pymongo import MongoClient, ReplaceOne
 
+from dev_health_ops.metrics.loaders.base import (
+    to_dataclass,
+)
 from dev_health_ops.metrics.schemas import (
+    CICDMetricsDailyRecord,
     CommitMetricsRecord,
+    DeployMetricsDailyRecord,
+    DORAMetricsRecord,
+    FileComplexitySnapshot,
+    FileHotspotDaily,
+    FileMetricsRecord,
+    ICLandscapeRollingRecord,
+    IncidentMetricsDailyRecord,
+    InvestmentClassificationRecord,
+    InvestmentExplanationRecord,
+    InvestmentMetricsRecord,
+    IssueTypeMetricsRecord,
+    RepoComplexityDaily,
     RepoMetricsDailyRecord,
+    ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
     UserMetricsDailyRecord,
+    WorkGraphEdgeRecord,
+    WorkGraphIssuePRRecord,
+    WorkGraphPRCommitRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
     WorkItemUserMetricsDailyRecord,
-    FileMetricsRecord,
-    ReviewEdgeDailyRecord,
-    CICDMetricsDailyRecord,
-    DeployMetricsDailyRecord,
-    DORAMetricsRecord,
-    IncidentMetricsDailyRecord,
-    ICLandscapeRollingRecord,
-    FileComplexitySnapshot,
-    RepoComplexityDaily,
-    FileHotspotDaily,
-    InvestmentClassificationRecord,
-    InvestmentMetricsRecord,
-    IssueTypeMetricsRecord,
-    InvestmentExplanationRecord,
-    WorkGraphEdgeRecord,
-    WorkGraphIssuePRRecord,
-    WorkGraphPRCommitRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -44,12 +50,7 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusTransition,
     Worklog,
 )
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
-from dev_health_ops.metrics.loaders.base import (
-    to_dataclass,
-)
 from dev_health_ops.providers.teams import normalize_team_id
-import logging
 
 
 def _day_to_mongo_datetime(day: date) -> datetime:
@@ -67,13 +68,13 @@ class MongoMetricsSink(BaseMetricsSink):
     """MongoDB sink for derived daily metrics (idempotent upserts by stable _id)."""
 
     def query_dicts(
-        self, query: str, parameters: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, query: str, parameters: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         q = query.lower().strip()
         params = parameters or {}
 
         if "from work_graph_edges" in q:
-            f: Dict[str, Any] = {}
+            f: dict[str, Any] = {}
             if "repo_id in" in q:
                 f["repo_id"] = {"$in": params.get("repo_ids", [])}
             docs = list(self.db["work_graph_edges"].find(f))
@@ -146,7 +147,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def backend_type(self) -> str:
         return "mongo"
 
-    def __init__(self, uri: str, db_name: Optional[str] = None) -> None:
+    def __init__(self, uri: str, db_name: str | None = None) -> None:
         if not uri:
             raise ValueError("MongoDB URI is required")
         self.client = MongoClient(uri)
@@ -304,10 +305,10 @@ class MongoMetricsSink(BaseMetricsSink):
             [("repo_id", 1), ("pr_number", 1), ("commit_hash", 1)], unique=True
         )
 
-    async def get_all_teams(self) -> List[Dict[str, Any]]:
+    async def get_all_teams(self) -> list[dict[str, Any]]:
         """Fetch all teams from MongoDB for identity resolution."""
         rows = list(self.db["teams"].find({}, {"_id": 0}))
-        teams: List[Dict[str, Any]] = []
+        teams: list[dict[str, Any]] = []
         for row in rows:
             teams.append(
                 {
@@ -318,11 +319,11 @@ class MongoMetricsSink(BaseMetricsSink):
             )
         return teams
 
-    async def insert_teams(self, teams: List[Any]) -> None:
+    async def insert_teams(self, teams: list[Any]) -> None:
         """Insert or update teams in MongoDB."""
         if not teams:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for team in teams:
             if isinstance(team, dict):
                 team_id = team.get("id") or team.get("team_id")
@@ -357,7 +358,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}"
@@ -370,7 +371,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_user_metrics(self, rows: Sequence[UserMetricsDailyRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}:{row.author_email}"
@@ -383,7 +384,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_commit_metrics(self, rows: Sequence[CommitMetricsRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}:{row.commit_hash}"
@@ -396,7 +397,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_file_metrics(self, rows: Sequence[FileMetricsRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}:{row.path}"
@@ -409,7 +410,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_team_metrics(self, rows: Sequence[TeamMetricsDailyRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.day.isoformat()}:{row.team_id}"
@@ -423,7 +424,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             team_key = normalize_team_id(row.team_id)
@@ -439,7 +440,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             scope_key = row.work_scope_id or ""
@@ -456,7 +457,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = str(row.work_item_id)
@@ -475,7 +476,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             scope_key = row.work_scope_id or ""
@@ -491,7 +492,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_review_edges(self, rows: Sequence[ReviewEdgeDailyRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = (
@@ -506,7 +507,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_cicd_metrics(self, rows: Sequence[CICDMetricsDailyRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}"
@@ -519,7 +520,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_deploy_metrics(self, rows: Sequence[DeployMetricsDailyRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}"
@@ -534,7 +535,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}"
@@ -547,7 +548,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}:{row.metric_name}"
@@ -564,7 +565,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             # key: repo_id:map_name:as_of_day:identity_id
@@ -580,8 +581,8 @@ class MongoMetricsSink(BaseMetricsSink):
     def get_rolling_30d_user_stats(
         self,
         as_of_day: date,
-        repo_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        repo_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Compute rolling 30d stats by aggregating daily docs in Python.
         """
@@ -590,7 +591,7 @@ class MongoMetricsSink(BaseMetricsSink):
         start_dt = _day_to_mongo_datetime(start_day)
         end_dt = _day_to_mongo_datetime(as_of_day)
 
-        query: Dict[str, Any] = {"day": {"$gte": start_dt, "$lte": end_dt}}
+        query: dict[str, Any] = {"day": {"$gte": start_dt, "$lte": end_dt}}
         if repo_id:
             query["repo_id"] = str(repo_id)
 
@@ -607,7 +608,7 @@ class MongoMetricsSink(BaseMetricsSink):
         docs = list(self.db["user_metrics_daily"].find(query, projection))
 
         # Aggregate in Python
-        aggs: Dict[str, Dict[str, Any]] = {}
+        aggs: dict[str, dict[str, Any]] = {}
 
         for doc in docs:
             # Fallback for identity_id
@@ -664,7 +665,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.as_of_day.isoformat()}:{row.file_path}"
@@ -677,7 +678,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_repo_complexity_daily(self, rows: Sequence[RepoComplexityDaily]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}"
@@ -690,7 +691,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_file_hotspot_daily(self, rows: Sequence[FileHotspotDaily]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.day.isoformat()}:{row.file_path}"
@@ -705,7 +706,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = (
@@ -721,7 +722,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_investment_metrics(self, rows: Sequence[InvestmentMetricsRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             repo_part = str(row.repo_id) if row.repo_id else "global"
@@ -738,7 +739,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_issue_type_metrics(self, rows: Sequence[IssueTypeMetricsRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             repo_part = str(row.repo_id) if row.repo_id else "global"
@@ -757,7 +758,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             # Composite key: work_unit_id + categorization_run_id for versioning
@@ -775,7 +776,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             # Composite key: work_unit_id + source_type + source_id + quote hash
@@ -802,7 +803,7 @@ class MongoMetricsSink(BaseMetricsSink):
 
     def read_investment_explanation(
         self, cache_key: str
-    ) -> Optional[InvestmentExplanationRecord]:
+    ) -> InvestmentExplanationRecord | None:
         """Read a cached investment explanation by cache_key."""
         doc = self.db["investment_explanations"].find_one(
             {"_id": cache_key}, {"_id": 0}
@@ -818,7 +819,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_work_graph_edges(self, rows: Sequence[WorkGraphEdgeRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = row.edge_id
@@ -833,7 +834,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_work_graph_issue_pr(self, rows: Sequence[WorkGraphIssuePRRecord]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.work_item_id}:{row.pr_number}"
@@ -847,7 +848,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for row in rows:
             doc = asdict(row)
             doc["_id"] = f"{row.repo_id}:{row.pr_number}:{row.commit_hash}"
@@ -863,7 +864,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_work_items(self, work_items: Sequence[WorkItem]) -> None:
         if not work_items:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for item in work_items:
             doc = asdict(item)
             doc["_id"] = item.work_item_id
@@ -887,7 +888,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not transitions:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for tr in transitions:
             doc = asdict(tr)
             doc["_id"] = (
@@ -900,7 +901,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_work_item_dependencies(self, rows: Sequence[WorkItemDependency]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for r in rows:
             doc = asdict(r)
             doc["_id"] = (
@@ -915,7 +916,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for r in rows:
             doc = asdict(r)
             doc["_id"] = f"{r.work_item_id}:{r.occurred_at.isoformat()}"
@@ -929,7 +930,7 @@ class MongoMetricsSink(BaseMetricsSink):
     ) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for r in rows:
             doc = asdict(r)
             doc["_id"] = (
@@ -943,7 +944,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_sprints(self, rows: Sequence[Sprint]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for r in rows:
             doc = asdict(r)
             doc["_id"] = f"{r.provider}:{r.sprint_id}"
@@ -960,7 +961,7 @@ class MongoMetricsSink(BaseMetricsSink):
     def write_worklogs(self, rows: Sequence[Worklog]) -> None:
         if not rows:
             return
-        ops: List[ReplaceOne] = []
+        ops: list[ReplaceOne] = []
         for r in rows:
             doc = asdict(r)
             doc["_id"] = f"{r.provider}:{r.worklog_id}"

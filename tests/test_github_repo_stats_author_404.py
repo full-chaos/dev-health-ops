@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 
-from dev_health_ops.connectors.github import GitHubConnector
 from github.GithubException import UnknownObjectException
+
+from dev_health_ops.connectors.github import GitHubConnector
 
 
 class _AuthorWith404Name:

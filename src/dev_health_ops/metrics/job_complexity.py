@@ -2,21 +2,22 @@ import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any
 
 import git
+
 from dev_health_ops.analytics.complexity import ComplexityScanner
-from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
-from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
-from dev_health_ops.storage import detect_db_type
-from dev_health_ops.metrics.db_utils import (
-    normalize_sqlite_url as _normalize_sqlite_url,
-)
 from dev_health_ops.metrics.db_utils import (
     normalize_postgres_url as _normalize_postgres_url,
 )
+from dev_health_ops.metrics.db_utils import (
+    normalize_sqlite_url as _normalize_sqlite_url,
+)
+from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
+from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
+from dev_health_ops.storage import detect_db_type
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ def run_complexity_scan_job(
     date: date,
     backfill_days: int = 1,
     ref: str = "HEAD",
-    sink: Optional[Any] = None,
+    sink: Any | None = None,
 ) -> None:
     if not db_url and not sink:
         raise ValueError("DB connection string or sink is required.")

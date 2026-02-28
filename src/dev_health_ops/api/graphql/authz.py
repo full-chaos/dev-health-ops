@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable, Dict, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from .context import GraphQLContext
 from .errors import AuthorizationError
@@ -154,7 +155,7 @@ def require_org_id(context: GraphQLContext) -> str:
     return context.org_id
 
 
-def enforce_org_scope(org_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def enforce_org_scope(org_id: str, params: dict[str, Any]) -> dict[str, Any]:
     """
     Inject org_id into SQL parameters to enforce org scoping.
 

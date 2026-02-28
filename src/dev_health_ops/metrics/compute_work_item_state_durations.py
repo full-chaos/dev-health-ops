@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Optional, Sequence, Tuple
 
 from dev_health_ops.metrics.schemas import WorkItemStateDurationDailyRecord
 from dev_health_ops.models.work_items import (
@@ -19,20 +19,20 @@ from dev_health_ops.providers.teams import (
 from dev_health_ops.utils.datetime import to_utc
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
 
 
 def _resolve_team(
-    team_resolver: Optional[TeamResolver],
-    project_key_resolver: Optional[ProjectKeyTeamResolver],
-    work_scope_id: Optional[str],
-    identity: Optional[str],
-) -> Tuple[str, str]:
-    team_id: Optional[str] = None
-    team_name: Optional[str] = None
+    team_resolver: TeamResolver | None,
+    project_key_resolver: ProjectKeyTeamResolver | None,
+    work_scope_id: str | None,
+    identity: str | None,
+) -> tuple[str, str]:
+    team_id: str | None = None
+    team_name: str | None = None
     if project_key_resolver is not None:
         team_id, team_name = project_key_resolver.resolve(work_scope_id)
     if not team_id and team_resolver is not None:
@@ -45,7 +45,7 @@ def _segment_statuses(
     item: WorkItem,
     transitions: Sequence[WorkItemStatusTransition],
     computed_at: datetime,
-) -> List[Tuple[WorkItemStatusCategory, datetime, datetime]]:
+) -> list[tuple[WorkItemStatusCategory, datetime, datetime]]:
     """
     Build best-effort status segments for a work item.
 
@@ -66,7 +66,7 @@ def _segment_statuses(
         # No history; cannot infer per-status durations.
         return []
 
-    segments: List[Tuple[WorkItemStatusCategory, datetime, datetime]] = []
+    segments: list[tuple[WorkItemStatusCategory, datetime, datetime]] = []
 
     first = ordered[0]
     current_status: WorkItemStatusCategory = first.from_status or item.status  # type: ignore[assignment]
@@ -96,9 +96,9 @@ def compute_work_item_state_durations_daily(
     work_items: Sequence[WorkItem],
     transitions: Sequence[WorkItemStatusTransition],
     computed_at: datetime,
-    team_resolver: Optional[TeamResolver] = None,
-    project_key_resolver: Optional[ProjectKeyTeamResolver] = None,
-) -> List[WorkItemStateDurationDailyRecord]:
+    team_resolver: TeamResolver | None = None,
+    project_key_resolver: ProjectKeyTeamResolver | None = None,
+) -> list[WorkItemStateDurationDailyRecord]:
     """
     Compute per-day time-in-state totals from status transitions.
 
@@ -111,13 +111,13 @@ def compute_work_item_state_durations_daily(
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
 
-    transitions_by_id: Dict[str, List[WorkItemStatusTransition]] = defaultdict(list)
+    transitions_by_id: dict[str, list[WorkItemStatusTransition]] = defaultdict(list)
     for tr in transitions:
         transitions_by_id[tr.work_item_id].append(tr)
 
-    totals: Dict[Tuple[str, str, str, str], float] = defaultdict(float)
-    items_seen: Dict[Tuple[str, str, str, str], set] = defaultdict(set)
-    team_name_by_key: Dict[Tuple[str, str, str], str] = {}
+    totals: dict[tuple[str, str, str, str], float] = defaultdict(float)
+    items_seen: dict[tuple[str, str, str, str], set] = defaultdict(set)
+    team_name_by_key: dict[tuple[str, str, str], str] = {}
 
     for item in work_items:
         item_transitions = transitions_by_id.get(item.work_item_id) or []
@@ -146,7 +146,7 @@ def compute_work_item_state_durations_daily(
             totals[key] += float(hours)
             items_seen[key].add(item.work_item_id)
 
-    rows: List[WorkItemStateDurationDailyRecord] = []
+    rows: list[WorkItemStateDurationDailyRecord] = []
     for (provider, work_scope_id, team_id, status), total_hours in sorted(
         totals.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2], kv[0][3])
     ):

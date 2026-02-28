@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 async def resolve_catalog(
     context: GraphQLContext,
-    dimension: Optional[DimensionInput] = None,
-    filters: Optional["FilterInput"] = None,  # NEW: Filter support
+    dimension: DimensionInput | None = None,
+    filters: FilterInput | None = None,  # NEW: Filter support
 ) -> CatalogResult:
     """
     Resolve catalog query.

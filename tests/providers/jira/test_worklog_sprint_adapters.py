@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from atlassian import JiraSprint, JiraUser, JiraWorklog
+
 from dev_health_ops.providers.jira.normalize import (
     canonical_sprint_to_model,
     canonical_worklog_to_model,

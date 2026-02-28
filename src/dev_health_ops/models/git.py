@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from git import Repo as GitRepo
 from sqlalchemy import (
+    CHAR,
     JSON,
     Boolean,
     Column,
@@ -15,11 +16,9 @@ from sqlalchemy import (
     Integer,
     Text,
     TypeDecorator,
-    CHAR,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import declarative_base, relationship
-from typing import Optional, List, Tuple
 
 Base = declarative_base()
 
@@ -153,7 +152,7 @@ def get_repo_uuid(repo_path: str) -> uuid.UUID:
 class Repo(Base, GitRepo):
     __tablename__ = "repos"
 
-    def __init__(self, repo_path: Optional[str] = None, **kwargs):
+    def __init__(self, repo_path: str | None = None, **kwargs):
         """
         Initialize the Repo class with the given repository path.
 
@@ -398,8 +397,8 @@ class GitBlameMixin:
         repo_path: str,
         filepath: str,
         repo_uuid: uuid.UUID,
-        repo: Optional[GitRepo] = None,
-    ) -> List[Tuple]:
+        repo: GitRepo | None = None,
+    ) -> list[tuple]:
         """
         Fetch blame data for a given file using gitpython.
 

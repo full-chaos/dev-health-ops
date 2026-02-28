@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from dev_health_ops.work_graph.investment.types import TextBundle
 from dev_health_ops.work_graph.investment.utils import clamp, evidence_quality_band
@@ -24,7 +24,7 @@ class TimeBounds:
     end: datetime
 
 
-def _ensure_utc(value: Optional[datetime | str]) -> Optional[datetime]:
+def _ensure_utc(value: datetime | str | None) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, str):
@@ -45,7 +45,7 @@ def _truncate_text(value: str, limit: int) -> str:
     return f"{compact[:limit].rstrip()}..."
 
 
-def _commit_subject(message: Optional[str]) -> Optional[str]:
+def _commit_subject(message: str | None) -> str | None:
     if not message:
         return None
     for line in str(message).splitlines():
@@ -57,8 +57,8 @@ def _commit_subject(message: Optional[str]) -> Optional[str]:
 
 def _node_time_bounds(
     node_type: str,
-    data: Dict[str, object],
-) -> Tuple[Optional[datetime], Optional[datetime]]:
+    data: dict[str, object],
+) -> tuple[datetime | None, datetime | None]:
     if node_type == "issue":
         start = _ensure_utc(data.get("created_at"))  # type: ignore[arg-type]
         end = _ensure_utc(data.get("completed_at"))  # type: ignore[arg-type]
@@ -77,15 +77,15 @@ def _node_time_bounds(
 
 
 def compute_time_bounds(
-    nodes: Iterable[Tuple[str, str]],
-    work_item_map: Dict[str, Dict[str, object]],
-    pr_map: Dict[str, Dict[str, object]],
-    commit_map: Dict[str, Dict[str, object]],
-) -> Optional[TimeBounds]:
-    starts: List[datetime] = []
-    ends: List[datetime] = []
+    nodes: Iterable[tuple[str, str]],
+    work_item_map: dict[str, dict[str, object]],
+    pr_map: dict[str, dict[str, object]],
+    commit_map: dict[str, dict[str, object]],
+) -> TimeBounds | None:
+    starts: list[datetime] = []
+    ends: list[datetime] = []
     for node_type, node_id in nodes:
-        data: Dict[str, object] = {}
+        data: dict[str, object] = {}
         if node_type == "issue":
             data = work_item_map.get(node_id, {})
         elif node_type == "pr":
@@ -111,7 +111,7 @@ def _graph_density(node_count: int, edge_count: int) -> float:
     return min(1.0, edge_count / possible)
 
 
-def _edge_confidence(edges: Iterable[Dict[str, object]]) -> float:
+def _edge_confidence(edges: Iterable[dict[str, object]]) -> float:
     values = [float(edge.get("confidence") or 0.0) for edge in edges]
     if not values:
         return 0.0
@@ -122,7 +122,7 @@ def compute_evidence_quality(
     *,
     text_bundle: TextBundle,
     nodes_count: int,
-    edges: Iterable[Dict[str, object]],
+    edges: Iterable[dict[str, object]],
 ) -> float:
     edges_list = list(edges)
     text_sources = text_bundle.text_source_count
@@ -145,21 +145,21 @@ def compute_evidence_quality(
 
 def build_text_bundle(
     *,
-    issue_ids: List[str],
-    pr_ids: List[str],
-    commit_ids: List[str],
-    work_item_map: Dict[str, Dict[str, object]],
-    pr_map: Dict[str, Dict[str, object]],
-    commit_map: Dict[str, Dict[str, object]],
-    parent_titles: Dict[str, str],
-    epic_titles: Dict[str, str],
+    issue_ids: list[str],
+    pr_ids: list[str],
+    commit_ids: list[str],
+    work_item_map: dict[str, dict[str, object]],
+    pr_map: dict[str, dict[str, object]],
+    commit_map: dict[str, dict[str, object]],
+    parent_titles: dict[str, str],
+    epic_titles: dict[str, str],
     work_unit_id: str,
 ) -> TextBundle:
-    source_texts: Dict[str, Dict[str, str]] = {"issue": {}, "pr": {}, "commit": {}}
+    source_texts: dict[str, dict[str, str]] = {"issue": {}, "pr": {}, "commit": {}}
 
     for issue_id in sorted(issue_ids)[:MAX_ISSUES]:
         item = work_item_map.get(issue_id) or {}
-        parts: List[str] = []
+        parts: list[str] = []
         title = item.get("title")
         if title:
             parts.append(_truncate_text(str(title), MAX_FIELD_CHARS))
@@ -209,7 +209,7 @@ def build_text_bundle(
                 str(subject), MAX_SOURCE_CHARS
             )
 
-    source_block_lines: List[str] = []
+    source_block_lines: list[str] = []
     for source_type in ("issue", "pr", "commit"):
         for source_id, text in source_texts[source_type].items():
             if not text:

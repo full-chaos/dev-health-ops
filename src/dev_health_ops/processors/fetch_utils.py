@@ -9,15 +9,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable, Coroutine
 from datetime import datetime
-from typing import Any, Callable, Coroutine, List, Optional
+from typing import Any
 
 from dev_health_ops.utils import BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
 
-def safe_parse_datetime(value: Any) -> Optional[datetime]:
+def safe_parse_datetime(value: Any) -> datetime | None:
     """Parse a datetime from a string or datetime, handling "Z" suffix."""
     if isinstance(value, datetime):
         return value
@@ -32,9 +33,9 @@ def safe_parse_datetime(value: Any) -> Optional[datetime]:
 coerce_datetime = safe_parse_datetime
 
 
-def extract_retry_after(exc: BaseException, connector: Any = None) -> Optional[float]:
+def extract_retry_after(exc: BaseException, connector: Any = None) -> float | None:
     """Extract retry delay seconds from connector helper or exception headers."""
-    retry_after: Optional[float] = None
+    retry_after: float | None = None
 
     if connector is not None and hasattr(connector, "_rate_limit_reset_delay_seconds"):
         try:
@@ -75,7 +76,7 @@ class SyncBatchCollector:
 
     def __init__(
         self,
-        flush_coro_fn: Callable[[List[Any]], Coroutine[Any, Any, Any]],
+        flush_coro_fn: Callable[[list[Any]], Coroutine[Any, Any, Any]],
         loop: asyncio.AbstractEventLoop,
         batch_size: int = BATCH_SIZE,
     ):
@@ -103,7 +104,7 @@ class SyncBatchCollector:
     def total(self) -> int:
         return self._total
 
-    def __enter__(self) -> "SyncBatchCollector":
+    def __enter__(self) -> SyncBatchCollector:
         return self
 
     def __exit__(self, *exc: object) -> bool:
@@ -119,7 +120,7 @@ class AsyncBatchCollector:
 
     def __init__(
         self,
-        flush_coro_fn: Callable[[List[Any]], Coroutine[Any, Any, Any]],
+        flush_coro_fn: Callable[[list[Any]], Coroutine[Any, Any, Any]],
         batch_size: int = BATCH_SIZE,
     ):
         self._flush_coro_fn = flush_coro_fn
@@ -144,7 +145,7 @@ class AsyncBatchCollector:
     def total(self) -> int:
         return self._total
 
-    async def __aenter__(self) -> "AsyncBatchCollector":
+    async def __aenter__(self) -> AsyncBatchCollector:
         return self
 
     async def __aexit__(self, *exc: object) -> bool:

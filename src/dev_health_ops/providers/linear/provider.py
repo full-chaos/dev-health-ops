@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -78,8 +77,8 @@ class LinearProvider(Provider):
     def __init__(
         self,
         *,
-        status_mapping: Optional[StatusMapping] = None,
-        identity: Optional[IdentityResolver] = None,
+        status_mapping: StatusMapping | None = None,
+        identity: IdentityResolver | None = None,
     ) -> None:
         """
         Initialize the Linear provider.
@@ -129,11 +128,11 @@ class LinearProvider(Provider):
 
         client = LinearClient.from_env()
 
-        work_items: List[WorkItem] = []
-        transitions: List[WorkItemStatusTransition] = []
-        reopen_events: List[WorkItemReopenEvent] = []
-        interactions: List[WorkItemInteractionEvent] = []
-        sprints: List[Sprint] = []
+        work_items: list[WorkItem] = []
+        transitions: list[WorkItemStatusTransition] = []
+        reopen_events: list[WorkItemReopenEvent] = []
+        interactions: list[WorkItemInteractionEvent] = []
+        sprints: list[Sprint] = []
 
         fetch_comments = _env_flag("LINEAR_FETCH_COMMENTS", True)
         fetch_history = _env_flag("LINEAR_FETCH_HISTORY", True)
@@ -150,14 +149,14 @@ class LinearProvider(Provider):
                     raw_comments_limit,
                 )
 
-        cycle_cache: Dict[str, Sprint] = {}
+        cycle_cache: dict[str, Sprint] = {}
 
-        updated_after: Optional[datetime] = None
+        updated_after: datetime | None = None
         if ctx.window.updated_since:
             updated_after = _to_utc(ctx.window.updated_since)
 
         team_key = ctx.repo
-        teams_to_sync: List[Dict] = []
+        teams_to_sync: list[dict] = []
 
         if team_key:
             all_teams = list(client.iter_teams())
@@ -215,7 +214,7 @@ class LinearProvider(Provider):
                     if not issue_id:
                         continue
 
-                    history: List[Dict] = []
+                    history: list[dict] = []
                     if fetch_history:
                         try:
                             history = client.get_issue_history(issue_id)

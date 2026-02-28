@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from dev_health_ops.llm.providers.openai import OpenAIProvider
 
 

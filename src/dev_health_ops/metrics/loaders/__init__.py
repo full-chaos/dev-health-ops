@@ -9,17 +9,17 @@ from __future__ import annotations
 
 from dev_health_ops.metrics.loaders.base import (
     DataLoader,
-    naive_utc,
-    to_utc,
-    parse_uuid,
-    safe_json_loads,
     chunked,
     clickhouse_query_dicts,
+    naive_utc,
+    parse_uuid,
+    safe_json_loads,
+    to_utc,
 )
 from dev_health_ops.metrics.loaders.validation import (
     ValidationError,
-    validate_rows,
     validate_or_raise,
+    validate_rows,
     validate_typed_dict,
 )
 

@@ -5,7 +5,6 @@ Anthropic LLM provider implementation.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ class AnthropicProvider:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self._client: Optional[object] = None
+        self._client: object | None = None
 
     def _get_client(self) -> object:
         """Lazy initialize Anthropic client."""

@@ -5,17 +5,17 @@ from enum import Enum
 
 import sqlalchemy as sa
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     ForeignKey,
     Integer,
-    JSON,
     Text,
     UniqueConstraint,
 )
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class BillingInterval(str, Enum):

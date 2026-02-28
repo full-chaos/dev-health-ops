@@ -4,15 +4,16 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
+from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
+from dev_health_ops.llm import get_provider, is_llm_available
 from dev_health_ops.llm.explainers.investment_mix_explainer import (
     build_prompt,
     load_prompt,
     parse_and_validate_response,
 )
-from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
-
 from dev_health_ops.metrics.schemas import InvestmentExplanationRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
@@ -24,15 +25,12 @@ from ..models.schemas import (
     InvestmentMixExplanation,
 )
 from .investment import build_investment_response
-from dev_health_ops.llm import get_provider, is_llm_available
 from .work_units import build_work_unit_investments
-from dev_health_ops.api.utils.logging import sanitize_for_log
-
 
 logger = logging.getLogger(__name__)
 
 
-def _top_items(distribution: Dict[str, float], limit: int) -> List[Tuple[str, float]]:
+def _top_items(distribution: dict[str, float], limit: int) -> list[tuple[str, float]]:
     return sorted(
         [
             (k, float(v or 0.0))
@@ -44,8 +42,8 @@ def _top_items(distribution: Dict[str, float], limit: int) -> List[Tuple[str, fl
     )[: max(1, int(limit))]
 
 
-def _dominant_subcategory(subcategories: Dict[str, float]) -> Optional[str]:
-    best_key: Optional[str] = None
+def _dominant_subcategory(subcategories: dict[str, float]) -> str | None:
+    best_key: str | None = None
     best_value = 0.0
     for key, value in subcategories.items():
         v = float(value or 0.0)
@@ -56,7 +54,7 @@ def _dominant_subcategory(subcategories: Dict[str, float]) -> Optional[str]:
 
 
 def _determine_confidence_level(
-    quality_mean: Optional[float], quality_stddev: Optional[float]
+    quality_mean: float | None, quality_stddev: float | None
 ) -> str:
     if quality_mean is None:
         return "unknown"
@@ -67,9 +65,7 @@ def _determine_confidence_level(
     return "low"
 
 
-def _compute_cache_key(
-    filters: Any, theme: Optional[str], subcategory: Optional[str]
-) -> str:
+def _compute_cache_key(filters: Any, theme: str | None, subcategory: str | None) -> str:
     """Compute a deterministic cache key from filter context."""
     # Serialize filters to JSON for hashing
     if hasattr(filters, "model_dump"):
@@ -92,11 +88,11 @@ async def explain_investment_mix(
     *,
     db_url: str,
     filters: Any,
-    theme: Optional[str] = None,
-    subcategory: Optional[str] = None,
+    theme: str | None = None,
+    subcategory: str | None = None,
     org_id: str = "",
     llm_provider: str = "auto",
-    llm_model: Optional[str] = None,
+    llm_model: str | None = None,
     force_refresh: bool = False,
 ) -> InvestmentMixExplanation:
     if theme and theme not in THEMES:
@@ -188,9 +184,9 @@ async def explain_investment_mix(
             if float((unit.investment.subcategories or {}).get(subcategory, 0.0)) > 0.0
         ]
 
-    band_counts: Dict[str, int] = {}
-    dominant_counts: Dict[str, int] = {}
-    quotes_by_subcategory: Dict[str, List[str]] = {}
+    band_counts: dict[str, int] = {}
+    dominant_counts: dict[str, int] = {}
+    quotes_by_subcategory: dict[str, list[str]] = {}
 
     for unit in units:
         band = str(unit.evidence_quality.band or "very_low")
@@ -214,7 +210,7 @@ async def explain_investment_mix(
     top_subcategories = _top_items(subcategory_distribution, 12)
     top_counts = _top_items({k: float(v) for k, v in dominant_counts.items()}, 10)
 
-    sample_quotes: List[Dict[str, Any]] = []
+    sample_quotes: list[dict[str, Any]] = []
     for subcat, _count in top_counts[:6]:
         quotes = quotes_by_subcategory.get(subcat, [])[:3]
         if quotes:
@@ -240,7 +236,7 @@ async def explain_investment_mix(
         quality_stddev = math.sqrt(variance)
 
     # Determine quality drivers based on band distribution
-    quality_drivers: List[str] = []
+    quality_drivers: list[str] = []
     unknown_count = band_counts.get("unknown", 0)
     low_count = band_counts.get("low", 0) + band_counts.get("very_low", 0)
     total_band = sum(band_counts.values())
@@ -254,7 +250,7 @@ async def explain_investment_mix(
     if quality_stddev is not None and quality_stddev > 0.25:
         quality_drivers.append("high_uncertainty_spread")
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "focus": {"theme": theme, "subcategory": subcategory},
         "total_effort": total_effort,
         "theme_distribution_top": [
@@ -315,7 +311,7 @@ async def explain_investment_mix(
         logger.warning("Investment mix explanation parse/validation failed")
         # Build deterministic fallback
         confidence_level = _determine_confidence_level(quality_mean, quality_stddev)
-        fallback_findings: List[InvestmentFinding] = []
+        fallback_findings: list[InvestmentFinding] = []
         for key, value in top_themes[:2]:
             pct = (value / total_effort * 100) if total_effort else 0.0
             fallback_findings.append(

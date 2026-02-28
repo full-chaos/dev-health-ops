@@ -14,7 +14,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
@@ -71,6 +71,8 @@ def _get_jira_activity_schema_classes() -> tuple[type, type]:
     """Lazy import to avoid circular dependency with admin.schemas."""
     from dev_health_ops.api.admin.schemas import (
         ConfirmInferredMemberAction as _CIMA,
+    )
+    from dev_health_ops.api.admin.schemas import (
         InferredMember as _IM,
     )
 
@@ -125,8 +127,8 @@ class SettingsService:
         self,
         key: str,
         category: str = SettingCategory.GENERAL.value,
-        default: Optional[str] = None,
-    ) -> Optional[str]:
+        default: str | None = None,
+    ) -> str | None:
         """Get a setting value, decrypting if necessary."""
         stmt = select(Setting).where(
             Setting.org_id == self.org_id,
@@ -146,10 +148,10 @@ class SettingsService:
     async def set(
         self,
         key: str,
-        value: Optional[str],
+        value: str | None,
         category: str = SettingCategory.GENERAL.value,
         encrypt: bool = False,
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> Setting:
         """Set a setting value, encrypting if requested."""
         stmt = select(Setting).where(
@@ -247,7 +249,7 @@ class IntegrationCredentialsService:
         self,
         provider: str,
         name: str = "default",
-    ) -> Optional[IntegrationCredential]:
+    ) -> IntegrationCredential | None:
         """Get an integration credential."""
         stmt = select(IntegrationCredential).where(
             IntegrationCredential.org_id == self.org_id,
@@ -261,7 +263,7 @@ class IntegrationCredentialsService:
         self,
         provider: str,
         name: str = "default",
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get credentials as a decrypted dictionary."""
         cred = await self.get(provider, name)
         if cred is None or not cred.credentials_encrypted:
@@ -283,7 +285,7 @@ class IntegrationCredentialsService:
         provider: str,
         credentials: dict[str, Any],
         name: str = "default",
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
         is_active: bool = True,
     ) -> IntegrationCredential:
         """Set integration credentials (always encrypted)."""
@@ -320,7 +322,7 @@ class IntegrationCredentialsService:
         self,
         provider: str,
         success: bool,
-        error: Optional[str] = None,
+        error: str | None = None,
         name: str = "default",
     ) -> None:
         """Update the test connection result."""
@@ -370,7 +372,7 @@ class SyncConfigurationService:
         self.session = session
         self.org_id = org_id
 
-    async def get(self, name: str) -> Optional[SyncConfiguration]:
+    async def get(self, name: str) -> SyncConfiguration | None:
         """Get a sync configuration by name."""
         stmt = select(SyncConfiguration).where(
             SyncConfiguration.org_id == self.org_id,
@@ -379,7 +381,7 @@ class SyncConfigurationService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_id(self, config_id: str) -> Optional[SyncConfiguration]:
+    async def get_by_id(self, config_id: str) -> SyncConfiguration | None:
         """Get a sync configuration by ID."""
         import uuid as uuid_module
 
@@ -399,8 +401,8 @@ class SyncConfigurationService:
         name: str,
         provider: str,
         sync_targets: list[str],
-        sync_options: Optional[dict[str, Any]] = None,
-        credential_id: Optional[str] = None,
+        sync_options: dict[str, Any] | None = None,
+        credential_id: str | None = None,
     ) -> SyncConfiguration:
         """Create a new sync configuration."""
         import uuid as uuid_module
@@ -420,10 +422,10 @@ class SyncConfigurationService:
     async def update(
         self,
         name: str,
-        sync_targets: Optional[list[str]] = None,
-        sync_options: Optional[dict[str, Any]] = None,
-        is_active: Optional[bool] = None,
-    ) -> Optional[SyncConfiguration]:
+        sync_targets: list[str] | None = None,
+        sync_options: dict[str, Any] | None = None,
+        is_active: bool | None = None,
+    ) -> SyncConfiguration | None:
         """Update a sync configuration."""
         config = await self.get(name)
         if config is None:
@@ -467,7 +469,7 @@ class IdentityMappingService:
         self.session = session
         self.org_id = org_id
 
-    async def get(self, canonical_id: str) -> Optional[IdentityMapping]:
+    async def get(self, canonical_id: str) -> IdentityMapping | None:
         """Get an identity mapping by canonical ID."""
         stmt = select(IdentityMapping).where(
             IdentityMapping.org_id == self.org_id,
@@ -480,7 +482,7 @@ class IdentityMappingService:
         self,
         provider: str,
         identity: str,
-    ) -> Optional[IdentityMapping]:
+    ) -> IdentityMapping | None:
         """Find an identity mapping by provider-specific identity."""
         stmt = select(IdentityMapping).where(
             IdentityMapping.org_id == self.org_id,
@@ -497,10 +499,10 @@ class IdentityMappingService:
     async def create_or_update(
         self,
         canonical_id: str,
-        display_name: Optional[str] = None,
-        email: Optional[str] = None,
-        provider_identities: Optional[dict[str, list[str]]] = None,
-        team_ids: Optional[list[str]] = None,
+        display_name: str | None = None,
+        email: str | None = None,
+        provider_identities: dict[str, list[str]] | None = None,
+        team_ids: list[str] | None = None,
     ) -> IdentityMapping:
         """Create or update an identity mapping."""
         mapping = await self.get(canonical_id)
@@ -533,7 +535,7 @@ class IdentityMappingService:
         canonical_id: str,
         provider: str,
         identity: str,
-    ) -> Optional[IdentityMapping]:
+    ) -> IdentityMapping | None:
         """Add a provider identity to an existing mapping."""
         mapping = await self.get(canonical_id)
         if mapping is None:
@@ -568,7 +570,7 @@ class TeamMappingService:
         self.session = session
         self.org_id = org_id
 
-    async def get(self, team_id: str) -> Optional[TeamMapping]:
+    async def get(self, team_id: str) -> TeamMapping | None:
         """Get a team mapping by team ID."""
         stmt = select(TeamMapping).where(
             TeamMapping.org_id == self.org_id,
@@ -581,10 +583,10 @@ class TeamMappingService:
         self,
         team_id: str,
         name: str,
-        description: Optional[str] = None,
-        repo_patterns: Optional[list[str]] = None,
-        project_keys: Optional[list[str]] = None,
-        extra_data: Optional[dict[str, Any]] = None,
+        description: str | None = None,
+        repo_patterns: list[str] | None = None,
+        project_keys: list[str] | None = None,
+        extra_data: dict[str, Any] | None = None,
     ) -> TeamMapping:
         """Create or update a team mapping."""
         mapping = await self.get(team_id)
@@ -1234,7 +1236,7 @@ class TeamMembershipService:
                     IdentityMapping.is_active == True,  # noqa: E712
                 )
                 name_result = await self.session.execute(name_stmt)
-                best_match: Optional[IdentityMapping] = None
+                best_match: IdentityMapping | None = None
                 best_score = 0.0
                 for candidate in name_result.scalars().all():
                     if not candidate.display_name:
@@ -1330,7 +1332,7 @@ class JiraActivityInferenceService:
         self.session = session
         self.org_id = org_id
 
-    def _parse_jira_datetime(self, value: Any) -> Optional[datetime]:
+    def _parse_jira_datetime(self, value: Any) -> datetime | None:
         if not isinstance(value, str) or not value:
             return None
         normalized = value.replace("Z", "+00:00")
@@ -1389,7 +1391,7 @@ class JiraActivityInferenceService:
         def _touch(
             actor: Any,
             role: str,
-            issue_updated_at: Optional[datetime],
+            issue_updated_at: datetime | None,
         ) -> None:
             if not isinstance(actor, dict):
                 return

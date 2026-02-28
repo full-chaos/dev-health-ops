@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from .client import query_dicts
 
 
-def _date_params(start_day: date, end_day: date) -> Dict[str, Any]:
+def _date_params(start_day: date, end_day: date) -> dict[str, Any]:
     return {"start_day": start_day, "end_day": end_day}
 
 
@@ -18,10 +18,10 @@ async def fetch_metric_series(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     aggregator: str,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             day,
@@ -47,7 +47,7 @@ async def fetch_metric_value(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     aggregator: str,
     org_id: str = "",
 ) -> float:
@@ -75,9 +75,9 @@ async def fetch_blocked_hours(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-) -> Tuple[float, List[Dict[str, Any]]]:
+) -> tuple[float, list[dict[str, Any]]]:
     query = f"""
         SELECT
             day,

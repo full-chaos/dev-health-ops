@@ -11,7 +11,6 @@ import logging
 import os
 from dataclasses import replace
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -74,8 +73,8 @@ class GitLabProvider(Provider):
     def __init__(
         self,
         *,
-        status_mapping: Optional[StatusMapping] = None,
-        identity: Optional[IdentityResolver] = None,
+        status_mapping: StatusMapping | None = None,
+        identity: IdentityResolver | None = None,
     ) -> None:
         """
         Initialize the GitLab provider.
@@ -134,12 +133,12 @@ class GitLabProvider(Provider):
         project_path = ctx.repo
         client = GitLabWorkClient.from_env()
 
-        work_items: List[WorkItem] = []
-        transitions: List[WorkItemStatusTransition] = []
-        dependencies: List[WorkItemDependency] = []
-        reopen_events: List[WorkItemReopenEvent] = []
-        interactions: List[WorkItemInteractionEvent] = []
-        sprints: List[Sprint] = []
+        work_items: list[WorkItem] = []
+        transitions: list[WorkItemStatusTransition] = []
+        dependencies: list[WorkItemDependency] = []
+        reopen_events: list[WorkItemReopenEvent] = []
+        interactions: list[WorkItemInteractionEvent] = []
+        sprints: list[Sprint] = []
 
         include_mrs = _env_flag("GITLAB_INCLUDE_MRS", True)
         fetch_notes = _env_flag("GITLAB_FETCH_NOTES", True)
@@ -158,11 +157,11 @@ class GitLabProvider(Provider):
                     raw_notes_limit,
                 )
 
-        sprint_cache: Dict[str, Sprint] = {}
+        sprint_cache: dict[str, Sprint] = {}
         epic_count = 0
 
         # Determine time window
-        updated_after: Optional[datetime] = None
+        updated_after: datetime | None = None
         if ctx.window.updated_since:
             updated_after = _to_utc(ctx.window.updated_since)
 

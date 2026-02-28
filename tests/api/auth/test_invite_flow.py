@@ -4,7 +4,6 @@ import importlib
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from dev_health_ops.api.services.auth import AuthService, AuthenticatedUser
+from dev_health_ops.api.services.auth import AuthenticatedUser, AuthService
 from dev_health_ops.api.services.invites import create_invite
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.git import Base

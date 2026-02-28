@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,7 +44,7 @@ def make_edge_row(
     evidence: str = "Closes #123",
     repo_id: str = "abc-def",
     provider: str = "github",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "edge_id": edge_id,
         "source_type": source_type,

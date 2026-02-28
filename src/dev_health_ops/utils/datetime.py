@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional, overload
+from typing import overload
 
 
 @overload
@@ -10,7 +10,7 @@ def to_utc(dt: None) -> None: ...
 def to_utc(dt: datetime) -> datetime: ...
 
 
-def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
+def to_utc(dt: datetime | None) -> datetime | None:
     """Ensure datetime has UTC tzinfo. Handles None gracefully."""
     if dt is None:
         return None

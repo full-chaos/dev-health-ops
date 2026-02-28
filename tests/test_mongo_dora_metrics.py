@@ -35,6 +35,4 @@ def test_mongo_sink_writes_dora_metrics():
         mock_collection.bulk_write.assert_called_once()
         ops = mock_collection.bulk_write.call_args[0][0]
         assert len(ops) == 1
-        assert ops[0]._filter == {
-            "_id": f"{repo_id}:2025-01-01:deployment_frequency"
-        }
+        assert ops[0]._filter == {"_id": f"{repo_id}:2025-01-01:deployment_frequency"}

@@ -34,6 +34,7 @@ def _make_alembic_config(db_url: str | None = None) -> Config:
 
 # ── individual commands ────────────────────────────────────────────
 
+
 def _run_upgrade(ns: argparse.Namespace) -> int:
     cfg = _make_alembic_config(getattr(ns, "db", None))
     command.upgrade(cfg, ns.revision)
@@ -66,22 +67,25 @@ def _run_heads(ns: argparse.Namespace) -> int:
 
 # ── CLI registration ───────────────────────────────────────────────
 
+
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     migrate_parser = subparsers.add_parser(
         "migrate", help="Run PostgreSQL schema migrations (Alembic)."
     )
-    migrate_sub = migrate_parser.add_subparsers(
-        dest="migrate_command", required=True
-    )
+    migrate_sub = migrate_parser.add_subparsers(dest="migrate_command", required=True)
 
     # upgrade
     up = migrate_sub.add_parser("upgrade", help="Upgrade to a later revision.")
-    up.add_argument("revision", nargs="?", default="head", help="Target revision (default: head).")
+    up.add_argument(
+        "revision", nargs="?", default="head", help="Target revision (default: head)."
+    )
     up.set_defaults(func=_run_upgrade)
 
     # downgrade
     down = migrate_sub.add_parser("downgrade", help="Revert to a previous revision.")
-    down.add_argument("revision", help="Target revision (e.g. -1, base, or a specific rev).")
+    down.add_argument(
+        "revision", help="Target revision (e.g. -1, base, or a specific rev)."
+    )
     down.set_defaults(func=_run_downgrade)
 
     # current

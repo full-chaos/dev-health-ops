@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
@@ -65,7 +66,7 @@ _MAX_SEARCH_LIMIT = 50
 _MAX_DRILLDOWN_LIMIT = 200
 
 
-_PERSON_METRICS: List[Dict[str, Any]] = [
+_PERSON_METRICS: list[dict[str, Any]] = [
     {
         "metric": "cycle_time",
         "label": "Cycle Time",
@@ -226,11 +227,11 @@ _PERSON_METRICS: List[Dict[str, Any]] = [
 ]
 
 
-def _metric_config(metric: str) -> Dict[str, Any]:
+def _metric_config(metric: str) -> dict[str, Any]:
     return next((cfg for cfg in _PERSON_METRICS if cfg["metric"] == metric), {})
 
 
-def _time_window(range_days: int, compare_days: int) -> Tuple[date, date, date, date]:
+def _time_window(range_days: int, compare_days: int) -> tuple[date, date, date, date]:
     end_day = date.today() + timedelta(days=1)
     range_days = max(1, range_days)
     compare_days = max(1, compare_days)
@@ -240,8 +241,8 @@ def _time_window(range_days: int, compare_days: int) -> Tuple[date, date, date, 
     return start_day, end_day, compare_start, compare_end
 
 
-def _spark_points(rows: List[Dict[str, Any]], transform) -> List[SparkPoint]:
-    points: List[SparkPoint] = []
+def _spark_points(rows: list[dict[str, Any]], transform) -> list[SparkPoint]:
+    points: list[SparkPoint] = []
     for row in rows:
         value = safe_float(row.get("value"))
         points.append(SparkPoint(ts=row["day"], value=safe_transform(transform, value)))
@@ -259,9 +260,9 @@ async def _resolve_identity_context(
     sink: BaseMetricsSink,
     *,
     person_id: str,
-    aliases: Dict[str, List[str]],
+    aliases: dict[str, list[str]],
     org_id: str = "",
-) -> Tuple[str, List[str]]:
+) -> tuple[str, list[str]]:
     identity = await resolve_person_identity(sink, person_id=person_id, org_id=org_id)
     reverse = build_reverse_alias_map(aliases)
 
@@ -282,7 +283,7 @@ async def _resolve_identity_context(
     return "", []
 
 
-def _identity_inputs(identity: str, aliases: Iterable[str]) -> List[str]:
+def _identity_inputs(identity: str, aliases: Iterable[str]) -> list[str]:
     variants = identity_variants(identity, aliases)
     return list(dict.fromkeys([v for v in variants if v]))
 
@@ -313,13 +314,13 @@ def _drilldown_link(person_id: str, metric: str) -> str:
 
 
 def _narrative_for_deltas(
-    deltas: List[PersonDelta],
+    deltas: list[PersonDelta],
     *,
     person_id: str,
     range_days: int,
     compare_days: int,
-) -> List[SummarySentence]:
-    narrative: List[SummarySentence] = []
+) -> list[SummarySentence]:
+    narrative: list[SummarySentence] = []
     ranked = sorted(deltas, key=lambda d: abs(d.delta_pct), reverse=True)
 
     for idx, delta in enumerate(ranked[:2], start=1):
@@ -360,7 +361,7 @@ def _driver_from_breakdowns(
     metric: str,
     breakdowns: PersonMetricBreakdowns,
     person_id: str,
-) -> List[DriverStatement]:
+) -> list[DriverStatement]:
     for items in [
         breakdowns.by_repo,
         breakdowns.by_work_type,
@@ -385,7 +386,7 @@ async def search_people_response(
     query: str,
     limit: int,
     org_id: str = "",
-) -> List[PersonSearchResult]:
+) -> list[PersonSearchResult]:
     trimmed = (query or "").strip()
     if not trimmed:
         return []
@@ -402,7 +403,7 @@ async def search_people_response(
             org_id=org_id,
         )
 
-    results: List[PersonSearchResult] = []
+    results: list[PersonSearchResult] = []
     today = date.today()
     for row in rows:
         identity = str(row.get("identity_id") or "").strip()
@@ -480,7 +481,7 @@ async def build_person_summary_response(
         )
         identity_coverage_pct = safe_float(safe_float(coverage_sources) / 2.0 * 100.0)
 
-        deltas: List[PersonDelta] = []
+        deltas: list[PersonDelta] = []
         for metric in _PERSON_METRICS:
             current_value = await fetch_person_metric_value(
                 sink,
@@ -573,8 +574,8 @@ async def build_person_summary_response(
             end_day=end_day,
             org_id=org_id,
         )
-        review_load: List[CollaborationItem] = []
-        handoff_points: List[CollaborationItem] = []
+        review_load: list[CollaborationItem] = []
+        handoff_points: list[CollaborationItem] = []
         for row in collab_rows:
             item = CollaborationItem(
                 label=str(row.get("label") or ""),
@@ -663,7 +664,7 @@ async def build_person_metric_response(
         ]
 
         breakdowns = {"by_repo": [], "by_work_type": [], "by_stage": []}
-        for key in breakdowns.keys():
+        for key in breakdowns:
             detail = config.get("breakdowns", {}).get(key)
             if not detail:
                 continue
@@ -717,7 +718,7 @@ async def build_person_drilldown_prs_response(
     person_id: str,
     range_days: int,
     limit: int,
-    cursor: Optional[datetime] = None,
+    cursor: datetime | None = None,
     org_id: str = "",
 ) -> PersonDrilldownResponse:
     start_day, end_day, _, _ = _time_window(range_days, range_days)
@@ -745,7 +746,7 @@ async def build_person_drilldown_prs_response(
             org_id=org_id,
         )
 
-    items: List[PullRequestRow] = []
+    items: list[PullRequestRow] = []
     for row in rows:
         items.append(
             PullRequestRow(
@@ -773,7 +774,7 @@ async def build_person_drilldown_issues_response(
     person_id: str,
     range_days: int,
     limit: int,
-    cursor: Optional[datetime] = None,
+    cursor: datetime | None = None,
     org_id: str = "",
 ) -> PersonDrilldownResponse:
     start_day, end_day, _, _ = _time_window(range_days, range_days)
@@ -801,7 +802,7 @@ async def build_person_drilldown_issues_response(
             org_id=org_id,
         )
 
-    items: List[IssueRow] = []
+    items: list[IssueRow] = []
     for row in rows:
         items.append(
             IssueRow(

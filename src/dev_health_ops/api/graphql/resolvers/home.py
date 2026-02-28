@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 async def resolve_home(
     context: GraphQLContext,
-    filters: Optional[Any] = None,
-) -> Dict[str, Any]:
+    filters: Any | None = None,
+) -> dict[str, Any]:
     """
     Resolve home dashboard metrics.
 

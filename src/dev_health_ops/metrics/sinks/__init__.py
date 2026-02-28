@@ -22,15 +22,15 @@ Usage:
 """
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.sinks.factory import (
     SinkBackend,
     create_sink,
     detect_backend,
 )
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
-from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 from dev_health_ops.metrics.sinks.postgres import PostgresMetricsSink
+from dev_health_ops.metrics.sinks.sqlite import SQLiteMetricsSink
 
 __all__ = [
     "BaseMetricsSink",

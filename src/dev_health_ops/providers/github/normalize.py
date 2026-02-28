@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
 import logging
+import re
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from typing import Any
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -16,14 +17,18 @@ from dev_health_ops.models.work_items import (
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import (
     parse_iso_datetime as _parse_iso,
+)
+from dev_health_ops.providers.normalize_common import (
     priority_from_labels as _priority_from_labels,
+)
+from dev_health_ops.providers.normalize_common import (
     to_utc as _to_utc,
 )
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 
-def _labels_from_nodes(nodes: Any) -> List[str]:
-    labels: List[str] = []
+def _labels_from_nodes(nodes: Any) -> list[str]:
+    labels: list[str] = []
     for node in nodes or []:
         name = (
             (node or {}).get("name")
@@ -36,9 +41,9 @@ def _labels_from_nodes(nodes: Any) -> List[str]:
 
 
 def _update_transitions_work_item_id(
-    transitions: List[WorkItemStatusTransition],
+    transitions: list[WorkItemStatusTransition],
     work_item_id: str,
-) -> List[WorkItemStatusTransition]:
+) -> list[WorkItemStatusTransition]:
     """
     Update work_item_id in a list of transitions.
 
@@ -64,12 +69,12 @@ def github_issue_to_work_item(
     *,
     issue: Any,
     repo_full_name: str,
-    repo_id: Optional[Any],
+    repo_id: Any | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    events: Optional[Sequence[Any]] = None,
-    project_status_raw: Optional[str] = None,
-) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    events: Sequence[Any] | None = None,
+    project_status_raw: str | None = None,
+) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     number = int(getattr(issue, "number", 0) or 0)
     work_item_id = f"gh:{repo_full_name}#{number}"
 
@@ -99,7 +104,7 @@ def github_issue_to_work_item(
         labels=labels,
     )
 
-    assignees: List[str] = []
+    assignees: list[str] = []
     for a in getattr(issue, "assignees", []) or []:
         assignees.append(
             identity.resolve(
@@ -123,7 +128,7 @@ def github_issue_to_work_item(
     url = getattr(issue, "html_url", None) or getattr(issue, "url", None)
 
     # Best-effort transitions from issue events (label add/remove, closed/reopened).
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
     started_at = None
     completed_at = None
     if events:
@@ -226,11 +231,11 @@ def github_issue_to_work_item(
 
 def github_project_v2_item_to_work_item(
     *,
-    item_node: Dict[str, Any],
-    project_scope_id: Optional[str] = None,
+    item_node: dict[str, Any],
+    project_scope_id: str | None = None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-) -> Tuple[Optional[WorkItem], List[WorkItemStatusTransition]]:
+) -> tuple[WorkItem | None, list[WorkItemStatusTransition]]:
     """
     Normalize a Projects v2 item node into a WorkItem with status transitions.
 
@@ -272,7 +277,7 @@ def github_project_v2_item_to_work_item(
                     )
 
     # Parse field changes to create status transitions
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
 
     # Extract transitions from changes
     for change in (item_node.get("changes") or {}).get("nodes") or []:
@@ -460,11 +465,11 @@ def github_pr_to_work_item(
     *,
     pr: Any,
     repo_full_name: str,
-    repo_id: Optional[Any],
+    repo_id: Any | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    events: Optional[Sequence[Any]] = None,
-) -> Tuple[WorkItem, List[WorkItemStatusTransition]]:
+    events: Sequence[Any] | None = None,
+) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     """
     Normalize a GitHub pull request to a WorkItem with status transitions.
 
@@ -521,7 +526,7 @@ def github_pr_to_work_item(
     # PRs are always type "pr"
     normalized_type = "pr"
 
-    assignees: List[str] = []
+    assignees: list[str] = []
     for assignee in getattr(pr, "assignees", []) or []:
         assignees.append(
             identity.resolve(
@@ -545,7 +550,7 @@ def github_pr_to_work_item(
     url = getattr(pr, "html_url", None) or getattr(pr, "url", None)
 
     # Build transitions from events
-    transitions: List[WorkItemStatusTransition] = []
+    transitions: list[WorkItemStatusTransition] = []
     started_at = created_at  # PRs are in progress when opened
     completed_at = None
 
@@ -646,7 +651,7 @@ def github_comment_to_interaction_event(
     comment: Any,
     work_item_id: str,
     identity: IdentityResolver,
-) -> Optional[WorkItemInteractionEvent]:
+) -> WorkItemInteractionEvent | None:
     """
     Convert a GitHub comment to a WorkItemInteractionEvent.
 
@@ -731,7 +736,7 @@ def detect_github_reopen_events(
     work_item_id: str,
     events: Sequence[Any],
     identity: IdentityResolver,
-) -> List[WorkItemReopenEvent]:
+) -> list[WorkItemReopenEvent]:
     """
     Detect reopen events from GitHub issue/PR events.
 
@@ -743,7 +748,7 @@ def detect_github_reopen_events(
     Returns:
         List of WorkItemReopenEvent objects
     """
-    reopen_events: List[WorkItemReopenEvent] = []
+    reopen_events: list[WorkItemReopenEvent] = []
 
     for ev in events:
         event_type = str(getattr(ev, "event", "") or "").lower()
@@ -793,7 +798,7 @@ def extract_github_dependencies(
     work_item_id: str,
     issue_or_pr: Any,
     repo_full_name: str,
-) -> List[WorkItemDependency]:
+) -> list[WorkItemDependency]:
     """
     Extract dependencies from GitHub issue/PR body text.
 
@@ -810,7 +815,7 @@ def extract_github_dependencies(
     Returns:
         List of WorkItemDependency objects
     """
-    dependencies: List[WorkItemDependency] = []
+    dependencies: list[WorkItemDependency] = []
     body = getattr(issue_or_pr, "body", "") or ""
 
     for match in _GITHUB_ISSUE_REF_PATTERN.finditer(body):

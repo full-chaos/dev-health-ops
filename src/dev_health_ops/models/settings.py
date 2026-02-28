@@ -12,7 +12,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
 
 from sqlalchemy import (
     JSON,
@@ -27,7 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class SettingCategory(str, Enum):
@@ -110,10 +109,10 @@ class Setting(Base):
         self,
         key: str,
         category: str = SettingCategory.GENERAL.value,
-        value: Optional[str] = None,
+        value: str | None = None,
         org_id: str | None = None,
         is_encrypted: bool = False,
-        description: Optional[str] = None,
+        description: str | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id
@@ -182,8 +181,8 @@ class IntegrationCredential(Base):
         provider: str,
         name: str,
         org_id: str | None = None,
-        credentials_encrypted: Optional[str] = None,
-        config: Optional[dict] = None,
+        credentials_encrypted: str | None = None,
+        config: dict | None = None,
         is_active: bool = True,
     ):
         self.id = uuid.uuid4()
@@ -264,9 +263,9 @@ class SyncConfiguration(Base):
         name: str,
         provider: str,
         org_id: str | None = None,
-        credential_id: Optional[uuid.UUID] = None,
-        sync_targets: Optional[list] = None,
-        sync_options: Optional[dict] = None,
+        credential_id: uuid.UUID | None = None,
+        sync_targets: list | None = None,
+        sync_options: dict | None = None,
         is_active: bool = True,
     ):
         self.id = uuid.uuid4()
@@ -353,8 +352,8 @@ class ScheduledJob(Base):
         job_type: str,
         schedule_cron: str,
         org_id: str | None = None,
-        job_config: Optional[dict] = None,
-        sync_config_id: Optional[uuid.UUID] = None,
+        job_config: dict | None = None,
+        sync_config_id: uuid.UUID | None = None,
         tz: str = "UTC",
         status: int = JobStatus.ACTIVE.value,
     ):
@@ -489,10 +488,10 @@ class IdentityMapping(Base):
         self,
         canonical_id: str,
         org_id: str | None = None,
-        display_name: Optional[str] = None,
-        email: Optional[str] = None,
-        provider_identities: Optional[dict] = None,
-        team_ids: Optional[list] = None,
+        display_name: str | None = None,
+        email: str | None = None,
+        provider_identities: dict | None = None,
+        team_ids: list | None = None,
         is_active: bool = True,
     ):
         self.id = uuid.uuid4()
@@ -587,13 +586,13 @@ class TeamMapping(Base):
         team_id: str,
         name: str,
         org_id: str | None = None,
-        description: Optional[str] = None,
-        repo_patterns: Optional[list] = None,
-        project_keys: Optional[list] = None,
-        extra_data: Optional[dict] = None,
-        managed_fields: Optional[list] = None,
+        description: str | None = None,
+        repo_patterns: list | None = None,
+        project_keys: list | None = None,
+        extra_data: dict | None = None,
+        managed_fields: list | None = None,
         sync_policy: int = 1,
-        flagged_changes: Optional[dict] = None,
+        flagged_changes: dict | None = None,
         is_active: bool = True,
     ):
         self.id = uuid.uuid4()
@@ -657,7 +656,7 @@ class SyncWatermark(Base):
         repo_id: str,
         target: str,
         org_id: str | None = None,
-        last_synced_at: Optional[datetime] = None,
+        last_synced_at: datetime | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id

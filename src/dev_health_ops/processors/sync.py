@@ -3,9 +3,6 @@ import asyncio
 import os
 
 from dev_health_ops.db import resolve_sink_uri
-from dev_health_ops.storage import resolve_db_type, run_with_store
-from dev_health_ops.utils import _resolve_since, _resolve_max_commits
-from dev_health_ops.processors.local import process_local_blame, process_local_repo
 from dev_health_ops.processors.github import (
     process_github_repo,
     process_github_repos_batch,
@@ -14,6 +11,9 @@ from dev_health_ops.processors.gitlab import (
     process_gitlab_project,
     process_gitlab_projects_batch,
 )
+from dev_health_ops.processors.local import process_local_blame, process_local_repo
+from dev_health_ops.storage import resolve_db_type, run_with_store
+from dev_health_ops.utils import _resolve_max_commits, _resolve_since
 
 
 def _sync_flags_for_target(target: str) -> dict:

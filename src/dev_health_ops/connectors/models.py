@@ -7,7 +7,6 @@ to retrieve and store information from GitHub and GitLab APIs.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
 
 
 @dataclass
@@ -16,8 +15,8 @@ class Organization:
 
     id: int
     name: str
-    description: Optional[str] = None
-    url: Optional[str] = None
+    description: str | None = None
+    url: str | None = None
 
 
 @dataclass
@@ -28,11 +27,11 @@ class Repository:
     name: str
     full_name: str
     default_branch: str
-    description: Optional[str] = None
-    url: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    language: Optional[str] = None
+    description: str | None = None
+    url: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    language: str | None = None
     stars: int = 0
     forks: int = 0
 
@@ -43,9 +42,9 @@ class Author:
 
     id: int
     username: str
-    email: Optional[str] = None
-    name: Optional[str] = None
-    url: Optional[str] = None
+    email: str | None = None
+    name: str | None = None
+    url: str | None = None
 
 
 @dataclass
@@ -65,7 +64,7 @@ class RepoStats:
     additions: int
     deletions: int
     commits_per_week: float
-    authors: List[Author] = field(default_factory=list)
+    authors: list[Author] = field(default_factory=list)
 
 
 @dataclass
@@ -76,14 +75,14 @@ class PullRequest:
     number: int
     title: str
     state: str  # 'open', 'closed', 'merged'
-    author: Optional[Author] = None
-    created_at: Optional[datetime] = None
-    merged_at: Optional[datetime] = None
-    closed_at: Optional[datetime] = None
-    body: Optional[str] = None
-    url: Optional[str] = None
-    base_branch: Optional[str] = None
-    head_branch: Optional[str] = None
+    author: Author | None = None
+    created_at: datetime | None = None
+    merged_at: datetime | None = None
+    closed_at: datetime | None = None
+    body: str | None = None
+    url: str | None = None
+    base_branch: str | None = None
+    head_branch: str | None = None
 
 
 @dataclass
@@ -103,7 +102,7 @@ class FileBlame:
     """Represents blame information for a file."""
 
     file_path: str
-    ranges: List[BlameRange] = field(default_factory=list)
+    ranges: list[BlameRange] = field(default_factory=list)
 
 
 @dataclass
@@ -113,9 +112,9 @@ class PullRequestReview:
     id: str
     reviewer: str
     state: str
-    submitted_at: Optional[datetime] = None
-    body: Optional[str] = None
-    url: Optional[str] = None
+    submitted_at: datetime | None = None
+    body: str | None = None
+    url: str | None = None
 
 
 @dataclass
@@ -123,10 +122,10 @@ class PullRequestCommit:
     """Represents a commit associated with a Pull Request or Merge Request."""
 
     sha: str
-    authored_at: Optional[datetime] = None
-    message: Optional[str] = None
-    author_name: Optional[str] = None
-    author_email: Optional[str] = None
+    authored_at: datetime | None = None
+    message: str | None = None
+    author_name: str | None = None
+    author_email: str | None = None
 
 
 @dataclass
@@ -142,4 +141,4 @@ class DORAMetrics:
     """Represents a collection of DORA metrics for a project or group."""
 
     metric_name: str  # deployment_frequency, lead_time_for_changes, etc.
-    data_points: List[DORAMetric] = field(default_factory=list)
+    data_points: list[DORAMetric] = field(default_factory=list)

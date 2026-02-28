@@ -3,10 +3,10 @@ Extractors for parsing links from various sources.
 """
 
 from dev_health_ops.work_graph.extractors.text_parser import (
-    extract_jira_keys,
+    ParsedIssueRef,
     extract_github_issue_refs,
     extract_gitlab_issue_refs,
-    ParsedIssueRef,
+    extract_jira_keys,
 )
 
 __all__ = [

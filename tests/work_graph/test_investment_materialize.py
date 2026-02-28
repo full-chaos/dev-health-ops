@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import builtins
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
 import uuid
-import pytest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import pytest
 
 from dev_health_ops.work_graph.investment.categorize import CategorizationOutcome
 from dev_health_ops.work_graph.investment.materialize import (

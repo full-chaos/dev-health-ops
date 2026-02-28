@@ -4,8 +4,6 @@ This module provides centralized functions for normalizing identity aliases
 and constructing reverse alias maps, used across people, heatmap, and quadrant services.
 """
 
-from typing import Dict, List
-
 
 def normalize_alias(value: str) -> str:
     """Normalize an alias string for consistent comparison.
@@ -25,7 +23,7 @@ def normalize_alias(value: str) -> str:
     return (value or "").strip().lower()
 
 
-def build_reverse_alias_map(aliases: Dict[str, List[str]]) -> Dict[str, str]:
+def build_reverse_alias_map(aliases: dict[str, list[str]]) -> dict[str, str]:
     """Build a reverse mapping from normalized aliases to canonical identities.
 
     Args:
@@ -42,7 +40,7 @@ def build_reverse_alias_map(aliases: Dict[str, List[str]]) -> Dict[str, str]:
         >>> reverse["john doe"]
         'john.doe@example.com'
     """
-    reverse: Dict[str, str] = {}
+    reverse: dict[str, str] = {}
     for canonical, alias_list in aliases.items():
         for alias in alias_list:
             key = normalize_alias(alias)

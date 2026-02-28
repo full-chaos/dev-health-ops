@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import List
-
 from ..models.filters import MetricFilter
 from ..models.schemas import OpportunitiesResponse, OpportunityCard
-from .home import build_home_response
 from .cache import TTLCache
+from .home import build_home_response
 
 
 async def build_opportunities_response(
@@ -24,7 +22,7 @@ async def build_opportunities_response(
 
     negative = [d for d in home.deltas if d.delta_pct > 0]
     ranked = sorted(negative, key=lambda d: d.delta_pct, reverse=True)
-    cards: List[OpportunityCard] = []
+    cards: list[OpportunityCard] = []
 
     for idx, delta in enumerate(ranked[:4], start=1):
         cards.append(

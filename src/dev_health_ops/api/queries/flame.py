@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .client import query_dicts
 
@@ -11,7 +11,7 @@ async def fetch_pull_request(
     repo_id: str,
     number: int,
     org_id: str = "",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     query = """
         SELECT
             repo_id,
@@ -43,7 +43,7 @@ async def fetch_pull_request_reviews(
     repo_id: str,
     number: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = """
         SELECT
             review_id,
@@ -70,7 +70,7 @@ async def fetch_issue(
     *,
     work_item_id: str,
     org_id: str = "",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     query = """
         SELECT
             work_item_id,
@@ -99,7 +99,7 @@ async def fetch_deployment(
     repo_id: str,
     deployment_id: str,
     org_id: str = "",
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     query = """
         SELECT
             repo_id,

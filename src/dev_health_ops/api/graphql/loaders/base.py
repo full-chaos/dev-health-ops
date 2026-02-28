@@ -6,7 +6,8 @@ import hashlib
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Generic, List, Optional, Sequence, TypeVar
+from collections.abc import Sequence
+from typing import Any, Generic, TypeVar
 
 from strawberry.dataloader import DataLoader
 
@@ -47,7 +48,7 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
     def __init__(
         self,
         org_id: str,
-        cache: Optional[Any] = None,
+        cache: Any | None = None,
         cache_ttl: int = 300,
         cache_prefix: str = "loader",
     ):
@@ -65,15 +66,15 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
         self._cache_prefix = cache_prefix
         self._org_id = org_id
 
-    async def _load_with_cache(self, keys: List[K]) -> Sequence[V]:
+    async def _load_with_cache(self, keys: list[K]) -> Sequence[V]:
         """
         Load values with optional cache lookup.
 
         First checks cache for each key, then batch loads missing keys,
         and finally caches the newly loaded values.
         """
-        results: Dict[int, V] = {}
-        missing_keys: List[tuple[int, K]] = []
+        results: dict[int, V] = {}
+        missing_keys: list[tuple[int, K]] = []
 
         # Check cache for each key
         if self._external_cache:
@@ -113,7 +114,7 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
         return [results[idx] for idx in range(len(keys))]
 
     @abstractmethod
-    async def batch_load(self, keys: List[K]) -> List[V]:
+    async def batch_load(self, keys: list[K]) -> list[V]:
         """
         Batch load values for the given keys.
 
@@ -139,12 +140,12 @@ class SimpleDataLoader(DataLoader[K, V], Generic[K, V]):
     def __init__(self):
         super().__init__(load_fn=self._batch_load_wrapper)
 
-    async def _batch_load_wrapper(self, keys: List[K]) -> Sequence[V]:
+    async def _batch_load_wrapper(self, keys: list[K]) -> Sequence[V]:
         """Wrapper to call the abstract batch_load method."""
         return await self.batch_load(keys)
 
     @abstractmethod
-    async def batch_load(self, keys: List[K]) -> List[V]:
+    async def batch_load(self, keys: list[K]) -> list[V]:
         """
         Batch load values for the given keys.
 

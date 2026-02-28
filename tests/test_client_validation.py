@@ -1,4 +1,5 @@
 import pytest
+
 from dev_health_ops.api.queries.client import query_dicts
 
 

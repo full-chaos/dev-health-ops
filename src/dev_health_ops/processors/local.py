@@ -3,9 +3,9 @@ import logging
 import os
 import re
 import uuid
-from typing import List, Optional, Tuple, Set, Dict, Any
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from dev_health_ops.models.git import (
     GitBlame,
@@ -15,15 +15,14 @@ from dev_health_ops.models.git import (
     GitPullRequest,
     Repo,
 )
+from dev_health_ops.providers.pr_state import PRState
 from dev_health_ops.utils import (
     BATCH_SIZE,
     MAX_WORKERS,
+    _normalize_datetime,
     collect_changed_files,
     iter_commits_since,
-    _normalize_datetime,
 )
-from dev_health_ops.providers.pr_state import PRState
-
 
 _GITHUB_MERGE_PR_RE = re.compile(
     r"^Merge pull request #(?P<number>\d+)\b",
@@ -32,7 +31,7 @@ _GITHUB_MERGE_PR_RE = re.compile(
 _GITLAB_MERGE_MR_RE = re.compile(r"\bSee merge request\b.*!(?P<number>\d+)\b")
 
 
-def _first_meaningful_title_line(message: str) -> Optional[str]:
+def _first_meaningful_title_line(message: str) -> str | None:
     if not message:
         return None
     lines = [ln.strip() for ln in message.splitlines()]
@@ -51,20 +50,20 @@ def _first_meaningful_title_line(message: str) -> Optional[str]:
 
 
 def infer_merged_pull_requests_from_commits(
-    commits: List[Any],
+    commits: list[Any],
     repo_id: uuid.UUID,
-    since: Optional[datetime] = None,
-) -> List[GitPullRequest]:
+    since: datetime | None = None,
+) -> list[GitPullRequest]:
     """Infer merged PRs/MRs from merge commit messages.
 
     Supports common GitHub merge-commit messages ("Merge pull request #123") and
     common GitLab merge-commit trailers ("See merge request group/project!123").
     """
-    inferred: Dict[int, GitPullRequest] = {}
+    inferred: dict[int, GitPullRequest] = {}
 
     for commit in commits or []:
         try:
-            commit_dt = _normalize_datetime(getattr(commit, "committed_datetime"))
+            commit_dt = _normalize_datetime(commit.committed_datetime)
             if since and commit_dt and commit_dt < since:
                 continue
 
@@ -108,14 +107,14 @@ def infer_merged_pull_requests_from_commits(
 def infer_open_pull_requests_from_refs(
     repo_obj: Any,
     repo_id: uuid.UUID,
-) -> List[GitPullRequest]:
+) -> list[GitPullRequest]:
     """Infer open PRs/MRs from local refs, if present.
 
     Requires that the local clone has fetched provider-specific refs:
     - GitHub: refs/pull/<id>/head
     - GitLab: refs/merge-requests/<id>/head
     """
-    inferred: Dict[int, GitPullRequest] = {}
+    inferred: dict[int, GitPullRequest] = {}
 
     refs = getattr(repo_obj, "refs", None) or []
     for ref in refs:
@@ -161,8 +160,8 @@ async def process_local_pull_requests(
     repo: Repo,
     store: Any,
     repo_obj: Any,
-    commits: Optional[List[Any]] = None,
-    since: Optional[datetime] = None,
+    commits: list[Any] | None = None,
+    since: datetime | None = None,
 ) -> None:
     """Collect PR/MR-like records for local repos and store them.
 
@@ -179,7 +178,7 @@ async def process_local_pull_requests(
     )
     open_refs = infer_open_pull_requests_from_refs(repo_obj, repo.id)
 
-    pr_objects: List[GitPullRequest] = []
+    pr_objects: list[GitPullRequest] = []
     pr_objects.extend(open_refs)
     pr_objects.extend(merged)
 
@@ -196,7 +195,7 @@ async def process_local_pull_requests(
 
 def _extract_commit_info(
     commit: Any, repo_id: uuid.UUID
-) -> Tuple[Optional[GitCommit], Optional[str]]:
+) -> tuple[GitCommit | None, str | None]:
     """Helper to safely extract commit info in a thread."""
     try:
         git_commit = GitCommit(
@@ -216,10 +215,10 @@ def _extract_commit_info(
         return None, str(e)
 
 
-def _compute_commit_stats_sync(commit: Any, repo_id: uuid.UUID) -> List[GitCommitStat]:
+def _compute_commit_stats_sync(commit: Any, repo_id: uuid.UUID) -> list[GitCommitStat]:
     """Helper to compute commit stats (git diff) in a thread."""
-    stats: List[GitCommitStat] = []
-    commit_stats: Dict[str, Dict[str, int]] = {}
+    stats: list[GitCommitStat] = []
+    commit_stats: dict[str, dict[str, int]] = {}
 
     try:
         stats_attr = getattr(commit, "stats", None)
@@ -265,14 +264,14 @@ def _compute_commit_stats_sync(commit: Any, repo_id: uuid.UUID) -> List[GitCommi
 async def process_git_commits(
     repo: Repo,
     store: Any,  # DataStore
-    commits: Optional[Any] = None,  # Iterable
-    since: Optional[datetime] = None,
+    commits: Any | None = None,  # Iterable
+    since: datetime | None = None,
 ) -> None:
     """
     Process and insert GitCommit data into the database.
     """
     logging.info("Processing git commits...")
-    commit_batch: List[GitCommit] = []
+    commit_batch: list[GitCommit] = []
     loop = asyncio.get_running_loop()
 
     # If commits is None, we need to manually iterate using iter_commits
@@ -329,14 +328,14 @@ async def process_git_commits(
 async def process_git_commit_stats(
     repo: Repo,
     store: Any,
-    commits: Optional[Any] = None,
-    since: Optional[datetime] = None,
+    commits: Any | None = None,
+    since: datetime | None = None,
 ) -> None:
     """
     Process and insert GitCommitStat data into the database.
     """
     logging.info("Processing git commit stats...")
-    commit_stats_batch: List[GitCommitStat] = []
+    commit_stats_batch: list[GitCommitStat] = []
     loop = asyncio.get_running_loop()
 
     if commits is None:
@@ -379,7 +378,7 @@ async def process_git_commit_stats(
 
 def _process_file_and_blame_sync(
     filepath: Path, repo_id: uuid.UUID, repo_root: str, do_blame: bool
-) -> Tuple[Optional[GitFile], List[GitBlame], Optional[str]]:
+) -> tuple[GitFile | None, list[GitBlame], str | None]:
     """
     Helper to process a single file for both content and blame safely in a thread.
     """
@@ -391,7 +390,7 @@ def _process_file_and_blame_sync(
         contents = None
         try:
             if os.path.getsize(filepath) < 1_000_000:  # Skip files > 1MB
-                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                with open(filepath, encoding="utf-8", errors="ignore") as f:
                     contents = f.read()
         except Exception:
             pass  # Content read failed, but we still proceed
@@ -431,8 +430,8 @@ def _process_file_and_blame_sync(
 
 async def process_files_and_blame(
     repo: Repo,
-    all_files: List[Path],
-    files_for_blame: Set[Path],
+    all_files: list[Path],
+    files_for_blame: set[Path],
     store: Any,
     repo_root_path: str,  # Passed explicitly now
 ) -> None:
@@ -443,9 +442,9 @@ async def process_files_and_blame(
         f"Processing {len(all_files)} git files (blame for {len(files_for_blame)})..."
     )
 
-    file_batch: List[GitFile] = []
-    blame_batch: List[GitBlame] = []
-    failed_files: List[Tuple[Path, str]] = []
+    file_batch: list[GitFile] = []
+    blame_batch: list[GitBlame] = []
+    failed_files: list[tuple[Path, str]] = []
 
     loop = asyncio.get_running_loop()
     concurrency = MAX_WORKERS
@@ -468,8 +467,9 @@ async def process_files_and_blame(
 
     # Import tqdm for progress bar
     try:
-        from tqdm import tqdm
         import sys
+
+        from tqdm import tqdm
 
         use_tqdm = True
     except ImportError:
@@ -559,7 +559,7 @@ async def process_files_and_blame(
 async def process_local_repo(
     store: Any,
     repo_path: str,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
     fetch_blame: bool = False,
     sync_git: bool = True,
     sync_prs: bool = True,
@@ -632,7 +632,7 @@ async def process_local_repo(
 async def process_local_blame(
     store: Any,
     repo_path: str,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ) -> None:
     """
     Backfill git blame data without syncing commits or PRs.

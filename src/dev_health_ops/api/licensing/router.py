@@ -37,10 +37,10 @@ async def get_entitlements(org_id: str) -> EntitlementsResponse:
     from sqlalchemy import select
 
     from dev_health_ops.models.licensing import (
+        TIER_LIMITS,
         FeatureFlag,
         OrgFeatureOverride,
         OrgLicense,
-        TIER_LIMITS,
     )
     from dev_health_ops.models.users import Organization
 

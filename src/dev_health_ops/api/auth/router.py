@@ -7,32 +7,10 @@ import uuid as uuid_mod
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func, select
 
-from dev_health_ops.api.services.auth import (
-    AuthenticatedUser,
-    get_auth_service,
-    extract_token_from_header,
-)
-from dev_health_ops.api.services.refresh_tokens import (
-    create_refresh_token as create_refresh_token_record,
-    find_by_hash,
-    revoke_family,
-    revoke_token,
-    rotate_token,
-)
-from dev_health_ops.api.services.invites import (
-    accept_invite as accept_org_invite,
-    validate_invite as validate_org_invite,
-)
-from dev_health_ops.api.services.login_attempts import (
-    check_lockout,
-    clear_attempts,
-    get_lockout_remaining_seconds,
-    record_failed_attempt,
-)
 from dev_health_ops.api.middleware.rate_limit import (
     AUTH_LOGIN_IP_LIMIT,
     AUTH_LOGIN_LIMIT,
@@ -42,9 +20,35 @@ from dev_health_ops.api.middleware.rate_limit import (
     get_auth_key,
     limiter,
 )
-from dev_health_ops.api.utils.password_policy import validate_password
+from dev_health_ops.api.services.auth import (
+    AuthenticatedUser,
+    extract_token_from_header,
+    get_auth_service,
+)
+from dev_health_ops.api.services.invites import (
+    accept_invite as accept_org_invite,
+)
+from dev_health_ops.api.services.invites import (
+    validate_invite as validate_org_invite,
+)
+from dev_health_ops.api.services.login_attempts import (
+    check_lockout,
+    clear_attempts,
+    get_lockout_remaining_seconds,
+    record_failed_attempt,
+)
+from dev_health_ops.api.services.refresh_tokens import (
+    create_refresh_token as create_refresh_token_record,
+)
+from dev_health_ops.api.services.refresh_tokens import (
+    find_by_hash,
+    revoke_family,
+    revoke_token,
+    rotate_token,
+)
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.api.utils.password_policy import validate_password
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.users import Membership, Organization, User
@@ -110,7 +114,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     needs_onboarding: bool = False
-    user: "UserInfo"
+    user: UserInfo
 
 
 class EmailVerificationRequiredResponse(BaseModel):
@@ -170,7 +174,7 @@ class TokenRefreshResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int
-    user: "UserInfo | None" = None
+    user: UserInfo | None = None
 
 
 class TokenValidateRequest(BaseModel):
@@ -315,17 +319,17 @@ async def get_current_user_optional(
 @router.post("/register", response_model=RegisterResponse, status_code=201)
 @limiter.limit(AUTH_REGISTER_LIMIT)
 async def register(payload: RegisterRequest, request: Request) -> RegisterResponse:
-    import bcrypt
     from datetime import datetime, timezone
+
+    import bcrypt
 
     email_verification_service = importlib.import_module(
         "dev_health_ops.api.services.email_verification"
     )
-    create_verification_token = getattr(
-        email_verification_service,
-        "create_email_verification_token",
+    create_verification_token = (
+        email_verification_service.create_email_verification_token
     )
-    send_verification = getattr(email_verification_service, "send_verification_email")
+    send_verification = email_verification_service.send_verification_email
 
     async with get_postgres_session() as db:
         email_normalized = payload.email.lower().strip()
@@ -445,7 +449,7 @@ async def verify_email(
     email_verification_service = importlib.import_module(
         "dev_health_ops.api.services.email_verification"
     )
-    verify_token = getattr(email_verification_service, "verify_email_token")
+    verify_token = email_verification_service.verify_email_token
 
     async with get_postgres_session() as db:
         user = await verify_token(db, token)
@@ -471,11 +475,10 @@ async def resend_verification_email(
     email_verification_service = importlib.import_module(
         "dev_health_ops.api.services.email_verification"
     )
-    create_verification_token = getattr(
-        email_verification_service,
-        "create_email_verification_token",
+    create_verification_token = (
+        email_verification_service.create_email_verification_token
     )
-    send_verification = getattr(email_verification_service, "send_verification_email")
+    send_verification = email_verification_service.send_verification_email
 
     generic_response = VerifyEmailResponse(
         message="If an account exists with that email, a verification link has been sent"
@@ -515,8 +518,8 @@ async def forgot_password(
     password_reset_service = importlib.import_module(
         "dev_health_ops.api.services.password_reset"
     )
-    create_reset_token = getattr(password_reset_service, "create_password_reset_token")
-    send_reset_email = getattr(password_reset_service, "send_password_reset_email")
+    create_reset_token = password_reset_service.create_password_reset_token
+    send_reset_email = password_reset_service.send_password_reset_email
 
     generic_response = VerifyEmailResponse(
         message="If the account exists, a password reset email has been sent"
@@ -552,7 +555,7 @@ async def reset_password(payload: ResetPasswordRequest) -> VerifyEmailResponse:
     password_reset_service = importlib.import_module(
         "dev_health_ops.api.services.password_reset"
     )
-    reset_with_token = getattr(password_reset_service, "reset_password_with_token")
+    reset_with_token = password_reset_service.reset_password_with_token
 
     async with get_postgres_session() as db:
         user = await reset_with_token(db, payload.token, payload.new_password)
@@ -578,8 +581,9 @@ async def login(
     For local auth, validates email/password.
     For OAuth users, use the OAuth flow instead.
     """
-    import bcrypt
     from datetime import datetime, timezone
+
+    import bcrypt
 
     async with get_postgres_session() as db:
         email_normalized = payload.email.lower().strip()
@@ -747,7 +751,7 @@ async def login(
                 )
 
         # Update last login
-        setattr(user, "last_login_at", datetime.now(timezone.utc))
+        user.last_login_at = datetime.now(timezone.utc)
 
         success_org_id = _parse_uuid(payload.org_id) or (
             membership.org_id if membership else primary_org_id

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Sequence
+from typing import Any
 
 from dev_health_ops.metrics.schemas import (
+    ICLandscapeRollingRecord,
     UserMetricsDailyRecord,
     WorkItemUserMetricsDailyRecord,
-    ICLandscapeRollingRecord,
 )
 
 
@@ -33,17 +34,17 @@ def _percentile_rank(values: Sequence[float], value: float) -> float:
 
 
 def compute_ic_metrics_daily(
-    git_metrics: List[UserMetricsDailyRecord],
-    wi_metrics: List[WorkItemUserMetricsDailyRecord],
-    team_map: Dict[str, str],
-) -> List[UserMetricsDailyRecord]:
+    git_metrics: list[UserMetricsDailyRecord],
+    wi_metrics: list[WorkItemUserMetricsDailyRecord],
+    team_map: dict[str, str],
+) -> list[UserMetricsDailyRecord]:
     """
     Merge Git-based user metrics and WorkItem-based user metrics into a unified record.
     Also populates the new IC fields (identity_id, loc_touched, delivery_units, etc).
     """
 
     # Process Git metrics
-    git_map: Dict[str, UserMetricsDailyRecord] = {}
+    git_map: dict[str, UserMetricsDailyRecord] = {}
     for r in git_metrics:
         identity = r.author_email  # Assuming normalized already
         git_map[identity] = r
@@ -52,7 +53,7 @@ def compute_ic_metrics_daily(
     # Cross-provider identity mapping is a known limitation (see GH#416).
     # Currently we rely on identity_mapping.yaml to normalize identities separately
     # for Git (via compute.py) and WorkItems (via compute_work_items.py).
-    wi_map: Dict[str, WorkItemUserMetricsDailyRecord] = {}
+    wi_map: dict[str, WorkItemUserMetricsDailyRecord] = {}
     for r in wi_metrics:
         # wi metrics might be per-provider, we aggregate per user
         identity = r.user_identity
@@ -84,7 +85,7 @@ def compute_ic_metrics_daily(
 
     all_identities = set(git_map.keys()) | set(wi_map.keys())
 
-    results: List[UserMetricsDailyRecord] = []
+    results: list[UserMetricsDailyRecord] = []
 
     for identity in all_identities:
         g = git_map.get(identity)
@@ -149,9 +150,9 @@ def compute_ic_metrics_daily(
 
 def compute_ic_landscape_rolling(
     as_of_day: date,
-    rolling_stats: List[Dict[str, Any]],
-    team_map: Dict[str, str],
-) -> List[ICLandscapeRollingRecord]:
+    rolling_stats: list[dict[str, Any]],
+    team_map: dict[str, str],
+) -> list[ICLandscapeRollingRecord]:
     """
     Compute landscape coordinates for the 3 maps.
 
@@ -168,7 +169,7 @@ def compute_ic_landscape_rolling(
 
     computed_at = datetime.now(timezone.utc)
 
-    records: List[ICLandscapeRollingRecord] = []
+    records: list[ICLandscapeRollingRecord] = []
 
     # Enrich stats with team_id from map if missing
     enriched_stats = []
@@ -216,7 +217,7 @@ def compute_ic_landscape_rolling(
         )
 
     # 2. Group by team for normalization
-    by_team: Dict[str, List[Any]] = {}
+    by_team: dict[str, list[Any]] = {}
     for item in enriched_stats:
         by_team.setdefault(item["team_id"], []).append(item)
 

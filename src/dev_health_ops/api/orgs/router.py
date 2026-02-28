@@ -7,7 +7,6 @@ profile (name, description) without requiring superuser access.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -31,15 +30,15 @@ router = APIRouter(prefix="/api/v1/orgs", tags=["orgs"])
 class OrgProfileUpdate(BaseModel):
     """Fields an org admin/owner can self-service update."""
 
-    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    description: Optional[str] = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
 
 
 class OrgProfileResponse(BaseModel):
     id: str
     slug: str
     name: str
-    description: Optional[str]
+    description: str | None
     tier: str
     is_active: bool
 

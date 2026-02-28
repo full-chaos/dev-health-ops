@@ -130,7 +130,9 @@ def main() -> int:
 
     src_changes = sorted(path for path in changed_files if path.startswith(SRC_PREFIX))
     if not src_changes:
-        print("Governance gate: no src/ changes detected, skipping strict evidence checks.")
+        print(
+            "Governance gate: no src/ changes detected, skipping strict evidence checks."
+        )
         return 0
 
     test_changes = sorted(
@@ -155,7 +157,9 @@ def main() -> int:
 
     if missing:
         print("Governance gate failed.")
-        print(f"Detected src/ changes without test file updates ({len(src_changes)} files).")
+        print(
+            f"Detected src/ changes without test file updates ({len(src_changes)} files)."
+        )
         for path in src_changes[:10]:
             print(f"  - {path}")
         if len(src_changes) > 10:
@@ -168,7 +172,9 @@ def main() -> int:
         print(f"Missing/invalid markers: {', '.join(missing)}")
         return 1
 
-    print("Governance gate: src/ changes detected, PR markers provided; policy satisfied.")
+    print(
+        "Governance gate: src/ changes detected, PR markers provided; policy satisfied."
+    )
     return 0
 
 

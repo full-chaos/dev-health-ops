@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from typing import Literal
 
 WorkItemProvider = Literal["jira", "github", "gitlab", "linear"]
 
@@ -47,36 +47,36 @@ class WorkItem:
     title: str
     type: WorkItemType
     status: WorkItemStatusCategory
-    status_raw: Optional[str]
-    description: Optional[str] = None
+    status_raw: str | None
+    description: str | None = None
 
     # Optional dimensions.
-    repo_id: Optional[uuid.UUID] = None
-    project_key: Optional[str] = None
-    project_id: Optional[str] = None
+    repo_id: uuid.UUID | None = None
+    project_key: str | None = None
+    project_id: str | None = None
 
-    assignees: List[str] = field(
+    assignees: list[str] = field(
         default_factory=list
     )  # canonical identities when resolvable
-    reporter: Optional[str] = None  # canonical identity when resolvable
+    reporter: str | None = None  # canonical identity when resolvable
 
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    closed_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    closed_at: datetime | None = None
 
-    labels: List[str] = field(default_factory=list)
-    story_points: Optional[float] = None
-    sprint_id: Optional[str] = None
-    sprint_name: Optional[str] = None
-    parent_id: Optional[str] = None
-    epic_id: Optional[str] = None
-    url: Optional[str] = None
-    priority_raw: Optional[str] = None
-    service_class: Optional[str] = None
-    due_at: Optional[datetime] = None
+    labels: list[str] = field(default_factory=list)
+    story_points: float | None = None
+    sprint_id: str | None = None
+    sprint_name: str | None = None
+    parent_id: str | None = None
+    epic_id: str | None = None
+    url: str | None = None
+    priority_raw: str | None = None
+    service_class: str | None = None
+    due_at: datetime | None = None
 
     @property
     def work_scope_id(self) -> str:
@@ -108,11 +108,11 @@ class WorkItemStatusTransition:
     work_item_id: str
     provider: WorkItemProvider
     occurred_at: datetime
-    from_status_raw: Optional[str]
-    to_status_raw: Optional[str]
+    from_status_raw: str | None
+    to_status_raw: str | None
     from_status: WorkItemStatusCategory
     to_status: WorkItemStatusCategory
-    actor: Optional[str] = None  # canonical identity when resolvable
+    actor: str | None = None  # canonical identity when resolvable
 
 
 @dataclass(frozen=True)
@@ -131,9 +131,9 @@ class WorkItemReopenEvent:
     occurred_at: datetime
     from_status: WorkItemStatusCategory
     to_status: WorkItemStatusCategory
-    from_status_raw: Optional[str]
-    to_status_raw: Optional[str]
-    actor: Optional[str]
+    from_status_raw: str | None
+    to_status_raw: str | None
+    actor: str | None
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     org_id: str = ""
 
@@ -144,7 +144,7 @@ class WorkItemInteractionEvent:
     provider: WorkItemProvider
     interaction_type: str
     occurred_at: datetime
-    actor: Optional[str]
+    actor: str | None
     body_length: int
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     org_id: str = ""
@@ -154,11 +154,11 @@ class WorkItemInteractionEvent:
 class Sprint:
     provider: WorkItemProvider
     sprint_id: str
-    name: Optional[str]
-    state: Optional[str]
-    started_at: Optional[datetime]
-    ended_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    name: str | None
+    state: str | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    completed_at: datetime | None
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     org_id: str = ""
 
@@ -168,7 +168,7 @@ class Worklog:
     work_item_id: str
     provider: WorkItemProvider
     worklog_id: str
-    author: Optional[str]
+    author: str | None
     started_at: datetime
     time_spent_seconds: int
     created_at: datetime

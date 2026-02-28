@@ -6,8 +6,9 @@ contributors, statistics, merge requests, and blame information from GitLab.
 """
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Callable
+from typing import Any
 
 import gitlab
 from gitlab.exceptions import GitlabAuthenticationError, GitlabError
@@ -33,14 +34,14 @@ from dev_health_ops.connectors.models import (
 )
 from dev_health_ops.connectors.utils import (
     GitLabRESTClient,
-    retry_with_backoff,
     match_project_pattern,
+    retry_with_backoff,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_retry_after_seconds(headers: object) -> Optional[float]:
+def _parse_retry_after_seconds(headers: object) -> float | None:
     if not isinstance(headers, dict):
         return None
     retry_after = headers.get("Retry-After")
@@ -63,7 +64,7 @@ class GitLabConnector(GitConnector):
     def __init__(
         self,
         url: str = "https://gitlab.com",
-        private_token: Optional[str] = None,
+        private_token: str | None = None,
         per_page: int = 100,
         max_workers: int = 4,
         rest_timeout: int = 15,
@@ -139,8 +140,8 @@ class GitLabConnector(GitConnector):
     )
     def list_groups(
         self,
-        max_groups: Optional[int] = None,
-    ) -> List[Organization]:
+        max_groups: int | None = None,
+    ) -> list[Organization]:
         """
         List groups accessible to the authenticated user.
 
@@ -186,13 +187,13 @@ class GitLabConnector(GitConnector):
     )
     def list_projects(
         self,
-        group_id: Optional[int] = None,
-        group_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        search: Optional[str] = None,
-        pattern: Optional[str] = None,
-        max_projects: Optional[int] = None,
-    ) -> List[Repository]:
+        group_id: int | None = None,
+        group_name: str | None = None,
+        user_name: str | None = None,
+        search: str | None = None,
+        pattern: str | None = None,
+        max_projects: int | None = None,
+    ) -> list[Repository]:
         """
         List projects for a group, user, or all accessible projects.
 
@@ -330,10 +331,10 @@ class GitLabConnector(GitConnector):
     )
     def get_contributors_by_project(
         self,
-        project_id: Optional[int] = None,
-        project_name: Optional[str] = None,
-        max_contributors: Optional[int] = None,
-    ) -> List[Author]:
+        project_id: int | None = None,
+        project_name: str | None = None,
+        max_contributors: int | None = None,
+    ) -> list[Author]:
         """
         Get contributors for a project.
 
@@ -386,9 +387,9 @@ class GitLabConnector(GitConnector):
     )
     def get_commit_stats_by_project(
         self,
-        project_id: Optional[int] = None,
-        project_name: Optional[str] = None,
-        sha: Optional[str] = None,
+        project_id: int | None = None,
+        project_name: str | None = None,
+        sha: str | None = None,
     ) -> CommitStats:
         """
         Get statistics for a specific commit.
@@ -430,9 +431,9 @@ class GitLabConnector(GitConnector):
     )
     def get_repo_stats_by_project(
         self,
-        project_id: Optional[int] = None,
-        project_name: Optional[str] = None,
-        max_commits: Optional[int] = None,
+        project_id: int | None = None,
+        project_name: str | None = None,
+        max_commits: int | None = None,
     ) -> RepoStats:
         """
         Get aggregated statistics for a project.
@@ -526,11 +527,11 @@ class GitLabConnector(GitConnector):
     )
     def get_merge_requests(
         self,
-        project_id: Optional[int] = None,
-        project_name: Optional[str] = None,
+        project_id: int | None = None,
+        project_name: str | None = None,
         state: str = "all",
-        max_mrs: Optional[int] = None,
-    ) -> List[PullRequest]:
+        max_mrs: int | None = None,
+    ) -> list[PullRequest]:
         """
         Get merge requests for a project using REST API.
 
@@ -658,10 +659,10 @@ class GitLabConnector(GitConnector):
     )
     def get_merge_request_commits(
         self,
-        project_id: Optional[int] = None,
-        project_name: Optional[str] = None,
+        project_id: int | None = None,
+        project_name: str | None = None,
         iid: int = 0,
-    ) -> List[PullRequestCommit]:
+    ) -> list[PullRequestCommit]:
         """
         Get commits for a specific merge request.
 
@@ -715,8 +716,8 @@ class GitLabConnector(GitConnector):
     def get_file_blame_by_project(
         self,
         file_path: str,
-        project_id: Optional[int] = None,
-        project_name: Optional[str] = None,
+        project_id: int | None = None,
+        project_name: str | None = None,
         ref: str = "HEAD",
     ) -> FileBlame:
         """
@@ -806,19 +807,19 @@ class GitLabConnector(GitConnector):
 
     def list_organizations(
         self,
-        max_orgs: Optional[int] = None,
-    ) -> List[Organization]:
+        max_orgs: int | None = None,
+    ) -> list[Organization]:
         """List groups accessible to the authenticated user."""
         return self.list_groups(max_groups=max_orgs) or []
 
     def list_repositories(
         self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        search: Optional[str] = None,
-        pattern: Optional[str] = None,
-        max_repos: Optional[int] = None,
-    ) -> List[Repository]:
+        org_name: str | None = None,
+        user_name: str | None = None,
+        search: str | None = None,
+        pattern: str | None = None,
+        max_repos: int | None = None,
+    ) -> list[Repository]:
         """List projects for a group, user, or all accessible projects."""
         return (
             self.list_projects(
@@ -835,8 +836,8 @@ class GitLabConnector(GitConnector):
         self,
         owner: str,
         repo: str,
-        max_contributors: Optional[int] = None,
-    ) -> List[Author]:
+        max_contributors: int | None = None,
+    ) -> list[Author]:
         """Get contributors for a repository using owner/repo style parameters."""
         return self.get_contributors_by_project(
             project_name=f"{owner}/{repo}", max_contributors=max_contributors
@@ -855,7 +856,7 @@ class GitLabConnector(GitConnector):
         self,
         owner: str,
         repo: str,
-        max_commits: Optional[int] = None,
+        max_commits: int | None = None,
     ) -> RepoStats:
         """Get aggregated statistics for a repository using owner/repo style parameters."""
         return self.get_repo_stats_by_project(
@@ -864,16 +865,16 @@ class GitLabConnector(GitConnector):
 
     def get_projects_with_stats(
         self,
-        group_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
+        group_name: str | None = None,
+        user_name: str | None = None,
+        pattern: str | None = None,
         batch_size: int = 10,
         max_concurrent: int = 4,
         rate_limit_delay: float = 1.0,
-        max_commits_per_repo: Optional[int] = None,
-        max_repos: Optional[int] = None,
-        on_project_complete: Optional[Callable[[BatchResult], None]] = None,
-    ) -> List[BatchResult]:
+        max_commits_per_repo: int | None = None,
+        max_repos: int | None = None,
+        on_project_complete: Callable[[BatchResult], None] | None = None,
+    ) -> list[BatchResult]:
         """Alias for get_repos_with_stats using project nomenclature."""
         return self.get_repos_with_stats(
             org_name=group_name,
@@ -889,16 +890,16 @@ class GitLabConnector(GitConnector):
 
     async def get_projects_with_stats_async(
         self,
-        group_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
+        group_name: str | None = None,
+        user_name: str | None = None,
+        pattern: str | None = None,
         batch_size: int = 10,
         max_concurrent: int = 4,
         rate_limit_delay: float = 1.0,
-        max_commits_per_repo: Optional[int] = None,
-        max_repos: Optional[int] = None,
-        on_project_complete: Optional[Callable[[BatchResult], None]] = None,
-    ) -> List[BatchResult]:
+        max_commits_per_repo: int | None = None,
+        max_repos: int | None = None,
+        on_project_complete: Callable[[BatchResult], None] | None = None,
+    ) -> list[BatchResult]:
         """Alias for get_repos_with_stats_async using project nomenclature."""
         return await self.get_repos_with_stats_async(
             org_name=group_name,
@@ -914,11 +915,11 @@ class GitLabConnector(GitConnector):
 
     def _get_repositories_for_processing(
         self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        pattern: Optional[str] = None,
-        max_repos: Optional[int] = None,
-    ) -> List[Repository]:
+        org_name: str | None = None,
+        user_name: str | None = None,
+        pattern: str | None = None,
+        max_repos: int | None = None,
+    ) -> list[Repository]:
         """GitLab-specific repository discovery, favoring group extraction from patterns."""
         effective_org = org_name
         effective_user = user_name
@@ -938,7 +939,7 @@ class GitLabConnector(GitConnector):
             max_repos=max_repos,
         )
 
-    def _get_projects_for_processing(self, **kwargs) -> List[Repository]:
+    def _get_projects_for_processing(self, **kwargs) -> list[Repository]:
         """Internal helper for project listing, aliasing _get_repositories_for_processing."""
         if "group_name" in kwargs and "org_name" not in kwargs:
             kwargs["org_name"] = kwargs.pop("group_name")
@@ -953,8 +954,8 @@ class GitLabConnector(GitConnector):
         owner: str,
         repo: str,
         state: str = "all",
-        max_prs: Optional[int] = None,
-    ) -> List[PullRequest]:
+        max_prs: int | None = None,
+    ) -> list[PullRequest]:
         """Get pull requests (merge requests) for a repository."""
         return self.get_merge_requests(
             project_name=f"{owner}/{repo}", state=state, max_mrs=max_prs
@@ -976,8 +977,8 @@ class GitLabConnector(GitConnector):
         self,
         project_name: str,
         metric: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         interval: str = "daily",
     ) -> DORAMetrics:
         """Retrieve DORA metrics for a GitLab project."""
@@ -1017,7 +1018,7 @@ class GitLabConnector(GitConnector):
                 pass
             return DORAMetrics(metric_name=metric, data_points=[])
 
-    def get_rate_limit(self) -> Dict[str, Any]:
+    def get_rate_limit(self) -> dict[str, Any]:
         """Get current rate limit status."""
         return {}
 

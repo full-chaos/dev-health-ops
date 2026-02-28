@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..authz import enforce_org_scope
 from .filter_translation import translate_filters
@@ -43,7 +43,7 @@ class TimeseriesRequest:
     interval: str
     start_date: date
     end_date: date
-    use_investment: Optional[bool] = None
+    use_investment: bool | None = None
 
 
 @dataclass
@@ -55,20 +55,20 @@ class BreakdownRequest:
     start_date: date
     end_date: date
     top_n: int = 10
-    use_investment: Optional[bool] = None
+    use_investment: bool | None = None
 
 
 @dataclass
 class SankeyRequest:
     """Request for a Sankey flow query."""
 
-    path: List[str]
+    path: list[str]
     measure: str
     start_date: date
     end_date: date
     max_nodes: int = 100
     max_edges: int = 500
-    use_investment: Optional[bool] = None
+    use_investment: bool | None = None
 
 
 @dataclass
@@ -80,10 +80,10 @@ class CatalogValuesRequest:
 
 
 def _get_context_params(
-    dimensions: List[Dimension],
-    force_investment: Optional[bool] = None,
+    dimensions: list[Dimension],
+    force_investment: bool | None = None,
     needs_team_join: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Determine source table and extra clauses based on dimensions."""
     investment_dims = {Dimension.THEME, Dimension.SUBCATEGORY}
     auto_use_investment = any(d in investment_dims for d in dimensions)
@@ -148,7 +148,7 @@ def _get_context_params(
     }
 
 
-def _needs_team_join(filters: Optional["FilterInput"]) -> bool:
+def _needs_team_join(filters: FilterInput | None) -> bool:
     if not filters or not filters.scope or not filters.scope.ids:
         return False
     return filters.scope.level.value == "team"
@@ -158,8 +158,8 @@ def compile_timeseries(
     request: TimeseriesRequest,
     org_id: str,
     timeout: int = DEFAULT_TIMEOUT,
-    filters: Optional["FilterInput"] = None,  # NEW: Filter support
-) -> Tuple[str, Dict[str, Any]]:
+    filters: FilterInput | None = None,  # NEW: Filter support
+) -> tuple[str, dict[str, Any]]:
     """
     Compile a timeseries request to parameterized SQL.
 
@@ -191,7 +191,7 @@ def compile_timeseries(
         dimension, measure, interval, filter_clause=filter_clause, **ctx
     )
 
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "start_date": request.start_date,
         "end_date": request.end_date,
         "timeout": timeout,
@@ -206,8 +206,8 @@ def compile_breakdown(
     request: BreakdownRequest,
     org_id: str,
     timeout: int = DEFAULT_TIMEOUT,
-    filters: Optional["FilterInput"] = None,  # NEW: Filter support
-) -> Tuple[str, Dict[str, Any]]:
+    filters: FilterInput | None = None,  # NEW: Filter support
+) -> tuple[str, dict[str, Any]]:
     """
     Compile a breakdown request to parameterized SQL.
     """
@@ -227,7 +227,7 @@ def compile_breakdown(
 
     sql = breakdown_template(dimension, measure, filter_clause=filter_clause, **ctx)
 
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "start_date": request.start_date,
         "end_date": request.end_date,
         "top_n": request.top_n,
@@ -243,8 +243,8 @@ def compile_sankey(
     request: SankeyRequest,
     org_id: str,
     timeout: int = DEFAULT_TIMEOUT,
-    filters: Optional["FilterInput"] = None,  # NEW: Filter support
-) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[Tuple[str, Dict[str, Any]]]]:
+    filters: FilterInput | None = None,  # NEW: Filter support
+) -> tuple[list[tuple[str, dict[str, Any]]], list[tuple[str, dict[str, Any]]]]:
     """
     Compile a Sankey request to parameterized SQL queries.
     """
@@ -269,7 +269,7 @@ def compile_sankey(
     nodes_sql = sankey_nodes_template(
         dimensions, measure, filter_clause=filter_clause, **ctx
     )
-    nodes_params: Dict[str, Any] = {
+    nodes_params: dict[str, Any] = {
         "start_date": request.start_date,
         "end_date": request.end_date,
         "limit_per_dim": limit_per_dim,
@@ -279,7 +279,7 @@ def compile_sankey(
     nodes_params = enforce_org_scope(org_id, nodes_params)
 
     # Build edges queries (one per adjacent pair in path)
-    edges_queries: List[Tuple[str, Dict[str, Any]]] = []
+    edges_queries: list[tuple[str, dict[str, Any]]] = []
     for i in range(len(dimensions) - 1):
         source_dim = dimensions[i]
         target_dim = dimensions[i + 1]
@@ -287,7 +287,7 @@ def compile_sankey(
         edge_sql = sankey_edges_template(
             source_dim, target_dim, measure, filter_clause=filter_clause, **ctx
         )
-        edge_params: Dict[str, Any] = {
+        edge_params: dict[str, Any] = {
             "start_date": request.start_date,
             "end_date": request.end_date,
             "max_edges": request.max_edges // (len(dimensions) - 1),
@@ -304,8 +304,8 @@ def compile_catalog_values(
     request: CatalogValuesRequest,
     org_id: str,
     timeout: int = DEFAULT_TIMEOUT,
-    filters: Optional["FilterInput"] = None,  # NEW: Filter support
-) -> Tuple[str, Dict[str, Any]]:
+    filters: FilterInput | None = None,  # NEW: Filter support
+) -> tuple[str, dict[str, Any]]:
     """
     Compile a catalog values request to parameterized SQL.
     """
@@ -323,7 +323,7 @@ def compile_catalog_values(
 
     sql = catalog_values_template(dimension, filter_clause=filter_clause, **ctx)
 
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "limit": request.limit,
         "timeout": timeout,
     }

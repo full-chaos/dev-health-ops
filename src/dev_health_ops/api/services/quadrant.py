@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from fastapi import HTTPException
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+
 from ..models.filters import MetricFilter, ScopeFilter, TimeFilter
 from ..models.schemas import (
     QuadrantAnnotation,
-    QuadrantAxis,
     QuadrantAxes,
+    QuadrantAxis,
     QuadrantPoint,
     QuadrantPointTrajectory,
     QuadrantResponse,
@@ -60,7 +62,7 @@ class QuadrantDefinition:
 
 TEAM_LABEL = "ifNull(nullIf(m.team_name, ''), m.team_id)"
 
-TEAM_METRICS: Dict[str, MetricSpec] = {
+TEAM_METRICS: dict[str, MetricSpec] = {
     "churn": MetricSpec(
         metric="churn",
         label="Churn",
@@ -124,7 +126,7 @@ TEAM_METRICS: Dict[str, MetricSpec] = {
     ),
 }
 
-REPO_METRICS: Dict[str, MetricSpec] = {
+REPO_METRICS: dict[str, MetricSpec] = {
     "churn": MetricSpec(
         metric="churn",
         label="Churn",
@@ -194,7 +196,7 @@ REPO_METRICS: Dict[str, MetricSpec] = {
     ),
 }
 
-PERSON_METRICS: Dict[str, MetricSpec] = {
+PERSON_METRICS: dict[str, MetricSpec] = {
     "churn": MetricSpec(
         metric="churn",
         label="Churn",
@@ -264,7 +266,7 @@ METRICS_BY_SCOPE = {
     "person": PERSON_METRICS,
 }
 
-QUADRANT_DEFINITIONS: Dict[str, QuadrantDefinition] = {
+QUADRANT_DEFINITIONS: dict[str, QuadrantDefinition] = {
     "churn_throughput": QuadrantDefinition(
         type="churn_throughput",
         x=AxisDefinition(metric="churn", label="Churn", unit="loc"),
@@ -320,7 +322,7 @@ async def _resolve_identity_variants(
     sink: BaseMetricsSink,
     *,
     person_id: str,
-) -> List[str]:
+) -> list[str]:
     aliases = load_identity_aliases()
     reverse = build_reverse_alias_map(aliases)
 
@@ -343,7 +345,7 @@ async def _resolve_identity_variants(
     return []
 
 
-def _bucket_start(value: Any) -> Optional[date]:
+def _bucket_start(value: Any) -> date | None:
     if isinstance(value, date) and not isinstance(value, datetime):
         return value
     if isinstance(value, datetime):
@@ -363,14 +365,14 @@ def _bucket_window_end(bucket_start: date, bucket: str) -> date:
     return bucket_start + timedelta(days=7)
 
 
-def _cohort_scope_filter(team_id: Optional[str]) -> tuple[str, Dict[str, Any]]:
+def _cohort_scope_filter(team_id: str | None) -> tuple[str, dict[str, Any]]:
     if not team_id:
         return "", {}
     return "AND m.team_id = %(team_id)s", {"team_id": team_id}
 
 
 def _row_entity(
-    row: Dict[str, Any],
+    row: dict[str, Any],
     *,
     group_scope: str,
 ) -> tuple[str, str]:
@@ -412,8 +414,8 @@ def _evidence_link(metric: str) -> str:
 
 
 def _trajectory(
-    windows: List[Dict[str, Any]],
-) -> List[QuadrantPointTrajectory]:
+    windows: list[dict[str, Any]],
+) -> list[QuadrantPointTrajectory]:
     return [
         QuadrantPointTrajectory(
             x=window["x"],
@@ -471,9 +473,9 @@ async def build_quadrant_response(
     start_day, end_day, _, _ = time_window(filters)
 
     async with clickhouse_client(db_url) as sink:
-        team_filter: Optional[str] = None
+        team_filter: str | None = None
         scope_filter = ""
-        scope_params: Dict[str, Any] = {}
+        scope_params: dict[str, Any] = {}
 
         if group_scope == "person":
             identities = await _resolve_identity_variants(sink, person_id=scope_id)
@@ -516,7 +518,7 @@ async def build_quadrant_response(
             org_id=org_id,
         )
 
-    x_map: Dict[tuple[str, date], Dict[str, Any]] = {}
+    x_map: dict[tuple[str, date], dict[str, Any]] = {}
     for row in x_rows:
         bucket_start = _bucket_start(row.get("bucket"))
         if not bucket_start:
@@ -531,7 +533,7 @@ async def build_quadrant_response(
             "x": value,
         }
 
-    points_by_entity: Dict[str, List[Dict[str, Any]]] = {}
+    points_by_entity: dict[str, list[dict[str, Any]]] = {}
     for row in y_rows:
         bucket_start = _bucket_start(row.get("bucket"))
         if not bucket_start:
@@ -557,7 +559,7 @@ async def build_quadrant_response(
             }
         )
 
-    points: List[QuadrantPoint] = []
+    points: list[QuadrantPoint] = []
     for entity_id, windows in points_by_entity.items():
         ordered = sorted(windows, key=lambda item: item["window_start"])
         if not ordered:
@@ -577,5 +579,5 @@ async def build_quadrant_response(
         )
 
     axes = _build_axes(definition)
-    annotations: List[QuadrantAnnotation] = []
+    annotations: list[QuadrantAnnotation] = []
     return QuadrantResponse(axes=axes, points=points, annotations=annotations)

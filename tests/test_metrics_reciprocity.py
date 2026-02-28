@@ -1,10 +1,11 @@
 import uuid
 from datetime import date, datetime, timezone
+
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.schemas import (
-    PullRequestRow,
-    PullRequestReviewRow,
     CommitStatRow,
+    PullRequestReviewRow,
+    PullRequestRow,
 )
 
 

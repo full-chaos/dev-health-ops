@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any
 
 from .client import query_dicts
 
@@ -12,10 +12,10 @@ async def fetch_pull_requests(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int = 50,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             repo_id,
@@ -51,10 +51,10 @@ async def fetch_issues(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int = 50,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             work_item_id,

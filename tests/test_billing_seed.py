@@ -6,12 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
 
 from dev_health_ops.api.billing.plans import router as billing_router
-from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.db import postgres_session_dependency
 
 
 def _build_app() -> FastAPI:

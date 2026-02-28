@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextvars
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -18,11 +18,11 @@ class FakeSink:
 
     def __init__(self):
         self.last_query: str | None = None
-        self.last_params: Dict[str, Any] | None = None
+        self.last_params: dict[str, Any] | None = None
 
     def query_dicts(
-        self, query: str, params: Dict[str, Any] | None
-    ) -> List[Dict[str, Any]]:
+        self, query: str, params: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
         """Capture query and params, return empty result."""
         self.last_query = query
         self.last_params = params

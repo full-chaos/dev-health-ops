@@ -5,11 +5,11 @@ This connector provides methods to retrieve organizations, repositories,
 contributors, statistics, pull requests, and blame information from GitHub.
 """
 
-import logging
 import inspect
+import logging
 import time
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 from github import Auth, Github, GithubException, RateLimitExceededException
 
@@ -36,8 +36,8 @@ from dev_health_ops.connectors.models import (
 )
 from dev_health_ops.connectors.utils import (
     GitHubGraphQLClient,
-    retry_with_backoff,
     match_repo_pattern,
+    retry_with_backoff,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class GitHubConnector(GitConnector):
     def __init__(
         self,
         token: str,
-        base_url: Optional[str] = None,
+        base_url: str | None = None,
         per_page: int = 100,
         max_workers: int = 4,
     ):
@@ -113,8 +113,8 @@ class GitHubConnector(GitConnector):
     )
     def list_organizations(
         self,
-        max_orgs: Optional[int] = None,
-    ) -> List[Organization]:
+        max_orgs: int | None = None,
+    ) -> list[Organization]:
         """
         List organizations accessible to the authenticated user.
 
@@ -152,12 +152,12 @@ class GitHubConnector(GitConnector):
     )
     def list_repositories(
         self,
-        org_name: Optional[str] = None,
-        user_name: Optional[str] = None,
-        search: Optional[str] = None,
-        pattern: Optional[str] = None,
-        max_repos: Optional[int] = None,
-    ) -> List[Repository]:
+        org_name: str | None = None,
+        user_name: str | None = None,
+        search: str | None = None,
+        pattern: str | None = None,
+        max_repos: int | None = None,
+    ) -> list[Repository]:
         """
         List repositories for an organization, user, or search query.
 
@@ -240,8 +240,8 @@ class GitHubConnector(GitConnector):
         self,
         owner: str,
         repo: str,
-        max_contributors: Optional[int] = None,
-    ) -> List[Author]:
+        max_contributors: int | None = None,
+    ) -> list[Author]:
         """
         Get contributors for a repository.
 
@@ -321,7 +321,7 @@ class GitHubConnector(GitConnector):
         self,
         owner: str,
         repo: str,
-        max_commits: Optional[int] = None,
+        max_commits: int | None = None,
     ) -> RepoStats:
         """
         Get aggregated statistics for a repository.
@@ -408,8 +408,8 @@ class GitHubConnector(GitConnector):
         owner: str,
         repo: str,
         state: str = "all",
-        max_prs: Optional[int] = None,
-    ) -> List[PullRequest]:
+        max_prs: int | None = None,
+    ) -> list[PullRequest]:
         """
         Get pull requests for a repository.
 
@@ -469,7 +469,7 @@ class GitHubConnector(GitConnector):
         owner: str,
         repo: str,
         number: int,
-    ) -> List[PullRequestReview]:
+    ) -> list[PullRequestReview]:
         """
         Get reviews for a specific pull request.
 
@@ -508,7 +508,7 @@ class GitHubConnector(GitConnector):
         owner: str,
         repo: str,
         number: int,
-    ) -> List[PullRequestCommit]:
+    ) -> list[PullRequestCommit]:
         """
         Get commits for a specific pull request.
 
@@ -610,7 +610,7 @@ class GitHubConnector(GitConnector):
             self._handle_github_exception(e)
             raise
 
-    def get_rate_limit(self) -> Dict[str, Any]:
+    def get_rate_limit(self) -> dict[str, Any]:
         """
         Get current rate limit status.
 

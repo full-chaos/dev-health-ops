@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, cast
 
 # Canonical prompt from AGENTS-WG.md - USE VERBATIM
 CANONICAL_EXPLANATION_PROMPT = """You are explaining a precomputed investment view.
@@ -50,20 +50,20 @@ class ExplanationInputs:
     work_unit_id: str
     time_range_start: datetime
     time_range_end: datetime
-    categories: Dict[str, float]  # Investment category vectors
+    categories: dict[str, float]  # Investment category vectors
     evidence_quality_value: float
     evidence_quality_band: str  # high, moderate, low, very_low
-    evidence_summary: Dict[str, Any] = field(default_factory=dict)
+    evidence_summary: dict[str, Any] = field(default_factory=dict)
 
 
 def extract_allowed_inputs(
     work_unit_id: str,
     time_range_start: datetime,
     time_range_end: datetime,
-    categories: Dict[str, float],
+    categories: dict[str, float],
     evidence_quality_value: float,
     evidence_quality_band: str,
-    evidence: Optional[Dict[str, List[Any]]] = None,
+    evidence: dict[str, list[Any]] | None = None,
 ) -> ExplanationInputs:
     """
     Extract only the inputs allowed per AGENTS-WG.md for LLM consumption.
@@ -97,19 +97,19 @@ def extract_allowed_inputs(
     )
 
 
-def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
+def _summarize_evidence(evidence: dict[str, list[Any]]) -> dict[str, Any]:
     """
     Summarize evidence arrays into metadata-only summaries.
 
     Raw text content is NEVER included, only counts and types.
     """
-    summary: Dict[str, Any] = {}
+    summary: dict[str, Any] = {}
 
     # Structural evidence - summarize types and values
     structural = evidence.get("structural", [])
     if structural:
         summary["structural"] = cast(
-            Dict[str, Any],
+            dict[str, Any],
             {
                 "count": len(structural),
                 "types": list(
@@ -128,7 +128,7 @@ def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
     contextual = evidence.get("contextual", [])
     if contextual:
         summary["contextual"] = cast(
-            Dict[str, Any],
+            dict[str, Any],
             {
                 "count": len(contextual),
             },
@@ -142,7 +142,7 @@ def _summarize_evidence(evidence: Dict[str, List[Any]]) -> Dict[str, Any]:
     textual = evidence.get("textual", [])
     if textual:
         # Count only explicit text matches; avoid "unknown" categories.
-        category_counts: Dict[str, int] = {}
+        category_counts: dict[str, int] = {}
         match_count = 0
         for item in textual:
             if not isinstance(item, dict):
@@ -243,7 +243,7 @@ Use probabilistic language (appears, leans, suggests). Never use definitive lang
     return CANONICAL_EXPLANATION_PROMPT + data_section
 
 
-def validate_explanation_language(text: str) -> List[str]:
+def validate_explanation_language(text: str) -> list[str]:
     """
     Validate that explanation text follows AGENTS-WG.md language rules.
 

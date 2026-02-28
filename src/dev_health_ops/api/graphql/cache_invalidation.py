@@ -7,7 +7,7 @@ background tasks (e.g., Celery workers) when data changes.
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,8 @@ class CacheInvalidationEvent:
         self,
         event_type: str,
         org_id: str,
-        tags: Optional[List[str]] = None,
-        metadata: Optional[dict] = None,
+        tags: list[str] | None = None,
+        metadata: dict | None = None,
     ):
         """
         Initialize a cache invalidation event.
@@ -47,7 +47,7 @@ class CacheInvalidationEvent:
         self.tags = tags or []
         self.metadata = metadata or {}
 
-    def get_tags_to_invalidate(self) -> List[str]:
+    def get_tags_to_invalidate(self) -> list[str]:
         """
         Get all cache tags that should be invalidated for this event.
 

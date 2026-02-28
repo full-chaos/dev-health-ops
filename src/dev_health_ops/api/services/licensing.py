@@ -15,11 +15,11 @@ from jwt.exceptions import InvalidTokenError
 
 from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.licensing import (
+    STANDARD_FEATURES,
+    TIER_LIMITS,
     FeatureFlag,
     OrgFeatureOverride,
     OrgLicense,
-    STANDARD_FEATURES,
-    TIER_LIMITS,
 )
 
 if TYPE_CHECKING:
@@ -187,7 +187,7 @@ class LicenseService:
 class FeatureService:
     """Feature flag checking service with caching."""
 
-    def __init__(self, session: "Session"):
+    def __init__(self, session: Session):
         self.session = session
         self._feature_cache: dict[str, FeatureFlag] = {}
         self._override_cache: dict[
@@ -310,7 +310,7 @@ class FeatureService:
 class TierLimitService:
     """Tier limit checking and enforcement service."""
 
-    def __init__(self, session: "Session"):
+    def __init__(self, session: Session):
         self.session = session
 
     def _get_org_license(self, org_id: uuid.UUID) -> OrgLicense | None:
@@ -379,7 +379,7 @@ def get_standard_feature_keys() -> frozenset[str]:
     return frozenset(f[0] for f in STANDARD_FEATURES)
 
 
-def seed_feature_flags(session: "Session") -> int:
+def seed_feature_flags(session: Session) -> int:
     """Seed the feature_flags table with standard features."""
     existing = {f.key for f in session.query(FeatureFlag.key).all()}
     created = 0

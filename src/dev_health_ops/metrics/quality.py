@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Optional, Sequence
+from collections.abc import Sequence
 
 from dev_health_ops.metrics.schemas import CommitStatRow
 from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
@@ -17,7 +17,7 @@ def compute_rework_churn_ratio(
 
     This is a proxy for "rework within 30 days" using commit-level churn.
     """
-    file_stats: Dict[str, Dict[str, object]] = {}
+    file_stats: dict[str, dict[str, object]] = {}
     for row in window_stats:
         if str(row["repo_id"]) != repo_id:
             continue
@@ -50,12 +50,12 @@ def compute_single_owner_file_ratio(
     repo_id: str,
     window_stats: Sequence[CommitStatRow],
     owner_threshold: float = 0.75,
-    identity_resolver: Optional[IdentityResolver] = None,
+    identity_resolver: IdentityResolver | None = None,
 ) -> float:
     """
     Compute ratio of files dominated by a single owner in the window.
     """
-    file_authors: Dict[str, Dict[str, set]] = defaultdict(lambda: defaultdict(set))
+    file_authors: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
 
     for row in window_stats:
         if str(row["repo_id"]) != repo_id:

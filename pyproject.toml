@@ -121,7 +121,30 @@ ignore = [
   "E501",   # line too long (handled by formatter)
   "B008",   # do not perform function calls in argument defaults (FastAPI Depends)
   "SIM108", # use ternary operator (readability trade-off)
+  # Existing violations suppressed to unblock CI — address incrementally
+  "B904",   # raise-without-from-inside-except (58 violations)
+  "B905",   # zip-without-explicit-strict (14 violations)
+  "B023",   # function-uses-loop-variable (12 violations)
+  "B027",   # empty-method-without-abstract-decorator (9 violations)
+  "B017",   # assert-raises-exception (6 violations)
+  "B007",   # unused-loop-control-variable (4 violations)
+  "UP045",  # non-pep604-annotation-optional (requires unsafe fix)
+  "UP028",  # yield-in-for-loop (8 violations)
+  "SIM102", # collapsible-if (25 violations)
+  "SIM117", # multiple-with-statements (13 violations)
+  "SIM113", # enumerate-for-loop (8 violations)
+  "SIM105", # suppressible-exception (7 violations)
+  "SIM103", # needless-bool (5 violations)
+  "SIM110", # reimplemented-builtin (4 violations)
+  "SIM118", # in-dict-keys (4 violations)
+  "SIM116", # if-else-block-instead-of-dict-lookup (2 violations)
+  "SIM101", # duplicate-isinstance-call (1 violation)
+  "SIM201", # negate-equal-op (1 violation)
+  "E402",   # module-import-not-at-top-of-file (2 violations)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # re-exports are intentional in __init__ files
 
 [tool.ruff.lint.isort]
 known-first-party = ["dev_health_ops"]

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List
+from typing import Any
+
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_investment_flow_items(
@@ -13,10 +14,10 @@ async def fetch_investment_flow_items(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             theme_kv.1 AS source,
@@ -44,9 +45,9 @@ async def fetch_expense_counts(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             sum(new_items_count) AS new_items,
@@ -69,9 +70,9 @@ async def fetch_expense_abandoned(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             countIf(status = 'canceled') AS canceled_items
@@ -92,9 +93,9 @@ async def fetch_state_status_counts(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             status,
@@ -118,10 +119,10 @@ async def fetch_hotspot_rows(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         WITH
             (

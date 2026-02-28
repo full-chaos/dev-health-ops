@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone, date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -15,21 +15,21 @@ from dev_health_ops.metrics.loaders.base import (
 )
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    PullRequestRow,
-    PullRequestReviewRow,
-    PipelineRunRow,
     DeploymentRow,
     IncidentRow,
+    PipelineRunRow,
+    PullRequestReviewRow,
+    PullRequestRow,
 )
 from dev_health_ops.models.atlassian_ops import (
-    AtlassianOpsIncident,
     AtlassianOpsAlert,
+    AtlassianOpsIncident,
     AtlassianOpsSchedule,
 )
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
 
-def _to_dt(val: Any) -> Optional[datetime]:
+def _to_dt(val: Any) -> datetime | None:
     if val is None:
         return None
     if isinstance(val, datetime):
@@ -52,12 +52,12 @@ class SqlAlchemyDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[CommitStatRow], List[PullRequestRow], List[PullRequestReviewRow]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[CommitStatRow], list[PullRequestRow], list[PullRequestReviewRow]]:
         start_str = start.isoformat()
         end_str = end.isoformat()
-        params: Dict[str, Any] = {"start": start_str, "end": end_str}
+        params: dict[str, Any] = {"start": start_str, "end": end_str}
 
         repo_filter = ""
         if repo_id is not None:
@@ -99,9 +99,9 @@ class SqlAlchemyDataLoader(DataLoader):
         {repo_filter.replace("c.repo_id", "repo_id") if repo_id or repo_name else ""}
         """
 
-        commit_rows: List[CommitStatRow] = []
-        pr_rows: List[PullRequestRow] = []
-        review_rows: List[PullRequestReviewRow] = []
+        commit_rows: list[CommitStatRow] = []
+        pr_rows: list[PullRequestRow] = []
+        review_rows: list[PullRequestReviewRow] = []
 
         with self.engine.connect() as conn:
             c_result = conn.execute(text(commit_query), params).mappings().all()
@@ -169,12 +169,12 @@ class SqlAlchemyDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[Any], List[Any]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[Any], list[Any]]:
         from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
 
-        params: Dict[str, Any] = {"start": start.isoformat(), "end": end.isoformat()}
+        params: dict[str, Any] = {"start": start.isoformat(), "end": end.isoformat()}
         repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
@@ -218,9 +218,9 @@ class SqlAlchemyDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[PipelineRunRow], List[DeploymentRow]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[PipelineRunRow], list[DeploymentRow]]:
         params = {"start": start.isoformat(), "end": end.isoformat()}
         repo_filter = ""
         if repo_id:
@@ -230,8 +230,8 @@ class SqlAlchemyDataLoader(DataLoader):
         pipe_query = f"SELECT * FROM ci_pipeline_runs WHERE finished_at >= :start AND finished_at < :end {repo_filter}"
         deploy_query = f"SELECT * FROM deployments WHERE deployed_at >= :start AND deployed_at < :end {repo_filter}"
 
-        pipes: List[PipelineRunRow] = []
-        deploys: List[DeploymentRow] = []
+        pipes: list[PipelineRunRow] = []
+        deploys: list[DeploymentRow] = []
         with self.engine.connect() as conn:
             p_rows = conn.execute(text(pipe_query), params).mappings().all()
             d_rows = conn.execute(text(deploy_query), params).mappings().all()
@@ -257,9 +257,9 @@ class SqlAlchemyDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> List[IncidentRow]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> list[IncidentRow]:
         params = {"start": start.isoformat(), "end": end.isoformat()}
         repo_filter = ""
         if repo_id:
@@ -267,7 +267,7 @@ class SqlAlchemyDataLoader(DataLoader):
             repo_filter = " AND repo_id = :repo_id"
 
         query = f"SELECT * FROM incidents WHERE started_at >= :start AND started_at < :end {repo_filter}"
-        incidents: List[IncidentRow] = []
+        incidents: list[IncidentRow] = []
         with self.engine.connect() as conn:
             rows = conn.execute(text(query), params).mappings().all()
             for r in rows:
@@ -281,7 +281,7 @@ class SqlAlchemyDataLoader(DataLoader):
         self,
         repo_id: uuid.UUID,
         as_of: datetime,
-    ) -> Dict[uuid.UUID, float]:
+    ) -> dict[uuid.UUID, float]:
         params = {"repo_id": str(repo_id)}
         query = """
         SELECT
@@ -303,11 +303,11 @@ class SqlAlchemyDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsIncident]:
+    ) -> list[AtlassianOpsIncident]:
         params = {"start": start, "end": end}
         query = "SELECT * FROM atlassian_ops_incidents WHERE created_at >= :start AND created_at < :end"
 
-        incidents: List[AtlassianOpsIncident] = []
+        incidents: list[AtlassianOpsIncident] = []
         with self.engine.connect() as conn:
             rows = conn.execute(text(query), params).mappings().all()
             for r in rows:
@@ -332,11 +332,11 @@ class SqlAlchemyDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsAlert]:
+    ) -> list[AtlassianOpsAlert]:
         params = {"start": start, "end": end}
         query = "SELECT * FROM atlassian_ops_alerts WHERE created_at >= :start AND created_at < :end"
 
-        alerts: List[AtlassianOpsAlert] = []
+        alerts: list[AtlassianOpsAlert] = []
         with self.engine.connect() as conn:
             rows = conn.execute(text(query), params).mappings().all()
             for r in rows:
@@ -358,10 +358,10 @@ class SqlAlchemyDataLoader(DataLoader):
 
     async def load_atlassian_ops_schedules(
         self,
-    ) -> List[AtlassianOpsSchedule]:
+    ) -> list[AtlassianOpsSchedule]:
         query = "SELECT * FROM atlassian_ops_schedules"
 
-        schedules: List[AtlassianOpsSchedule] = []
+        schedules: list[AtlassianOpsSchedule] = []
         with self.engine.connect() as conn:
             rows = conn.execute(text(query)).mappings().all()
             for r in rows:
@@ -378,10 +378,10 @@ class SqlAlchemyDataLoader(DataLoader):
 
     async def load_jira_project_ops_team_links(
         self,
-    ) -> List[JiraProjectOpsTeamLink]:
+    ) -> list[JiraProjectOpsTeamLink]:
         query = "SELECT * FROM jira_project_ops_team_links"
 
-        links: List[JiraProjectOpsTeamLink] = []
+        links: list[JiraProjectOpsTeamLink] = []
         with self.engine.connect() as conn:
             rows = conn.execute(text(query)).mappings().all()
             for r in rows:
@@ -400,7 +400,7 @@ class SqlAlchemyDataLoader(DataLoader):
     async def load_user_metrics_rolling_30d(
         self,
         as_of: date,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         start = as_of - timedelta(days=29)
 
         query = """

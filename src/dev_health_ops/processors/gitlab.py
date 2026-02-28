@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Union
 
 from dev_health_ops.models.git import (
     GitCommit,
@@ -25,6 +25,7 @@ from dev_health_ops.processors.fetch_utils import (
     safe_parse_datetime,
     AsyncBatchCollector,
 )
+from dev_health_ops.processors.storage_protocol import GitSyncStore
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
@@ -745,7 +746,7 @@ async def _backfill_gitlab_missing_data(
 
 
 async def process_gitlab_project(
-    store: Any,
+    store: Union[GitSyncStore, Any],
     project_id: int,
     token: str,
     gitlab_url: str,

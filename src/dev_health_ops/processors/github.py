@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Tuple, List, Optional
+from typing import Any, Tuple, List, Optional, Union
 
 from dev_health_ops.models.git import (
     GitBlame,
@@ -27,6 +27,7 @@ from dev_health_ops.processors.fetch_utils import (
     SyncBatchCollector,
     AsyncBatchCollector,
 )
+from dev_health_ops.processors.storage_protocol import GitSyncStore
 from dev_health_ops.providers.pr_state import normalize_pr_state
 
 _unused_BATCH_COLLECTOR_TYPES = (SyncBatchCollector, AsyncBatchCollector)
@@ -820,7 +821,7 @@ async def _backfill_github_missing_data(
 
 
 async def process_github_repo(
-    store: Any,
+    store: Union[GitSyncStore, Any],
     owner: str,
     repo_name: str,
     token: str,

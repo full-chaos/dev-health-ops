@@ -245,59 +245,6 @@ class HomeResult:
 # =============================================================================
 
 
-@strawberry.type
-class OpportunityCard:
-    """An opportunity/focus card."""
-
-    id: str
-    title: str
-    rationale: str
-    evidence_links: List[str]
-    suggested_experiments: List[str]
-
-
-@strawberry.type
-class OpportunitiesResult:
-    """Result for opportunities query."""
-
-    items: List[OpportunityCard]
-
-
-# =============================================================================
-# People types
-# =============================================================================
-
-
-@strawberry.type
-class PersonSearchResult:
-    """Result for person search."""
-
-    id: str
-    name: str
-    email: Optional[str] = None
-    team: Optional[str] = None
-
-
-@strawberry.type
-class PersonMetric:
-    """A metric for a person."""
-
-    metric: str
-    value: float
-    unit: str
-
-
-@strawberry.type
-class PersonResult:
-    """Detailed person information."""
-
-    id: str
-    name: str
-    email: Optional[str] = None
-    team: Optional[str] = None
-    metrics: List[PersonMetric]
-
-
 # =============================================================================
 # Drilldown types
 # =============================================================================

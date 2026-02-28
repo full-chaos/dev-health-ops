@@ -4,6 +4,7 @@ import math
 from datetime import datetime, time, timezone
 from typing import Any, Dict, List, Tuple
 
+from dev_health_ops.core.taxonomy import split_category_filters as _split_category_filters_core
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from ..models.filters import MetricFilter
 from ..models.schemas import (
@@ -22,20 +23,11 @@ from .filtering import resolve_repo_filter_ids, time_window
 
 
 def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]]:
-    themes: List[str] = []
-    subcategories: List[str] = []
-    for category in filters.why.work_category or []:
-        if not category:
-            continue
-        category_str = str(category).strip()
-        if not category_str:
-            continue
-        if "." in category_str:
-            subcategories.append(category_str)
-            themes.append(category_str.split(".", 1)[0])
-        else:
-            themes.append(category_str)
-    return list(dict.fromkeys(themes)), list(dict.fromkeys(subcategories))
+    """Split MetricFilter work categories into (themes, subcategories).
+
+    Delegates to core.taxonomy.split_category_filters for the pure logic.
+    """
+    return _split_category_filters_core(filters.why.work_category)
 
 
 async def _tables_present(sink: BaseMetricsSink, tables: List[str]) -> bool:

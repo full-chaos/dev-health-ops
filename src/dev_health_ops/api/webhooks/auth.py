@@ -101,28 +101,23 @@ def verify_jira_signature(
     signature_header: str | None,
     secret: str,
 ) -> bool:
-    """Verify Jira webhook signature (if configured).
+    """Verify Jira webhook HMAC-SHA256 signature.
 
-    Jira Cloud uses a different mechanism - the Connect app
-    handles JWT validation. For Jira Server/DC, we use a shared secret.
+    For Jira Server/DC, the shared secret is used to compute an
+    HMAC-SHA256 digest that must match the X-Hub-Signature header.
 
     Args:
         body: Raw request body bytes
-        signature_header: Signature header if present
+        signature_header: Value of X-Hub-Signature header
         secret: Configured webhook secret
 
     Returns:
-        True if signature is valid or no secret configured
+        True if signature is valid, False otherwise
     """
-    if not secret:
-        # No secret configured - allow (log warning)
-        logger.warning("Jira webhook received without secret validation")
-        return True
-
     if not signature_header:
         return False
 
-    # Jira Server can use HMAC-SHA256
+    # Jira Server uses HMAC-SHA256
     computed = hmac.new(
         secret.encode("utf-8"),
         body,
@@ -200,38 +195,36 @@ async def validate_gitlab_webhook(
 
 async def validate_jira_webhook(
     request: Request,
-    x_atlassian_webhook_identifier: Annotated[str | None, Header()] = None,
+    x_hub_signature: Annotated[str | None, Header()] = None,
 ) -> bytes:
     """FastAPI dependency to validate Jira webhooks.
 
-    For Jira Cloud with Atlassian Connect, JWT validation is handled
-    by the Connect framework. For Jira Server/DC, we use shared secrets.
+    For Jira Server/DC with a shared secret, the HMAC-SHA256 signature
+    is sent in the X-Hub-Signature header.
 
     Raises:
-        HTTPException: 401 if validation fails
+        HTTPException: 401 if signature validation fails
+        HTTPException: 500 if secret not configured
 
     Returns:
         Raw request body for further processing
     """
     secret = _get_jira_webhook_secret()
+
+    if not secret:
+        logger.warning("JIRA_WEBHOOK_SECRET not configured - rejecting webhook")
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook secret not configured",
+        )
+
     body = await _get_raw_body(request)
 
-    # If no secret configured, log and allow (Jira Cloud may use different auth)
-    if not secret:
-        logger.info(
-            "Jira webhook received (no secret validation): id=%s",
-            x_atlassian_webhook_identifier or "unknown",
-        )
-        return body
-
-    # For Jira Server with shared secret, validate signature
-    # Note: The exact header depends on Jira configuration
-    # This is a simplified implementation
-    if not verify_jira_signature(body, None, secret):
-        logger.warning("Jira webhook validation failed")
+    if not verify_jira_signature(body, x_hub_signature, secret):
+        logger.warning("Jira webhook signature validation failed")
         raise HTTPException(
             status_code=401,
-            detail="Invalid webhook",
+            detail="Invalid signature",
         )
 
     return body

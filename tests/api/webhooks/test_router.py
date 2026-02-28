@@ -203,10 +203,45 @@ class TestGitLabWebhook:
         assert response.status_code == 200
 
 
-class TestJiraWebhook:
-    def test_accepts_issue_created(self, client, monkeypatch, mock_celery):
-        monkeypatch.delenv("JIRA_WEBHOOK_SECRET", raising=False)
+def _sign_jira_payload(body: bytes, secret: str) -> str:
+    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
+
+@pytest.fixture
+def jira_secret(monkeypatch):
+    secret = "test-jira-secret"
+    monkeypatch.setenv("JIRA_WEBHOOK_SECRET", secret)
+    return secret
+
+
+class TestJiraWebhook:
+    def test_rejects_missing_secret_config(self, client, monkeypatch):
+        monkeypatch.delenv("JIRA_WEBHOOK_SECRET", raising=False)
+        payload = {"webhookEvent": "jira:issue_created", "issue": {"key": "PROJ-1"}}
+        body = json.dumps(payload).encode()
+
+        response = client.post("/api/v1/webhooks/jira", content=body)
+        assert response.status_code == 500
+
+    def test_rejects_missing_signature(self, client, jira_secret):
+        payload = {"webhookEvent": "jira:issue_created", "issue": {"key": "PROJ-1"}}
+        body = json.dumps(payload).encode()
+
+        response = client.post("/api/v1/webhooks/jira", content=body)
+        assert response.status_code == 401
+
+    def test_rejects_invalid_signature(self, client, jira_secret):
+        payload = {"webhookEvent": "jira:issue_created", "issue": {"key": "PROJ-1"}}
+        body = json.dumps(payload).encode()
+
+        response = client.post(
+            "/api/v1/webhooks/jira",
+            content=body,
+            headers={"X-Hub-Signature": "invalid-signature"},
+        )
+        assert response.status_code == 401
+
+    def test_accepts_issue_created(self, client, jira_secret, mock_celery):
         payload = {
             "webhookEvent": "jira:issue_created",
             "issue": {
@@ -215,38 +250,55 @@ class TestJiraWebhook:
             },
         }
         body = json.dumps(payload).encode()
+        signature = _sign_jira_payload(body, jira_secret)
 
         response = client.post(
             "/api/v1/webhooks/jira",
             content=body,
+            headers={"X-Hub-Signature": signature},
         )
         assert response.status_code == 200
         assert response.json()["status"] == "accepted"
 
-    def test_accepts_issue_updated(self, client, monkeypatch, mock_celery):
-        monkeypatch.delenv("JIRA_WEBHOOK_SECRET", raising=False)
-
+    def test_accepts_issue_updated(self, client, jira_secret, mock_celery):
         payload = {
             "webhookEvent": "jira:issue_updated",
             "issue": {"key": "PROJ-456", "fields": {"project": {"key": "PROJ"}}},
             "changelog": {"items": [{"field": "status"}]},
         }
         body = json.dumps(payload).encode()
+        signature = _sign_jira_payload(body, jira_secret)
 
         response = client.post(
             "/api/v1/webhooks/jira",
             content=body,
+            headers={"X-Hub-Signature": signature},
         )
         assert response.status_code == 200
 
     def test_returns_message_for_unsupported_event(
-        self, client, monkeypatch, mock_celery
+        self, client, jira_secret, mock_celery
     ):
-        monkeypatch.delenv("JIRA_WEBHOOK_SECRET", raising=False)
-
         payload = {"webhookEvent": "jira:worklog_updated", "issue": {"key": "PROJ-789"}}
         body = json.dumps(payload).encode()
+        signature = _sign_jira_payload(body, jira_secret)
 
-        response = client.post("/api/v1/webhooks/jira", content=body)
+        response = client.post(
+            "/api/v1/webhooks/jira",
+            content=body,
+            headers={"X-Hub-Signature": signature},
+        )
         assert response.status_code == 200
         assert "not processed" in response.json()["message"]
+
+    def test_rejects_tampered_body(self, client, jira_secret):
+        original = json.dumps({"webhookEvent": "jira:issue_created"}).encode()
+        tampered = json.dumps({"webhookEvent": "jira:issue_deleted"}).encode()
+        signature = _sign_jira_payload(original, jira_secret)
+
+        response = client.post(
+            "/api/v1/webhooks/jira",
+            content=tampered,
+            headers={"X-Hub-Signature": signature},
+        )
+        assert response.status_code == 401

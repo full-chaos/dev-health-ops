@@ -69,9 +69,9 @@ class TestGitLabTokenValidation:
 
 
 class TestJiraSignatureValidation:
-    def test_no_secret_allows_all(self):
+    def test_missing_signature_rejected(self):
         body = b'{"issue": {"key": "PROJ-123"}}'
-        assert verify_jira_signature(body, None, "") is True
+        assert verify_jira_signature(body, None, "some-secret") is False
 
     def test_valid_hmac_accepted(self):
         secret = "jira-secret"
@@ -86,3 +86,11 @@ class TestJiraSignatureValidation:
         body = b'{"webhookEvent": "jira:issue_created"}'
 
         assert verify_jira_signature(body, "invalid", secret) is False
+
+    def test_tampered_body_rejected(self):
+        secret = "jira-secret"
+        original = b'{"amount": 100}'
+        tampered = b'{"amount": 999}'
+
+        sig = hmac.new(secret.encode(), original, hashlib.sha256).hexdigest()
+        assert verify_jira_signature(tampered, sig, secret) is False

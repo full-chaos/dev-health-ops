@@ -348,7 +348,6 @@ async def test_entitlements_org_endpoint_removed(client):
     assert "tier" in body
 
 
-
 # ---------------------------------------------------------------------------
 # Webhook -> email integration tests
 # ---------------------------------------------------------------------------
@@ -386,7 +385,10 @@ async def test_webhook_invoice_paid_sends_receipt_email(client):
 
     with (
         patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch(
+            "dev_health_ops.api.billing.router.get_webhook_secret",
+            return_value="whsec_test",
+        ),
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
@@ -446,7 +448,10 @@ async def test_webhook_invoice_payment_failed_sends_email(client):
 
     with (
         patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch(
+            "dev_health_ops.api.billing.router.get_webhook_secret",
+            return_value="whsec_test",
+        ),
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
@@ -498,10 +503,18 @@ async def test_webhook_subscription_deleted_sends_cancelled_email(client):
 
     with (
         patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch(
+            "dev_health_ops.api.billing.router.get_webhook_secret",
+            return_value="whsec_test",
+        ),
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
-        patch("dev_health_ops.api.billing.router._process_subscription_event", new_callable=AsyncMock),
-        patch("dev_health_ops.api.billing.router._revoke_license", new_callable=AsyncMock),
+        patch(
+            "dev_health_ops.api.billing.router._process_subscription_event",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "dev_health_ops.api.billing.router._revoke_license", new_callable=AsyncMock
+        ),
         patch(
             "dev_health_ops.api.billing.router.send_billing_notification",
         ) as mock_task,
@@ -554,13 +567,30 @@ async def test_webhook_subscription_updated_sends_changed_email(client):
 
     with (
         patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch(
+            "dev_health_ops.api.billing.router.get_webhook_secret",
+            return_value="whsec_test",
+        ),
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
-        patch("dev_health_ops.api.billing.router._process_subscription_event", new_callable=AsyncMock),
-        patch("dev_health_ops.api.billing.router._persist_license", new_callable=AsyncMock),
-        patch("dev_health_ops.api.billing.router.get_private_key", return_value="test_private_key"),
-        patch("dev_health_ops.api.billing.router.sign_license", return_value="signed_license"),
-        patch("dev_health_ops.api.billing.router.get_tier_from_line_items", return_value=LicenseTier.ENTERPRISE),
+        patch(
+            "dev_health_ops.api.billing.router._process_subscription_event",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "dev_health_ops.api.billing.router._persist_license", new_callable=AsyncMock
+        ),
+        patch(
+            "dev_health_ops.api.billing.router.get_private_key",
+            return_value="test_private_key",
+        ),
+        patch(
+            "dev_health_ops.api.billing.router.sign_license",
+            return_value="signed_license",
+        ),
+        patch(
+            "dev_health_ops.api.billing.router.get_tier_from_line_items",
+            return_value=LicenseTier.ENTERPRISE,
+        ),
         patch(
             "dev_health_ops.api.billing.router.send_billing_notification",
         ) as mock_task,
@@ -617,7 +647,10 @@ async def test_webhook_email_failure_does_not_break_webhook(client):
 
     with (
         patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch("dev_health_ops.api.billing.router.get_webhook_secret", return_value="whsec_test"),
+        patch(
+            "dev_health_ops.api.billing.router.get_webhook_secret",
+            return_value="whsec_test",
+        ),
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(

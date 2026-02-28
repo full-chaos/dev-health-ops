@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
-import json
 
 import pytest
 
 from dev_health_ops.api.models.filters import MetricFilter, ScopeFilter, TimeFilter
-from dev_health_ops.api.services.cache import TTLCache
 from dev_health_ops.api.services import explain as explain_service
 from dev_health_ops.api.services import home as home_service
 from dev_health_ops.api.services import people as people_service
+from dev_health_ops.api.services.cache import TTLCache
 
 
 def _payload(model):

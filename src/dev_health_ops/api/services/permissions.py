@@ -7,9 +7,9 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from dev_health_ops.models.users import (
-    MemberRole,
     ROLE_PERMISSIONS,
     STANDARD_PERMISSIONS,
+    MemberRole,
 )
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ def _get_all_permission_names() -> frozenset[str]:
     return frozenset(p[0] for p in STANDARD_PERMISSIONS)
 
 
-def has_permission(user: "AuthenticatedUser", permission: str) -> bool:
+def has_permission(user: AuthenticatedUser, permission: str) -> bool:
     """Check if user has the specified permission.
 
     Args:
@@ -81,17 +81,17 @@ def has_permission(user: "AuthenticatedUser", permission: str) -> bool:
     return permission in role_perms
 
 
-def has_any_permission(user: "AuthenticatedUser", *permissions: str) -> bool:
+def has_any_permission(user: AuthenticatedUser, *permissions: str) -> bool:
     """Check if user has any of the specified permissions."""
     return any(has_permission(user, p) for p in permissions)
 
 
-def has_all_permissions(user: "AuthenticatedUser", *permissions: str) -> bool:
+def has_all_permissions(user: AuthenticatedUser, *permissions: str) -> bool:
     """Check if user has all of the specified permissions."""
     return all(has_permission(user, p) for p in permissions)
 
 
-def get_user_permissions(user: "AuthenticatedUser") -> set[str]:
+def get_user_permissions(user: AuthenticatedUser) -> set[str]:
     """Get all permissions for a user."""
     # If impersonating, return impersonated user's permissions
     from dev_health_ops.api.services.auth import get_impersonation_context

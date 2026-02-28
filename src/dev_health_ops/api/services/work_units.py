@@ -2,31 +2,31 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from datetime import datetime, time, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..models.filters import MetricFilter
 from ..models.schemas import (
     EvidenceQuality,
     InvestmentBreakdown,
-    WorkUnitEvidence,
     WorkUnitEffort,
+    WorkUnitEvidence,
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
 from ..queries.client import clickhouse_client, require_clickhouse_backend
 from ..queries.work_unit_investments import (
-    fetch_work_unit_investment_quotes,
-    fetch_work_unit_investments,
     fetch_repo_scopes,
     fetch_work_item_team_assignments,
+    fetch_work_unit_investment_quotes,
+    fetch_work_unit_investments,
 )
 from .filtering import resolve_repo_filter_ids, time_window
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+def _ensure_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
@@ -34,16 +34,16 @@ def _ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _clean_optional_text(value: object) -> Optional[str]:
+def _clean_optional_text(value: object) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
     return text or None
 
 
-def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]]:
-    themes: List[str] = []
-    subcategories: List[str] = []
+def _split_category_filters(filters: MetricFilter) -> tuple[list[str], list[str]]:
+    themes: list[str] = []
+    subcategories: list[str] = []
     for category in filters.why.work_category or []:
         if not category:
             continue
@@ -58,7 +58,7 @@ def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]
     return list(dict.fromkeys(themes)), list(dict.fromkeys(subcategories))
 
 
-def _parse_distribution(value: object) -> Dict[str, float]:
+def _parse_distribution(value: object) -> dict[str, float]:
     if isinstance(value, dict):
         return {str(k): float(v or 0.0) for k, v in value.items()}
     if isinstance(value, str):
@@ -71,7 +71,7 @@ def _parse_distribution(value: object) -> Dict[str, float]:
     return {}
 
 
-def _extract_issue_ids(structural_payload: object) -> List[str]:
+def _extract_issue_ids(structural_payload: object) -> list[str]:
     if not structural_payload:
         return []
     try:
@@ -92,10 +92,10 @@ def _extract_issue_ids(structural_payload: object) -> List[str]:
 
 def _majority_team_for_issues(
     issue_ids: Iterable[str],
-    team_map: Dict[str, Dict[str, str]],
-) -> Tuple[str, str]:
-    counts: Dict[str, int] = {}
-    names: Dict[str, str] = {}
+    team_map: dict[str, dict[str, str]],
+) -> tuple[str, str]:
+    counts: dict[str, int] = {}
+    names: dict[str, str] = {}
     for issue_id in issue_ids:
         assignment = team_map.get(str(issue_id)) or {}
         team_id = str(assignment.get("team_id") or "").strip()
@@ -112,8 +112,8 @@ def _majority_team_for_issues(
 
 
 def _matches_category_filter(
-    theme_distribution: Dict[str, float],
-    subcategory_distribution: Dict[str, float],
+    theme_distribution: dict[str, float],
+    subcategory_distribution: dict[str, float],
     themes: Iterable[str],
     subcategories: Iterable[str],
 ) -> bool:
@@ -139,15 +139,15 @@ async def build_work_unit_investments(
     org_id: str = "",
     limit: int = 200,
     include_text: bool = True,
-    work_unit_id: Optional[str] = None,
-) -> List[WorkUnitInvestment]:
+    work_unit_id: str | None = None,
+) -> list[WorkUnitInvestment]:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
     theme_filters, subcategory_filters = _split_category_filters(filters)
 
-    repo_scopes: Dict[str, str] = {}
-    team_assignments: Dict[str, Dict[str, str]] = {}
+    repo_scopes: dict[str, str] = {}
+    team_assignments: dict[str, dict[str, str]] = {}
 
     async with clickhouse_client(db_url) as sink:
         require_clickhouse_backend(sink)
@@ -183,7 +183,7 @@ async def build_work_unit_investments(
                     filtered_rows.append(row)
             rows = filtered_rows
 
-        quote_rows: List[Dict[str, object]] = []
+        quote_rows: list[dict[str, object]] = []
         if include_text:
             unit_runs = [
                 (str(row.get("work_unit_id")), str(row.get("categorization_run_id")))
@@ -205,7 +205,7 @@ async def build_work_unit_investments(
             org_id=org_id,
         )
 
-        issue_ids: List[str] = []
+        issue_ids: list[str] = []
         for row in rows:
             issue_ids.extend(_extract_issue_ids(row.get("structural_evidence_json")))
         team_assignments = await fetch_work_item_team_assignments(
@@ -214,14 +214,14 @@ async def build_work_unit_investments(
             org_id=org_id,
         )
 
-    quotes_by_unit: Dict[str, List[Dict[str, object]]] = {}
+    quotes_by_unit: dict[str, list[dict[str, object]]] = {}
     for quote in quote_rows:
         work_unit = str(quote.get("work_unit_id") or "")
         if not work_unit:
             continue
         quotes_by_unit.setdefault(work_unit, []).append(quote)
 
-    results: List[WorkUnitInvestment] = []
+    results: list[WorkUnitInvestment] = []
     for row in rows:
         unit_id = str(row.get("work_unit_id") or "")
         if not unit_id:
@@ -235,7 +235,7 @@ async def build_work_unit_investments(
         effort_metric = str(row.get("effort_metric") or "churn_loc")
         effort_value = float(row.get("effort_value") or 0.0)
 
-        structural_evidence: List[Dict[str, object]] = []
+        structural_evidence: list[dict[str, object]] = []
         structural_payload = row.get("structural_evidence_json")
         if structural_payload:
             try:
@@ -248,7 +248,7 @@ async def build_work_unit_investments(
                     unit_id,
                 )
 
-        textual_evidence: List[Dict[str, object]] = []
+        textual_evidence: list[dict[str, object]] = []
         for quote in quotes_by_unit.get(unit_id, []):
             textual_evidence.append(
                 {

@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ class CacheBackend(ABC):
     """Abstract base class for cache backends."""
 
     @abstractmethod
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get a value from the cache."""
         pass
 
@@ -33,9 +33,9 @@ class MemoryBackend(CacheBackend):
     """In-memory cache backend (default)."""
 
     def __init__(self) -> None:
-        self._store: Dict[str, Tuple[float, Any]] = {}
+        self._store: dict[str, tuple[float, Any]] = {}
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         entry = self._store.get(key)
         if not entry:
             return None
@@ -68,7 +68,7 @@ class RedisBackend(CacheBackend):
             self._available = False
             self._fallback = MemoryBackend()
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         if not self._available:
             return self._fallback.get(key)
         try:
@@ -105,12 +105,12 @@ class TTLCache:
     def __init__(
         self,
         ttl_seconds: int,
-        backend: Optional[CacheBackend] = None,
+        backend: CacheBackend | None = None,
     ) -> None:
         self.ttl_seconds = ttl_seconds
         self._backend = backend or MemoryBackend()
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         return self._backend.get(key)
 
     def set(self, key: str, value: Any) -> None:
@@ -123,7 +123,7 @@ class TTLCache:
 
 def create_cache(
     ttl_seconds: int,
-    redis_url: Optional[str] = None,
+    redis_url: str | None = None,
 ) -> TTLCache:
     """Factory function to create a cache with the appropriate backend.
 
@@ -161,7 +161,7 @@ class GraphQLCacheManager:
         self._cache = cache
         self._tag_prefix = "gql_tag:"
 
-    def get_query_result(self, key: str) -> Optional[Any]:
+    def get_query_result(self, key: str) -> Any | None:
         """
         Get a cached query result.
 
@@ -177,7 +177,7 @@ class GraphQLCacheManager:
         self,
         key: str,
         value: Any,
-        tags: Optional[list] = None,
+        tags: list | None = None,
     ) -> None:
         """
         Cache a query result with optional tags.

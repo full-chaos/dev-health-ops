@@ -41,9 +41,18 @@ class _FakeResponse:
 
 
 def test_parse_retry_after_seconds():
-    assert _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "3"})) == 3.0
-    assert _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "-2"})) == 0.0
-    assert _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "bad"})) is None
+    assert (
+        _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "3"}))
+        == 3.0
+    )
+    assert (
+        _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "-2"}))
+        == 0.0
+    )
+    assert (
+        _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "bad"}))
+        is None
+    )
     assert _parse_retry_after_seconds(_FakeResponse(429, headers={})) is None
 
 
@@ -81,7 +90,9 @@ def test_restclient_get_429_then_success(monkeypatch):
     ]
     get = MagicMock(side_effect=responses)
     monkeypatch.setattr("dev_health_ops.connectors.utils.rest.requests.get", get)
-    monkeypatch.setattr("dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
+    )
 
     client = RESTClient("https://example.test")
     data = client.get("items")
@@ -129,7 +140,9 @@ def test_restclient_delete_404_raises_api_exception(monkeypatch):
         "dev_health_ops.connectors.utils.rest.requests.delete",
         MagicMock(return_value=response),
     )
-    monkeypatch.setattr("dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
+    )
 
     client = RESTClient("https://example.test")
     with pytest.raises(APIException, match="Not found"):

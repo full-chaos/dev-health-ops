@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
@@ -30,7 +31,7 @@ class GitLabWorkClient:
         *,
         auth: GitLabAuth,
         per_page: int = 100,
-        gate: Optional[RateLimitGate] = None,
+        gate: RateLimitGate | None = None,
     ) -> None:
         import gitlab  # python-gitlab
 
@@ -45,7 +46,7 @@ class GitLabWorkClient:
         )
 
     @classmethod
-    def from_env(cls) -> "GitLabWorkClient":
+    def from_env(cls) -> GitLabWorkClient:
         token = os.getenv("GITLAB_TOKEN") or ""
         url = os.getenv("GITLAB_URL") or "https://gitlab.com"
         if not token:
@@ -67,11 +68,11 @@ class GitLabWorkClient:
         *,
         project_id_or_path: str,
         state: str = "all",
-        updated_after: Optional[datetime] = None,
-        limit: Optional[int] = None,
+        updated_after: datetime | None = None,
+        limit: int | None = None,
     ) -> Iterable[Any]:
         project = self.get_project(project_id_or_path)
-        params: Dict[str, Any] = {"state": state}
+        params: dict[str, Any] = {"state": state}
         if updated_after is not None:
             params["updated_after"] = updated_after.isoformat()
         issues = project.issues.list(iterator=True, **params)
@@ -87,12 +88,12 @@ class GitLabWorkClient:
         *,
         project_id_or_path: str,
         state: str = "all",
-        updated_after: Optional[datetime] = None,
-        limit: Optional[int] = None,
+        updated_after: datetime | None = None,
+        limit: int | None = None,
     ) -> Iterable[Any]:
         """Iterate merge requests for a project."""
         project = self.get_project(project_id_or_path)
-        params: Dict[str, Any] = {"state": state}
+        params: dict[str, Any] = {"state": state}
         if updated_after is not None:
             params["updated_after"] = updated_after.isoformat()
         mrs = project.mergerequests.list(iterator=True, **params)
@@ -108,7 +109,7 @@ class GitLabWorkClient:
         issue: Any,
         *,
         limit: int = 500,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get notes/comments for an issue."""
         try:
             self.gate.wait_sync()
@@ -125,7 +126,7 @@ class GitLabWorkClient:
         mr: Any,
         *,
         limit: int = 500,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get notes/comments for a merge request."""
         try:
             self.gate.wait_sync()
@@ -142,7 +143,7 @@ class GitLabWorkClient:
         issue: Any,
         *,
         limit: int = 300,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get resource label events for an issue."""
         try:
             self.gate.wait_sync()
@@ -161,7 +162,7 @@ class GitLabWorkClient:
         issue: Any,
         *,
         limit: int = 100,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get resource state events for an issue (open/close/reopen)."""
         try:
             self.gate.wait_sync()
@@ -180,7 +181,7 @@ class GitLabWorkClient:
         mr: Any,
         *,
         limit: int = 100,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get resource state events for a merge request."""
         try:
             self.gate.wait_sync()
@@ -197,7 +198,7 @@ class GitLabWorkClient:
     def get_issue_links(
         self,
         issue: Any,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get linked issues for an issue."""
         try:
             self.gate.wait_sync()
@@ -260,8 +261,8 @@ class GitLabWorkClient:
         *,
         group_id_or_path: str,
         state: str = "all",
-        updated_after: Optional[datetime] = None,
-        limit: Optional[int] = None,
+        updated_after: datetime | None = None,
+        limit: int | None = None,
     ) -> Iterable[Any]:
         """
         Iterate epics for a group.
@@ -280,7 +281,7 @@ class GitLabWorkClient:
         """
         try:
             group = self.get_group(group_id_or_path)
-            params: Dict[str, Any] = {"state": state}
+            params: dict[str, Any] = {"state": state}
             if updated_after is not None:
                 params["updated_after"] = updated_after.isoformat()
 
@@ -312,7 +313,7 @@ class GitLabWorkClient:
         epic: Any,
         *,
         limit: int = 500,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get notes/comments for an epic."""
         try:
             self.gate.wait_sync()
@@ -327,7 +328,7 @@ class GitLabWorkClient:
     def get_epic_issues(
         self,
         epic: Any,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """
         Get issues linked to an epic.
 
@@ -348,7 +349,7 @@ class GitLabWorkClient:
         epic: Any,
         *,
         limit: int = 100,
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Get resource state events for an epic (open/close/reopen)."""
         try:
             self.gate.wait_sync()

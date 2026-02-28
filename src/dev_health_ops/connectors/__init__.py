@@ -16,15 +16,6 @@ from .exceptions import (
 )
 from .github import GitHubConnector, match_repo_pattern
 from .gitlab import GitLabConnector, match_project_pattern
-from .teams import (
-    MicrosoftGraphClient,
-    TeamsChannel,
-    TeamsConnector,
-    TeamsMeeting,
-    TeamsMessage,
-    TeamsTeam,
-    TeamsUser,
-)
 from .models import (
     Author,
     BlameRange,
@@ -34,6 +25,15 @@ from .models import (
     PullRequest,
     Repository,
     RepoStats,
+)
+from .teams import (
+    MicrosoftGraphClient,
+    TeamsChannel,
+    TeamsConnector,
+    TeamsMeeting,
+    TeamsMessage,
+    TeamsTeam,
+    TeamsUser,
 )
 
 __all__ = [

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Sequence, Tuple
 
 from dev_health_ops.metrics.schemas import IncidentMetricsDailyRecord, IncidentRow
 from dev_health_ops.utils.datetime import to_utc
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
@@ -36,14 +36,14 @@ def compute_incident_metrics_daily(
     day: date,
     incidents: Sequence[IncidentRow],
     computed_at: datetime,
-) -> List[IncidentMetricsDailyRecord]:
+) -> list[IncidentMetricsDailyRecord]:
     """
     Compute MTTR distributions for incidents resolved on the given day.
     """
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
 
-    by_repo: Dict[str, Dict[str, object]] = {}
+    by_repo: dict[str, dict[str, object]] = {}
     for row in incidents:
         resolved_at = row.get("resolved_at")
         if not isinstance(resolved_at, datetime):
@@ -64,9 +64,9 @@ def compute_incident_metrics_daily(
         if mttr >= 0:
             bucket["mttr_hours"].append(float(mttr))
 
-    records: List[IncidentMetricsDailyRecord] = []
+    records: list[IncidentMetricsDailyRecord] = []
     for repo_id, bucket in sorted(by_repo.items(), key=lambda kv: kv[0]):
-        mttr_hours: List[float] = list(bucket["mttr_hours"])
+        mttr_hours: list[float] = list(bucket["mttr_hours"])
         records.append(
             IncidentMetricsDailyRecord(
                 repo_id=uuid.UUID(repo_id),

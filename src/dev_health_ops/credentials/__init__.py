@@ -19,8 +19,8 @@ Usage:
 """
 
 from dev_health_ops.credentials.resolver import (
-    CredentialResolver,
     CredentialResolutionError,
+    CredentialResolver,
     resolve_credentials_sync,
 )
 from dev_health_ops.credentials.types import (

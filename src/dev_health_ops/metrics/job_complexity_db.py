@@ -5,12 +5,13 @@ import fnmatch
 import logging
 import os
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any
 
-from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.analytics.complexity import ComplexityScanner, FileComplexity
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
@@ -22,7 +23,7 @@ DEFAULT_COMPLEXITY_CONFIG_PATH = (
 )
 
 
-def _date_range(end_day: date, backfill_days: int) -> List[date]:
+def _date_range(end_day: date, backfill_days: int) -> list[date]:
     if backfill_days <= 1:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
@@ -35,19 +36,19 @@ def _coerce_uuid(value: Any) -> uuid.UUID:
     return uuid.UUID(str(value))
 
 
-def _query_rows(client: Any, query: str, params: Optional[dict] = None) -> list:
+def _query_rows(client: Any, query: str, params: dict | None = None) -> list:
     result = client.query(query, parameters=params or {})
     return list(getattr(result, "result_rows", []) or [])
 
 
 def _load_repos(
-    client: Any, repo_id: Optional[uuid.UUID], search_pattern: Optional[str]
-) -> List[Tuple[uuid.UUID, Optional[str]]]:
+    client: Any, repo_id: uuid.UUID | None, search_pattern: str | None
+) -> list[tuple[uuid.UUID, str | None]]:
     if repo_id is not None:
         return [(repo_id, None)]
 
     rows = _query_rows(client, "SELECT id, repo FROM repos")
-    repos: List[Tuple[uuid.UUID, Optional[str]]] = []
+    repos: list[tuple[uuid.UUID, str | None]] = []
     for row in rows:
         repo_uuid = _coerce_uuid(row[0])
         repo_name = row[1] if len(row) > 1 else None
@@ -57,7 +58,7 @@ def _load_repos(
     return repos
 
 
-def _git_file_counts(client: Any, repo_id: uuid.UUID) -> Tuple[int, int]:
+def _git_file_counts(client: Any, repo_id: uuid.UUID) -> tuple[int, int]:
     rows = _query_rows(
         client,
         """
@@ -76,8 +77,8 @@ def _git_file_counts(client: Any, repo_id: uuid.UUID) -> Tuple[int, int]:
 
 
 def _load_git_files(
-    client: Any, repo_id: uuid.UUID, limit: Optional[int]
-) -> List[Tuple[str, str]]:
+    client: Any, repo_id: uuid.UUID, limit: int | None
+) -> list[tuple[str, str]]:
     query = """
         SELECT path, contents
         FROM git_files
@@ -95,8 +96,8 @@ def _load_git_files(
 
 
 def _load_missing_paths(
-    client: Any, repo_id: uuid.UUID, limit: Optional[int]
-) -> List[str]:
+    client: Any, repo_id: uuid.UUID, limit: int | None
+) -> list[str]:
     query = """
         SELECT path
         FROM git_files
@@ -115,9 +116,9 @@ def _load_missing_paths(
 def _load_blame_contents(
     client: Any,
     repo_id: uuid.UUID,
-    paths: Optional[Sequence[str]],
-    limit: Optional[int],
-) -> List[Tuple[str, str]]:
+    paths: Sequence[str] | None,
+    limit: int | None,
+) -> list[tuple[str, str]]:
     query = """
         SELECT
           path,
@@ -143,7 +144,7 @@ def _load_blame_contents(
     return [(row[0], row[1]) for row in rows]
 
 
-def _max_last_synced(client: Any, table: str, repo_id: uuid.UUID) -> Optional[datetime]:
+def _max_last_synced(client: Any, table: str, repo_id: uuid.UUID) -> datetime | None:
     rows = _query_rows(
         client,
         f"SELECT max(last_synced) FROM {table} WHERE repo_id = {{repo_id:UUID}}",
@@ -170,10 +171,10 @@ def _build_ref(client: Any, repo_id: uuid.UUID) -> str:
 
 def _filter_files(
     scanner: ComplexityScanner,
-    files: List[Tuple[str, str]],
-    max_files: Optional[int],
-) -> List[Tuple[str, str]]:
-    filtered: List[Tuple[str, str]] = []
+    files: list[tuple[str, str]],
+    max_files: int | None,
+) -> list[tuple[str, str]]:
+    filtered: list[tuple[str, str]] = []
     for path, contents in files:
         if not scanner.should_process(path):
             continue
@@ -185,14 +186,14 @@ def _filter_files(
 
 def run_complexity_db_job(
     *,
-    repo_id: Optional[uuid.UUID],
-    db_url: Optional[str] = None,
+    repo_id: uuid.UUID | None,
+    db_url: str | None = None,
     date: date,
     backfill_days: int,
-    language_globs: Optional[List[str]],
-    max_files: Optional[int],
-    search_pattern: Optional[str] = None,
-    exclude_globs: Optional[List[str]] = None,
+    language_globs: list[str] | None,
+    max_files: int | None,
+    search_pattern: str | None = None,
+    exclude_globs: list[str] | None = None,
     org_id: str,
 ) -> int:
     """
@@ -236,7 +237,7 @@ def run_complexity_db_job(
             repo_label = repo_name or str(repo_uuid)
             total_files, non_empty = _git_file_counts(sink.client, repo_uuid)
 
-            files: List[Tuple[str, str]] = []
+            files: list[tuple[str, str]] = []
             remaining = max_files
 
             if non_empty > 0:
@@ -310,10 +311,10 @@ def _build_snapshots(
     repo_id: uuid.UUID,
     day: date,
     ref_value: str,
-    file_results: List[FileComplexity],
+    file_results: list[FileComplexity],
     computed_at: datetime,
-) -> Tuple[List[FileComplexitySnapshot], RepoComplexityDaily]:
-    snapshots: List[FileComplexitySnapshot] = []
+) -> tuple[list[FileComplexitySnapshot], RepoComplexityDaily]:
+    snapshots: list[FileComplexitySnapshot] = []
     total_loc = 0
     total_cc = 0
     total_high = 0

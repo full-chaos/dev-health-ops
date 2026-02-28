@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from dev_health_ops.storage import ClickHouseStore
 
 

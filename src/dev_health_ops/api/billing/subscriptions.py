@@ -10,10 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import require_admin
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.billing.stripe_client import get_stripe_client
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import postgres_session_dependency
-
 
 router = APIRouter(prefix="/subscriptions", tags=["billing-subscriptions"])
 
@@ -100,7 +99,7 @@ def _serialize_record(record: Any) -> dict[str, Any]:
 
 def _service(session: AsyncSession) -> Any:
     module = importlib.import_module("dev_health_ops.api.billing.subscription_service")
-    return getattr(module, "SubscriptionService")(session)
+    return module.SubscriptionService(session)
 
 
 @router.get("", response_model=SubscriptionView)

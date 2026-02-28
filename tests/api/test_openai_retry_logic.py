@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
+
 from dev_health_ops.llm.providers.openai import OpenAIProvider
 
 

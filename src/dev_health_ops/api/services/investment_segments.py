@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, time, timezone
-from typing import Dict, List, Optional, Tuple
 
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
 from dev_health_ops.utils.normalization import (
     evidence_quality_band as _evidence_quality_band,
+)
+from dev_health_ops.utils.normalization import (
     normalize_scores as _normalize_scores,
 )
 
@@ -14,8 +15,8 @@ from ..models.filters import MetricFilter
 from ..models.schemas import (
     EvidenceQuality,
     InvestmentBreakdown,
-    WorkUnitEvidence,
     WorkUnitEffort,
+    WorkUnitEvidence,
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
@@ -27,7 +28,7 @@ from ..queries.work_unit_investments import (
 from .filtering import resolve_repo_filter_ids, time_window
 
 
-def _parse_distribution(value: object) -> Dict[str, float]:
+def _parse_distribution(value: object) -> dict[str, float]:
     if isinstance(value, dict):
         return {str(k): float(v or 0.0) for k, v in value.items()}
     if isinstance(value, str):
@@ -41,11 +42,11 @@ def _parse_distribution(value: object) -> Dict[str, float]:
 
 
 def _segment_filter_match(
-    theme_distribution: Dict[str, float],
-    subcategory_distribution: Dict[str, float],
+    theme_distribution: dict[str, float],
+    subcategory_distribution: dict[str, float],
     *,
-    theme: Optional[str],
-    subcategory: Optional[str],
+    theme: str | None,
+    subcategory: str | None,
 ) -> bool:
     if subcategory:
         return float(subcategory_distribution.get(subcategory, 0.0)) > 0.0
@@ -55,11 +56,11 @@ def _segment_filter_match(
 
 
 def _segment_contribution(
-    theme_distribution: Dict[str, float],
-    subcategory_distribution: Dict[str, float],
+    theme_distribution: dict[str, float],
+    subcategory_distribution: dict[str, float],
     *,
-    theme: Optional[str],
-    subcategory: Optional[str],
+    theme: str | None,
+    subcategory: str | None,
     effort_value: float,
 ) -> float:
     if subcategory:
@@ -73,10 +74,10 @@ async def build_segment_investment(
     *,
     db_url: str,
     filters: MetricFilter,
-    theme: Optional[str],
-    subcategory: Optional[str],
+    theme: str | None,
+    subcategory: str | None,
     limit: int = 500,
-) -> Optional[WorkUnitInvestment]:
+) -> WorkUnitInvestment | None:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)
@@ -114,10 +115,10 @@ async def build_segment_investment(
             return None
 
         total_effort = 0.0
-        theme_totals: Dict[str, float] = {key: 0.0 for key in THEMES}
-        subcategory_totals: Dict[str, float] = {key: 0.0 for key in SUBCATEGORIES}
+        theme_totals: dict[str, float] = {key: 0.0 for key in THEMES}
+        subcategory_totals: dict[str, float] = {key: 0.0 for key in SUBCATEGORIES}
         evidence_weighted = 0.0
-        contributions: List[Tuple[float, str, str]] = []
+        contributions: list[tuple[float, str, str]] = []
 
         for row in rows:
             effort_value = float(row.get("effort_value") or 0.0)
@@ -173,7 +174,7 @@ async def build_segment_investment(
         ]
         quote_rows = await fetch_work_unit_investment_quotes(sink, unit_runs=unit_runs)
 
-    textual_evidence: List[Dict[str, object]] = []
+    textual_evidence: list[dict[str, object]] = []
     for quote in quote_rows or []:
         textual_evidence.append(
             {
@@ -184,7 +185,7 @@ async def build_segment_investment(
             }
         )
 
-    structural_evidence: List[Dict[str, object]] = []
+    structural_evidence: list[dict[str, object]] = []
     if contributions:
         structural_evidence.append(
             {

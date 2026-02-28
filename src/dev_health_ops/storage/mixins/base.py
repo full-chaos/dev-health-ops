@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 class SQLAlchemyStoreMixinProtocol(Protocol):
     """Protocol for SQLAlchemy store mixins."""
 
-    session: "AsyncSession | None"
+    session: AsyncSession | None
 
     def _insert_for_dialect(self, model: Any) -> Any:
         """Return dialect-specific insert statement."""
@@ -17,8 +17,8 @@ class SQLAlchemyStoreMixinProtocol(Protocol):
     async def _upsert_many(
         self,
         model: Any,
-        rows: List[Dict[str, Any]],
-        conflict_columns: List[str],
-        update_columns: List[str],
+        rows: list[dict[str, Any]],
+        conflict_columns: list[str],
+        update_columns: list[str],
     ) -> None:
         """Upsert multiple rows."""

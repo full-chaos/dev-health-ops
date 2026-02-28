@@ -4,7 +4,8 @@ import functools
 import logging
 import os
 import uuid
-from typing import Any, Callable, Optional, ParamSpec, TypeVar
+from collections.abc import Callable
+from typing import Any, ParamSpec, TypeVar
 
 from fastapi import HTTPException, status
 
@@ -15,7 +16,6 @@ from dev_health_ops.licensing.types import (
     LicenseTier,
 )
 from dev_health_ops.licensing.validator import LicenseValidator, ValidationResult
-
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -73,9 +73,9 @@ class LicenseAuditLogger:
         resource_id: str,
         description: str,
         status: str = "success",
-        error_message: Optional[str] = None,
-        changes: Optional[dict[str, Any]] = None,
-        extra_metadata: Optional[dict[str, Any]] = None,
+        error_message: str | None = None,
+        changes: dict[str, Any] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Log a license audit event.
 
@@ -111,7 +111,7 @@ class LicenseAuditLogger:
         self,
         license_id: str,
         tier: str,
-        org_id: Optional[str] = None,
+        org_id: str | None = None,
         in_grace_period: bool = False,
     ) -> dict[str, Any]:
         """Log successful license validation."""
@@ -146,7 +146,7 @@ class LicenseAuditLogger:
         self,
         license_id: str,
         tier: str,
-        days_remaining: Optional[int] = None,
+        days_remaining: int | None = None,
     ) -> dict[str, Any]:
         """Log when a license enters grace period."""
         changes = {
@@ -165,7 +165,7 @@ class LicenseAuditLogger:
         self,
         feature: str,
         current_tier: str,
-        required_tier: Optional[str] = None,
+        required_tier: str | None = None,
     ) -> dict[str, Any]:
         """Log when feature access is denied due to licensing."""
         changes = {

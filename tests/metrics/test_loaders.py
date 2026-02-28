@@ -1,11 +1,13 @@
-import pytest
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
+
+import pytest
+from sqlalchemy import create_engine
+
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.loaders.mongo import MongoDataLoader
 from dev_health_ops.metrics.loaders.sqlalchemy import SqlAlchemyDataLoader
-from sqlalchemy import create_engine
 
 
 @pytest.mark.asyncio

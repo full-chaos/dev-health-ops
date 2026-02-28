@@ -4,9 +4,9 @@ import os
 from unittest.mock import patch
 
 import pytest
-
 from atlassian import BasicApiTokenAuth, CookieAuth, OAuthBearerAuth
 from atlassian.oauth_3lo import OAuthRefreshTokenAuth
+
 from dev_health_ops.providers.jira.atlassian_compat import (
     atlassian_client_enabled,
     get_atlassian_auth,

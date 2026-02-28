@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
 
 from atlassian import BasicApiTokenAuth, CookieAuth, JiraRestClient, OAuthBearerAuth
 from atlassian.graph.client import GraphQLClient
@@ -32,7 +31,7 @@ def atlassian_client_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def get_atlassian_auth() -> Optional[BasicApiTokenAuth]:
+def get_atlassian_auth() -> BasicApiTokenAuth | None:
     email = os.getenv("ATLASSIAN_EMAIL") or os.getenv("JIRA_EMAIL")
     api_token = os.getenv("ATLASSIAN_API_TOKEN") or os.getenv("JIRA_API_TOKEN")
     if not email or not api_token:
@@ -40,14 +39,14 @@ def get_atlassian_auth() -> Optional[BasicApiTokenAuth]:
     return BasicApiTokenAuth(email.strip(), api_token.strip())
 
 
-def get_atlassian_base_url() -> Optional[str]:
+def get_atlassian_base_url() -> str | None:
     base_url = os.getenv("ATLASSIAN_JIRA_BASE_URL") or os.getenv("JIRA_BASE_URL")
     if not base_url:
         return None
     return _normalize_base_url(base_url)
 
 
-def get_atlassian_cloud_id() -> Optional[str]:
+def get_atlassian_cloud_id() -> str | None:
     cloud_id = os.getenv("ATLASSIAN_CLOUD_ID")
     if cloud_id:
         return cloud_id.strip()
@@ -121,7 +120,7 @@ def get_atlassian_graphql_auth():
     return None
 
 
-def get_atlassian_graphql_base_url() -> Optional[str]:
+def get_atlassian_graphql_base_url() -> str | None:
     base_url = os.getenv("ATLASSIAN_GQL_BASE_URL") or os.getenv(
         "ATLASSIAN_OAUTH_GQL_ENDPOINT"
     )

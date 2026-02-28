@@ -8,7 +8,8 @@ handling of potentially invalid or non-finite values.
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 __all__ = [
     "safe_float",
@@ -35,7 +36,7 @@ def safe_float(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
-def safe_optional_float(value: Any) -> Optional[float]:
+def safe_optional_float(value: Any) -> float | None:
     """Convert value to float, returning None for invalid/non-finite values.
 
     Args:

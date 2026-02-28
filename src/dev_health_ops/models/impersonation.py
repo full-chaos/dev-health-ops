@@ -3,9 +3,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text, CheckConstraint
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, String, Text
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class ImpersonationSession(Base):

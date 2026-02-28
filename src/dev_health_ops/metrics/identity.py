@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
+from dev_health_ops.models.work_items import WorkItemProvider
 from dev_health_ops.providers.identity import (
     load_identity_resolver as _load_identity_resolver,
 )
 from dev_health_ops.providers.teams import (
     load_team_resolver as _load_team_resolver,
+)
+from dev_health_ops.providers.teams import (
     load_team_resolver_from_store,
 )
-from dev_health_ops.models.work_items import WorkItemProvider
 
 _IDENTITY_RESOLVER = None
 _TEAM_RESOLVER = None
@@ -17,7 +19,7 @@ _TEAM_RESOLVER = None
 
 def resolve_identity(
     provider: str,
-    raw_user_fields: Dict[str, Any],
+    raw_user_fields: dict[str, Any],
 ) -> str:
     """
     Resolve a canonical identity from raw provider fields.
@@ -44,7 +46,7 @@ def resolve_identity(
     )
 
 
-def load_team_map() -> Dict[str, str]:
+def load_team_map() -> dict[str, str]:
     """
     Load mapping of identity_id -> team_id.
 

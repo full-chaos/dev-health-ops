@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable, Sequence
 from datetime import date, timedelta
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any
 
 from sqlalchemy import text
 
@@ -48,8 +49,8 @@ def _window_start(as_of: date, window_days: int) -> date:
 
 
 def _query_dicts_clickhouse(
-    client: Any, query: str, parameters: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    client: Any, query: str, parameters: dict[str, Any]
+) -> list[dict[str, Any]]:
     result = client.query(query, parameters=parameters)
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])
@@ -59,8 +60,8 @@ def _query_dicts_clickhouse(
 
 
 def _query_dicts_sqlite(
-    engine: Any, query: str, parameters: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    engine: Any, query: str, parameters: dict[str, Any]
+) -> list[dict[str, Any]]:
     with engine.connect() as conn:
         result = conn.execute(text(query), parameters)
         rows = result.fetchall()
@@ -72,7 +73,7 @@ def _query_dicts_sqlite(
 
 def _fetch_table_presence_clickhouse(
     client: Any, tables: Iterable[str]
-) -> Dict[str, bool]:
+) -> dict[str, bool]:
     table_list = list(tables)
     if not table_list:
         return {}
@@ -90,7 +91,7 @@ def _fetch_table_presence_clickhouse(
     return {table: table in present for table in table_list}
 
 
-def _fetch_table_presence_sqlite(engine: Any, tables: Iterable[str]) -> Dict[str, bool]:
+def _fetch_table_presence_sqlite(engine: Any, tables: Iterable[str]) -> dict[str, bool]:
     table_list = list(tables)
     if not table_list:
         return {}
@@ -155,7 +156,7 @@ def _sum_monotonicity_clickhouse(
     start_short: date,
     start_long: date,
     end: date,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     group_cols = ", ".join(group_by)
     rows = _query_dicts_clickhouse(
         client,
@@ -203,7 +204,7 @@ def _sum_monotonicity_sqlite(
     start_short: date,
     start_long: date,
     end: date,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     group_cols = ", ".join(group_by)
     rows = _query_dicts_sqlite(
         engine,
@@ -249,7 +250,7 @@ def _avg_check_clickhouse(
     agg_kind: str,
     start_long: date,
     end: date,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     group_cols = ", ".join(group_by)
     if agg_kind == "p50":
         agg_expr = f"quantile(0.5)(if({metric} IS NOT NULL, {metric}, NULL))"
@@ -295,7 +296,7 @@ def _avg_check_sqlite(
     metric: str,
     start_long: date,
     end: date,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     group_cols = ", ".join(group_by)
     rows = _query_dicts_sqlite(
         engine,
@@ -333,7 +334,7 @@ def _avg_check_sqlite(
     }
 
 
-def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> Dict[str, Any]:
+def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> dict[str, Any]:
     backend = detect_db_type(db_url)
     windows = sorted(set(int(w) for w in ROLLING_WINDOWS))
     short_window = windows[0]
@@ -342,7 +343,7 @@ def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> Dict[str, Any]:
     start_long = _window_start(as_of, long_window)
 
     tables = [spec["table"] for spec in ROLLING_TABLE_SPECS]
-    report: Dict[str, Any] = {
+    report: dict[str, Any] = {
         "as_of": as_of,
         "windows": windows,
         "tables": {},
@@ -398,9 +399,9 @@ def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> Dict[str, Any]:
 
 def _populate_table_report(
     *,
-    report: Dict[str, Any],
-    presence: Dict[str, bool],
-    spec: Dict[str, Any],
+    report: dict[str, Any],
+    presence: dict[str, bool],
+    spec: dict[str, Any],
     backend: str,
     client: Any,
     engine: Any,
@@ -415,7 +416,7 @@ def _populate_table_report(
     avg_metrics = spec.get("avg_metrics", ())
     p50_metrics = spec.get("p50_metrics", ())
 
-    entry: Dict[str, Any] = {
+    entry: dict[str, Any] = {
         "status": "missing",
         "rows": 0,
         "sum_metrics": {},
@@ -524,7 +525,7 @@ def _populate_table_report(
 
 
 def _append_avg_issues(
-    entry: Dict[str, Any], metric: str, stats: Dict[str, Any], label: str
+    entry: dict[str, Any], metric: str, stats: dict[str, Any], label: str
 ) -> None:
     no_samples = stats.get("no_samples", 0)
     non_finite = stats.get("non_finite", 0)
@@ -539,13 +540,13 @@ def _append_avg_issues(
         )
 
 
-def _render_table(headers: List[str], rows: List[List[str]]) -> str:
+def _render_table(headers: list[str], rows: list[list[str]]) -> str:
     widths = [len(h) for h in headers]
     for row in rows:
         for idx, cell in enumerate(row):
             widths[idx] = max(widths[idx], len(cell))
 
-    def _row(cells: List[str]) -> str:
+    def _row(cells: list[str]) -> str:
         padded = [cell.ljust(widths[idx]) for idx, cell in enumerate(cells)]
         return f"| {' | '.join(padded)} |"
 
@@ -556,7 +557,7 @@ def _render_table(headers: List[str], rows: List[List[str]]) -> str:
     return "\n".join(lines)
 
 
-def format_rolling_aggregates_table(report: Dict[str, Any]) -> str:
+def format_rolling_aggregates_table(report: dict[str, Any]) -> str:
     as_of = report.get("as_of")
     windows = report.get("windows", [])
     if isinstance(as_of, date):
@@ -566,7 +567,7 @@ def format_rolling_aggregates_table(report: Dict[str, Any]) -> str:
 
     header = f"Rolling aggregates as of {as_of_label} (windows: {', '.join(f'{w}d' for w in windows)})"
 
-    rows: List[List[str]] = []
+    rows: list[list[str]] = []
     tables = report.get("tables", {})
     for table, entry in tables.items():
         issues = entry.get("issues") or []
@@ -595,11 +596,11 @@ def _serialize_report(value: Any) -> Any:
     return value
 
 
-def format_rolling_aggregates_json(report: Dict[str, Any]) -> str:
+def format_rolling_aggregates_json(report: dict[str, Any]) -> str:
     return json.dumps(_serialize_report(report), indent=2, sort_keys=True)
 
 
-def rolling_aggregates_failed(report: Dict[str, Any]) -> bool:
+def rolling_aggregates_failed(report: dict[str, Any]) -> bool:
     tables = report.get("tables", {})
     for entry in tables.values():
         if entry.get("status") in {"drift", "missing"}:

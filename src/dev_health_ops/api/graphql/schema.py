@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import strawberry
 from strawberry.types import Info
@@ -32,7 +31,6 @@ from .resolvers.analytics import resolve_analytics
 from .resolvers.catalog import resolve_catalog
 from .subscriptions import Subscription
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -52,8 +50,8 @@ class Query:
         self,
         info: Info,
         org_id: str,
-        dimension: Optional[DimensionInput] = None,
-        filters: Optional[FilterInput] = None,  # NEW: Filter support
+        dimension: DimensionInput | None = None,
+        filters: FilterInput | None = None,  # NEW: Filter support
     ) -> CatalogResult:
         """
         Fetch catalog information.
@@ -104,7 +102,7 @@ class Query:
         self,
         info: Info,
         org_id: str,
-        filters: Optional[FilterInput] = None,
+        filters: FilterInput | None = None,
     ) -> HomeResult:
         """
         Fetch home dashboard metrics and freshness info.
@@ -116,8 +114,9 @@ class Query:
         Returns:
             HomeResult with freshness and metric deltas.
         """
+        from .models.outputs import Freshness, MetricDelta
+        from .models.outputs import HomeResult as HR
         from .resolvers.home import resolve_home
-        from .models.outputs import Freshness, MetricDelta, HomeResult as HR
 
         context = get_context(info)
         if context.org_id and context.org_id != org_id:
@@ -171,7 +170,7 @@ class Query:
         self,
         info: Info,
         person_id: str,
-    ) -> Optional[PersonResult]:
+    ) -> PersonResult | None:
         """
         Get detailed information about a person.
 
@@ -189,7 +188,7 @@ class Query:
         self,
         info: Info,
         org_id: str,
-        filters: Optional[FilterInput] = None,
+        filters: FilterInput | None = None,
     ) -> OpportunitiesResult:
         """
         Fetch opportunity cards for the organization.
@@ -211,7 +210,7 @@ class Query:
         self,
         info: Info,
         org_id: str,
-        filters: Optional[WorkGraphEdgeFilterInput] = None,
+        filters: WorkGraphEdgeFilterInput | None = None,
     ) -> WorkGraphEdgesResult:
         from .resolvers.work_graph import resolve_work_graph_edges
 
@@ -228,8 +227,8 @@ class Query:
         self,
         info: Info,
         org_id: str,
-        input: Optional[CapacityForecastInput] = None,
-    ) -> Optional[CapacityForecast]:
+        input: CapacityForecastInput | None = None,
+    ) -> CapacityForecast | None:
         from .resolvers.capacity import resolve_capacity_forecast
 
         context = get_context(info)
@@ -245,7 +244,7 @@ class Query:
         self,
         info: Info,
         org_id: str,
-        filters: Optional[CapacityForecastFilterInput] = None,
+        filters: CapacityForecastFilterInput | None = None,
     ) -> CapacityForecastConnection:
         from .resolvers.capacity import resolve_capacity_forecasts
 

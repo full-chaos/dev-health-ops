@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import logging
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-import logging
 from typing import Any
-import uuid
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -230,7 +230,7 @@ class ReconciliationService:
             if hasattr(payload, "auto_paging_iter"):
                 iterator = payload.auto_paging_iter()
             elif hasattr(payload, "data"):
-                iterator = getattr(payload, "data") or []
+                iterator = payload.data or []
             elif isinstance(payload, dict):
                 iterator = payload.get("data", [])
             elif isinstance(payload, list):

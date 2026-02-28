@@ -57,10 +57,9 @@ async def create_email_verification_token(
     user_id: uuid.UUID,
     ttl_hours: int = 24,
 ) -> str:
-    email_verification_token_model = getattr(
-        importlib.import_module("dev_health_ops.models.email_verification_token"),
-        "EmailVerificationToken",
-    )
+    email_verification_token_model = importlib.import_module(
+        "dev_health_ops.models.email_verification_token"
+    ).EmailVerificationToken
     token_id = uuid.uuid4()
     token = _build_token(token_id)
 
@@ -82,10 +81,9 @@ async def create_email_verification_token(
 
 
 async def verify_email_token(db: AsyncSession, token: str) -> User | None:
-    email_verification_token_model = getattr(
-        importlib.import_module("dev_health_ops.models.email_verification_token"),
-        "EmailVerificationToken",
-    )
+    email_verification_token_model = importlib.import_module(
+        "dev_health_ops.models.email_verification_token"
+    ).EmailVerificationToken
     validated_token = _validate_signed_token(token)
     if validated_token is None:
         return None
@@ -109,8 +107,8 @@ async def verify_email_token(db: AsyncSession, token: str) -> User | None:
         await db.flush()
         return None
 
-    setattr(user, "is_verified", True)
-    setattr(user, "updated_at", now)
+    user.is_verified = True
+    user.updated_at = now
     await db.execute(
         delete(email_verification_token_model).where(
             email_verification_token_model.user_id == user.id
@@ -128,10 +126,9 @@ async def send_verification_email(
 ) -> None:
     base_url = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
     verification_url = f"{base_url}/api/v1/auth/verify?token={quote(token)}"
-    email_service = getattr(
-        importlib.import_module("dev_health_ops.api.services.email"),
-        "get_email_service",
-    )()
+    email_service = importlib.import_module(
+        "dev_health_ops.api.services.email"
+    ).get_email_service()
     await email_service.send_template_email(
         to_address=to_email,
         subject="Verify your email address",

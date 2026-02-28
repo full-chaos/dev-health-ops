@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Sequence
 
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.models.retention import OrgRetentionPolicy, RetentionResourceType
-from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.models.audit import AuditLog
+from dev_health_ops.models.retention import OrgRetentionPolicy, RetentionResourceType
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ class RetentionService:
         org_id: uuid.UUID,
         resource_type: str,
         retention_days: int = 90,
-        description: Optional[str] = None,
-        created_by_id: Optional[uuid.UUID] = None,
+        description: str | None = None,
+        created_by_id: uuid.UUID | None = None,
     ) -> OrgRetentionPolicy:
         if resource_type not in [r.value for r in RetentionResourceType]:
             raise ValueError(f"Invalid resource type: {resource_type}")
@@ -61,7 +61,7 @@ class RetentionService:
 
     async def get_policy(
         self, org_id: uuid.UUID, policy_id: uuid.UUID
-    ) -> Optional[OrgRetentionPolicy]:
+    ) -> OrgRetentionPolicy | None:
         stmt = select(OrgRetentionPolicy).where(
             and_(
                 OrgRetentionPolicy.id == policy_id, OrgRetentionPolicy.org_id == org_id
@@ -72,7 +72,7 @@ class RetentionService:
 
     async def get_policy_by_resource_type(
         self, org_id: uuid.UUID, resource_type: str
-    ) -> Optional[OrgRetentionPolicy]:
+    ) -> OrgRetentionPolicy | None:
         stmt = select(OrgRetentionPolicy).where(
             and_(
                 OrgRetentionPolicy.org_id == org_id,
@@ -114,10 +114,10 @@ class RetentionService:
         self,
         org_id: uuid.UUID,
         policy_id: uuid.UUID,
-        retention_days: Optional[int] = None,
-        description: Optional[str] = None,
-        is_active: Optional[bool] = None,
-    ) -> Optional[OrgRetentionPolicy]:
+        retention_days: int | None = None,
+        description: str | None = None,
+        is_active: bool | None = None,
+    ) -> OrgRetentionPolicy | None:
         policy = await self.get_policy(org_id, policy_id)
         if not policy:
             return None
@@ -150,7 +150,7 @@ class RetentionService:
 
     async def execute_policy(
         self, org_id: uuid.UUID, policy_id: uuid.UUID
-    ) -> tuple[int, Optional[str]]:
+    ) -> tuple[int, str | None]:
         policy = await self.get_policy(org_id, policy_id)
         if not policy:
             return 0, "Policy not found"

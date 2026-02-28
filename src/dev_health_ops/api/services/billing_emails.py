@@ -1,21 +1,20 @@
 import logging
 import uuid
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.models.users import Membership, MemberRole, Organization, User
-from dev_health_ops.db import get_postgres_session
 from dev_health_ops.api.services.email import get_email_service
+from dev_health_ops.db import get_postgres_session
+from dev_health_ops.models.users import MemberRole, Membership, Organization, User
 
 logger = logging.getLogger(__name__)
 
 
 async def get_org_owner_email(
     db: AsyncSession, org_id: uuid.UUID
-) -> Optional[tuple[str, str, str]]:
+) -> tuple[str, str, str] | None:
     """Return (email, full_name, org_name) of the Organization owner, or None if not found."""
     result = await db.execute(
         select(User.email, User.full_name)

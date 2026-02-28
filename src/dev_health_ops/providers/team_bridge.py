@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import Any, List
+from typing import Any
 
 from sqlalchemy import select
 
@@ -13,7 +13,7 @@ from dev_health_ops.models.settings import TeamMapping
 from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 
-def _parse_json_array(value: Any) -> List[str]:
+def _parse_json_array(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, list):
@@ -43,7 +43,7 @@ def _clickhouse_uri() -> str:
 
 
 def bridge_teams_to_clickhouse(org_id: str | None = None) -> int:
-    teams_payload: List[dict[str, Any]] = []
+    teams_payload: list[dict[str, Any]] = []
 
     with get_postgres_session_sync() as session:
         mappings = (

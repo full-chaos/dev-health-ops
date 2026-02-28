@@ -6,18 +6,17 @@ from datetime import date
 
 from dev_health_ops.api.graphql.models.inputs import (
     FilterInput,
-    WhoFilterInput,
-    WhatFilterInput,
-    WhyFilterInput,
     ScopeFilterInput,
     ScopeLevelInput,
+    WhatFilterInput,
+    WhoFilterInput,
+    WhyFilterInput,
 )
-
 from dev_health_ops.api.graphql.sql.compiler import (
-    TimeseriesRequest,
     BreakdownRequest,
-    compile_timeseries,
+    TimeseriesRequest,
     compile_breakdown,
+    compile_timeseries,
 )
 
 

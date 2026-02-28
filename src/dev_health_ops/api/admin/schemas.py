@@ -1,33 +1,33 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class SettingResponse(BaseModel):
     key: str
-    value: Optional[str]
+    value: str | None
     category: str
     is_encrypted: bool
-    description: Optional[str]
+    description: str | None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class SettingCreate(BaseModel):
     key: str = Field(..., min_length=1, max_length=255)
-    value: Optional[str] = None
+    value: str | None = None
     category: str = "general"
     encrypt: bool = False
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class SettingUpdate(BaseModel):
-    value: Optional[str] = None
-    encrypt: Optional[bool] = None
-    description: Optional[str] = None
+    value: str | None = None
+    encrypt: bool | None = None
+    description: str | None = None
 
 
 class SettingsListResponse(BaseModel):
@@ -41,9 +41,9 @@ class IntegrationCredentialResponse(BaseModel):
     name: str
     is_active: bool
     config: dict[str, Any]
-    last_test_at: Optional[datetime]
-    last_test_success: Optional[bool]
-    last_test_error: Optional[str]
+    last_test_at: datetime | None
+    last_test_success: bool | None
+    last_test_error: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -56,21 +56,21 @@ class IntegrationCredentialCreate(BaseModel):
     credentials: dict[str, Any] = Field(
         ..., description="Provider credentials (will be encrypted)"
     )
-    config: Optional[dict[str, Any]] = Field(
+    config: dict[str, Any] | None = Field(
         default=None, description="Non-sensitive configuration"
     )
 
 
 class IntegrationCredentialUpdate(BaseModel):
-    credentials: Optional[dict[str, Any]] = None
-    config: Optional[dict[str, Any]] = None
-    is_active: Optional[bool] = None
+    credentials: dict[str, Any] | None = None
+    config: dict[str, Any] | None = None
+    is_active: bool | None = None
 
 
 class TestConnectionRequest(BaseModel):
     provider: str
     name: str = "default"
-    credentials: Optional[dict[str, Any]] = Field(
+    credentials: dict[str, Any] | None = Field(
         default=None,
         description="Inline credentials to test without saving. "
         "When provided, these are used directly instead of looking up stored credentials.",
@@ -79,21 +79,21 @@ class TestConnectionRequest(BaseModel):
 
 class TestConnectionResponse(BaseModel):
     success: bool
-    error: Optional[str] = None
-    details: Optional[dict[str, Any]] = None
+    error: str | None = None
+    details: dict[str, Any] | None = None
 
 
 class SyncConfigResponse(BaseModel):
     id: str
     name: str
     provider: str
-    credential_id: Optional[str]
+    credential_id: str | None
     sync_targets: list[str]
     sync_options: dict[str, Any]
     is_active: bool
-    last_sync_at: Optional[datetime]
-    last_sync_success: Optional[bool]
-    last_sync_error: Optional[str]
+    last_sync_at: datetime | None
+    last_sync_success: bool | None
+    last_sync_error: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -103,15 +103,15 @@ class SyncConfigResponse(BaseModel):
 class SyncConfigCreate(BaseModel):
     name: str = Field(..., min_length=1)
     provider: str = Field(..., min_length=1)
-    credential_id: Optional[str] = None
+    credential_id: str | None = None
     sync_targets: list[str] = Field(default_factory=list)
     sync_options: dict[str, Any] = Field(default_factory=dict)
 
 
 class SyncConfigUpdate(BaseModel):
-    sync_targets: Optional[list[str]] = None
-    sync_options: Optional[dict[str, Any]] = None
-    is_active: Optional[bool] = None
+    sync_targets: list[str] | None = None
+    sync_options: dict[str, Any] | None = None
+    is_active: bool | None = None
 
 
 JOB_RUN_STATUS_LABELS: dict[int, str] = {
@@ -127,11 +127,11 @@ class JobRunResponse(BaseModel):
     id: str
     job_id: str
     status: str
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_seconds: Optional[int] = None
-    result: Optional[dict[str, Any]] = None
-    error: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_seconds: int | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
     triggered_by: str
     created_at: datetime
 
@@ -141,8 +141,8 @@ class JobRunResponse(BaseModel):
 class IdentityMappingResponse(BaseModel):
     id: str
     canonical_id: str
-    display_name: Optional[str]
-    email: Optional[str]
+    display_name: str | None
+    email: str | None
     provider_identities: dict[str, list[str]]
     team_ids: list[str]
     is_active: bool
@@ -154,31 +154,31 @@ class IdentityMappingResponse(BaseModel):
 
 class IdentityMappingCreate(BaseModel):
     canonical_id: str = Field(..., min_length=1)
-    display_name: Optional[str] = None
-    email: Optional[str] = None
+    display_name: str | None = None
+    email: str | None = None
     provider_identities: dict[str, list[str]] = Field(default_factory=dict)
     team_ids: list[str] = Field(default_factory=list)
 
 
 class IdentityMappingUpdate(BaseModel):
-    display_name: Optional[str] = None
-    email: Optional[str] = None
-    provider_identities: Optional[dict[str, list[str]]] = None
-    team_ids: Optional[list[str]] = None
+    display_name: str | None = None
+    email: str | None = None
+    provider_identities: dict[str, list[str]] | None = None
+    team_ids: list[str] | None = None
 
 
 class TeamMappingResponse(BaseModel):
     id: str
     team_id: str
     name: str
-    description: Optional[str]
+    description: str | None
     repo_patterns: list[str]
     project_keys: list[str]
     extra_data: dict[str, Any]
     managed_fields: list[str]
     sync_policy: int
-    flagged_changes: Optional[dict[str, Any]] = None
-    last_drift_sync_at: Optional[datetime] = None
+    flagged_changes: dict[str, Any] | None = None
+    last_drift_sync_at: datetime | None = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -189,7 +189,7 @@ class TeamMappingResponse(BaseModel):
 class TeamMappingCreate(BaseModel):
     team_id: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
-    description: Optional[str] = None
+    description: str | None = None
     repo_patterns: list[str] = Field(default_factory=list)
     project_keys: list[str] = Field(default_factory=list)
     extra_data: dict[str, Any] = Field(default_factory=dict)
@@ -198,21 +198,21 @@ class TeamMappingCreate(BaseModel):
 
 
 class TeamMappingUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    repo_patterns: Optional[list[str]] = None
-    project_keys: Optional[list[str]] = None
-    extra_data: Optional[dict[str, Any]] = None
-    managed_fields: Optional[list[str]] = None
-    sync_policy: Optional[int] = Field(default=None, ge=0, le=2)
+    name: str | None = None
+    description: str | None = None
+    repo_patterns: list[str] | None = None
+    project_keys: list[str] | None = None
+    extra_data: dict[str, Any] | None = None
+    managed_fields: list[str] | None = None
+    sync_policy: int | None = Field(default=None, ge=0, le=2)
 
 
 class DiscoveredTeam(BaseModel):
     provider_type: str
     provider_team_id: str
     name: str
-    description: Optional[str] = None
-    member_count: Optional[int] = None
+    description: str | None = None
+    member_count: int | None = None
     associations: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -237,17 +237,17 @@ class TeamImportResponse(BaseModel):
 class DiscoveredMember(BaseModel):
     provider_type: str
     provider_identity: str
-    display_name: Optional[str] = None
-    email: Optional[str] = None
-    role: Optional[str] = None
+    display_name: str | None = None
+    email: str | None = None
+    role: str | None = None
 
 
 class MemberMatchResult(BaseModel):
     discovered: DiscoveredMember
     match_status: str = Field(pattern="^(matched|suggested|unmatched)$")
-    matched_identity: Optional[IdentityMappingResponse] = None
-    confidence: Optional[float] = None
-    suggestion_reason: Optional[str] = None
+    matched_identity: IdentityMappingResponse | None = None
+    confidence: float | None = None
+    suggestion_reason: str | None = None
 
 
 class TeamMembersDiscoverResponse(BaseModel):
@@ -277,14 +277,14 @@ class ConfirmMembersResponse(BaseModel):
 
 class InferredMember(BaseModel):
     account_id: str
-    display_name: Optional[str] = None
-    email: Optional[str] = None
+    display_name: str | None = None
+    email: str | None = None
     activity_count: int = Field(ge=0)
     confidence: Literal["core", "active", "peripheral"]
     roles: list[Literal["assignee", "reporter", "commenter"]] = Field(
         default_factory=list
     )
-    last_active: Optional[datetime] = None
+    last_active: datetime | None = None
 
 
 class JiraActivityInferenceResponse(BaseModel):
@@ -298,9 +298,9 @@ class JiraActivityInferenceResponse(BaseModel):
 class ConfirmInferredMemberAction(BaseModel):
     account_id: str
     action: Literal["add", "skip"]
-    canonical_id: Optional[str] = None
-    display_name: Optional[str] = None
-    email: Optional[str] = None
+    canonical_id: str | None = None
+    display_name: str | None = None
+    email: str | None = None
 
 
 class ConfirmInferredMembersRequest(BaseModel):
@@ -318,7 +318,7 @@ class FlaggedChange(BaseModel):
     team_id: str
     team_name: str
     change_type: str
-    field: Optional[str] = None
+    field: str | None = None
     old_value: Any = None
     new_value: Any = None
     discovered_at: datetime
@@ -340,14 +340,14 @@ class ApproveChangesRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: str
-    username: Optional[str]
-    full_name: Optional[str]
-    avatar_url: Optional[str]
+    username: str | None
+    full_name: str | None
+    avatar_url: str | None
     auth_provider: str
     is_active: bool
     is_verified: bool
     is_superuser: bool
-    last_login_at: Optional[datetime]
+    last_login_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -356,23 +356,23 @@ class UserResponse(BaseModel):
 
 class UserCreate(BaseModel):
     email: str = Field(..., min_length=1)
-    password: Optional[str] = Field(default=None, min_length=8)
-    username: Optional[str] = None
-    full_name: Optional[str] = None
+    password: str | None = Field(default=None, min_length=8)
+    username: str | None = None
+    full_name: str | None = None
     auth_provider: str = "local"
-    auth_provider_id: Optional[str] = None
+    auth_provider_id: str | None = None
     is_verified: bool = False
     is_superuser: bool = False
 
 
 class UserUpdate(BaseModel):
-    email: Optional[str] = None
-    username: Optional[str] = None
-    full_name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    is_active: Optional[bool] = None
-    is_verified: Optional[bool] = None
-    is_superuser: Optional[bool] = None
+    email: str | None = None
+    username: str | None = None
+    full_name: str | None = None
+    avatar_url: str | None = None
+    is_active: bool | None = None
+    is_verified: bool | None = None
+    is_superuser: bool | None = None
 
 
 class UserSetPassword(BaseModel):
@@ -387,7 +387,7 @@ class OrganizationResponse(BaseModel):
     id: str
     slug: str
     name: str
-    description: Optional[str]
+    description: str | None
     tier: str
     settings: dict[str, Any]
     is_active: bool
@@ -399,19 +399,19 @@ class OrganizationResponse(BaseModel):
 
 class OrganizationCreate(BaseModel):
     name: str = Field(..., min_length=1)
-    slug: Optional[str] = None
-    description: Optional[str] = None
+    slug: str | None = None
+    description: str | None = None
     tier: str = "community"
     settings: dict[str, Any] = Field(default_factory=dict)
-    owner_user_id: Optional[str] = None
+    owner_user_id: str | None = None
 
 
 class OrganizationUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    tier: Optional[str] = None
-    settings: Optional[dict[str, Any]] = None
-    is_active: Optional[bool] = None
+    name: str | None = None
+    description: str | None = None
+    tier: str | None = None
+    settings: dict[str, Any] | None = None
+    is_active: bool | None = None
 
 
 # ---- Membership schemas ----
@@ -422,8 +422,8 @@ class MembershipResponse(BaseModel):
     org_id: str
     user_id: str
     role: str
-    invited_by_id: Optional[str]
-    joined_at: Optional[datetime]
+    invited_by_id: str | None
+    joined_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -433,7 +433,7 @@ class MembershipResponse(BaseModel):
 class MembershipCreate(BaseModel):
     user_id: str = Field(..., min_length=1)
     role: str = "member"
-    invited_by_id: Optional[str] = None
+    invited_by_id: str | None = None
 
 
 class MembershipUpdateRole(BaseModel):
@@ -450,10 +450,10 @@ class OrgInviteResponse(BaseModel):
     org_id: str
     email: str
     role: str
-    invited_by_id: Optional[str]
+    invited_by_id: str | None
     status: str
     expires_at: datetime
-    accepted_at: Optional[datetime]
+    accepted_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -467,15 +467,15 @@ class OwnershipTransfer(BaseModel):
 class AuditLogResponse(BaseModel):
     id: str
     org_id: str
-    user_id: Optional[str]
+    user_id: str | None
     action: str
     resource_type: str
     resource_id: str
-    description: Optional[str]
-    changes: Optional[dict[str, Any]]
-    request_metadata: Optional[dict[str, Any]]
+    description: str | None
+    changes: dict[str, Any] | None
+    request_metadata: dict[str, Any] | None
     status: str
-    error_message: Optional[str]
+    error_message: str | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -489,20 +489,20 @@ class AuditLogListResponse(BaseModel):
 
 
 class AuditLogFilter(BaseModel):
-    user_id: Optional[str] = None
-    action: Optional[str] = None
-    resource_type: Optional[str] = None
-    resource_id: Optional[str] = None
-    status: Optional[str] = None
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
+    user_id: str | None = None
+    action: str | None = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    status: str | None = None
+    start_date: datetime | None = None
+    end_date: datetime | None = None
 
 
 class FeatureFlagResponse(BaseModel):
     id: str
     key: str
     name: str
-    description: Optional[str]
+    description: str | None
     category: str
     min_tier: str
     is_enabled: bool
@@ -516,9 +516,9 @@ class FeatureFlagResponse(BaseModel):
 class FeatureOverrideCreate(BaseModel):
     feature_id: str
     is_enabled: bool = True
-    expires_at: Optional[datetime] = None
-    config: Optional[dict[str, Any]] = None
-    reason: Optional[str] = None
+    expires_at: datetime | None = None
+    config: dict[str, Any] | None = None
+    reason: str | None = None
 
 
 class FeatureOverrideResponse(BaseModel):
@@ -527,10 +527,10 @@ class FeatureOverrideResponse(BaseModel):
     feature_id: str
     feature_key: str
     is_enabled: bool
-    expires_at: Optional[datetime]
-    config: Optional[dict[str, Any]]
-    reason: Optional[str]
-    created_by: Optional[str]
+    expires_at: datetime | None
+    config: dict[str, Any] | None
+    reason: str | None
+    created_by: str | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -559,10 +559,11 @@ class StopImpersonationResponse(BaseModel):
 
 class ImpersonationStatusResponse(BaseModel):
     is_impersonating: bool
-    target_user_id: Optional[str] = None
-    target_email: Optional[str] = None
-    target_org_id: Optional[str] = None
-    expires_at: Optional[datetime] = None
+    target_user_id: str | None = None
+    target_email: str | None = None
+    target_org_id: str | None = None
+    expires_at: datetime | None = None
+
 
 # ---- IP Allowlist schemas (Enterprise feature: ip_allowlist) ----
 
@@ -571,12 +572,12 @@ class IPAllowlistResponse(BaseModel):
     id: str
     org_id: str
     ip_range: str
-    description: Optional[str]
+    description: str | None
     is_active: bool
-    created_by_id: Optional[str]
+    created_by_id: str | None
     created_at: datetime
     updated_at: datetime
-    expires_at: Optional[datetime]
+    expires_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -585,15 +586,15 @@ class IPAllowlistCreate(BaseModel):
     ip_range: str = Field(
         ..., description="IP address or CIDR range (e.g., '192.168.1.0/24')"
     )
-    description: Optional[str] = None
-    expires_at: Optional[datetime] = None
+    description: str | None = None
+    expires_at: datetime | None = None
 
 
 class IPAllowlistUpdate(BaseModel):
-    ip_range: Optional[str] = Field(None, description="IP address or CIDR range")
-    description: Optional[str] = None
-    is_active: Optional[bool] = None
-    expires_at: Optional[datetime] = None
+    ip_range: str | None = Field(None, description="IP address or CIDR range")
+    description: str | None = None
+    is_active: bool | None = None
+    expires_at: datetime | None = None
 
 
 class IPAllowlistListResponse(BaseModel):
@@ -617,12 +618,12 @@ class RetentionPolicyResponse(BaseModel):
     org_id: str
     resource_type: str
     retention_days: int
-    description: Optional[str]
+    description: str | None
     is_active: bool
-    last_run_at: Optional[datetime]
-    last_run_deleted_count: Optional[int]
-    next_run_at: Optional[datetime]
-    created_by_id: Optional[str]
+    last_run_at: datetime | None
+    last_run_deleted_count: int | None
+    next_run_at: datetime | None
+    created_by_id: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -634,15 +635,15 @@ class RetentionPolicyCreate(BaseModel):
         ..., description="Type of resource to apply retention to"
     )
     retention_days: int = Field(90, ge=1, description="Number of days to retain data")
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class RetentionPolicyUpdate(BaseModel):
-    retention_days: Optional[int] = Field(
+    retention_days: int | None = Field(
         None, ge=1, description="Number of days to retain data"
     )
-    description: Optional[str] = None
-    is_active: Optional[bool] = None
+    description: str | None = None
+    is_active: bool | None = None
 
 
 class RetentionPolicyListResponse(BaseModel):
@@ -654,7 +655,7 @@ class RetentionPolicyListResponse(BaseModel):
 
 class RetentionExecuteResponse(BaseModel):
     deleted_count: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class PlatformStatsResponse(BaseModel):

@@ -1,14 +1,14 @@
 import asyncio
-import pytest
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy import select
 
-from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
-from dev_health_ops.storage import SQLAlchemyStore, MongoStore, ClickHouseStore
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
+from dev_health_ops.storage import ClickHouseStore, MongoStore, SQLAlchemyStore
 
 
 @pytest.mark.asyncio

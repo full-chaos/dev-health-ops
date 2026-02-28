@@ -1,37 +1,37 @@
 import random
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any
 
+from dev_health_ops.metrics.schemas import (
+    FileMetricsRecord,
+    RepoMetricsDailyRecord,
+    UserMetricsDailyRecord,
+    WorkItemCycleTimeRecord,
+    WorkItemMetricsDailyRecord,
+    WorkItemUserMetricsDailyRecord,
+)
 from dev_health_ops.models.git import (
-    Repo,
-    GitCommit,
-    GitCommitStat,
-    GitPullRequest,
-    GitPullRequestReview,
-    GitFile,
     CiPipelineRun,
     Deployment,
+    GitCommit,
+    GitCommitStat,
+    GitFile,
+    GitPullRequest,
+    GitPullRequestReview,
     Incident,
+    Repo,
 )
+from dev_health_ops.models.teams import Team
 from dev_health_ops.models.work_items import (
+    Sprint,
     WorkItem,
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
     WorkItemStatusTransition,
     WorkItemType,
-    Sprint,
     Worklog,
-)
-from dev_health_ops.models.teams import Team
-from dev_health_ops.metrics.schemas import (
-    RepoMetricsDailyRecord,
-    UserMetricsDailyRecord,
-    WorkItemMetricsDailyRecord,
-    WorkItemCycleTimeRecord,
-    FileMetricsRecord,
-    WorkItemUserMetricsDailyRecord,
 )
 from dev_health_ops.providers.teams import normalize_team_id, normalize_team_name
 
@@ -40,10 +40,10 @@ class SyntheticDataGenerator:
     def __init__(
         self,
         repo_name: str = "acme/demo-app",
-        repo_id: Optional[uuid.UUID] = None,
+        repo_id: uuid.UUID | None = None,
         provider: str = "synthetic",
-        seed: Optional[int] = None,
-        assigned_teams: Optional[List[Team]] = None,
+        seed: int | None = None,
+        assigned_teams: list[Team] | None = None,
     ):
         self.repo_name = repo_name
         self.assigned_teams = assigned_teams
@@ -126,7 +126,7 @@ class SyntheticDataGenerator:
             ".github/workflows/release.yml",
         ]
 
-    def _resolve_repo_authors(self) -> List[Tuple[str, str]]:
+    def _resolve_repo_authors(self) -> list[tuple[str, str]]:
         if self.assigned_teams is None:
             return list(self.authors)
         if self.assigned_teams:
@@ -146,7 +146,7 @@ class SyntheticDataGenerator:
             return list(self.authors)
         return list(self.unassigned_authors)
 
-    def get_team_assignment(self, count: int = 2) -> Dict[str, Any]:
+    def get_team_assignment(self, count: int = 2) -> dict[str, Any]:
         """
         Returns a consistent assignment of authors to teams.
         Output includes 'teams' (List[Team]) and 'member_map' (email -> (id, name)).
@@ -189,7 +189,7 @@ class SyntheticDataGenerator:
 
         return {"teams": teams, "member_map": member_map}
 
-    def generate_teams(self, count: int = 2) -> List[Team]:
+    def generate_teams(self, count: int = 2) -> list[Team]:
         """
         Generate synthetic teams with members distributed among them.
         """
@@ -209,7 +209,7 @@ class SyntheticDataGenerator:
 
     def generate_commits(
         self, days: int = 30, commits_per_day: int = 5
-    ) -> List[GitCommit]:
+    ) -> list[GitCommit]:
         commits = []
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
@@ -260,7 +260,7 @@ class SyntheticDataGenerator:
 
         return commits
 
-    def generate_commit_stats(self, commits: List[GitCommit]) -> List[GitCommitStat]:
+    def generate_commit_stats(self, commits: list[GitCommit]) -> list[GitCommitStat]:
         stats = []
         for commit in commits:
             # Each commit touches 1-5 files
@@ -292,8 +292,8 @@ class SyntheticDataGenerator:
     def generate_prs(
         self,
         count: int = 20,
-        issue_numbers: Optional[List[int]] = None,
-    ) -> List[Dict[str, Any]]:
+        issue_numbers: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
         prs = []
         end_date = datetime.now(timezone.utc)
         issue_numbers = issue_numbers or []
@@ -406,7 +406,7 @@ class SyntheticDataGenerator:
 
     def generate_ci_pipeline_runs(
         self, days: int = 30, runs_per_day: int = 3
-    ) -> List[CiPipelineRun]:
+    ) -> list[CiPipelineRun]:
         runs = []
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
@@ -442,8 +442,8 @@ class SyntheticDataGenerator:
         self,
         days: int = 30,
         deployments_per_day: int = 2,
-        pr_numbers: Optional[List[int]] = None,
-    ) -> List[Deployment]:
+        pr_numbers: list[int] | None = None,
+    ) -> list[Deployment]:
         deployments = []
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
@@ -487,7 +487,7 @@ class SyntheticDataGenerator:
 
     def generate_incidents(
         self, days: int = 30, incidents_per_day: int = 1
-    ) -> List[Incident]:
+    ) -> list[Incident]:
         incidents = []
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
@@ -522,7 +522,7 @@ class SyntheticDataGenerator:
 
     def _generate_pr_reviews(
         self, pr_number: int, first_review_at: datetime, count: int
-    ) -> List[GitPullRequestReview]:
+    ) -> list[GitPullRequestReview]:
         reviews = []
         for i in range(count):
             reviewer_name, reviewer_email = random.choice(self.repo_authors)
@@ -544,7 +544,7 @@ class SyntheticDataGenerator:
             )
         return reviews
 
-    def generate_complexity_metrics(self, days: int = 30) -> Dict[str, List[Any]]:
+    def generate_complexity_metrics(self, days: int = 30) -> dict[str, list[Any]]:
         from dev_health_ops.metrics.schemas import (
             FileComplexitySnapshot,
             RepoComplexityDaily,
@@ -616,12 +616,12 @@ class SyntheticDataGenerator:
 
         return {"snapshots": snapshots, "dailies": dailies}
 
-    def generate_files(self) -> List[GitFile]:
+    def generate_files(self) -> list[GitFile]:
         return [
             GitFile(repo_id=self.repo_id, path=f, executable=False) for f in self.files
         ]
 
-    def _generate_synthetic_python_lines(self, file_path: str) -> List[str]:
+    def _generate_synthetic_python_lines(self, file_path: str) -> list[str]:
         target_lines = random.randint(30, 140)
         safe_name = (
             file_path.replace("/", "_")
@@ -634,7 +634,7 @@ class SyntheticDataGenerator:
         )
         safe_name = safe_name.strip("_") or "synthetic_module"
 
-        lines: List[str] = [
+        lines: list[str] = [
             f'"""Synthetic fixture module: {safe_name}."""',
             "",
             "from __future__ import annotations",
@@ -677,8 +677,8 @@ class SyntheticDataGenerator:
         return lines
 
     def generate_blame(
-        self, commits: List[GitCommit]
-    ) -> List[
+        self, commits: list[GitCommit]
+    ) -> list[
         Any
     ]:  # using Any to avoid circular import issues if GitBlame isn't imported, but it is
         # We need to import GitBlame inside the method or file level
@@ -717,7 +717,7 @@ class SyntheticDataGenerator:
 
     def generate_work_item_metrics(
         self, days: int = 30
-    ) -> List[WorkItemMetricsDailyRecord]:
+    ) -> list[WorkItemMetricsDailyRecord]:
         records = []
         end_date = datetime.now(timezone.utc).date()
 
@@ -766,7 +766,7 @@ class SyntheticDataGenerator:
 
     def generate_work_item_cycle_times(
         self, count: int = 50
-    ) -> List[WorkItemCycleTimeRecord]:
+    ) -> list[WorkItemCycleTimeRecord]:
         records = []
         end_date = datetime.now(timezone.utc)
 
@@ -817,10 +817,10 @@ class SyntheticDataGenerator:
 
     def _resolve_team(
         self,
-        member_map: Optional[Dict[str, Any]],
+        member_map: dict[str, Any] | None,
         author_name: str,
         author_email: str,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         if not member_map:
             return None, None
         for key in (author_email, author_name):
@@ -835,8 +835,8 @@ class SyntheticDataGenerator:
         self,
         *,
         day: date,
-        member_map: Optional[Dict[str, Any]] = None,
-    ) -> List[UserMetricsDailyRecord]:
+        member_map: dict[str, Any] | None = None,
+    ) -> list[UserMetricsDailyRecord]:
         records = []
         computed_at = datetime.now(timezone.utc)
         for author_name, author_email in self.repo_authors:
@@ -897,8 +897,8 @@ class SyntheticDataGenerator:
         self,
         *,
         day: date,
-        member_map: Optional[Dict[str, Any]] = None,
-    ) -> List[WorkItemUserMetricsDailyRecord]:
+        member_map: dict[str, Any] | None = None,
+    ) -> list[WorkItemUserMetricsDailyRecord]:
         records = []
         computed_at = datetime.now(timezone.utc)
         for author_name, author_email in self.repo_authors:
@@ -927,10 +927,10 @@ class SyntheticDataGenerator:
     def generate_work_items(
         self,
         days: int = 30,
-        projects: Optional[List[str]] = None,
-        investment_weights: Optional[Dict[str, float]] = None,
-        provider: Optional[str] = None,
-    ) -> List[WorkItem]:
+        projects: list[str] | None = None,
+        investment_weights: dict[str, float] | None = None,
+        provider: str | None = None,
+    ) -> list[WorkItem]:
         items = []
         end_date = datetime.now(timezone.utc)
         provider_value = provider or self.provider
@@ -1196,7 +1196,7 @@ class SyntheticDataGenerator:
         items.sort(key=lambda x: x.created_at)
         return items
 
-    def generate_teams_config(self) -> Dict[str, Any]:
+    def generate_teams_config(self) -> dict[str, Any]:
         """
         Generate a team mapping configuration for the synthetic users.
         """
@@ -1221,8 +1221,8 @@ class SyntheticDataGenerator:
         }
 
     def generate_work_item_transitions(
-        self, items: List[WorkItem]
-    ) -> List[WorkItemStatusTransition]:
+        self, items: list[WorkItem]
+    ) -> list[WorkItemStatusTransition]:
         transitions = []
         for item in items:
             # Simple transition from todo -> in_progress -> done
@@ -1301,8 +1301,8 @@ class SyntheticDataGenerator:
         return transitions
 
     def generate_work_item_dependencies(
-        self, items: List[WorkItem]
-    ) -> List[WorkItemDependency]:
+        self, items: list[WorkItem]
+    ) -> list[WorkItemDependency]:
         dependencies = []
         synced_at = datetime.now(timezone.utc)
         parent_edge_rate = 0.2
@@ -1361,9 +1361,9 @@ class SyntheticDataGenerator:
 
         return dependencies
 
-    def generate_worklogs(self, work_items: List[WorkItem]) -> List[Worklog]:
+    def generate_worklogs(self, work_items: list[WorkItem]) -> list[Worklog]:
         now = datetime.now(timezone.utc)
-        worklogs: List[Worklog] = []
+        worklogs: list[Worklog] = []
         for work_item in work_items:
             if not work_item.started_at:
                 continue
@@ -1396,9 +1396,9 @@ class SyntheticDataGenerator:
 
     def generate_pr_commits(
         self,
-        prs: List[GitPullRequest],
-        commits: List[GitCommit],
-    ) -> List[Dict[str, Any]]:
+        prs: list[GitPullRequest],
+        commits: list[GitCommit],
+    ) -> list[dict[str, Any]]:
         """
         Link PRs to commits.
         Assumes commits and PRs are already generated.
@@ -1471,12 +1471,12 @@ class SyntheticDataGenerator:
 
     def generate_issue_pr_links(
         self,
-        work_items: List[WorkItem],
-        prs: List[GitPullRequest],
+        work_items: list[WorkItem],
+        prs: list[GitPullRequest],
         *,
         min_coverage: float = 0.7,
         cluster_size: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Generate work_graph_issue_pr rows with isolated clusters for multiple components."""
         if not work_items or not prs:
             return []
@@ -1493,7 +1493,7 @@ class SyntheticDataGenerator:
         linked_items = candidates[:target_count]
 
         synced_at = datetime.now(timezone.utc)
-        links: List[Dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
 
         num_clusters = max(1, len(linked_items) // cluster_size)
         pr_idx = 0
@@ -1544,7 +1544,7 @@ class SyntheticDataGenerator:
 
     def generate_repo_metrics_daily(
         self, days: int = 30
-    ) -> List[RepoMetricsDailyRecord]:
+    ) -> list[RepoMetricsDailyRecord]:
         records = []
         end_date = datetime.now(timezone.utc).date()
         for i in range(days):
@@ -1564,7 +1564,7 @@ class SyntheticDataGenerator:
             )
         return records
 
-    def generate_dora_metrics(self, days: int = 30) -> List[Any]:
+    def generate_dora_metrics(self, days: int = 30) -> list[Any]:
         """Generate synthetic DORA metrics records."""
         from dev_health_ops.metrics.schemas import DORAMetricsRecord
 
@@ -1603,8 +1603,8 @@ class SyntheticDataGenerator:
         return records
 
     def generate_investment_classifications(
-        self, work_items: List[WorkItem], days: int = 30
-    ) -> List[Any]:
+        self, work_items: list[WorkItem], days: int = 30
+    ) -> list[Any]:
         """Generate investment classification records from work items."""
         from dev_health_ops.metrics.schemas import InvestmentClassificationRecord
 
@@ -1635,7 +1635,7 @@ class SyntheticDataGenerator:
             )
         return records
 
-    def generate_investment_metrics(self, days: int = 30) -> List[Any]:
+    def generate_investment_metrics(self, days: int = 30) -> list[Any]:
         """Generate investment metrics daily rollup records."""
         from dev_health_ops.metrics.schemas import InvestmentMetricsRecord
 
@@ -1674,7 +1674,7 @@ class SyntheticDataGenerator:
                     )
         return records
 
-    def generate_file_hotspot_daily(self, days: int = 30) -> List[Any]:
+    def generate_file_hotspot_daily(self, days: int = 30) -> list[Any]:
         """Generate file hotspot daily records using synthetic complexity and churn data."""
         from dev_health_ops.metrics.schemas import FileHotspotDaily
 
@@ -1711,7 +1711,7 @@ class SyntheticDataGenerator:
                 )
         return records
 
-    def generate_file_metrics(self) -> List[FileMetricsRecord]:
+    def generate_file_metrics(self) -> list[FileMetricsRecord]:
         records = []
         computed_at = datetime.now(timezone.utc)
         today = computed_at.date()
@@ -1735,11 +1735,12 @@ class SyntheticDataGenerator:
         *,
         default_password: str = "devhealth123",
         include_admin: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import bcrypt
+
         from dev_health_ops.licensing.types import LicenseTier
-        from dev_health_ops.models.users import User, Organization, Membership
         from dev_health_ops.models.licensing import OrgLicense
+        from dev_health_ops.models.users import Membership, Organization, User
 
         users = []
         orgs = []
@@ -1841,8 +1842,8 @@ class SyntheticDataGenerator:
         }
 
     def generate_work_item_reopen_events(
-        self, transitions: List[WorkItemStatusTransition]
-    ) -> List[WorkItemReopenEvent]:
+        self, transitions: list[WorkItemStatusTransition]
+    ) -> list[WorkItemReopenEvent]:
         """Extract reopen events from transitions where from_status is 'done' and
         to_status is not 'done' or 'canceled'.
 
@@ -1876,7 +1877,8 @@ class SyntheticDataGenerator:
                 done_transitions_by_item[t.work_item_id] = t
 
         candidates = [
-            t for item_id, t in done_transitions_by_item.items()
+            t
+            for item_id, t in done_transitions_by_item.items()
             if item_id not in reopened_item_ids
         ]
         num_extra = max(0, int(len(candidates) * 0.1))
@@ -1904,8 +1906,8 @@ class SyntheticDataGenerator:
         return reopen_events
 
     def generate_work_item_interactions(
-        self, work_items: List[WorkItem]
-    ) -> List[WorkItemInteractionEvent]:
+        self, work_items: list[WorkItem]
+    ) -> list[WorkItemInteractionEvent]:
         """Generate 0-5 comment interaction events per work item."""
         interactions = []
         last_synced = datetime.now(timezone.utc)
@@ -1943,7 +1945,7 @@ class SyntheticDataGenerator:
 
         return interactions
 
-    def generate_sprints(self, days: int = 30) -> List[Sprint]:
+    def generate_sprints(self, days: int = 30) -> list[Sprint]:
         """Generate 2-week sprints covering the time window."""
         sprints = []
         last_synced = datetime.now(timezone.utc)
@@ -1993,8 +1995,8 @@ class SyntheticDataGenerator:
         return sprints
 
     def assign_sprints_to_work_items(
-        self, work_items: List[WorkItem], sprints: List[Sprint]
-    ) -> List[WorkItem]:
+        self, work_items: list[WorkItem], sprints: list[Sprint]
+    ) -> list[WorkItem]:
         """Assign sprint_id/sprint_name to ~60% of non-epic work items.
 
         For each eligible work item, picks the sprint whose time window contains

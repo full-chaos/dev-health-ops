@@ -13,15 +13,15 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, List, Optional
 
+from dev_health_ops.llm import get_provider, is_llm_available
 from dev_health_ops.llm.explainers.work_unit_explainer import (
     build_explanation_prompt,
     extract_allowed_inputs,
     validate_explanation_language,
 )
+
 from ..models.schemas import EvidenceQuality, WorkUnitExplanation, WorkUnitInvestment
-from dev_health_ops.llm import get_provider, is_llm_available
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 async def explain_work_unit(
     investment: WorkUnitInvestment,
     llm_provider: str = "auto",
-    llm_model: Optional[str] = None,
+    llm_model: str | None = None,
 ) -> WorkUnitExplanation:
     """
     Generate an LLM explanation for a work unit's precomputed investment view.
@@ -152,7 +152,7 @@ def _parse_llm_response(
     )
 
 
-def _extract_section(text: str, header: Optional[str] = None, default: str = "") -> str:
+def _extract_section(text: str, header: str | None = None, default: str = "") -> str:
     """Extract a section from the response by header, or return first paragraph."""
     if header:
         pattern = rf"\*\*{header}[:\*]*\*\*\s*(.*?)(?=\n\n|\*\*|$)"
@@ -169,10 +169,10 @@ def _extract_section(text: str, header: Optional[str] = None, default: str = "")
 
 
 def _extract_category_rationale(
-    text: str, categories: Dict[str, float]
-) -> Dict[str, str]:
+    text: str, categories: dict[str, float]
+) -> dict[str, str]:
     """Extract rationale for each category from the response."""
-    rationale: Dict[str, str] = {}
+    rationale: dict[str, str] = {}
 
     # Try to find category analysis section
     analysis_section = _extract_section(text, "Category Analysis")
@@ -191,9 +191,9 @@ def _extract_category_rationale(
     return rationale
 
 
-def _extract_evidence_highlights(text: str) -> List[str]:
+def _extract_evidence_highlights(text: str) -> list[str]:
     """Extract list of important evidence from the response."""
-    highlights: List[str] = []
+    highlights: list[str] = []
 
     highlights_section = _extract_section(text, "Evidence Highlights")
     if highlights_section:

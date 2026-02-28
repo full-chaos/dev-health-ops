@@ -31,7 +31,6 @@ import logging
 import os
 import warnings
 from enum import Enum
-from typing import Optional
 from urllib.parse import urlparse
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
@@ -90,7 +89,7 @@ def detect_backend(dsn: str) -> SinkBackend:
         )
 
 
-def create_sink(dsn: Optional[str] = None) -> BaseMetricsSink:
+def create_sink(dsn: str | None = None) -> BaseMetricsSink:
     """
     Create a metrics sink instance for the specified backend.
 

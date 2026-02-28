@@ -5,7 +5,7 @@ import uuid
 import sqlalchemy as sa
 from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Text
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class Subscription(Base):

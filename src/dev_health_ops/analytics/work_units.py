@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 from dev_health_ops.investment_taxonomy import (
     SUBCATEGORIES,
@@ -11,10 +10,14 @@ from dev_health_ops.investment_taxonomy import (
 )
 from dev_health_ops.utils.normalization import (
     clamp as _clamp,
+)
+from dev_health_ops.utils.normalization import (
     evidence_quality_band,
     normalize_scores,
-    rollup_subcategories_to_themes as _rollup_subcategories_to_themes,
     work_unit_id,
+)
+from dev_health_ops.utils.normalization import (
+    rollup_subcategories_to_themes as _rollup_subcategories_to_themes,
 )
 
 __all__ = [
@@ -32,10 +35,10 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-CANONICAL_INVESTMENT_THEMES: Tuple[str, ...] = tuple(sorted(THEMES))
-CANONICAL_SUBCATEGORIES: Tuple[str, ...] = tuple(sorted(SUBCATEGORIES))
+CANONICAL_INVESTMENT_THEMES: tuple[str, ...] = tuple(sorted(THEMES))
+CANONICAL_SUBCATEGORIES: tuple[str, ...] = tuple(sorted(SUBCATEGORIES))
 
-WORK_ITEM_TYPE_WEIGHTS: Dict[str, Dict[str, float]] = {
+WORK_ITEM_TYPE_WEIGHTS: dict[str, dict[str, float]] = {
     "story": {"feature_delivery.roadmap": 1.0},
     "epic": {"feature_delivery.roadmap": 1.0},
     "feature": {"feature_delivery.customer": 1.0},
@@ -83,7 +86,7 @@ class WorkUnitConfig:
     temporal_fallback: float = TEMPORAL_FALLBACK
 
 
-_CONFIG: Optional[WorkUnitConfig] = None
+_CONFIG: WorkUnitConfig | None = None
 
 
 def _config() -> WorkUnitConfig:
@@ -93,16 +96,16 @@ def _config() -> WorkUnitConfig:
     return _CONFIG
 
 
-def _normalize_work_item_type(value: Optional[str]) -> str:
+def _normalize_work_item_type(value: str | None) -> str:
     raw = str(value or "").strip().lower()
     return raw if raw else "unknown"
 
 
 def compute_subcategory_scores(
-    type_counts: Dict[str, int],
-) -> Tuple[Dict[str, float], List[Dict[str, object]]]:
+    type_counts: dict[str, int],
+) -> tuple[dict[str, float], list[dict[str, object]]]:
     scores = {cat: 0.0 for cat in CANONICAL_SUBCATEGORIES}
-    evidence: List[Dict[str, object]] = []
+    evidence: list[dict[str, object]] = []
 
     for work_type, count in type_counts.items():
         normalized_type = _normalize_work_item_type(work_type)
@@ -113,7 +116,7 @@ def compute_subcategory_scores(
                 for cat in CANONICAL_SUBCATEGORIES
             }
 
-        contribution: Dict[str, float] = {}
+        contribution: dict[str, float] = {}
         for category, weight in (weights or {}).items():
             if category not in scores:
                 continue
@@ -137,10 +140,10 @@ def compute_subcategory_scores(
 
 def merge_subcategory_vectors(
     *,
-    primary: Optional[Dict[str, float]],
-    secondary: Optional[Dict[str, float]],
+    primary: dict[str, float] | None,
+    secondary: dict[str, float] | None,
     primary_weight: float,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     if not primary and not secondary:
         return normalize_scores({}, CANONICAL_SUBCATEGORIES)
     if not secondary:
@@ -148,7 +151,7 @@ def merge_subcategory_vectors(
     if not primary:
         return normalize_scores(secondary or {}, CANONICAL_SUBCATEGORIES)
 
-    weighted: Dict[str, float] = {}
+    weighted: dict[str, float] = {}
     secondary_weight = 1.0 - primary_weight
     for category in CANONICAL_SUBCATEGORIES:
         weighted[category] = (
@@ -160,8 +163,8 @@ def merge_subcategory_vectors(
 
 
 def rollup_subcategories_to_themes(
-    subcategories: Dict[str, float],
-) -> Dict[str, float]:
+    subcategories: dict[str, float],
+) -> dict[str, float]:
     return _rollup_subcategories_to_themes(
         subcategories, SUBCATEGORY_TO_THEME, CANONICAL_INVESTMENT_THEMES
     )

@@ -1,36 +1,37 @@
 import asyncio
 import logging
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any, Iterable, List, Optional
+from typing import Any
 
 from dev_health_ops.models.git import (
-    GitCommit,
-    GitCommitStat,
-    Repo,
-    GitPullRequest,
-    GitBlame,
-    GitFile,
     CiPipelineRun,
     Deployment,
+    GitBlame,
+    GitCommit,
+    GitCommitStat,
+    GitFile,
+    GitPullRequest,
     Incident,
+    Repo,
 )
-from dev_health_ops.utils import (
-    AGGREGATE_STATS_MARKER,
-    is_skippable,
-    CONNECTORS_AVAILABLE,
-    BATCH_SIZE,
+from dev_health_ops.processors.fetch_utils import (
+    AsyncBatchCollector,
+    safe_parse_datetime,
 )
 from dev_health_ops.providers.pr_state import normalize_pr_state
-from dev_health_ops.processors.fetch_utils import (
-    safe_parse_datetime,
-    AsyncBatchCollector,
+from dev_health_ops.utils import (
+    AGGREGATE_STATS_MARKER,
+    BATCH_SIZE,
+    CONNECTORS_AVAILABLE,
+    is_skippable,
 )
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
         BatchResult,
-        GitLabConnector,
         ConnectorException,
+        GitLabConnector,
     )
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
@@ -56,9 +57,9 @@ def _fetch_gitlab_project_info_sync(connector, project_id):
 
 def _fetch_gitlab_commits_sync(
     gl_project,
-    max_commits: Optional[int],
+    max_commits: int | None,
     repo_id,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ):
     """Sync helper to fetch GitLab commits."""
     list_params = {"per_page": 100, "get_all": False}
@@ -214,8 +215,8 @@ def _sync_gitlab_mrs_to_store(
     loop: asyncio.AbstractEventLoop,
     batch_size: int,
     state: str = "all",
-    gate: Optional[RateLimitGate] = None,
-    since: Optional[datetime] = None,
+    gate: RateLimitGate | None = None,
+    since: datetime | None = None,
 ) -> int:
     """Fetch all MRs for a project and insert them in batches.
 
@@ -225,7 +226,7 @@ def _sync_gitlab_mrs_to_store(
         "Fetching merge requests for project %d...",
         project_id,
     )
-    batch: List[GitPullRequest] = []
+    batch: list[GitPullRequest] = []
     total = 0
     page = 1
 
@@ -499,7 +500,7 @@ def _iter_gitlab_repo_tree(
     *,
     ref: str,
     per_page: int = 100,
-    limit: Optional[int] = None,
+    limit: int | None = None,
 ) -> Iterable[Any]:
     page = 1
     seen = 0
@@ -603,7 +604,7 @@ async def _backfill_gitlab_missing_data(
     db_repo: Repo,
     project_full_name: str,
     default_branch: str,
-    max_commits: Optional[int],
+    max_commits: int | None,
     blame_only: bool = False,
 ) -> None:
     if not (
@@ -628,7 +629,7 @@ async def _backfill_gitlab_missing_data(
         logging.warning(f"Failed to load GitLab project {project_full_name}: {e}")
         return
 
-    file_paths: List[str] = []
+    file_paths: list[str] = []
     if needs_files or needs_blame:
         try:
             items = _iter_gitlab_repo_tree(
@@ -751,13 +752,13 @@ async def process_gitlab_project(
     gitlab_url: str,
     fetch_blame: bool = False,
     blame_only: bool = False,
-    max_commits: Optional[int] = None,
+    max_commits: int | None = None,
     sync_git: bool = True,
     sync_prs: bool = True,
     sync_cicd: bool = True,
     sync_deployments: bool = True,
     sync_incidents: bool = True,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ) -> None:
     """
     Process a GitLab project using the GitLab connector.
@@ -964,7 +965,7 @@ async def process_gitlab_projects_batch(
     sync_incidents: bool = True,
     blame_only: bool = False,
     backfill_missing: bool = True,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ) -> None:
     """
     Process multiple GitLab projects using batch processing with pattern matching.
@@ -986,10 +987,10 @@ async def process_gitlab_projects_batch(
         )
         mr_semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
-    all_results: List[BatchResult] = []
+    all_results: list[BatchResult] = []
     stored_count = 0
 
-    results_queue: Optional[asyncio.Queue] = None
+    results_queue: asyncio.Queue | None = None
     _queue_sentinel = object()
 
     async def store_result(result: BatchResult) -> None:

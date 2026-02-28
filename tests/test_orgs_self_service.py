@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dev_health_ops.api.orgs.router import router as orgs_router
 from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.orgs.router import router as orgs_router
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import postgres_session_dependency
 

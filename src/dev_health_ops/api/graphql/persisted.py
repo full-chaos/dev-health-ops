@@ -10,10 +10,8 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
 
 from .errors import PersistedQueryError
-
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +33,7 @@ class PersistedQuery:
 
 
 # In-memory cache of persisted queries
-_QUERY_CACHE: Dict[str, PersistedQuery] = {}
+_QUERY_CACHE: dict[str, PersistedQuery] = {}
 _CACHE_LOADED = False
 
 
@@ -52,7 +50,7 @@ def _load_registry() -> None:
         return
 
     try:
-        with open(_REGISTRY_PATH, "r") as f:
+        with open(_REGISTRY_PATH) as f:
             data = json.load(f)
 
         for entry in data.get("queries", []):
@@ -115,7 +113,7 @@ def get_schema_version() -> str:
     return SCHEMA_VERSION
 
 
-def list_persisted_queries() -> list[Dict[str, str]]:
+def list_persisted_queries() -> list[dict[str, str]]:
     """
     List all available persisted queries.
 

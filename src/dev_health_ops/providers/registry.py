@@ -11,14 +11,14 @@ Usage:
 from __future__ import annotations
 
 import logging
-from typing import Callable, Dict
+from collections.abc import Callable
 
 from dev_health_ops.providers.base import Provider
 
 logger = logging.getLogger(__name__)
 
 # Registry mapping provider name -> provider class or factory
-_registry: Dict[str, Callable[[], Provider]] = {}
+_registry: dict[str, Callable[[], Provider]] = {}
 
 
 def register_provider(name: str, factory: Callable[[], Provider]) -> None:

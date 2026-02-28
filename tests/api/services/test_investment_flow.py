@@ -1,11 +1,13 @@
-import pytest
 from datetime import date
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+from dev_health_ops.api.models.filters import MetricFilter
 from dev_health_ops.api.services.investment_flow import (
     build_investment_flow_response,
     build_investment_repo_team_flow_response,
 )
-from dev_health_ops.api.models.filters import MetricFilter
 
 
 @pytest.mark.asyncio
@@ -334,13 +336,13 @@ async def test_build_investment_flow_team_subcategory_repo_mode_requires_drill()
             "dev_health_ops.api.services.investment_flow._split_category_filters",
             return_value=([], []),
         ),
+        pytest.raises(ValueError),
     ):
-        with pytest.raises(ValueError):
-            await build_investment_flow_response(
-                db_url="mock://",
-                filters=filters,
-                flow_mode="team_subcategory_repo",
-            )
+        await build_investment_flow_response(
+            db_url="mock://",
+            filters=filters,
+            flow_mode="team_subcategory_repo",
+        )
 
 
 @pytest.mark.asyncio

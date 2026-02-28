@@ -1,10 +1,13 @@
 from __future__ import annotations
-from unittest.mock import MagicMock, patch, AsyncMock
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from atlassian.canonical_models import (
     CanonicalProjectWithOpsgenieTeams,
     JiraProject,
     OpsgenieTeamRef,
 )
+
 from dev_health_ops.providers.teams import sync_teams
 
 

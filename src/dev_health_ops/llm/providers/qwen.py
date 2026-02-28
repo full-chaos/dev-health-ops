@@ -10,9 +10,8 @@ Supports:
 from __future__ import annotations
 
 import os
-from typing import Optional
 
-from .local import LocalProvider, DEFAULT_ENDPOINTS
+from .local import DEFAULT_ENDPOINTS, LocalProvider
 
 # Default DashScope (China) OpenAI-compatible endpoint.
 # Users can override with DASHSCOPE_BASE_URL for international regions:
@@ -33,9 +32,9 @@ class QwenProvider(LocalProvider):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        base_url: Optional[str] = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -56,8 +55,8 @@ class QwenLocalProvider(LocalProvider):
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        base_url: Optional[str] = None,
+        model: str | None = None,
+        base_url: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -75,8 +74,8 @@ class QwenLMStudioProvider(LocalProvider):
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        base_url: Optional[str] = None,
+        model: str | None = None,
+        base_url: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(

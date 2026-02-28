@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from dev_health_ops.metrics.schemas import (
-    WorkUnitInvestmentRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
+    WorkUnitInvestmentRecord,
 )
 from dev_health_ops.metrics.sinks.mongo import MongoMetricsSink
 

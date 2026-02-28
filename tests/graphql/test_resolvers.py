@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -23,11 +23,11 @@ from dev_health_ops.api.graphql.resolvers.catalog import resolve_catalog
 class MockClient:
     """Mock ClickHouse client for testing."""
 
-    def __init__(self, rows: List[Dict[str, Any]] = None):
+    def __init__(self, rows: list[dict[str, Any]] = None):
         self.rows = rows or []
-        self.queries_executed: List[str] = []
+        self.queries_executed: list[str] = []
 
-    def query(self, sql: str, parameters: Dict[str, Any] = None):
+    def query(self, sql: str, parameters: dict[str, Any] = None):
         """Mock query method that returns configured row data."""
         self.queries_executed.append(sql)
         return MockQueryResult(self.rows)
@@ -36,7 +36,7 @@ class MockClient:
 class MockQueryResult:
     """Mock query result."""
 
-    def __init__(self, rows: List[Dict[str, Any]]):
+    def __init__(self, rows: list[dict[str, Any]]):
         if rows:
             self.column_names = list(rows[0].keys()) if rows else []
             self.result_rows = [list(row.values()) for row in rows]

@@ -9,20 +9,22 @@ SQLite, and PostgreSQL backends.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from dev_health_ops.metrics.schemas import (
     CapacityForecastRecord,
     CICDMetricsDailyRecord,
     CommitMetricsRecord,
-    DORAMetricsRecord,
     DeployMetricsDailyRecord,
+    DORAMetricsRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
     ICLandscapeRollingRecord,
     IncidentMetricsDailyRecord,
     InvestmentClassificationRecord,
+    InvestmentExplanationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
     RepoComplexityDaily,
@@ -32,13 +34,12 @@ from dev_health_ops.metrics.schemas import (
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
-    WorkUnitInvestmentEvidenceQuoteRecord,
-    WorkUnitInvestmentRecord,
-    InvestmentExplanationRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
     WorkItemUserMetricsDailyRecord,
+    WorkUnitInvestmentEvidenceQuoteRecord,
+    WorkUnitInvestmentRecord,
 )
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -80,14 +81,14 @@ class BaseMetricsSink(ABC):
 
     @abstractmethod
     def query_dicts(
-        self, query: str, parameters: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, query: str, parameters: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Execute a query and return results as a list of dictionaries."""
         raise NotImplementedError(
             "BaseMetricsSink.query_dicts() must be implemented by subclasses."
         )
 
-    async def __aenter__(self) -> "BaseMetricsSink":
+    async def __aenter__(self) -> BaseMetricsSink:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
@@ -277,7 +278,7 @@ class BaseMetricsSink(ABC):
 
     def read_investment_explanation(
         self, cache_key: str
-    ) -> Optional[InvestmentExplanationRecord]:
+    ) -> InvestmentExplanationRecord | None:
         """Read a cached investment explanation by cache_key."""
         return None
 
@@ -317,11 +318,11 @@ class BaseMetricsSink(ABC):
     # Team resolution / identity support
     # -------------------------------------------------------------------------
 
-    async def get_all_teams(self) -> List[Any]:
+    async def get_all_teams(self) -> list[Any]:
         """Fetch all teams from the database for identity resolution."""
         return []
 
-    async def insert_teams(self, teams: List[Any]) -> None:
+    async def insert_teams(self, teams: list[Any]) -> None:
         """Insert or update teams in the database."""
         pass
 

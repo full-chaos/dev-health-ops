@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Sequence, Tuple
 
 from dev_health_ops.metrics.schemas import CICDMetricsDailyRecord, PipelineRunRow
 from dev_health_ops.utils.datetime import to_utc
 
 
-def _utc_day_window(day: date) -> Tuple[datetime, datetime]:
+def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
     return start, end
@@ -36,14 +36,14 @@ def compute_cicd_metrics_daily(
     day: date,
     pipeline_runs: Sequence[PipelineRunRow],
     computed_at: datetime,
-) -> List[CICDMetricsDailyRecord]:
+) -> list[CICDMetricsDailyRecord]:
     """
     Compute per-repo CI/CD metrics for pipeline runs started on the given day.
     """
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
 
-    by_repo: Dict[str, Dict[str, object]] = {}
+    by_repo: dict[str, dict[str, object]] = {}
     for row in pipeline_runs:
         started_at = to_utc(row["started_at"])
         if not (start <= started_at < end):
@@ -76,12 +76,12 @@ def compute_cicd_metrics_daily(
             if queue_min >= 0:
                 bucket["queues"].append(float(queue_min))
 
-    records: List[CICDMetricsDailyRecord] = []
+    records: list[CICDMetricsDailyRecord] = []
     for repo_id, bucket in sorted(by_repo.items(), key=lambda kv: kv[0]):
         pipelines = int(bucket["pipelines"])
         success = int(bucket["success"])
-        durations: List[float] = list(bucket["durations"])
-        queues: List[float] = list(bucket["queues"])
+        durations: list[float] = list(bucket["durations"])
+        queues: list[float] = list(bucket["queues"])
         success_rate = (success / pipelines) if pipelines else 0.0
 
         records.append(

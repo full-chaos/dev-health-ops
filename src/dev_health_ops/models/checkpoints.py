@@ -21,7 +21,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class CheckpointStatus(IntEnum):

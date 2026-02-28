@@ -6,7 +6,7 @@ Column names are validated against allowlists before being inserted.
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any
 
 from .validate import BucketInterval, Dimension, Measure
 
@@ -75,7 +75,7 @@ SETTINGS max_execution_time = %(timeout)s
 
 
 def sankey_nodes_template(
-    dimensions: List[Dimension],
+    dimensions: list[Dimension],
     measure: Measure,
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",

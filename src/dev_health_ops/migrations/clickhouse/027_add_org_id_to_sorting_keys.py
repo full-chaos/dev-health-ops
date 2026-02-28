@@ -215,7 +215,6 @@ def _replace_table_name(ddl: str, old_name: str, new_name: str) -> str:
     return result
 
 
-
 # Some ClickHouse versions omit ALTER-added columns from SHOW CREATE TABLE output.
 # org_id must be present in the column definitions for ORDER BY to reference it.
 _ORG_ID_COL_RE = re.compile(r"`?org_id`?\s+String", re.IGNORECASE)
@@ -240,6 +239,7 @@ def _ensure_org_id_in_ddl(ddl: str) -> str:
             flags=re.IGNORECASE,
         )
     return result
+
 
 def _table_exists(client, table: str) -> bool:
     try:
@@ -274,28 +274,22 @@ def _rebuild_table(client, table: str, new_order_by: str) -> None:
     res = client.query(f"SHOW CREATE TABLE `{table}`")
     ddl = _ensure_org_id_in_ddl(res.result_rows[0][0])
 
-
     if _has_org_id_first_in_order_by(ddl):
         log.info(f"  {table}: org_id already first in ORDER BY, skipping")
         return
 
-
     new_ddl = _replace_table_name(ddl, table, shadow)
     new_ddl = _replace_order_by(new_ddl, new_order_by)
-
 
     log.info(f"  {table}: creating shadow table")
     client.command(f"DROP TABLE IF EXISTS `{shadow}`")
     client.command(new_ddl)
 
-
     log.info(f"  {table}: copying data")
     client.command(f"INSERT INTO `{shadow}` SELECT * FROM `{table}`")
 
-
     log.info(f"  {table}: atomic swap via EXCHANGE TABLES")
     client.command(f"EXCHANGE TABLES `{table}` AND `{shadow}`")
-
 
     client.command(f"DROP TABLE `{shadow}`")
 

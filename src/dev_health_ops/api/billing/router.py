@@ -5,9 +5,9 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import uuid
 from datetime import datetime
 from typing import Annotated
-import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,16 +25,21 @@ except ModuleNotFoundError:
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.billing.audit_service import BillingAuditService
 from dev_health_ops.api.billing.reconciliation_service import ReconciliationService
-from dev_health_ops.workers.tasks import send_billing_notification
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session, postgres_session_dependency
-from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.licensing import (
     LicenseTier,
     get_entitlements,
     sign_license,
 )
+from dev_health_ops.models.billing_audit import BillingAuditLog
+from dev_health_ops.workers.tasks import send_billing_notification
 
+from .invoice_routes import router as invoice_router
+from .invoice_service import InvoiceService
+from .plans import router as plans_router
+from .refund_routes import router as refund_router
+from .refund_service import refund_service
 from .stripe_client import (
     get_private_key,
     get_stripe_client,
@@ -42,11 +47,6 @@ from .stripe_client import (
     get_tier_price_id,
     get_webhook_secret,
 )
-from .invoice_routes import router as invoice_router
-from .invoice_service import InvoiceService
-from .plans import router as plans_router
-from .refund_routes import router as refund_router
-from .refund_service import refund_service
 
 logger = logging.getLogger(__name__)
 
@@ -471,7 +471,7 @@ async def _process_subscription_event(event: object) -> None:
         subscription_module = importlib.import_module(
             "dev_health_ops.api.billing.subscription_service"
         )
-        subscription_service = getattr(subscription_module, "SubscriptionService")
+        subscription_service = subscription_module.SubscriptionService
 
         async with get_postgres_session() as session:
             service = subscription_service(session)
@@ -712,9 +712,7 @@ async def get_org_entitlements(org_id: str) -> EntitlementResponse:
 
 
 router.include_router(
-    getattr(
-        importlib.import_module("dev_health_ops.api.billing.subscriptions"), "router"
-    )
+    importlib.import_module("dev_health_ops.api.billing.subscriptions").router
 )
 
 

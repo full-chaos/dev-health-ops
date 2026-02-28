@@ -10,17 +10,17 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dev_health_ops.models.work_items import (
         Sprint,
-        Worklog,
         WorkItem,
         WorkItemDependency,
         WorkItemInteractionEvent,
         WorkItemReopenEvent,
         WorkItemStatusTransition,
+        Worklog,
     )
 
 
@@ -50,8 +50,8 @@ class IngestionWindow:
     - active_until: upper bound for the window (optional)
     """
 
-    updated_since: Optional[datetime] = None
-    active_until: Optional[datetime] = None
+    updated_since: datetime | None = None
+    active_until: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -67,10 +67,10 @@ class IngestionContext:
     """
 
     window: IngestionWindow
-    project_key: Optional[str] = None  # jira
-    repo: Optional[str] = None  # github/gitlab
-    group: Optional[str] = None  # gitlab
-    limit: Optional[int] = None
+    project_key: str | None = None  # jira
+    repo: str | None = None  # github/gitlab
+    group: str | None = None  # gitlab
+    limit: int | None = None
 
 
 @dataclass
@@ -82,13 +82,13 @@ class ProviderBatch:
     lists for capabilities they support; others remain empty.
     """
 
-    work_items: List["WorkItem"] = field(default_factory=list)
-    status_transitions: List["WorkItemStatusTransition"] = field(default_factory=list)
-    dependencies: List["WorkItemDependency"] = field(default_factory=list)
-    interactions: List["WorkItemInteractionEvent"] = field(default_factory=list)
-    sprints: List["Sprint"] = field(default_factory=list)
-    reopen_events: List["WorkItemReopenEvent"] = field(default_factory=list)
-    worklogs: List["Worklog"] = field(default_factory=list)
+    work_items: list[WorkItem] = field(default_factory=list)
+    status_transitions: list[WorkItemStatusTransition] = field(default_factory=list)
+    dependencies: list[WorkItemDependency] = field(default_factory=list)
+    interactions: list[WorkItemInteractionEvent] = field(default_factory=list)
+    sprints: list[Sprint] = field(default_factory=list)
+    reopen_events: list[WorkItemReopenEvent] = field(default_factory=list)
+    worklogs: list[Worklog] = field(default_factory=list)
 
 
 class Provider(ABC):

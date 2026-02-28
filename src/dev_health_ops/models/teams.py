@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import List, Optional
-
 import uuid
-from sqlalchemy import Column, Text, DateTime, JSON
-from dev_health_ops.models.git import Base, GUID
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Column, DateTime, Text
+
+from dev_health_ops.models.git import GUID, Base
 
 
 class Team(Base):
@@ -29,10 +29,10 @@ class Team(Base):
         self,
         id: str,
         name: str,
-        description: Optional[str] = None,
-        members: Optional[List[str]] = None,
-        updated_at: Optional[datetime] = None,
-        team_uuid: Optional[uuid.UUID] = None,
+        description: str | None = None,
+        members: list[str] | None = None,
+        updated_at: datetime | None = None,
+        team_uuid: uuid.UUID | None = None,
     ):
         self.id = id
         self.team_uuid = team_uuid or uuid.uuid4()
@@ -61,7 +61,7 @@ class JiraProjectOpsTeamLink(Base):
         ops_team_id: str,
         project_name: str,
         ops_team_name: str,
-        updated_at: Optional[datetime] = None,
+        updated_at: datetime | None = None,
     ):
         self.project_key = project_key
         self.ops_team_id = ops_team_id

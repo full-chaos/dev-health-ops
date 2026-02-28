@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone, date, timedelta, time
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Any
 
 from dev_health_ops.metrics.loaders.base import (
     DataLoader,
@@ -14,15 +14,15 @@ from dev_health_ops.metrics.loaders.base import (
 )
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    PullRequestRow,
-    PullRequestReviewRow,
-    PipelineRunRow,
     DeploymentRow,
     IncidentRow,
+    PipelineRunRow,
+    PullRequestReviewRow,
+    PullRequestRow,
 )
 from dev_health_ops.models.atlassian_ops import (
-    AtlassianOpsIncident,
     AtlassianOpsAlert,
+    AtlassianOpsIncident,
     AtlassianOpsSchedule,
 )
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink
@@ -38,13 +38,13 @@ class MongoDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[CommitStatRow], List[PullRequestRow], List[PullRequestReviewRow]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[CommitStatRow], list[PullRequestRow], list[PullRequestReviewRow]]:
         start_naive = naive_utc(start)
         end_naive = naive_utc(end)
 
-        repo_filter: Dict[str, Any] = {}
+        repo_filter: dict[str, Any] = {}
         if repo_id is not None:
             repo_filter["repo_id"] = str(repo_id)
         elif repo_name is not None:
@@ -65,14 +65,14 @@ class MongoDataLoader(DataLoader):
         }
         stats = list(self.db["git_commit_stats"].find(stats_query))
 
-        stats_by_hash: Dict[str, List[Dict[str, Any]]] = {}
+        stats_by_hash: dict[str, list[dict[str, Any]]] = {}
         for s in stats:
             h = s["commit_hash"]
             if h not in stats_by_hash:
                 stats_by_hash[h] = []
             stats_by_hash[h].append(s)
 
-        commit_rows: List[CommitStatRow] = []
+        commit_rows: list[CommitStatRow] = []
         for c in commits:
             h = c["hash"]
             repo_uuid = parse_uuid(c.get("repo_id"))
@@ -103,7 +103,7 @@ class MongoDataLoader(DataLoader):
         }
         prs = list(self.db["git_pull_requests"].find(pr_query))
 
-        pr_rows: List[PullRequestRow] = []
+        pr_rows: list[PullRequestRow] = []
         for p in prs:
             u = parse_uuid(p.get("repo_id"))
             if u:
@@ -133,7 +133,7 @@ class MongoDataLoader(DataLoader):
             **repo_filter,
         }
         reviews = list(self.db["git_pull_request_reviews"].find(review_query))
-        review_rows: List[PullRequestReviewRow] = []
+        review_rows: list[PullRequestReviewRow] = []
         for r in reviews:
             u = parse_uuid(r.get("repo_id"))
             if u:
@@ -153,15 +153,15 @@ class MongoDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[Any], List[Any]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[Any], list[Any]]:
         from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
 
         end_naive = naive_utc(end)
         start_naive = naive_utc(start)
 
-        repo_filter: Dict[str, Any] = {}
+        repo_filter: dict[str, Any] = {}
         if repo_id is not None:
             repo_filter["repo_id"] = str(repo_id)
 
@@ -190,12 +190,12 @@ class MongoDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[PipelineRunRow], List[DeploymentRow]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[PipelineRunRow], list[DeploymentRow]]:
         sn = naive_utc(start)
         en = naive_utc(end)
-        repo_filter: Dict[str, Any] = {}
+        repo_filter: dict[str, Any] = {}
         if repo_id is not None:
             repo_filter["repo_id"] = str(repo_id)
 
@@ -205,8 +205,8 @@ class MongoDataLoader(DataLoader):
         pipes_raw = list(self.db["ci_pipeline_runs"].find(pipe_query))
         deploys_raw = list(self.db["deployments"].find(deploy_query))
 
-        pipes: List[PipelineRunRow] = [dict(p) for p in pipes_raw]  # type: ignore
-        deploys: List[DeploymentRow] = [dict(d) for d in deploys_raw]  # type: ignore
+        pipes: list[PipelineRunRow] = [dict(p) for p in pipes_raw]  # type: ignore
+        deploys: list[DeploymentRow] = [dict(d) for d in deploys_raw]  # type: ignore
 
         return pipes, deploys
 
@@ -214,12 +214,12 @@ class MongoDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> List[IncidentRow]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> list[IncidentRow]:
         sn = naive_utc(start)
         en = naive_utc(end)
-        repo_filter: Dict[str, Any] = {}
+        repo_filter: dict[str, Any] = {}
         if repo_id is not None:
             repo_filter["repo_id"] = str(repo_id)
 
@@ -231,7 +231,7 @@ class MongoDataLoader(DataLoader):
         self,
         repo_id: uuid.UUID,
         as_of: datetime,
-    ) -> Dict[uuid.UUID, float]:
+    ) -> dict[uuid.UUID, float]:
         pipeline = [
             {"$match": {"repo_id": str(repo_id)}},
             {
@@ -261,14 +261,14 @@ class MongoDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsIncident]:
+    ) -> list[AtlassianOpsIncident]:
         sn = naive_utc(start)
         en = naive_utc(end)
 
         query = {"created_at": {"$gte": sn, "$lt": en}}
         items_raw = list(self.db["atlassian_ops_incidents"].find(query))
 
-        incidents: List[AtlassianOpsIncident] = []
+        incidents: list[AtlassianOpsIncident] = []
         for item in items_raw:
             incidents.append(
                 AtlassianOpsIncident(
@@ -289,14 +289,14 @@ class MongoDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsAlert]:
+    ) -> list[AtlassianOpsAlert]:
         sn = naive_utc(start)
         en = naive_utc(end)
 
         query = {"created_at": {"$gte": sn, "$lt": en}}
         items_raw = list(self.db["atlassian_ops_alerts"].find(query))
 
-        alerts: List[AtlassianOpsAlert] = []
+        alerts: list[AtlassianOpsAlert] = []
         for item in items_raw:
             alerts.append(
                 AtlassianOpsAlert(
@@ -314,10 +314,10 @@ class MongoDataLoader(DataLoader):
 
     async def load_atlassian_ops_schedules(
         self,
-    ) -> List[AtlassianOpsSchedule]:
+    ) -> list[AtlassianOpsSchedule]:
         items_raw = list(self.db["atlassian_ops_schedules"].find({}))
 
-        schedules: List[AtlassianOpsSchedule] = []
+        schedules: list[AtlassianOpsSchedule] = []
         for item in items_raw:
             schedules.append(
                 AtlassianOpsSchedule(
@@ -331,10 +331,10 @@ class MongoDataLoader(DataLoader):
 
     async def load_jira_project_ops_team_links(
         self,
-    ) -> List[JiraProjectOpsTeamLink]:
+    ) -> list[JiraProjectOpsTeamLink]:
         items_raw = list(self.db["jira_project_ops_team_links"].find({}))
 
-        links: List[JiraProjectOpsTeamLink] = []
+        links: list[JiraProjectOpsTeamLink] = []
         for item in items_raw:
             links.append(
                 JiraProjectOpsTeamLink(
@@ -350,7 +350,7 @@ class MongoDataLoader(DataLoader):
     async def load_user_metrics_rolling_30d(
         self,
         as_of: date,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         start = datetime.combine(
             as_of - timedelta(days=29), time.min, tzinfo=timezone.utc
         )

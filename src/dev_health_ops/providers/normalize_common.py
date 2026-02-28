@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any
 
 from dev_health_ops.models.work_items import (
     WorkItemReopenEvent,
@@ -47,7 +48,7 @@ PRIORITY_LABEL_MAP = {
 }
 
 
-def parse_iso_datetime(value: Any) -> Optional[datetime]:
+def parse_iso_datetime(value: Any) -> datetime | None:
     """Parse ISO 8601 datetime (GitHub/GitLab Z-suffix format) to UTC."""
     if value is None:
         return None
@@ -68,7 +69,7 @@ def parse_iso_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
-def parse_jira_datetime(value: Any) -> Optional[datetime]:
+def parse_jira_datetime(value: Any) -> datetime | None:
     """Parse Jira datetime (handles +0000 offset format without colon) to UTC."""
     if value is None:
         return None
@@ -96,7 +97,7 @@ def parse_jira_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
-def priority_from_labels(labels: Sequence[str]) -> Tuple[Optional[str], Optional[str]]:
+def priority_from_labels(labels: Sequence[str]) -> tuple[str | None, str | None]:
     """Extract (priority_raw, service_class) from label strings, or (None, None)."""
     for label in labels:
         normalized = label.strip().lower()
@@ -107,13 +108,13 @@ def priority_from_labels(labels: Sequence[str]) -> Tuple[Optional[str], Optional
 
 def detect_reopen_events_from_transitions(
     work_item_id: str,
-    transitions: List[WorkItemStatusTransition],
-) -> List[WorkItemReopenEvent]:
+    transitions: list[WorkItemStatusTransition],
+) -> list[WorkItemReopenEvent]:
     """Detect reopens: transitions from terminal (done/canceled) to non-terminal status."""
     terminal_statuses = {"done", "canceled"}
     non_terminal_statuses = {"todo", "in_progress"}
 
-    reopen_events: List[WorkItemReopenEvent] = []
+    reopen_events: list[WorkItemReopenEvent] = []
 
     for t in transitions:
         from_status = t.from_status

@@ -6,8 +6,9 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ class PubSubMessage:
     """A message from the PubSub system."""
 
     channel: str
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
 
 class RedisPubSub:
@@ -28,7 +29,7 @@ class RedisPubSub:
     Falls back to in-memory channels if Redis is unavailable.
     """
 
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: str | None = None):
         """
         Initialize the PubSub system.
 
@@ -36,10 +37,10 @@ class RedisPubSub:
             redis_url: Redis connection URL. Defaults to REDIS_URL env var.
         """
         self._redis_url = redis_url or os.getenv("REDIS_URL")
-        self._client: Optional[Any] = None
-        self._pubsub: Optional[Any] = None
+        self._client: Any | None = None
+        self._pubsub: Any | None = None
         self._available = False
-        self._memory_channels: Dict[str, asyncio.Queue] = {}
+        self._memory_channels: dict[str, asyncio.Queue] = {}
 
     async def connect(self) -> bool:
         """
@@ -75,7 +76,7 @@ class RedisPubSub:
             self._client = None
         self._available = False
 
-    async def publish(self, channel: str, data: Dict[str, Any]) -> int:
+    async def publish(self, channel: str, data: dict[str, Any]) -> int:
         """
         Publish a message to a channel.
 
@@ -171,7 +172,7 @@ class RedisPubSub:
 
 
 # Global PubSub instance
-_pubsub: Optional[RedisPubSub] = None
+_pubsub: RedisPubSub | None = None
 
 
 async def get_pubsub() -> RedisPubSub:

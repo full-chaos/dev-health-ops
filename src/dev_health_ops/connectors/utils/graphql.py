@@ -7,7 +7,7 @@ particularly for operations not well-supported by PyGithub such as blame.
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 def _github_reset_delay_seconds(
     response: requests.Response,
-) -> Optional[float]:
+) -> float | None:
     reset = response.headers.get("X-RateLimit-Reset")
     if not reset:
         return None
@@ -68,8 +68,8 @@ class GitHubGraphQLClient:
     def query(
         self,
         query: str,
-        variables: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Execute a GraphQL query.
 
@@ -130,7 +130,7 @@ class GitHubGraphQLClient:
         repo: str,
         path: str,
         ref: str = "HEAD",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get blame information for a file using GitHub GraphQL API.
 
@@ -183,7 +183,7 @@ class GitHubGraphQLClient:
 
         return result
 
-    def get_rate_limit(self) -> Dict[str, Any]:
+    def get_rate_limit(self) -> dict[str, Any]:
         """
         Get current rate limit status.
 

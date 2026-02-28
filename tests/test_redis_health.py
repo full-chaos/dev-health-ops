@@ -1,14 +1,17 @@
+# Mock redis before importing cache backends
+import sys
 import unittest
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Mock redis before importing cache backends
-import sys
-
 sys.modules["redis"] = MagicMock()
 
-from dev_health_ops.api.services.cache import MemoryBackend, RedisBackend, TTLCache  # noqa: E402
 from dev_health_ops.api.main import _check_database_service, health  # noqa: E402
+from dev_health_ops.api.services.cache import (  # noqa: E402
+    MemoryBackend,
+    RedisBackend,
+    TTLCache,
+)
 from dev_health_ops.metrics.sinks.factory import SinkBackend  # noqa: E402
 
 

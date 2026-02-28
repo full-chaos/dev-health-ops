@@ -6,11 +6,12 @@ Forecasts work completion using historical throughput data.
 from __future__ import annotations
 
 import random
+import statistics
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-import statistics
-from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import clickhouse_connect
@@ -28,28 +29,28 @@ class ForecastResult:
     # Metadata
     forecast_id: str
     computed_at: datetime
-    team_id: Optional[str]
-    work_scope_id: Optional[str]
+    team_id: str | None
+    work_scope_id: str | None
 
     # Input parameters
     backlog_size: int
-    target_items: Optional[int]  # For fixed-scope forecasts
-    target_date: Optional[date]  # For fixed-date forecasts
+    target_items: int | None  # For fixed-scope forecasts
+    target_date: date | None  # For fixed-date forecasts
     history_days: int
     simulation_count: int
 
     # Fixed-scope results: "When will we finish N items?"
-    p50_days: Optional[int]
-    p85_days: Optional[int]
-    p95_days: Optional[int]
-    p50_date: Optional[date]
-    p85_date: Optional[date]
-    p95_date: Optional[date]
+    p50_days: int | None
+    p85_days: int | None
+    p95_days: int | None
+    p50_date: date | None
+    p85_date: date | None
+    p95_date: date | None
 
     # Fixed-date results: "How many items by date X?"
-    p50_items: Optional[int]
-    p85_items: Optional[int]
-    p95_items: Optional[int]
+    p50_items: int | None
+    p85_items: int | None
+    p95_items: int | None
 
     # Throughput statistics
     throughput_mean: float
@@ -66,8 +67,8 @@ class ThroughputSample:
 
     day: date
     items_completed: int
-    team_id: Optional[str] = None
-    work_scope_id: Optional[str] = None
+    team_id: str | None = None
+    work_scope_id: str | None = None
 
 
 class ThroughputHistory:
@@ -84,15 +85,15 @@ class ThroughputHistory:
             samples: Sequence of ThroughputSample observations.
         """
         self._samples = list(samples)
-        self._daily_throughputs: List[int] = [s.items_completed for s in self._samples]
+        self._daily_throughputs: list[int] = [s.items_completed for s in self._samples]
 
     @property
-    def samples(self) -> List[ThroughputSample]:
+    def samples(self) -> list[ThroughputSample]:
         """Return the raw samples."""
         return self._samples
 
     @property
-    def daily_throughputs(self) -> List[int]:
+    def daily_throughputs(self) -> list[int]:
         """Return list of daily throughput values."""
         return self._daily_throughputs
 
@@ -136,8 +137,8 @@ def monte_carlo_forecast_days(
     target_items: int,
     simulations: int = 10000,
     max_days: int = 365,
-    seed: Optional[int] = None,
-) -> Tuple[List[int], bool]:
+    seed: int | None = None,
+) -> tuple[list[int], bool]:
     """Run Monte Carlo simulation for completion days.
 
     Simulates how many days it takes to complete `target_items`
@@ -163,7 +164,7 @@ def monte_carlo_forecast_days(
     if seed is not None:
         random.seed(seed)
 
-    completion_days: List[int] = []
+    completion_days: list[int] = []
     hit_max = False
 
     throughputs = list(throughput_history)
@@ -189,8 +190,8 @@ def monte_carlo_forecast_items(
     throughput_history: Sequence[int],
     days_available: int,
     simulations: int = 10000,
-    seed: Optional[int] = None,
-) -> List[int]:
+    seed: int | None = None,
+) -> list[int]:
     """Run Monte Carlo simulation for items completable by deadline.
 
     Simulates how many items can be completed in `days_available`
@@ -213,7 +214,7 @@ def monte_carlo_forecast_items(
     if seed is not None:
         random.seed(seed)
 
-    items_completed: List[int] = []
+    items_completed: list[int] = []
     throughputs = list(throughput_history)
 
     for _ in range(simulations):
@@ -243,7 +244,7 @@ def _percentile(sorted_values: Sequence[int], p: float) -> int:
 
 def compute_percentiles(
     values: Sequence[int], percentiles: Sequence[float]
-) -> List[int]:
+) -> list[int]:
     if not values:
         return [0] * len(percentiles)
     sorted_vals = sorted(values)
@@ -252,13 +253,13 @@ def compute_percentiles(
 
 def forecast_capacity(
     history: ThroughputHistory,
-    target_items: Optional[int] = None,
-    target_date: Optional[date] = None,
+    target_items: int | None = None,
+    target_date: date | None = None,
     backlog_size: int = 0,
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
     simulations: int = 10000,
-    seed: Optional[int] = None,
+    seed: int | None = None,
 ) -> ForecastResult:
     """Compute capacity forecast using Monte Carlo simulation.
 
@@ -293,15 +294,15 @@ def forecast_capacity(
     today = now.date()
     forecast_id = str(uuid.uuid4())
 
-    p50_days: Optional[int] = None
-    p85_days: Optional[int] = None
-    p95_days: Optional[int] = None
-    p50_date: Optional[date] = None
-    p85_date: Optional[date] = None
-    p95_date: Optional[date] = None
-    p50_items: Optional[int] = None
-    p85_items: Optional[int] = None
-    p95_items: Optional[int] = None
+    p50_days: int | None = None
+    p85_days: int | None = None
+    p95_days: int | None = None
+    p50_date: date | None = None
+    p85_date: date | None = None
+    p95_date: date | None = None
+    p50_items: int | None = None
+    p85_items: int | None = None
+    p95_items: int | None = None
 
     # Fixed-scope forecast: "When will we finish N items?"
     if target_items is not None:
@@ -362,9 +363,9 @@ def forecast_capacity(
 
 
 async def load_throughput_history_clickhouse(
-    client: "clickhouse_connect.driver.Client",
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    client: clickhouse_connect.driver.Client,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
     history_days: int = 90,
 ) -> ThroughputHistory:
     """Load throughput history from ClickHouse.
@@ -416,9 +417,9 @@ async def load_throughput_history_clickhouse(
 
 
 async def load_throughput_history_sqlalchemy(
-    session: "sqlalchemy.ext.asyncio.AsyncSession",
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    session: sqlalchemy.ext.asyncio.AsyncSession,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
     history_days: int = 90,
 ) -> ThroughputHistory:
     """Load throughput history from SQLAlchemy backend (Postgres/SQLite).
@@ -498,9 +499,9 @@ async def load_throughput_history_sqlalchemy(
 
 
 async def get_backlog_size_clickhouse(
-    client: "clickhouse_connect.driver.Client",
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    client: clickhouse_connect.driver.Client,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
 ) -> int:
     """Query current backlog size from ClickHouse.
 
@@ -539,9 +540,9 @@ async def get_backlog_size_clickhouse(
 
 
 async def get_backlog_size_sqlalchemy(
-    session: "sqlalchemy.ext.asyncio.AsyncSession",
-    team_id: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    session: sqlalchemy.ext.asyncio.AsyncSession,
+    team_id: str | None = None,
+    work_scope_id: str | None = None,
 ) -> int:
     """Query current backlog size from SQLAlchemy backend.
 

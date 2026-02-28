@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 import yaml
 
@@ -18,7 +18,7 @@ DEFAULT_STATUS_MAPPING_PATH = (
 )
 
 # If multiple label/status rules match, prefer "more terminal" states.
-_STATUS_PRIORITY: List[WorkItemStatusCategory] = [
+_STATUS_PRIORITY: list[WorkItemStatusCategory] = [
     "done",
     "canceled",
     "blocked",
@@ -34,8 +34,8 @@ def _norm_key(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
-def _index_values(values: Iterable[str], category: str) -> Dict[str, str]:
-    indexed: Dict[str, str] = {}
+def _index_values(values: Iterable[str], category: str) -> dict[str, str]:
+    indexed: dict[str, str] = {}
     for raw in values:
         key = _norm_key(str(raw))
         if not key:
@@ -55,9 +55,9 @@ class StatusMapping:
         self,
         *,
         provider: WorkItemProvider,
-        status_raw: Optional[str],
+        status_raw: str | None,
         labels: Sequence[str] = (),
-        state: Optional[str] = None,
+        state: str | None = None,
     ) -> WorkItemStatusCategory:
         """
         Normalize a raw status/category into a cross-provider bucket.
@@ -72,7 +72,7 @@ class StatusMapping:
 
         # 1) Labels
         label_map = self.label_status_by_provider.get(provider_key) or {}
-        matched: Set[WorkItemStatusCategory] = set()
+        matched: set[WorkItemStatusCategory] = set()
         for label in labels or ():
             cat = label_map.get(_norm_key(str(label)))
             if cat:
@@ -103,13 +103,13 @@ class StatusMapping:
         self,
         *,
         provider: WorkItemProvider,
-        type_raw: Optional[str],
+        type_raw: str | None,
         labels: Sequence[str] = (),
     ) -> WorkItemType:
         provider_key = str(provider)
 
         label_map = self.label_type_by_provider.get(provider_key) or {}
-        matched_types: Set[WorkItemType] = set()
+        matched_types: set[WorkItemType] = set()
         for label in labels or ():
             mapped = label_map.get(_norm_key(str(label)))
             if mapped:
@@ -141,7 +141,7 @@ class StatusMapping:
         return "unknown"
 
 
-def load_status_mapping(path: Optional[Path] = None) -> StatusMapping:
+def load_status_mapping(path: Path | None = None) -> StatusMapping:
     """
     Load `config/status_mapping.yaml` and build lookup indexes.
 
@@ -160,8 +160,8 @@ def load_status_mapping(path: Optional[Path] = None) -> StatusMapping:
 
     providers = payload.get("providers") or {}
 
-    def _build_status_index(provider_name: str) -> Dict[str, WorkItemStatusCategory]:
-        indexed: Dict[str, WorkItemStatusCategory] = {}
+    def _build_status_index(provider_name: str) -> dict[str, WorkItemStatusCategory]:
+        indexed: dict[str, WorkItemStatusCategory] = {}
 
         # Start from base categories.
         for category, values in (base_status or {}).items():
@@ -179,16 +179,16 @@ def load_status_mapping(path: Optional[Path] = None) -> StatusMapping:
 
     def _build_label_status_index(
         provider_name: str,
-    ) -> Dict[str, WorkItemStatusCategory]:
-        indexed: Dict[str, WorkItemStatusCategory] = {}
+    ) -> dict[str, WorkItemStatusCategory]:
+        indexed: dict[str, WorkItemStatusCategory] = {}
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("status_labels") or {}).items():
             for key, mapped in _index_values(values or [], str(category)).items():
                 indexed[key] = mapped  # type: ignore[assignment]
         return {k: v for k, v in indexed.items()}
 
-    def _build_type_index(provider_name: str) -> Dict[str, WorkItemType]:
-        indexed: Dict[str, WorkItemType] = {}
+    def _build_type_index(provider_name: str) -> dict[str, WorkItemType]:
+        indexed: dict[str, WorkItemType] = {}
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("types") or {}).items():
             for raw in values or []:
@@ -198,8 +198,8 @@ def load_status_mapping(path: Optional[Path] = None) -> StatusMapping:
                 indexed[key] = str(category)  # type: ignore[assignment]
         return indexed
 
-    def _build_label_type_index(provider_name: str) -> Dict[str, WorkItemType]:
-        indexed: Dict[str, WorkItemType] = {}
+    def _build_label_type_index(provider_name: str) -> dict[str, WorkItemType]:
+        indexed: dict[str, WorkItemType] = {}
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("type_labels") or {}).items():
             for raw in values or []:
@@ -209,10 +209,10 @@ def load_status_mapping(path: Optional[Path] = None) -> StatusMapping:
                 indexed[key] = str(category)  # type: ignore[assignment]
         return indexed
 
-    status_by_provider: Dict[str, Dict[str, WorkItemStatusCategory]] = {}
-    label_status_by_provider: Dict[str, Dict[str, WorkItemStatusCategory]] = {}
-    type_by_provider: Dict[str, Dict[str, WorkItemType]] = {}
-    label_type_by_provider: Dict[str, Dict[str, WorkItemType]] = {}
+    status_by_provider: dict[str, dict[str, WorkItemStatusCategory]] = {}
+    label_status_by_provider: dict[str, dict[str, WorkItemStatusCategory]] = {}
+    type_by_provider: dict[str, dict[str, WorkItemType]] = {}
+    label_type_by_provider: dict[str, dict[str, WorkItemType]] = {}
 
     for provider in ("jira", "github", "gitlab"):
         status_by_provider[provider] = _build_status_index(provider)

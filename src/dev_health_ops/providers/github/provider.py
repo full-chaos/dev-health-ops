@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -73,8 +72,8 @@ class GitHubProvider(Provider):
     def __init__(
         self,
         *,
-        status_mapping: Optional[StatusMapping] = None,
-        identity: Optional[IdentityResolver] = None,
+        status_mapping: StatusMapping | None = None,
+        identity: IdentityResolver | None = None,
     ) -> None:
         """
         Initialize the GitHub provider.
@@ -141,12 +140,12 @@ class GitHubProvider(Provider):
         auth = GitHubAuth(token=token, base_url=base_url)
         client = GitHubWorkClient(auth=auth)
 
-        work_items: List[WorkItem] = []
-        transitions: List[WorkItemStatusTransition] = []
-        dependencies: List[WorkItemDependency] = []
-        reopen_events: List[WorkItemReopenEvent] = []
-        interactions: List[WorkItemInteractionEvent] = []
-        sprints: List[Sprint] = []
+        work_items: list[WorkItem] = []
+        transitions: list[WorkItemStatusTransition] = []
+        dependencies: list[WorkItemDependency] = []
+        reopen_events: list[WorkItemReopenEvent] = []
+        interactions: list[WorkItemInteractionEvent] = []
+        sprints: list[Sprint] = []
 
         include_prs = _env_flag("GITHUB_INCLUDE_PRS", True)
         fetch_comments = _env_flag("GITHUB_FETCH_COMMENTS", True)
@@ -163,11 +162,11 @@ class GitHubProvider(Provider):
                     raw_comments_limit,
                 )
 
-        sprint_cache: Dict[str, Sprint] = {}
+        sprint_cache: dict[str, Sprint] = {}
         repo_full_name = f"{owner}/{repo}"
 
         # Determine time window
-        since: Optional[datetime] = None
+        since: datetime | None = None
         if ctx.window.updated_since:
             since = _to_utc(ctx.window.updated_since)
 

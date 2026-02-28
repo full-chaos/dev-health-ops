@@ -1,7 +1,7 @@
-from dev_health_ops.utils.datetime import naive_utc, to_utc
-
-import os
 import importlib.util
+import os
+
+from dev_health_ops.utils.datetime import naive_utc, to_utc
 
 _legacy_utils_path = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "utils.py"

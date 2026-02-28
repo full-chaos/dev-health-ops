@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from ..models.schemas import (
     AggregatedFlameMeta,
@@ -11,7 +11,6 @@ from ..models.schemas import (
     AggregatedFlameResponse,
     ApproximationInfo,
 )
-from ..queries.client import clickhouse_client
 from ..queries.aggregated_flame import (
     fetch_code_hotspots,
     fetch_cycle_breakdown,
@@ -20,7 +19,7 @@ from ..queries.aggregated_flame import (
     fetch_throughput,
     fetch_throughput_by_type,
 )
-
+from ..queries.client import clickhouse_client
 
 # Canonical status ordering for cycle breakdown display
 _CYCLE_STATUS_ORDER = [
@@ -53,7 +52,7 @@ def _status_sort_key(status: str) -> int:
         return len(_CYCLE_STATUS_ORDER) + ord(lower[0]) if lower else 999
 
 
-def _sanitize_label(name: Optional[str]) -> str:
+def _sanitize_label(name: str | None) -> str:
     """Ensure non-null label names."""
     if not name or not name.strip():
         return "(unknown)"
@@ -61,7 +60,7 @@ def _sanitize_label(name: Optional[str]) -> str:
 
 
 def _build_cycle_breakdown_tree(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
 ) -> AggregatedFlameNode:
     """
     Build hierarchical tree for cycle-time breakdown.
@@ -75,7 +74,7 @@ def _build_cycle_breakdown_tree(
       - Other (remaining statuses)
     """
     # Categorize statuses
-    categories: Dict[str, List[Dict[str, Any]]] = {
+    categories: dict[str, list[dict[str, Any]]] = {
         "Active Work": [],
         "Review": [],
         "Waiting": [],
@@ -101,7 +100,7 @@ def _build_cycle_breakdown_tree(
             categories["Other"].append(row)
 
     # Build category nodes
-    category_nodes: List[AggregatedFlameNode] = []
+    category_nodes: list[AggregatedFlameNode] = []
     for category_name, category_rows in categories.items():
         if not category_rows:
             continue
@@ -138,8 +137,8 @@ def _build_cycle_breakdown_tree(
 
 
 def _build_code_hotspots_tree(
-    rows: List[Dict[str, Any]],
-    repo_names: Dict[str, str],
+    rows: list[dict[str, Any]],
+    repo_names: dict[str, str],
 ) -> AggregatedFlameNode:
     """
     Build hierarchical tree for code hotspots.
@@ -151,19 +150,19 @@ def _build_code_hotspots_tree(
           - file
     """
     # Group by repo, then build path hierarchy
-    repo_files: Dict[str, List[Dict[str, Any]]] = {}
+    repo_files: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         repo_id = row.get("repo_id") or "(unknown)"
         if repo_id not in repo_files:
             repo_files[repo_id] = []
         repo_files[repo_id].append(row)
 
-    repo_nodes: List[AggregatedFlameNode] = []
+    repo_nodes: list[AggregatedFlameNode] = []
     for repo_id, files in repo_files.items():
         repo_name = repo_names.get(repo_id) or repo_id
 
         # Build path tree for this repo
-        path_tree: Dict[str, Any] = {}
+        path_tree: dict[str, Any] = {}
         for file_row in files:
             file_path = file_row.get("file_path") or "(unknown)"
             churn = float(file_row.get("total_churn") or 0)
@@ -184,7 +183,7 @@ def _build_code_hotspots_tree(
                 else:
                     current = current[segment]["_children"]
 
-        def _tree_to_node(name: str, tree_entry: Dict[str, Any]) -> AggregatedFlameNode:
+        def _tree_to_node(name: str, tree_entry: dict[str, Any]) -> AggregatedFlameNode:
             """Recursively convert path tree to AggregatedFlameNode."""
             children = [
                 _tree_to_node(child_name, child_tree)
@@ -204,7 +203,7 @@ def _build_code_hotspots_tree(
             )
 
         # Build nodes from path tree
-        dir_nodes: List[AggregatedFlameNode] = []
+        dir_nodes: list[AggregatedFlameNode] = []
         for dir_name, dir_tree in path_tree.items():
             dir_nodes.append(_tree_to_node(dir_name, dir_tree))
 
@@ -232,7 +231,7 @@ def _build_code_hotspots_tree(
 
 
 def _build_throughput_tree(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
 ) -> AggregatedFlameNode:
     """
     Build hierarchical tree for throughput.
@@ -243,14 +242,14 @@ def _build_throughput_tree(
         - By Team/Repo
     """
     # Group by work type
-    type_groups: Dict[str, List[Dict[str, Any]]] = {}
+    type_groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         w_type = row.get("work_type") or "unclassified"
         if w_type not in type_groups:
             type_groups[w_type] = []
         type_groups[w_type].append(row)
 
-    type_nodes: List[AggregatedFlameNode] = []
+    type_nodes: list[AggregatedFlameNode] = []
     for w_type, type_rows in type_groups.items():
         children = [
             AggregatedFlameNode(
@@ -292,18 +291,18 @@ async def build_aggregated_flame_response(
     mode: Literal["cycle_breakdown", "code_hotspots", "throughput"],
     start_day: date,
     end_day: date,
-    team_id: Optional[str] = None,
-    repo_id: Optional[str] = None,
-    provider: Optional[str] = None,
-    work_scope_id: Optional[str] = None,
+    team_id: str | None = None,
+    repo_id: str | None = None,
+    provider: str | None = None,
+    work_scope_id: str | None = None,
     limit: int = 500,
     min_value: int = 1,
 ) -> AggregatedFlameResponse:
     """
     Build an aggregated flame graph response for the given mode.
     """
-    notes: List[str] = []
-    filters_used: Dict[str, Any] = {}
+    notes: list[str] = []
+    filters_used: dict[str, Any] = {}
     approximation = ApproximationInfo()
 
     async with clickhouse_client(db_url) as sink:
@@ -386,7 +385,7 @@ async def build_aggregated_flame_response(
                 root = AggregatedFlameNode(name="Code Churn", value=0, children=[])
                 repo_names = {}
             else:
-                repo_ids: List[str] = [
+                repo_ids: list[str] = [
                     str(row.get("repo_id")) for row in rows if row.get("repo_id")
                 ]
                 repo_names = await fetch_repo_names(

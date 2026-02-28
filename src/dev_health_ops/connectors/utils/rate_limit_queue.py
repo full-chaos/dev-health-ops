@@ -21,7 +21,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class RateLimitConfig:
 class RateLimitGate:
     """Thread-safe, event-loop-friendly shared backoff gate."""
 
-    def __init__(self, config: Optional[RateLimitConfig] = None) -> None:
+    def __init__(self, config: RateLimitConfig | None = None) -> None:
         self._config = config or RateLimitConfig()
         self._lock = threading.Lock()
         self._next_allowed_at = 0.0
@@ -46,7 +46,7 @@ class RateLimitGate:
         with self._lock:
             self._current_backoff = self._config.initial_backoff_seconds
 
-    def penalize(self, delay_seconds: Optional[float] = None) -> float:
+    def penalize(self, delay_seconds: float | None = None) -> float:
         """Push the next allowed time into the future.
 
         If delay_seconds is not provided, uses exponential backoff.
@@ -131,7 +131,7 @@ class DistributedRateLimitGate(RateLimitGate):
         self,
         provider: str,
         token_hint: str = "",
-        config: Optional[RateLimitConfig] = None,
+        config: RateLimitConfig | None = None,
         *,
         redis_client: Any = None,
     ) -> None:
@@ -189,7 +189,7 @@ class DistributedRateLimitGate(RateLimitGate):
 
     # -- public interface (same as RateLimitGate) ----------------------------
 
-    def penalize(self, delay_seconds: Optional[float] = None) -> float:
+    def penalize(self, delay_seconds: float | None = None) -> float:
         """Push the shared next-allowed time into the future via Redis.
 
         Falls back to local penalize if Redis is unavailable.
@@ -285,7 +285,7 @@ _factory_lock = threading.Lock()
 def create_rate_limit_gate(
     provider: str,
     token_hint: str = "",
-    config: Optional[RateLimitConfig] = None,
+    config: RateLimitConfig | None = None,
 ) -> RateLimitGate:
     """Create a rate-limit gate, preferring Redis-backed when available.
 

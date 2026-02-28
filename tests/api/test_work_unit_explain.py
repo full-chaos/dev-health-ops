@@ -20,9 +20,9 @@ from dev_health_ops.api.models.schemas import (
     WorkUnitInvestment,
     WorkUnitTimeRange,
 )
+from dev_health_ops.api.services.work_unit_explain import explain_work_unit
 from dev_health_ops.llm import get_provider, is_llm_available
 from dev_health_ops.llm.providers.mock import MockProvider
-from dev_health_ops.api.services.work_unit_explain import explain_work_unit
 
 
 def _sample_investment() -> WorkUnitInvestment:

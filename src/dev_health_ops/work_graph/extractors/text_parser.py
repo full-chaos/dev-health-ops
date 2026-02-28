@@ -7,7 +7,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional
 
 
 class RefType(str, Enum):
@@ -32,7 +31,7 @@ class ParsedIssueRef:
     raw_match: str
     issue_key: str
     ref_type: RefType
-    project_key: Optional[str] = None
+    project_key: str | None = None
 
 
 # Jira key pattern: PROJECT-123
@@ -56,7 +55,7 @@ GITHUB_PLAIN_REF_PATTERN = re.compile(r"(?<!\w)#(\d+)\b")
 GITLAB_CROSS_PROJECT_PATTERN = re.compile(r"([\w\-\.]+/[\w\-\.]+)#(\d+)")
 
 
-def extract_jira_keys(text: str) -> List[ParsedIssueRef]:
+def extract_jira_keys(text: str) -> list[ParsedIssueRef]:
     """
     Extract Jira issue keys from text.
 
@@ -94,7 +93,7 @@ def extract_jira_keys(text: str) -> List[ParsedIssueRef]:
     return results
 
 
-def extract_github_issue_refs(text: str) -> List[ParsedIssueRef]:
+def extract_github_issue_refs(text: str) -> list[ParsedIssueRef]:
     """
     Extract GitHub issue references from text.
 
@@ -148,7 +147,7 @@ def extract_github_issue_refs(text: str) -> List[ParsedIssueRef]:
     return results
 
 
-def extract_gitlab_issue_refs(text: str) -> List[ParsedIssueRef]:
+def extract_gitlab_issue_refs(text: str) -> list[ParsedIssueRef]:
     """
     Extract GitLab issue references from text.
 

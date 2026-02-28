@@ -12,7 +12,7 @@ import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlencode
 
 import httpx
@@ -37,9 +37,9 @@ class OAuthConfig:
     redirect_uri: str
     scopes: list[str]
     # Optional overrides for self-hosted instances
-    authorization_url: Optional[str] = None
-    token_url: Optional[str] = None
-    userinfo_url: Optional[str] = None
+    authorization_url: str | None = None
+    token_url: str | None = None
+    userinfo_url: str | None = None
 
 
 @dataclass
@@ -49,10 +49,10 @@ class OAuthUserInfo:
     provider: str
     provider_user_id: str
     email: str
-    username: Optional[str] = None
-    full_name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    raw_data: Optional[dict[str, Any]] = None
+    username: str | None = None
+    full_name: str | None = None
+    avatar_url: str | None = None
+    raw_data: dict[str, Any] | None = None
 
 
 @dataclass
@@ -61,9 +61,9 @@ class OAuthTokenResponse:
 
     access_token: str
     token_type: str
-    scope: Optional[str] = None
-    refresh_token: Optional[str] = None
-    expires_in: Optional[int] = None
+    scope: str | None = None
+    refresh_token: str | None = None
+    expires_in: int | None = None
 
 
 @dataclass
@@ -135,8 +135,8 @@ class OAuthProvider(ABC):
 
     def generate_authorization_request(
         self,
-        state: Optional[str] = None,
-        extra_params: Optional[dict[str, str]] = None,
+        state: str | None = None,
+        extra_params: dict[str, str] | None = None,
     ) -> OAuthAuthorizationRequest:
         """Generate OAuth authorization URL with state parameter."""
         if state is None:
@@ -163,7 +163,7 @@ class OAuthProvider(ABC):
     async def exchange_code_for_token(
         self,
         code: str,
-        state: Optional[str] = None,
+        state: str | None = None,
     ) -> OAuthTokenResponse:
         """Exchange authorization code for access token."""
         data = {
@@ -429,8 +429,8 @@ class GoogleOAuthProvider(OAuthProvider):
 
     def generate_authorization_request(
         self,
-        state: Optional[str] = None,
-        extra_params: Optional[dict[str, str]] = None,
+        state: str | None = None,
+        extra_params: dict[str, str] | None = None,
     ) -> OAuthAuthorizationRequest:
         """Generate Google OAuth authorization URL with required parameters."""
         params = extra_params or {}
@@ -495,7 +495,7 @@ class GoogleOAuthProvider(OAuthProvider):
 def create_oauth_provider(
     provider_type: OAuthProviderType | str,
     config: OAuthConfig,
-    base_url: Optional[str] = None,
+    base_url: str | None = None,
 ) -> OAuthProvider:
     """Factory function to create OAuth provider instances.
 
@@ -547,8 +547,8 @@ def validate_oauth_config(
     provider_type: OAuthProviderType | str,
     client_id: str,
     client_secret: str,
-    scopes: Optional[list[str]] = None,
-    base_url: Optional[str] = None,
+    scopes: list[str] | None = None,
+    base_url: str | None = None,
 ) -> OAuthConfigValidationResult:
     if isinstance(provider_type, str):
         try:
@@ -571,9 +571,7 @@ def validate_oauth_config(
 
     if provider_type == OAuthProviderType.GITHUB:
         if client_id and not client_id.startswith(("Iv1.", "Iv2.", "Ov")):
-            errors.append(
-                "GitHub client_id should start with 'Iv1.', 'Iv2.', or 'Ov'"
-            )
+            errors.append("GitHub client_id should start with 'Iv1.', 'Iv2.', or 'Ov'")
 
     if provider_type == OAuthProviderType.GITLAB:
         if base_url:

@@ -14,8 +14,8 @@ from sqlalchemy import Column, Table
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.billing import router as billing_router
 from dev_health_ops.api.billing import invoice_routes
+from dev_health_ops.api.billing import router as billing_router
 from dev_health_ops.api.billing.invoice_service import InvoiceService
 from dev_health_ops.models import Base, Organization
 from dev_health_ops.models.git import GUID

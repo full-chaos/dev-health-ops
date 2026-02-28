@@ -6,16 +6,17 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 from dev_health_ops.llm import get_provider
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.ids import parse_commit_from_id, parse_pr_from_id
 from dev_health_ops.work_graph.investment.categorize import (
@@ -46,7 +47,7 @@ from dev_health_ops.work_graph.investment.utils import (
 
 logger = logging.getLogger(__name__)
 
-NodeKey = Tuple[str, str]
+NodeKey = tuple[str, str]
 
 
 @dataclass(frozen=True)
@@ -54,21 +55,21 @@ class MaterializeConfig:
     dsn: str
     from_ts: datetime
     to_ts: datetime
-    repo_ids: Optional[List[str]]
+    repo_ids: list[str] | None
     llm_provider: str
     persist_evidence_snippets: bool
-    llm_model: Optional[str]
+    llm_model: str | None
     force: bool = False
-    team_ids: Optional[List[str]] = None
+    team_ids: list[str] | None = None
     llm_concurrency: int = 5
     org_id: str | None = None
 
 
 def _build_components(
-    edges: List[Dict[str, object]],
-) -> List[Tuple[List[NodeKey], List[Dict[str, object]]]]:
-    adjacency: Dict[NodeKey, List[NodeKey]] = {}
-    edges_by_node: Dict[NodeKey, List[Dict[str, object]]] = {}
+    edges: list[dict[str, object]],
+) -> list[tuple[list[NodeKey], list[dict[str, object]]]]:
+    adjacency: dict[NodeKey, list[NodeKey]] = {}
+    edges_by_node: dict[NodeKey, list[dict[str, object]]] = {}
 
     for edge in edges:
         source = (str(edge.get("source_type")), str(edge.get("source_id")))
@@ -79,15 +80,15 @@ def _build_components(
         edges_by_node.setdefault(target, []).append(edge)
 
     visited: set[NodeKey] = set()
-    components: List[Tuple[List[NodeKey], List[Dict[str, object]]]] = []
+    components: list[tuple[list[NodeKey], list[dict[str, object]]]] = []
 
     for node in adjacency:
         if node in visited:
             continue
         stack = [node]
         visited.add(node)
-        component_nodes: List[NodeKey] = []
-        component_edges: Dict[str, Dict[str, object]] = {}
+        component_nodes: list[NodeKey] = []
+        component_edges: dict[str, dict[str, object]] = {}
         while stack:
             current = stack.pop()
             component_nodes.append(current)
@@ -105,16 +106,16 @@ def _build_components(
 
 
 def _flatten_nodes(
-    components: List[Tuple[List[NodeKey], List[Dict[str, object]]]],
-) -> List[NodeKey]:
-    nodes: List[NodeKey] = []
+    components: list[tuple[list[NodeKey], list[dict[str, object]]]],
+) -> list[NodeKey]:
+    nodes: list[NodeKey] = []
     for node_list, _ in components:
         nodes.extend(node_list)
     return nodes
 
 
-def _group_prs_by_repo(pr_ids: Iterable[str]) -> Dict[str, List[int]]:
-    repo_map: Dict[str, List[int]] = {}
+def _group_prs_by_repo(pr_ids: Iterable[str]) -> dict[str, list[int]]:
+    repo_map: dict[str, list[int]] = {}
     for pr_id in pr_ids:
         repo_id, number = parse_pr_from_id(pr_id)
         if repo_id and number is not None:
@@ -122,8 +123,8 @@ def _group_prs_by_repo(pr_ids: Iterable[str]) -> Dict[str, List[int]]:
     return repo_map
 
 
-def _group_commits_by_repo(commit_ids: Iterable[str]) -> Dict[str, List[str]]:
-    repo_map: Dict[str, List[str]] = {}
+def _group_commits_by_repo(commit_ids: Iterable[str]) -> dict[str, list[str]]:
+    repo_map: dict[str, list[str]] = {}
     for commit_id in commit_ids:
         repo_id, commit_hash = parse_commit_from_id(commit_id)
         if repo_id and commit_hash:
@@ -131,8 +132,8 @@ def _group_commits_by_repo(commit_ids: Iterable[str]) -> Dict[str, List[str]]:
     return repo_map
 
 
-def _map_prs(prs: Iterable[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
-    mapped: Dict[str, Dict[str, object]] = {}
+def _map_prs(prs: Iterable[dict[str, object]]) -> dict[str, dict[str, object]]:
+    mapped: dict[str, dict[str, object]] = {}
     for pr in prs:
         repo_id = str(pr.get("repo_id") or "")
         number = pr.get("number")
@@ -143,8 +144,8 @@ def _map_prs(prs: Iterable[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
     return mapped
 
 
-def _map_commits(commits: Iterable[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
-    mapped: Dict[str, Dict[str, object]] = {}
+def _map_commits(commits: Iterable[dict[str, object]]) -> dict[str, dict[str, object]]:
+    mapped: dict[str, dict[str, object]] = {}
     for commit in commits:
         repo_id = str(commit.get("repo_id") or "")
         commit_hash = str(commit.get("hash") or "")
@@ -155,8 +156,8 @@ def _map_commits(commits: Iterable[Dict[str, object]]) -> Dict[str, Dict[str, ob
     return mapped
 
 
-def _pr_churn_map(prs: Iterable[Dict[str, object]]) -> Dict[str, float]:
-    churn: Dict[str, float] = {}
+def _pr_churn_map(prs: Iterable[dict[str, object]]) -> dict[str, float]:
+    churn: dict[str, float] = {}
     for pr in prs:
         repo_id = str(pr.get("repo_id") or "")
         number = pr.get("number")
@@ -174,10 +175,10 @@ def _effort_from_work_unit(
     issue_ids: Iterable[str],
     pr_ids: Iterable[str],
     commit_ids: Iterable[str],
-    pr_churn: Dict[str, float],
-    commit_churn: Dict[str, float],
-    active_hours: Dict[str, float],
-) -> Tuple[str, float]:
+    pr_churn: dict[str, float],
+    commit_churn: dict[str, float],
+    active_hours: dict[str, float],
+) -> tuple[str, float]:
     commit_total = sum(commit_churn.get(cid, 0.0) for cid in commit_ids)
     if commit_total > 0:
         return "churn_loc", float(commit_total)
@@ -190,12 +191,12 @@ def _effort_from_work_unit(
     return "churn_loc", 0.0
 
 
-def _collect_repo_ids(edges: List[Dict[str, object]]) -> List[str]:
+def _collect_repo_ids(edges: list[dict[str, object]]) -> list[str]:
     repo_ids = {str(edge.get("repo_id") or "") for edge in edges if edge.get("repo_id")}
     return sorted(repo_id for repo_id in repo_ids if repo_id)
 
 
-def _parse_repo_id(repo_id: Optional[str]) -> Optional[uuid.UUID]:
+def _parse_repo_id(repo_id: str | None) -> uuid.UUID | None:
     if not repo_id:
         return None
     try:
@@ -206,8 +207,8 @@ def _parse_repo_id(repo_id: Optional[str]) -> Optional[uuid.UUID]:
 
 def _collect_provider(
     work_item_ids: Iterable[str],
-    work_item_map: Dict[str, Dict[str, object]],
-) -> Optional[str]:
+    work_item_map: dict[str, dict[str, object]],
+) -> str | None:
     providers = {
         str(work_item_map.get(item_id, {}).get("provider") or "")
         for item_id in work_item_ids
@@ -238,10 +239,10 @@ def _resolve_work_unit_label(
     issue_ids: Iterable[str],
     pr_ids: Iterable[str],
     commit_ids: Iterable[str],
-    work_item_map: Dict[str, Dict[str, object]],
-    pr_map: Dict[str, Dict[str, object]],
-    commit_map: Dict[str, Dict[str, object]],
-) -> Tuple[Optional[str], Optional[str]]:
+    work_item_map: dict[str, dict[str, object]],
+    pr_map: dict[str, dict[str, object]],
+    commit_map: dict[str, dict[str, object]],
+) -> tuple[str | None, str | None]:
     for issue_id in sorted(issue_ids):
         item = work_item_map.get(issue_id) or {}
         title = _clean_text(item.get("title"))
@@ -276,9 +277,9 @@ def _resolve_work_unit_label(
 
 def _resolve_repo_ids(
     sink: BaseMetricsSink,
-    repo_ids: Optional[List[str]],
-    team_ids: Optional[List[str]],
-) -> Optional[List[str]]:
+    repo_ids: list[str] | None,
+    team_ids: list[str] | None,
+) -> list[str] | None:
     if repo_ids:
         return repo_ids
     if team_ids:
@@ -286,7 +287,7 @@ def _resolve_repo_ids(
     return None
 
 
-async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
+async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
     sink = create_sink(config.dsn)
     provider_instance = None
     try:
@@ -344,8 +345,8 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         parent_titles = fetch_parent_titles(sink, work_item_ids=parent_ids)
         epic_titles = fetch_parent_titles(sink, work_item_ids=epic_ids)
 
-        records: List[WorkUnitInvestmentRecord] = []
-        quote_records: List[WorkUnitInvestmentEvidenceQuoteRecord] = []
+        records: list[WorkUnitInvestmentRecord] = []
+        quote_records: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
         run_id = uuid.uuid4().hex
         computed_at = datetime.now(timezone.utc)
         model_version = config.llm_model or config.llm_provider
@@ -357,9 +358,9 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
         )
 
         # Pre-process all components: build bundles and separate into LLM vs fallback
-        pending_llm: List[Tuple[int, Any]] = []  # (index, preprocessed_data)
-        fallback_results: List[Tuple[int, Any]] = []
-        preprocessed: Dict[int, Dict[str, Any]] = {}
+        pending_llm: list[tuple[int, Any]] = []  # (index, preprocessed_data)
+        fallback_results: list[tuple[int, Any]] = []
+        preprocessed: dict[int, dict[str, Any]] = {}
 
         for idx, (nodes, component_edges) in enumerate(components):
             unit_nodes = list(dict.fromkeys(nodes))
@@ -422,9 +423,9 @@ async def materialize_investments(config: MaterializeConfig) -> Dict[str, int]:
 
         # Parallel LLM categorization with concurrency limit
         semaphore = asyncio.Semaphore(config.llm_concurrency)
-        llm_results: Dict[int, Any] = {}
+        llm_results: dict[int, Any] = {}
 
-        async def categorize_with_limit(idx: int, bundle: Any) -> Tuple[int, Any]:
+        async def categorize_with_limit(idx: int, bundle: Any) -> tuple[int, Any]:
             async with semaphore:
                 outcome = await categorize_text_bundle(
                     bundle,

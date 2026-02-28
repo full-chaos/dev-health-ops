@@ -1,45 +1,47 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-from datetime import date, datetime, timezone, timedelta
-from pathlib import Path
-from typing import Any, Iterator, List, Optional, Sequence, Dict, TypeVar
+import asyncio
+import logging
 import uuid
+from collections.abc import Iterator, Sequence
+from dataclasses import asdict
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, TypeVar
 
 import clickhouse_connect
-import logging
-import asyncio
 
 from dev_health_ops.metrics.schemas import (
     CapacityForecastRecord,
+    CICDMetricsDailyRecord,
     CommitMetricsRecord,
+    DeployMetricsDailyRecord,
+    DORAMetricsRecord,
+    FileComplexitySnapshot,
+    FileHotspotDaily,
+    FileMetricsRecord,
+    ICLandscapeRollingRecord,
+    IncidentMetricsDailyRecord,
+    InvestmentClassificationRecord,
+    InvestmentExplanationRecord,
+    InvestmentMetricsRecord,
+    IssueTypeMetricsRecord,
+    RepoComplexityDaily,
     RepoMetricsDailyRecord,
+    ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
     UserMetricsDailyRecord,
+    WorkGraphEdgeRecord,
+    WorkGraphIssuePRRecord,
+    WorkGraphPRCommitRecord,
     WorkItemCycleTimeRecord,
     WorkItemMetricsDailyRecord,
     WorkItemStateDurationDailyRecord,
     WorkItemUserMetricsDailyRecord,
-    FileMetricsRecord,
-    ReviewEdgeDailyRecord,
-    CICDMetricsDailyRecord,
-    DeployMetricsDailyRecord,
-    DORAMetricsRecord,
-    IncidentMetricsDailyRecord,
-    ICLandscapeRollingRecord,
-    FileComplexitySnapshot,
-    RepoComplexityDaily,
-    FileHotspotDaily,
-    InvestmentClassificationRecord,
-    InvestmentMetricsRecord,
-    InvestmentExplanationRecord,
-    IssueTypeMetricsRecord,
-    WorkGraphEdgeRecord,
-    WorkGraphIssuePRRecord,
-    WorkGraphPRCommitRecord,
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItemDependency,
@@ -47,7 +49,6 @@ from dev_health_ops.models.work_items import (
     WorkItemReopenEvent,
     Worklog,
 )
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 DEFAULT_BATCH_SIZE = 10000
 
@@ -61,7 +62,7 @@ def _chunked(seq: Sequence[T], size: int) -> Iterator[Sequence[T]]:
         yield seq[i : i + size]
 
 
-def _dt_to_clickhouse_datetime(value: Optional[datetime]) -> Optional[datetime]:
+def _dt_to_clickhouse_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
@@ -78,8 +79,8 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     """
 
     def query_dicts(
-        self, query: str, parameters: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, query: str, parameters: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Execute a ClickHouse query and return results as list of dicts."""
         result = self.client.query(query, parameters=parameters)
         col_names = list(getattr(result, "column_names", []) or [])
@@ -92,7 +93,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def backend_type(self) -> str:
         return "clickhouse"
 
-    def __init__(self, dsn: str, client: Optional[Any] = None) -> None:
+    def __init__(self, dsn: str, client: Any | None = None) -> None:
         if not dsn:
             raise ValueError("ClickHouse DSN is required")
         self.dsn = dsn
@@ -114,11 +115,11 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 exc_info=True,
             )
 
-    async def get_all_teams(self) -> List[Dict[str, Any]]:
+    async def get_all_teams(self) -> list[dict[str, Any]]:
         """Fetch all teams from ClickHouse for identity resolution."""
         query = "SELECT id, name, members, project_keys, repo_patterns FROM teams FINAL"
         result = await asyncio.to_thread(self.client.query, query)
-        teams: List[Dict[str, Any]] = []
+        teams: list[dict[str, Any]] = []
         for row in result.result_rows or []:
             teams.append(
                 {
@@ -131,7 +132,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
             )
         return teams
 
-    async def insert_teams(self, teams: List[Any]) -> None:
+    async def insert_teams(self, teams: list[Any]) -> None:
         if not teams:
             return
         column_names = [
@@ -940,7 +941,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
 
     def read_investment_explanation(
         self, cache_key: str
-    ) -> Optional[InvestmentExplanationRecord]:
+    ) -> InvestmentExplanationRecord | None:
         """
         Read a cached investment explanation by cache_key.
 
@@ -1245,7 +1246,7 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def _insert_rows(
         self,
         table: str,
-        columns: List[str],
+        columns: list[str],
         rows: Sequence[Any],
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
@@ -1272,8 +1273,8 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def get_rolling_30d_user_stats(
         self,
         as_of_day: date,
-        repo_id: Optional[uuid.UUID] = None,
-    ) -> List[Dict[str, Any]]:
+        repo_id: uuid.UUID | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Compute rolling 30d stats for all users as of the given day.
 
@@ -1348,9 +1349,9 @@ class ClickHouseMetricsSink(BaseMetricsSink):
     def latest_repo_metrics_query(
         self,
         *,
-        repo_id: Optional[str] = None,
-        start_day: Optional[date] = None,
-        end_day: Optional[date] = None,
+        repo_id: str | None = None,
+        start_day: date | None = None,
+        end_day: date | None = None,
     ) -> str:
         where = []
         if repo_id:

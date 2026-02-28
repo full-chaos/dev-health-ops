@@ -1,45 +1,48 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Tuple, List, Optional
+from typing import Any
 
 from dev_health_ops.models.git import (
+    CiPipelineRun,
+    Deployment,
     GitBlame,
     GitCommit,
     GitCommitStat,
     GitFile,
     GitPullRequest,
     GitPullRequestReview,
-    CiPipelineRun,
-    Deployment,
     Incident,
     Repo,
 )
+from dev_health_ops.processors.fetch_utils import (
+    AsyncBatchCollector,
+    SyncBatchCollector,
+    extract_retry_after,
+)
+from dev_health_ops.processors.fetch_utils import (
+    safe_parse_datetime as _coerce_datetime,
+)
+from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
     BATCH_SIZE,
     CONNECTORS_AVAILABLE,
     is_skippable,
 )
-from dev_health_ops.processors.fetch_utils import (
-    safe_parse_datetime as _coerce_datetime,
-    extract_retry_after,
-    SyncBatchCollector,
-    AsyncBatchCollector,
-)
-from dev_health_ops.providers.pr_state import normalize_pr_state
 
 _unused_BATCH_COLLECTOR_TYPES = (SyncBatchCollector, AsyncBatchCollector)
 
 if CONNECTORS_AVAILABLE:
+    from github import RateLimitExceededException
+
     from dev_health_ops.connectors import (
         BatchResult,
-        GitHubConnector,
         ConnectorException,
+        GitHubConnector,
     )
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
-    from github import RateLimitExceededException
 else:
     BatchResult = None  # type: ignore
     GitHubConnector = None  # type: ignore
@@ -62,9 +65,9 @@ def _fetch_github_repo_info_sync(connector, owner, repo_name):
 
 def _fetch_github_commits_sync(
     gh_repo,
-    max_commits: Optional[int],
+    max_commits: int | None,
     repo_id,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ):
     """Sync helper to fetch and parse GitHub commits."""
     raw_commits = []
@@ -160,7 +163,7 @@ def _fetch_github_commit_stats_sync(
     raw_commits,
     repo_id,
     max_stats,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ):
     """Sync helper to fetch detailed commit stats (files)."""
     stats_objects = []
@@ -358,8 +361,8 @@ def _sync_github_prs_to_store(
     loop: asyncio.AbstractEventLoop,
     batch_size: int,
     state: str = "all",
-    gate: Optional[RateLimitGate] = None,
-    since: Optional[datetime] = None,
+    gate: RateLimitGate | None = None,
+    since: datetime | None = None,
 ) -> int:
     """Fetch all PRs for a repo and insert them in batches.
 
@@ -371,7 +374,7 @@ def _sync_github_prs_to_store(
         repo_name,
     )
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
-    batch: List[GitPullRequest] = []
+    batch: list[GitPullRequest] = []
     total = 0
 
     if gate is None:
@@ -576,7 +579,7 @@ def _fetch_github_blame_sync(gh_repo, repo_id, limit=50):
     return []
 
 
-def _split_full_name(full_name: str) -> Tuple[str, str]:
+def _split_full_name(full_name: str) -> tuple[str, str]:
     parts = (full_name or "").split("/", 1)
     if len(parts) != 2:
         raise ValueError(f"Invalid repo/project full name: {full_name}")
@@ -589,7 +592,7 @@ async def _backfill_github_missing_data(
     db_repo: Repo,
     repo_full_name: str,
     default_branch: str,
-    max_commits: Optional[int],
+    max_commits: int | None,
     blame_only: bool = False,
 ) -> None:
     # Logic matches the CLI sync orchestration.
@@ -617,7 +620,7 @@ async def _backfill_github_missing_data(
 
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
 
-    file_paths: List[str] = []
+    file_paths: list[str] = []
     if needs_files or needs_blame:
         try:
             branch = gh_repo.get_branch(default_branch)
@@ -765,13 +768,13 @@ async def process_github_repo(
     token: str,
     fetch_blame: bool = False,
     blame_only: bool = False,
-    max_commits: Optional[int] = None,
+    max_commits: int | None = None,
     sync_git: bool = True,
     sync_prs: bool = True,
     sync_cicd: bool = True,
     sync_deployments: bool = True,
     sync_incidents: bool = True,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ) -> None:
     """
     Process a GitHub repository using the GitHub connector.
@@ -983,7 +986,7 @@ async def process_github_repos_batch(
     sync_incidents: bool = True,
     blame_only: bool = False,
     backfill_missing: bool = True,
-    since: Optional[datetime] = None,
+    since: datetime | None = None,
 ) -> None:
     """
     Process multiple GitHub repositories using batch processing with
@@ -1005,10 +1008,10 @@ async def process_github_repos_batch(
         pr_semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
     # Track results for summary and incremental storage
-    all_results: List[BatchResult] = []
+    all_results: list[BatchResult] = []
     stored_count = 0
 
-    results_queue: Optional[asyncio.Queue] = None
+    results_queue: asyncio.Queue | None = None
     _queue_sentinel = object()
 
     async def store_result(result: BatchResult) -> None:

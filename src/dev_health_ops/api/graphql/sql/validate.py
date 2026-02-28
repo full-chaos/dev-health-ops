@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Set
 
 from ..errors import ValidationError
 
@@ -19,11 +18,11 @@ class Dimension(str, Enum):
     SUBCATEGORY = "subcategory"
 
     @classmethod
-    def values(cls) -> List[str]:
+    def values(cls) -> list[str]:
         return [d.value for d in cls]
 
     @classmethod
-    def db_column(cls, dim: "Dimension", use_investment: bool = False) -> str:
+    def db_column(cls, dim: Dimension, use_investment: bool = False) -> str:
         """Get the database column name for a dimension."""
         if use_investment:
             mapping = {
@@ -55,11 +54,11 @@ class Measure(str, Enum):
     THROUGHPUT = "throughput"
 
     @classmethod
-    def values(cls) -> List[str]:
+    def values(cls) -> list[str]:
         return [m.value for m in cls]
 
     @classmethod
-    def db_expression(cls, measure: "Measure", use_investment: bool = False) -> str:
+    def db_expression(cls, measure: Measure, use_investment: bool = False) -> str:
         """Map measure to SQL expression."""
         if use_investment:
             mapping = {
@@ -86,11 +85,11 @@ class BucketInterval(str, Enum):
     MONTH = "month"
 
     @classmethod
-    def values(cls) -> List[str]:
+    def values(cls) -> list[str]:
         return [b.value for b in cls]
 
     @classmethod
-    def date_trunc_unit(cls, interval: "BucketInterval") -> str:
+    def date_trunc_unit(cls, interval: BucketInterval) -> str:
         """Map interval to ClickHouse date_trunc unit."""
         return interval.value
 
@@ -164,7 +163,7 @@ def validate_bucket_interval(value: str) -> BucketInterval:
         )
 
 
-def validate_sankey_path(path: List[str]) -> List[Dimension]:
+def validate_sankey_path(path: list[str]) -> list[Dimension]:
     """
     Validate a Sankey path (list of dimensions).
 
@@ -192,7 +191,7 @@ def validate_sankey_path(path: List[str]) -> List[Dimension]:
         )
 
     # Check for duplicates
-    seen: Set[str] = set()
+    seen: set[str] = set()
     for dim_str in path:
         lower = dim_str.lower()
         if lower in seen:

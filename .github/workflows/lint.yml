@@ -2,10 +2,11 @@ name: Lint
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: ["**"]
+    branches: [ "**" ]
   workflow_dispatch:
+
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -24,7 +25,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.14"
           cache: "pip"
 
       - name: Install dependencies
@@ -32,22 +33,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run black (format check)
-        continue-on-error: true
-        run: |
-          black --check .
+      - name: Run ruff check (lint)
+        run: ruff check .
 
-      - name: Run isort (import sort check)
-        continue-on-error: true
-        run: |
-          isort --check-only .
-
-      - name: Run flake8 (linting)
-        run: |
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          # The following flake8 command is intended to be informational only.
-          # It provides broader linting feedback (complexity, line length, etc.) but does not fail the job due to --exit-zero.
-          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      - name: Run ruff format (format check)
+        run: ruff format --check .
 
       - name: Run mypy (type checking)
         continue-on-error: true

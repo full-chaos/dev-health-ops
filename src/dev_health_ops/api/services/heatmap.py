@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 from fastapi import HTTPException
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
-from ..models.schemas import HeatmapAxes, HeatmapCell, HeatmapLegend, HeatmapResponse
+
 from ..models.filters import MetricFilter, ScopeFilter, TimeFilter
+from ..models.schemas import HeatmapAxes, HeatmapCell, HeatmapLegend, HeatmapResponse
 from ..queries.client import clickhouse_client
 from ..queries.heatmap import (
     fetch_hotspot_evidence,
@@ -27,7 +29,6 @@ from .people_identity import (
     load_identity_aliases,
     person_id_for_identity,
 )
-
 
 WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 STATUS_ORDER = [
@@ -55,7 +56,7 @@ class HeatmapMetric:
     scope: str
 
 
-HEATMAP_METRICS: List[HeatmapMetric] = [
+HEATMAP_METRICS: list[HeatmapMetric] = [
     HeatmapMetric(
         type="temporal_load",
         metric="review_wait_density",
@@ -103,24 +104,24 @@ HEATMAP_METRICS: List[HeatmapMetric] = [
 ]
 
 
-def _metric_for(type_value: str, metric_value: str) -> Optional[HeatmapMetric]:
+def _metric_for(type_value: str, metric_value: str) -> HeatmapMetric | None:
     for metric in HEATMAP_METRICS:
         if metric.type == type_value and metric.metric == metric_value:
             return metric
     return None
 
 
-def _hour_labels() -> List[str]:
+def _hour_labels() -> list[str]:
     return [f"{hour:02d}" for hour in range(24)]
 
 
-def _weekday_labels() -> List[str]:
+def _weekday_labels() -> list[str]:
     return WEEKDAY_LABELS[:]
 
 
 def _axis_order(
-    kind: str, values: Iterable[str], totals: Dict[str, float]
-) -> List[str]:
+    kind: str, values: Iterable[str], totals: dict[str, float]
+) -> list[str]:
     values_list = list(dict.fromkeys([v for v in values if v is not None]))
     if kind == "hour":
         return _hour_labels()
@@ -162,8 +163,8 @@ def _format_axis_value(kind: str, value: Any) -> str:
     return str(value)
 
 
-def _totals_by_axis(rows: List[Dict[str, Any]], axis_key: str) -> Dict[str, float]:
-    totals: Dict[str, float] = {}
+def _totals_by_axis(rows: list[dict[str, Any]], axis_key: str) -> dict[str, float]:
+    totals: dict[str, float] = {}
     for row in rows:
         key = row.get(axis_key)
         label = str(key) if key is not None else ""
@@ -172,21 +173,21 @@ def _totals_by_axis(rows: List[Dict[str, Any]], axis_key: str) -> Dict[str, floa
     return totals
 
 
-def _axis_values(rows: List[Dict[str, Any]], key: str, kind: str) -> List[str]:
+def _axis_values(rows: list[dict[str, Any]], key: str, kind: str) -> list[str]:
     values = [_format_axis_value(kind, row.get(key)) for row in rows]
     totals = _totals_by_axis(rows, key)
     return _axis_order(kind, values, totals)
 
 
 def _cells_from_rows(
-    rows: List[Dict[str, Any]],
+    rows: list[dict[str, Any]],
     *,
     x_key: str,
     y_key: str,
     x_kind: str,
     y_kind: str,
-) -> List[HeatmapCell]:
-    cells: List[HeatmapCell] = []
+) -> list[HeatmapCell]:
+    cells: list[HeatmapCell] = []
     for row in rows:
         x_label = _format_axis_value(x_kind, row.get(x_key))
         y_label = _format_axis_value(y_kind, row.get(y_key))
@@ -204,7 +205,7 @@ async def _resolve_identity_variants(
     sink: BaseMetricsSink,
     *,
     person_id: str,
-) -> List[str]:
+) -> list[str]:
     aliases = load_identity_aliases()
     reverse = build_reverse_alias_map(aliases)
 
@@ -238,8 +239,8 @@ async def build_heatmap_response(
     range_days: int,
     start_date: date | None = None,
     end_date: date | None = None,
-    x: Optional[str] = None,
-    y: Optional[str] = None,
+    x: str | None = None,
+    y: str | None = None,
     limit: int = 50,
 ) -> HeatmapResponse:
     definition = _metric_for(type, metric)
@@ -285,14 +286,14 @@ async def build_heatmap_response(
     end_ts = datetime.combine(end_day, datetime.min.time())
 
     async with clickhouse_client(db_url) as sink:
-        identities: List[str] = []
+        identities: list[str] = []
         if definition.type == "individual":
             identities = await _resolve_identity_variants(sink, person_id=scope_id)
             if not identities:
                 raise HTTPException(status_code=404, detail="Individual not found")
 
-        rows: List[Dict[str, Any]]
-        evidence: Optional[List[Dict[str, Any]]] = None
+        rows: list[dict[str, Any]]
+        evidence: list[dict[str, Any]] | None = None
 
         if definition.metric == "review_wait_density":
             scope_filter, scope_params = await scope_filter_for_metric(

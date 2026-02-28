@@ -4,9 +4,9 @@ import uuid
 from enum import Enum
 
 import sqlalchemy as sa
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, Text
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class RefundStatus(str, Enum):

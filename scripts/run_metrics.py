@@ -6,9 +6,10 @@ import logging
 import os
 import sys
 import uuid
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any
 
 # Allow `python scripts/run_metrics.py` from repo root.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +26,11 @@ from dev_health_ops.analytics.metrics import (  # noqa: E402
     compute_repo_metrics,
     compute_user_metrics,
 )
-from dev_health_ops.models.git import GitCommit, GitCommitStat, GitPullRequest  # noqa: E402
+from dev_health_ops.models.git import (  # noqa: E402
+    GitCommit,
+    GitCommitStat,
+    GitPullRequest,
+)
 
 
 def _is_async_db_url(db_url: str) -> bool:
@@ -69,7 +74,7 @@ def _fmt_float(value: Any, digits: int = 2) -> str:
 def _print_table(
     title: str, headers: Sequence[str], rows: Iterable[Sequence[Any]]
 ) -> None:
-    rows_list: List[List[str]] = [[str(cell) for cell in row] for row in rows]
+    rows_list: list[list[str]] = [[str(cell) for cell in row] for row in rows]
     print(f"\n{title}")
     if not rows_list:
         print("(no rows)")
@@ -95,7 +100,7 @@ def _print_table(
         print(fmt_row(r))
 
 
-def _parse_uuid(value: Any) -> Optional[uuid.UUID]:
+def _parse_uuid(value: Any) -> uuid.UUID | None:
     if value is None:
         return None
     if isinstance(value, uuid.UUID):
@@ -115,7 +120,7 @@ def _parse_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _parse_datetime(value: Any) -> Optional[datetime]:
+def _parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -123,7 +128,7 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
-def _commit_from_row(row: Any) -> Optional[GitCommit]:
+def _commit_from_row(row: Any) -> GitCommit | None:
     if not isinstance(row, dict):
         return None
 
@@ -145,7 +150,7 @@ def _commit_from_row(row: Any) -> Optional[GitCommit]:
     )
 
 
-def _commit_stat_from_row(row: Any) -> Optional[GitCommitStat]:
+def _commit_stat_from_row(row: Any) -> GitCommitStat | None:
     if not isinstance(row, dict):
         return None
 
@@ -166,7 +171,7 @@ def _commit_stat_from_row(row: Any) -> Optional[GitCommitStat]:
     )
 
 
-def _pr_from_row(row: Any) -> Optional[GitPullRequest]:
+def _pr_from_row(row: Any) -> GitPullRequest | None:
     if not isinstance(row, dict):
         return None
 
@@ -203,9 +208,9 @@ async def _run_mongo(db_url: str, limit_commits: int) -> int:
         except Exception:
             db = client["mergestat"]
 
-        commits: List[GitCommit] = []
-        stats: List[GitCommitStat] = []
-        prs: List[GitPullRequest] = []
+        commits: list[GitCommit] = []
+        stats: list[GitCommitStat] = []
+        prs: list[GitPullRequest] = []
 
         commit_projection = {
             "repo_id": 1,
@@ -259,7 +264,7 @@ async def _run_mongo(db_url: str, limit_commits: int) -> int:
     return 0
 
 
-def _clickhouse_query_rows(client: Any, query: str) -> List[dict]:
+def _clickhouse_query_rows(client: Any, query: str) -> list[dict]:
     result = client.query(query)
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])

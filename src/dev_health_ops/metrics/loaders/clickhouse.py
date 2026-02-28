@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone, date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from dev_health_ops.metrics.loaders.base import (
     DataLoader,
@@ -14,23 +14,23 @@ from dev_health_ops.metrics.loaders.base import (
 )
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    PullRequestRow,
-    PullRequestReviewRow,
-    PipelineRunRow,
     DeploymentRow,
     IncidentRow,
+    PipelineRunRow,
+    PullRequestReviewRow,
+    PullRequestRow,
 )
 from dev_health_ops.models.atlassian_ops import (
-    AtlassianOpsIncident,
     AtlassianOpsAlert,
+    AtlassianOpsIncident,
     AtlassianOpsSchedule,
 )
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
 
 async def _clickhouse_query_dicts(
-    client: Any, query: str, params: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    client: Any, query: str, params: dict[str, Any]
+) -> list[dict[str, Any]]:
     from dev_health_ops.api.queries.client import query_dicts
 
     return await query_dicts(client, query, params)
@@ -56,7 +56,7 @@ class ClickHouseDataLoader(DataLoader):
         col = f"{alias}.org_id" if alias else "org_id"
         return f" AND {col} = {{org_id:String}}"
 
-    def _inject_org_id(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _inject_org_id(self, params: dict[str, Any]) -> dict[str, Any]:
         """Inject *org_id* into query parameters when set."""
         if self.org_id:
             params = dict(params)
@@ -67,10 +67,10 @@ class ClickHouseDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[CommitStatRow], List[PullRequestRow], List[PullRequestReviewRow]]:
-        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[CommitStatRow], list[PullRequestRow], list[PullRequestReviewRow]]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
@@ -142,7 +142,7 @@ class ClickHouseDataLoader(DataLoader):
         pr_dicts = await _clickhouse_query_dicts(self.client, pr_query, params)
         review_dicts = await _clickhouse_query_dicts(self.client, review_query, params)
 
-        commit_rows: List[CommitStatRow] = []
+        commit_rows: list[CommitStatRow] = []
         for r in commit_dicts:
             u = parse_uuid(r.get("repo_id"))
             cw = r.get("committer_when")
@@ -160,7 +160,7 @@ class ClickHouseDataLoader(DataLoader):
                     }
                 )
 
-        pr_rows: List[PullRequestRow] = []
+        pr_rows: list[PullRequestRow] = []
         for r in pr_dicts:
             u = parse_uuid(r.get("repo_id"))
             ca = r.get("created_at")
@@ -186,7 +186,7 @@ class ClickHouseDataLoader(DataLoader):
                     }
                 )
 
-        review_rows: List[PullRequestReviewRow] = []
+        review_rows: list[PullRequestReviewRow] = []
         for r in review_dicts:
             u = parse_uuid(r.get("repo_id"))
             sa = r.get("submitted_at")
@@ -207,12 +207,12 @@ class ClickHouseDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[Any], List[Any]]:
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[Any], list[Any]]:
         from dev_health_ops.models.work_items import WorkItem, WorkItemStatusTransition
 
-        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
@@ -248,10 +248,10 @@ class ClickHouseDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> Tuple[List[PipelineRunRow], List[DeploymentRow]]:
-        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> tuple[list[PipelineRunRow], list[DeploymentRow]]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
@@ -277,8 +277,8 @@ class ClickHouseDataLoader(DataLoader):
         deploys_dicts = await _clickhouse_query_dicts(self.client, deploy_query, params)
 
         # ClickHouse dicts can be directly cast if they match keys
-        pipes: List[PipelineRunRow] = [dict(p) for p in pipes_dicts]  # type: ignore
-        deploys: List[DeploymentRow] = [dict(d) for d in deploys_dicts]  # type: ignore
+        pipes: list[PipelineRunRow] = [dict(p) for p in pipes_dicts]  # type: ignore
+        deploys: list[DeploymentRow] = [dict(d) for d in deploys_dicts]  # type: ignore
 
         return pipes, deploys
 
@@ -286,10 +286,10 @@ class ClickHouseDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-        repo_id: Optional[uuid.UUID],
-        repo_name: Optional[str] = None,
-    ) -> List[IncidentRow]:
-        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        repo_id: uuid.UUID | None,
+        repo_name: str | None = None,
+    ) -> list[IncidentRow]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
@@ -311,8 +311,8 @@ class ClickHouseDataLoader(DataLoader):
         self,
         repo_id: uuid.UUID,
         as_of: datetime,
-    ) -> Dict[uuid.UUID, float]:
-        params: Dict[str, Any] = {"repo_id": str(repo_id), "as_of": naive_utc(as_of)}
+    ) -> dict[uuid.UUID, float]:
+        params: dict[str, Any] = {"repo_id": str(repo_id), "as_of": naive_utc(as_of)}
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 
@@ -337,8 +337,8 @@ class ClickHouseDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsIncident]:
-        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+    ) -> list[AtlassianOpsIncident]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 
@@ -349,7 +349,7 @@ class ClickHouseDataLoader(DataLoader):
         """
         dicts = await _clickhouse_query_dicts(self.client, query, params)
 
-        incidents: List[AtlassianOpsIncident] = []
+        incidents: list[AtlassianOpsIncident] = []
         for r in dicts:
             incidents.append(
                 AtlassianOpsIncident(
@@ -370,8 +370,8 @@ class ClickHouseDataLoader(DataLoader):
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AtlassianOpsAlert]:
-        params: Dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+    ) -> list[AtlassianOpsAlert]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 
@@ -382,7 +382,7 @@ class ClickHouseDataLoader(DataLoader):
         """
         dicts = await _clickhouse_query_dicts(self.client, query, params)
 
-        alerts: List[AtlassianOpsAlert] = []
+        alerts: list[AtlassianOpsAlert] = []
         for r in dicts:
             alerts.append(
                 AtlassianOpsAlert(
@@ -400,8 +400,8 @@ class ClickHouseDataLoader(DataLoader):
 
     async def load_atlassian_ops_schedules(
         self,
-    ) -> List[AtlassianOpsSchedule]:
-        params: Dict[str, Any] = {}
+    ) -> list[AtlassianOpsSchedule]:
+        params: dict[str, Any] = {}
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 
@@ -411,7 +411,7 @@ class ClickHouseDataLoader(DataLoader):
             query = "SELECT * FROM atlassian_ops_schedules"
         dicts = await _clickhouse_query_dicts(self.client, query, params)
 
-        schedules: List[AtlassianOpsSchedule] = []
+        schedules: list[AtlassianOpsSchedule] = []
         for r in dicts:
             schedules.append(
                 AtlassianOpsSchedule(
@@ -425,8 +425,8 @@ class ClickHouseDataLoader(DataLoader):
 
     async def load_jira_project_ops_team_links(
         self,
-    ) -> List[JiraProjectOpsTeamLink]:
-        params: Dict[str, Any] = {}
+    ) -> list[JiraProjectOpsTeamLink]:
+        params: dict[str, Any] = {}
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 
@@ -436,7 +436,7 @@ class ClickHouseDataLoader(DataLoader):
             query = "SELECT * FROM jira_project_ops_team_links"
         dicts = await _clickhouse_query_dicts(self.client, query, params)
 
-        links: List[JiraProjectOpsTeamLink] = []
+        links: list[JiraProjectOpsTeamLink] = []
         for r in dicts:
             links.append(
                 JiraProjectOpsTeamLink(
@@ -452,8 +452,8 @@ class ClickHouseDataLoader(DataLoader):
     async def load_user_metrics_rolling_30d(
         self,
         as_of: date,
-    ) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {"end": as_of, "start": as_of - timedelta(days=29)}
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"end": as_of, "start": as_of - timedelta(days=29)}
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
 

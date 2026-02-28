@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterable, Optional
+from typing import Any
 
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
 from dev_health_ops.connectors.utils.rate_limit_queue import (
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class GitHubAuth:
     token: str
-    base_url: Optional[str] = None  # GitHub Enterprise REST base URL (optional)
+    base_url: str | None = None  # GitHub Enterprise REST base URL (optional)
 
 
 class GitHubWorkClient:
@@ -32,7 +33,7 @@ class GitHubWorkClient:
         *,
         auth: GitHubAuth,
         per_page: int = 100,
-        gate: Optional[RateLimitGate] = None,
+        gate: RateLimitGate | None = None,
     ) -> None:
         from github import Github  # PyGithub
 
@@ -64,8 +65,8 @@ class GitHubWorkClient:
         owner: str,
         repo: str,
         state: str = "all",
-        since: Optional[datetime] = None,
-        limit: Optional[int] = None,
+        since: datetime | None = None,
+        limit: int | None = None,
     ) -> Iterable[Any]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
         issues = gh_repo.get_issues(state=state, since=since)
@@ -80,7 +81,7 @@ class GitHubWorkClient:
                 return
 
     def iter_issue_events(
-        self, issue: Any, *, limit: Optional[int] = None
+        self, issue: Any, *, limit: int | None = None
     ) -> Iterable[Any]:
         """
         Iterate issue events (labeled/unlabeled/closed/reopened/assigned/...) via REST.
@@ -101,7 +102,7 @@ class GitHubWorkClient:
         state: str = "all",
         sort: str = "updated",
         direction: str = "desc",
-        limit: Optional[int] = None,
+        limit: int | None = None,
     ) -> Iterable[Any]:
         """
         Iterate pull requests in a repository via REST.
@@ -116,7 +117,7 @@ class GitHubWorkClient:
                 return
 
     def iter_issue_comments(
-        self, issue: Any, *, limit: Optional[int] = None
+        self, issue: Any, *, limit: int | None = None
     ) -> Iterable[Any]:
         """
         Iterate comments on an issue via REST.
@@ -129,9 +130,7 @@ class GitHubWorkClient:
             if limit is not None and count >= int(limit):
                 return
 
-    def iter_pr_comments(
-        self, pr: Any, *, limit: Optional[int] = None
-    ) -> Iterable[Any]:
+    def iter_pr_comments(self, pr: Any, *, limit: int | None = None) -> Iterable[Any]:
         """
         Iterate comments on a pull request (issue comments + review comments).
         """
@@ -140,7 +139,7 @@ class GitHubWorkClient:
             yield comment
 
     def iter_pr_review_comments(
-        self, pr: Any, *, limit: Optional[int] = None
+        self, pr: Any, *, limit: int | None = None
     ) -> Iterable[Any]:
         """
         Iterate review comments on a pull request.
@@ -159,7 +158,7 @@ class GitHubWorkClient:
         owner: str,
         repo: str,
         state: str = "all",
-        limit: Optional[int] = None,
+        limit: int | None = None,
     ) -> Iterable[Any]:
         """
         Iterate milestones in a repository via REST.
@@ -179,8 +178,8 @@ class GitHubWorkClient:
         org_login: str,
         project_number: int,
         first: int = 50,
-        max_items: Optional[int] = None,
-    ) -> Iterable[Dict[str, Any]]:
+        max_items: int | None = None,
+    ) -> Iterable[dict[str, Any]]:
         """
         Iterate GitHub Projects v2 items via GraphQL.
 
@@ -362,8 +361,8 @@ class GitHubWorkClient:
         self,
         *,
         item_id: str,
-        after: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        after: str | None = None,
+    ) -> dict[str, Any] | None:
         """
         Fetch additional changes for a specific ProjectV2Item.
 

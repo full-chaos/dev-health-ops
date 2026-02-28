@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, Text
 from sqlalchemy.orm import relationship
 
-from .git import Base, GUID
+from .git import GUID, Base
 
 
 class Invoice(Base):

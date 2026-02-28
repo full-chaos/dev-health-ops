@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
-
+from collections.abc import Iterable
+from typing import Any
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 def query_dicts(
-    sink: BaseMetricsSink, query: str, params: Dict[str, Any]
-) -> List[Dict[str, Any]]:
+    sink: BaseMetricsSink, query: str, params: dict[str, Any]
+) -> list[dict[str, Any]]:
     return sink.query_dicts(query, params)
 
 
 def fetch_work_graph_edges(
     sink: BaseMetricsSink,
     *,
-    repo_ids: Optional[List[str]] = None,
-) -> List[Dict[str, Any]]:
-    params: Dict[str, Any] = {}
+    repo_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {}
     where_sql = ""
     if repo_ids:
         params["repo_ids"] = repo_ids
@@ -47,7 +47,7 @@ def fetch_work_items(
     sink: BaseMetricsSink,
     *,
     work_item_ids: Iterable[str],
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return []
@@ -76,7 +76,7 @@ def fetch_parent_titles(
     sink: BaseMetricsSink,
     *,
     work_item_ids: Iterable[str],
-) -> Dict[str, str]:
+) -> dict[str, str]:
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return {}
@@ -100,7 +100,7 @@ def fetch_work_item_active_hours(
     sink: BaseMetricsSink,
     *,
     work_item_ids: Iterable[str],
-) -> Dict[str, float]:
+) -> dict[str, float]:
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return {}
@@ -123,9 +123,9 @@ def fetch_work_item_active_hours(
 def fetch_pull_requests(
     sink: BaseMetricsSink,
     *,
-    repo_numbers: Dict[str, List[int]],
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+    repo_numbers: dict[str, list[int]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for repo_id, numbers in repo_numbers.items():
         if not numbers:
             continue
@@ -152,9 +152,9 @@ def fetch_pull_requests(
 def fetch_commits(
     sink: BaseMetricsSink,
     *,
-    repo_commits: Dict[str, List[str]],
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+    repo_commits: dict[str, list[str]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for repo_id, hashes in repo_commits.items():
         if not hashes:
             continue
@@ -177,9 +177,9 @@ def fetch_commits(
 def fetch_commit_churn(
     sink: BaseMetricsSink,
     *,
-    repo_commits: Dict[str, List[str]],
-) -> Dict[str, float]:
-    churn: Dict[str, float] = {}
+    repo_commits: dict[str, list[str]],
+) -> dict[str, float]:
+    churn: dict[str, float] = {}
     for repo_id, hashes in repo_commits.items():
         if not hashes:
             continue
@@ -205,7 +205,7 @@ def resolve_repo_ids_for_teams(
     sink: BaseMetricsSink,
     *,
     team_ids: Iterable[str],
-) -> List[str]:
+) -> list[str]:
     team_list = [team_id for team_id in team_ids if team_id]
     if not team_list:
         return []

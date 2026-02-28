@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import strawberry
 
@@ -13,7 +13,7 @@ class GraphQLError:
 
     message: str
     code: str
-    extensions: strawberry.Private[Dict[str, Any]] = strawberry.field(
+    extensions: strawberry.Private[dict[str, Any]] = strawberry.field(
         default_factory=dict
     )
 
@@ -34,7 +34,7 @@ class CostLimitExceededError(Exception):
         self.requested_value = requested_value
         self.code = "COST_LIMIT_EXCEEDED"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "message": str(self),
             "code": self.code,
@@ -55,7 +55,7 @@ class ValidationError(Exception):
         self.value = value
         self.code = "VALIDATION_ERROR"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "message": str(self),
             "code": self.code,
@@ -73,7 +73,7 @@ class AuthorizationError(Exception):
         super().__init__(message)
         self.code = "AUTHORIZATION_ERROR"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "message": str(self),
             "code": self.code,
@@ -94,8 +94,8 @@ class PersistedQueryError(Exception):
         self.schema_version = schema_version
         self.code = "PERSISTED_QUERY_ERROR"
 
-    def to_dict(self) -> Dict[str, Any]:
-        extensions: Dict[str, Any] = {}
+    def to_dict(self) -> dict[str, Any]:
+        extensions: dict[str, Any] = {}
         if self.query_id:
             extensions["query_id"] = self.query_id
         if self.schema_version:
@@ -117,7 +117,7 @@ class QueryTimeoutError(Exception):
         self.timeout_seconds = timeout_seconds
         self.code = "QUERY_TIMEOUT"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "message": str(self),
             "code": self.code,

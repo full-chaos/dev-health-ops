@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dev_health_ops.api.services.auth import AuthService, AuthenticatedUser
+from dev_health_ops.api.services.auth import AuthenticatedUser, AuthService
 
 
 def _make_token(auth_service: AuthService, **overrides) -> str:
@@ -46,8 +46,9 @@ def _mock_session(execute_returns):
 
 @pytest.mark.asyncio
 async def test_get_current_user_rejects_nonexistent_user(auth_service):
-    from dev_health_ops.api.auth.router import get_current_user
     from fastapi import HTTPException
+
+    from dev_health_ops.api.auth.router import get_current_user
 
     token = _make_token(auth_service)
     header = f"Bearer {token}"
@@ -74,8 +75,9 @@ async def test_get_current_user_rejects_nonexistent_user(auth_service):
 
 @pytest.mark.asyncio
 async def test_get_current_user_rejects_inactive_user(auth_service):
-    from dev_health_ops.api.auth.router import get_current_user
     from fastapi import HTTPException
+
+    from dev_health_ops.api.auth.router import get_current_user
 
     user_id = uuid.uuid4()
     token = _make_token(auth_service, user_id=str(user_id))

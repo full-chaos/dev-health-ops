@@ -5,8 +5,12 @@ import json
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
+from dev_health_ops.metrics.schemas import (
+    FileComplexitySnapshot,
+    WorkItemUserMetricsDailyRecord,
+)
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -24,9 +28,6 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemStatusTransition,
 )
-
-from dev_health_ops.metrics.schemas import FileComplexitySnapshot
-from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
 
 from .utils import _parse_date_value, _parse_datetime_value
 
@@ -50,7 +51,7 @@ class ClickHouseStore:
         self._lock = asyncio.Lock()
         self._settings = settings or {}
 
-    async def __aenter__(self) -> "ClickHouseStore":
+    async def __aenter__(self) -> ClickHouseStore:
         import clickhouse_connect
 
         self.client = await asyncio.to_thread(
@@ -82,7 +83,7 @@ class ClickHouseStore:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
 
     @staticmethod
-    def _json_or_none(value: Any) -> Optional[str]:
+    def _json_or_none(value: Any) -> str | None:
         if value is None:
             return None
         return json.dumps(value, default=str)
@@ -154,7 +155,7 @@ class ClickHouseStore:
                 )
 
     async def _insert_rows(
-        self, table: str, columns: List[str], rows: List[Dict[str, Any]]
+        self, table: str, columns: list[str], rows: list[dict[str, Any]]
     ) -> None:
         if not rows:
             return
@@ -186,7 +187,7 @@ class ClickHouseStore:
 
     async def insert_repo(self, repo: Repo) -> None:
         assert self.client is not None
-        repo_id = self._normalize_uuid(getattr(repo, "id"))
+        repo_id = self._normalize_uuid(repo.id)
         async with self._lock:
             existing = await asyncio.to_thread(
                 self.client.query,
@@ -203,7 +204,7 @@ class ClickHouseStore:
 
         row = {
             "id": repo_id,
-            "repo": getattr(repo, "repo"),
+            "repo": repo.repo,
             "ref": getattr(repo, "ref", None),
             "created_at": created_at,
             "settings": self._json_or_none(getattr(repo, "settings", None)),
@@ -224,7 +225,7 @@ class ClickHouseStore:
             [row],
         )
 
-    async def get_all_repos(self) -> List[Repo]:
+    async def get_all_repos(self) -> list[Repo]:
         assert self.client is not None
         query = "SELECT id, repo FROM repos"
         async with self._lock:
@@ -243,13 +244,13 @@ class ClickHouseStore:
         self,
         *,
         as_of_day: date,
-        repo_id: Optional[uuid.UUID] = None,
-        repo_name: Optional[str] = None,
-    ) -> List["FileComplexitySnapshot"]:
+        repo_id: uuid.UUID | None = None,
+        repo_name: str | None = None,
+    ) -> list[FileComplexitySnapshot]:
         assert self.client is not None
         from dev_health_ops.metrics.schemas import FileComplexitySnapshot
 
-        params: Dict[str, Any] = {"day": as_of_day}
+        params: dict[str, Any] = {"day": as_of_day}
         repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
@@ -285,7 +286,7 @@ class ClickHouseStore:
         if not col_names or not rows:
             return []
 
-        snapshots: List[FileComplexitySnapshot] = []
+        snapshots: list[FileComplexitySnapshot] = []
         for row in rows:
             row_dict = dict(zip(col_names, row))
             r_id = self._normalize_uuid(row_dict.get("repo_id"))
@@ -324,12 +325,12 @@ class ClickHouseStore:
         self,
         *,
         day: date,
-        provider: Optional[str] = None,
-    ) -> List["WorkItemUserMetricsDailyRecord"]:
+        provider: str | None = None,
+    ) -> list[WorkItemUserMetricsDailyRecord]:
         assert self.client is not None
         from dev_health_ops.metrics.schemas import WorkItemUserMetricsDailyRecord
 
-        params: Dict[str, Any] = {"day": day}
+        params: dict[str, Any] = {"day": day}
         where = "WHERE day = {day:Date}"
         if provider:
             params["provider"] = provider
@@ -354,7 +355,7 @@ class ClickHouseStore:
         if not col_names or not rows:
             return []
 
-        out: List[WorkItemUserMetricsDailyRecord] = []
+        out: list[WorkItemUserMetricsDailyRecord] = []
         for row in rows:
             row_dict = dict(zip(col_names, row))
             day_val = _parse_date_value(row_dict.get("day"))
@@ -405,11 +406,11 @@ class ClickHouseStore:
     async def has_any_git_blame(self, repo_id) -> bool:
         return await self._has_any("git_blame", self._normalize_uuid(repo_id))
 
-    async def insert_git_file_data(self, file_data: List[GitFile]) -> None:
+    async def insert_git_file_data(self, file_data: list[GitFile]) -> None:
         if not file_data:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in file_data:
             if isinstance(item, dict):
                 rows.append(
@@ -426,10 +427,10 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "path": getattr(item, "path"),
-                        "executable": 1 if getattr(item, "executable") else 0,
-                        "contents": getattr(item, "contents"),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "path": item.path,
+                        "executable": 1 if item.executable else 0,
+                        "contents": item.contents,
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -442,11 +443,11 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_git_commit_data(self, commit_data: List[GitCommit]) -> None:
+    async def insert_git_commit_data(self, commit_data: list[GitCommit]) -> None:
         if not commit_data:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in commit_data:
             if isinstance(item, dict):
                 rows.append(
@@ -473,20 +474,16 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "hash": getattr(item, "hash"),
-                        "message": getattr(item, "message"),
-                        "author_name": getattr(item, "author_name"),
-                        "author_email": getattr(item, "author_email"),
-                        "author_when": self._normalize_datetime(
-                            getattr(item, "author_when")
-                        ),
-                        "committer_name": getattr(item, "committer_name"),
-                        "committer_email": getattr(item, "committer_email"),
-                        "committer_when": self._normalize_datetime(
-                            getattr(item, "committer_when")
-                        ),
-                        "parents": int(getattr(item, "parents") or 0),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "hash": item.hash,
+                        "message": item.message,
+                        "author_name": item.author_name,
+                        "author_email": item.author_email,
+                        "author_when": self._normalize_datetime(item.author_when),
+                        "committer_name": item.committer_name,
+                        "committer_email": item.committer_email,
+                        "committer_when": self._normalize_datetime(item.committer_when),
+                        "parents": int(item.parents or 0),
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -511,11 +508,11 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_git_commit_stats(self, commit_stats: List[GitCommitStat]) -> None:
+    async def insert_git_commit_stats(self, commit_stats: list[GitCommitStat]) -> None:
         if not commit_stats:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in commit_stats:
             if isinstance(item, dict):
                 rows.append(
@@ -535,11 +532,11 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "commit_hash": getattr(item, "commit_hash"),
-                        "file_path": getattr(item, "file_path"),
-                        "additions": int(getattr(item, "additions") or 0),
-                        "deletions": int(getattr(item, "deletions") or 0),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "commit_hash": item.commit_hash,
+                        "file_path": item.file_path,
+                        "additions": int(item.additions or 0),
+                        "deletions": int(item.deletions or 0),
                         "old_file_mode": getattr(item, "old_file_mode", None)
                         or "unknown",
                         "new_file_mode": getattr(item, "new_file_mode", None)
@@ -565,11 +562,11 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_blame_data(self, data_batch: List[GitBlame]) -> None:
+    async def insert_blame_data(self, data_batch: list[GitBlame]) -> None:
         if not data_batch:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in data_batch:
             if isinstance(item, dict):
                 rows.append(
@@ -592,16 +589,14 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "path": getattr(item, "path"),
-                        "line_no": int(getattr(item, "line_no") or 0),
-                        "author_email": getattr(item, "author_email"),
-                        "author_name": getattr(item, "author_name"),
-                        "author_when": self._normalize_datetime(
-                            getattr(item, "author_when")
-                        ),
-                        "commit_hash": getattr(item, "commit_hash"),
-                        "line": getattr(item, "line"),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "path": item.path,
+                        "line_no": int(item.line_no or 0),
+                        "author_email": item.author_email,
+                        "author_name": item.author_name,
+                        "author_when": self._normalize_datetime(item.author_when),
+                        "commit_hash": item.commit_hash,
+                        "line": item.line,
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -624,11 +619,11 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_git_pull_requests(self, pr_data: List[GitPullRequest]) -> None:
+    async def insert_git_pull_requests(self, pr_data: list[GitPullRequest]) -> None:
         if not pr_data:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in pr_data:
             if isinstance(item, dict):
                 rows.append(
@@ -667,24 +662,18 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "number": int(getattr(item, "number") or 0),
-                        "title": getattr(item, "title"),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "number": int(item.number or 0),
+                        "title": item.title,
                         "body": getattr(item, "body", None),
-                        "state": getattr(item, "state"),
-                        "author_name": getattr(item, "author_name"),
-                        "author_email": getattr(item, "author_email"),
-                        "created_at": self._normalize_datetime(
-                            getattr(item, "created_at")
-                        ),
-                        "merged_at": self._normalize_datetime(
-                            getattr(item, "merged_at")
-                        ),
-                        "closed_at": self._normalize_datetime(
-                            getattr(item, "closed_at")
-                        ),
-                        "head_branch": getattr(item, "head_branch"),
-                        "base_branch": getattr(item, "base_branch"),
+                        "state": item.state,
+                        "author_name": item.author_name,
+                        "author_email": item.author_email,
+                        "created_at": self._normalize_datetime(item.created_at),
+                        "merged_at": self._normalize_datetime(item.merged_at),
+                        "closed_at": self._normalize_datetime(item.closed_at),
+                        "head_branch": item.head_branch,
+                        "base_branch": item.base_branch,
                         "additions": getattr(item, "additions", None),
                         "deletions": getattr(item, "deletions", None),
                         "changed_files": getattr(item, "changed_files", None),
@@ -734,12 +723,12 @@ class ClickHouseStore:
         )
 
     async def insert_git_pull_request_reviews(
-        self, review_data: List[GitPullRequestReview]
+        self, review_data: list[GitPullRequestReview]
     ) -> None:
         if not review_data:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in review_data:
             if isinstance(item, dict):
                 rows.append(
@@ -760,14 +749,12 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "number": int(getattr(item, "number") or 0),
-                        "review_id": str(getattr(item, "review_id")),
-                        "reviewer": str(getattr(item, "reviewer")),
-                        "state": str(getattr(item, "state")),
-                        "submitted_at": self._normalize_datetime(
-                            getattr(item, "submitted_at")
-                        ),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "number": int(item.number or 0),
+                        "review_id": str(item.review_id),
+                        "reviewer": str(item.reviewer),
+                        "state": str(item.state),
+                        "submitted_at": self._normalize_datetime(item.submitted_at),
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -788,11 +775,11 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_ci_pipeline_runs(self, runs: List[CiPipelineRun]) -> None:
+    async def insert_ci_pipeline_runs(self, runs: list[CiPipelineRun]) -> None:
         if not runs:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in runs:
             if isinstance(item, dict):
                 rows.append(
@@ -813,15 +800,13 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "run_id": str(getattr(item, "run_id")),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "run_id": str(item.run_id),
                         "status": getattr(item, "status", None),
                         "queued_at": self._normalize_datetime(
                             getattr(item, "queued_at", None)
                         ),
-                        "started_at": self._normalize_datetime(
-                            getattr(item, "started_at")
-                        ),
+                        "started_at": self._normalize_datetime(item.started_at),
                         "finished_at": self._normalize_datetime(
                             getattr(item, "finished_at", None)
                         ),
@@ -845,11 +830,11 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_deployments(self, deployments: List[Deployment]) -> None:
+    async def insert_deployments(self, deployments: list[Deployment]) -> None:
         if not deployments:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in deployments:
             if isinstance(item, dict):
                 rows.append(
@@ -875,8 +860,8 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "deployment_id": str(getattr(item, "deployment_id")),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "deployment_id": str(item.deployment_id),
                         "status": getattr(item, "status", None),
                         "environment": getattr(item, "environment", None),
                         "started_at": self._normalize_datetime(
@@ -917,11 +902,11 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_incidents(self, incidents: List[Incident]) -> None:
+    async def insert_incidents(self, incidents: list[Incident]) -> None:
         if not incidents:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in incidents:
             if isinstance(item, dict):
                 rows.append(
@@ -941,12 +926,10 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "repo_id": self._normalize_uuid(getattr(item, "repo_id")),
-                        "incident_id": str(getattr(item, "incident_id")),
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "incident_id": str(item.incident_id),
                         "status": getattr(item, "status", None),
-                        "started_at": self._normalize_datetime(
-                            getattr(item, "started_at")
-                        ),
+                        "started_at": self._normalize_datetime(item.started_at),
                         "resolved_at": self._normalize_datetime(
                             getattr(item, "resolved_at", None)
                         ),
@@ -969,13 +952,13 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_teams(self, teams: List["Team"]) -> None:
+    async def insert_teams(self, teams: list[Team]) -> None:
         if not teams:
             return
         # Note: Imports inside method to avoid circular deps if models imports storage
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in teams:
             if isinstance(item, dict):
                 team_id = str(item.get("id") or "")
@@ -1000,17 +983,15 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "id": getattr(item, "id"),
-                        "team_uuid": self._normalize_uuid(getattr(item, "team_uuid")),
-                        "name": getattr(item, "name"),
-                        "description": getattr(item, "description"),
+                        "id": item.id,
+                        "team_uuid": self._normalize_uuid(item.team_uuid),
+                        "name": item.name,
+                        "description": item.description,
                         "members": getattr(item, "members", []) or [],
                         "project_keys": getattr(item, "project_keys", []) or [],
                         "repo_patterns": getattr(item, "repo_patterns", []) or [],
                         "is_active": int(getattr(item, "is_active", 1) or 0),
-                        "updated_at": self._normalize_datetime(
-                            getattr(item, "updated_at")
-                        ),
+                        "updated_at": self._normalize_datetime(item.updated_at),
                         "last_synced": synced_at,
                         "org_id": getattr(item, "org_id", None) or "",
                     }
@@ -1035,13 +1016,13 @@ class ClickHouseStore:
         )
 
     async def insert_jira_project_ops_team_links(
-        self, links: List[JiraProjectOpsTeamLink]
+        self, links: list[JiraProjectOpsTeamLink]
     ) -> None:
         if not links:
             return
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in links:
             if isinstance(item, dict):
                 rows.append(
@@ -1057,13 +1038,11 @@ class ClickHouseStore:
             else:
                 rows.append(
                     {
-                        "project_key": getattr(item, "project_key"),
-                        "ops_team_id": getattr(item, "ops_team_id"),
-                        "project_name": getattr(item, "project_name"),
-                        "ops_team_name": getattr(item, "ops_team_name"),
-                        "updated_at": self._normalize_datetime(
-                            getattr(item, "updated_at")
-                        ),
+                        "project_key": item.project_key,
+                        "ops_team_id": item.ops_team_id,
+                        "project_name": item.project_name,
+                        "ops_team_name": item.ops_team_name,
+                        "updated_at": self._normalize_datetime(item.updated_at),
                         "last_synced": synced_at,
                     }
                 )
@@ -1082,13 +1061,13 @@ class ClickHouseStore:
         )
 
     async def insert_atlassian_ops_incidents(
-        self, incidents: List[AtlassianOpsIncident]
+        self, incidents: list[AtlassianOpsIncident]
     ) -> None:
         if not incidents:
             return
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in incidents:
             rows.append(
                 {
@@ -1121,13 +1100,13 @@ class ClickHouseStore:
         )
 
     async def insert_atlassian_ops_alerts(
-        self, alerts: List[AtlassianOpsAlert]
+        self, alerts: list[AtlassianOpsAlert]
     ) -> None:
         if not alerts:
             return
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in alerts:
             rows.append(
                 {
@@ -1158,13 +1137,13 @@ class ClickHouseStore:
         )
 
     async def insert_atlassian_ops_schedules(
-        self, schedules: List[AtlassianOpsSchedule]
+        self, schedules: list[AtlassianOpsSchedule]
     ) -> None:
         if not schedules:
             return
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in schedules:
             rows.append(
                 {
@@ -1186,7 +1165,7 @@ class ClickHouseStore:
             rows,
         )
 
-    async def get_all_teams(self) -> List["Team"]:
+    async def get_all_teams(self) -> list[Team]:
         from dev_health_ops.models.teams import Team
 
         assert self.client is not None
@@ -1210,7 +1189,7 @@ class ClickHouseStore:
                 )
         return teams
 
-    async def get_jira_project_ops_team_links(self) -> List["JiraProjectOpsTeamLink"]:
+    async def get_jira_project_ops_team_links(self) -> list[JiraProjectOpsTeamLink]:
         from dev_health_ops.models.teams import JiraProjectOpsTeamLink
 
         assert self.client is not None
@@ -1232,12 +1211,12 @@ class ClickHouseStore:
                 )
         return links
 
-    async def insert_work_items(self, work_items: List["WorkItem"]) -> None:
+    async def insert_work_items(self, work_items: list[WorkItem]) -> None:
         if not work_items:
             return
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
 
         for item in work_items:
             is_dict = isinstance(item, dict)
@@ -1324,13 +1303,13 @@ class ClickHouseStore:
         )
 
     async def insert_work_item_transitions(
-        self, transitions: List["WorkItemStatusTransition"]
+        self, transitions: list[WorkItemStatusTransition]
     ) -> None:
         if not transitions:
             return
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
 
         for item in transitions:
             is_dict = isinstance(item, dict)
@@ -1379,13 +1358,13 @@ class ClickHouseStore:
         )
 
     async def insert_work_item_dependencies(
-        self, dependencies: List["WorkItemDependency"]
+        self, dependencies: list[WorkItemDependency]
     ) -> None:
         if not dependencies:
             return
 
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
 
         for item in dependencies:
             is_dict = isinstance(item, dict)
@@ -1419,7 +1398,7 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_work_graph_issue_pr(self, records: List[Dict[str, Any]]) -> None:
+    async def insert_work_graph_issue_pr(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
 
@@ -1433,7 +1412,7 @@ class ClickHouseStore:
             "last_synced",
         ]
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in records:
             rows.append(
                 {
@@ -1451,7 +1430,7 @@ class ClickHouseStore:
 
         await self._insert_rows("work_graph_issue_pr", columns, rows)
 
-    async def insert_work_graph_pr_commit(self, records: List[Dict[str, Any]]) -> None:
+    async def insert_work_graph_pr_commit(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
 
@@ -1465,7 +1444,7 @@ class ClickHouseStore:
             "last_synced",
         ]
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for item in records:
             rows.append(
                 {

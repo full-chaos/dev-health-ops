@@ -1,9 +1,9 @@
 import argparse
 import fnmatch
 import os
-from datetime import datetime, date, timezone
+from collections.abc import Iterable
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Optional, Iterable, List, Union, Tuple
 
 # Constants
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -81,8 +81,8 @@ def _normalize_datetime(dt: datetime) -> datetime:
 
 
 def _parse_date(value: str) -> date:
-    from datetime import date
     import argparse
+    from datetime import date
 
     try:
         return date.fromisoformat(value)
@@ -121,7 +121,7 @@ def is_skippable(file_path: str) -> bool:
     return False
 
 
-def _parse_since(value: Optional[str]) -> Optional[datetime]:
+def _parse_since(value: str | None) -> datetime | None:
     """
     Parse a --since/--start-date argument into a timezone-aware datetime.
     """
@@ -155,7 +155,7 @@ def _since_from_date_backfill(day: date, backfill_days: int) -> datetime:
     )
 
 
-def _resolve_since(ns: argparse.Namespace) -> Optional[datetime]:
+def _resolve_since(ns: argparse.Namespace) -> datetime | None:
     """
     Resolve start datetime from argparse namespace.
     """
@@ -166,7 +166,7 @@ def _resolve_since(ns: argparse.Namespace) -> Optional[datetime]:
     return _parse_since(getattr(ns, "since", None))
 
 
-def _resolve_max_commits(ns: argparse.Namespace) -> Optional[int]:
+def _resolve_max_commits(ns: argparse.Namespace) -> int | None:
     """
     Resolve max commits per repo from argparse namespace.
     """
@@ -176,7 +176,7 @@ def _resolve_max_commits(ns: argparse.Namespace) -> Optional[int]:
     return max_commits or 100
 
 
-def iter_commits_since(repo, since: Optional[datetime]) -> Iterable:
+def iter_commits_since(repo, since: datetime | None) -> Iterable:
     """
     Iterate over commits, stopping once we reach commits older than `since`.
     Expects a GitPython Repo object.
@@ -189,7 +189,7 @@ def iter_commits_since(repo, since: Optional[datetime]) -> Iterable:
         yield commit
 
 
-def collect_changed_files(repo_root: Union[str, Path], commits: Iterable) -> List[Path]:
+def collect_changed_files(repo_root: str | Path, commits: Iterable) -> list[Path]:
     """
     Collect unique file paths touched by the provided commits.
     Expects iterable of GitPython commit objects.
@@ -221,7 +221,7 @@ def collect_changed_files(repo_root: Union[str, Path], commits: Iterable) -> Lis
     return sorted(paths)
 
 
-def _split_full_name(full_name: str) -> Tuple[str, str]:
+def _split_full_name(full_name: str) -> tuple[str, str]:
     parts = (full_name or "").split("/", 1)
     if len(parts) != 2:
         raise ValueError(f"Invalid repo/project full name: {full_name}")

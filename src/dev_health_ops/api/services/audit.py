@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,27 +24,27 @@ logger = logging.getLogger(__name__)
 class AuditLogEntry:
     id: str
     org_id: str
-    user_id: Optional[str]
+    user_id: str | None
     action: str
     resource_type: str
     resource_id: str
-    description: Optional[str]
-    changes: Optional[dict[str, Any]]
-    request_metadata: Optional[dict[str, Any]]
+    description: str | None
+    changes: dict[str, Any] | None
+    request_metadata: dict[str, Any] | None
     status: str
-    error_message: Optional[str]
+    error_message: str | None
     created_at: datetime
 
 
 @dataclass
 class AuditLogFilter:
-    user_id: Optional[str] = None
-    action: Optional[str] = None
-    resource_type: Optional[str] = None
-    resource_id: Optional[str] = None
-    status: Optional[str] = None
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
+    user_id: str | None = None
+    action: str | None = None
+    resource_type: str | None = None
+    resource_id: str | None = None
+    status: str | None = None
+    start_date: datetime | None = None
+    end_date: datetime | None = None
 
 
 class AuditService:
@@ -56,16 +57,16 @@ class AuditService:
         action: AuditAction | str,
         resource_type: AuditResourceType | str,
         resource_id: str,
-        user_id: Optional[uuid.UUID] = None,
+        user_id: uuid.UUID | None = None,
         user: AuthenticatedUser | None = None,
-        description: Optional[str] = None,
-        changes: Optional[dict[str, Any]] = None,
-        ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None,
-        request_id: Optional[str] = None,
-        extra_metadata: Optional[dict[str, Any]] = None,
+        description: str | None = None,
+        changes: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        request_id: str | None = None,
+        extra_metadata: dict[str, Any] | None = None,
         status: str = "success",
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
     ) -> AuditLog:
         action_str = action.value if isinstance(action, AuditAction) else action
         resource_type_str = (
@@ -129,9 +130,9 @@ class AuditService:
         org_id: uuid.UUID,
         resource_type: AuditResourceType | str,
         resource_id: str,
-        user_id: Optional[uuid.UUID] = None,
-        description: Optional[str] = None,
-        created_values: Optional[dict[str, Any]] = None,
+        user_id: uuid.UUID | None = None,
+        description: str | None = None,
+        created_values: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AuditLog:
         return await self.log(
@@ -150,10 +151,10 @@ class AuditService:
         org_id: uuid.UUID,
         resource_type: AuditResourceType | str,
         resource_id: str,
-        user_id: Optional[uuid.UUID] = None,
-        description: Optional[str] = None,
-        before: Optional[dict[str, Any]] = None,
-        after: Optional[dict[str, Any]] = None,
+        user_id: uuid.UUID | None = None,
+        description: str | None = None,
+        before: dict[str, Any] | None = None,
+        after: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AuditLog:
         changes = None
@@ -180,9 +181,9 @@ class AuditService:
         org_id: uuid.UUID,
         resource_type: AuditResourceType | str,
         resource_id: str,
-        user_id: Optional[uuid.UUID] = None,
-        description: Optional[str] = None,
-        deleted_values: Optional[dict[str, Any]] = None,
+        user_id: uuid.UUID | None = None,
+        description: str | None = None,
+        deleted_values: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AuditLog:
         return await self.log(
@@ -201,7 +202,7 @@ class AuditService:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         success: bool = True,
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
         **kwargs: Any,
     ) -> AuditLog:
         return await self.log(
@@ -219,7 +220,7 @@ class AuditService:
     async def get_logs(
         self,
         org_id: uuid.UUID,
-        filters: Optional[AuditLogFilter] = None,
+        filters: AuditLogFilter | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[Sequence[AuditLog], int]:
@@ -259,7 +260,7 @@ class AuditService:
 
     async def get_log_by_id(
         self, org_id: uuid.UUID, log_id: uuid.UUID
-    ) -> Optional[AuditLog]:
+    ) -> AuditLog | None:
         stmt = select(AuditLog).where(
             and_(AuditLog.id == log_id, AuditLog.org_id == org_id)
         )

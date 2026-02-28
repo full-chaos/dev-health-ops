@@ -12,12 +12,12 @@ import pytest
 from fastapi import HTTPException
 
 from dev_health_ops.licensing.gating import (
-    LicenseManager,
-    LicenseAuditLogger,
     FeatureNotLicensedError,
+    LicenseAuditLogger,
+    LicenseManager,
     _check_org_feature_async,
-    has_feature,
     get_entitlements,
+    has_feature,
     require_feature,
 )
 

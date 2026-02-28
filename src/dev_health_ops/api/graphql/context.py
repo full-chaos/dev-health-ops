@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Optional, TYPE_CHECKING
 import uuid
-
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from strawberry.fastapi import BaseContext
 
 if TYPE_CHECKING:
     from dev_health_ops.api.services.auth import AuthenticatedUser
+
     from .loaders import (
         DataLoaders,
-        TeamLoader,
-        TeamByNameLoader,
-        RepoLoader,
         RepoByNameLoader,
+        RepoLoader,
+        TeamByNameLoader,
+        TeamLoader,
     )
 
 
@@ -45,13 +45,13 @@ class GraphQLContext(BaseContext):
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     persisted_query_id: str | None = None
     client: Any = None
-    loaders: Optional["DataLoaders"] = None
-    team_loader: Optional["TeamLoader"] = None
-    team_by_name_loader: Optional["TeamByNameLoader"] = None
-    repo_loader: Optional["RepoLoader"] = None
-    repo_by_name_loader: Optional["RepoByNameLoader"] = None
+    loaders: DataLoaders | None = None
+    team_loader: TeamLoader | None = None
+    team_by_name_loader: TeamByNameLoader | None = None
+    repo_loader: RepoLoader | None = None
+    repo_by_name_loader: RepoByNameLoader | None = None
     cache: Any = None
-    user: Optional["AuthenticatedUser"] = None
+    user: AuthenticatedUser | None = None
 
     def __post_init__(self) -> None:
         if not self.org_id:
@@ -66,7 +66,7 @@ def build_context(
     persisted_query_id: str | None = None,
     client: Any = None,
     cache: Any = None,
-    user: Optional["AuthenticatedUser"] = None,
+    user: AuthenticatedUser | None = None,
 ) -> GraphQLContext:
     """
     Factory function to build a GraphQL context with DataLoaders.
@@ -98,10 +98,10 @@ def build_context(
     if client is not None:
         from .loaders import (
             DataLoaders,
-            TeamLoader,
-            TeamByNameLoader,
-            RepoLoader,
             RepoByNameLoader,
+            RepoLoader,
+            TeamByNameLoader,
+            TeamLoader,
         )
 
         context.loaders = DataLoaders.create(client)

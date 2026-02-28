@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import List, Optional
 
 import strawberry
 
@@ -64,38 +63,38 @@ class ScopeFilterInput:
     """
 
     level: ScopeLevelInput = ScopeLevelInput.ORG
-    ids: List[str] = strawberry.field(default_factory=list)
+    ids: list[str] = strawberry.field(default_factory=list)
 
 
 @strawberry.input
 class WhoFilterInput:
     """Filter by who performed the work."""
 
-    developers: Optional[List[str]] = None
-    roles: Optional[List[str]] = None
+    developers: list[str] | None = None
+    roles: list[str] | None = None
 
 
 @strawberry.input
 class WhatFilterInput:
     """Filter by what artifacts were affected."""
 
-    repos: Optional[List[str]] = None
-    services: Optional[List[str]] = None
+    repos: list[str] | None = None
+    services: list[str] | None = None
 
 
 @strawberry.input
 class WhyFilterInput:
     """Filter by why the work was done (classification/categorization)."""
 
-    work_category: Optional[List[str]] = None
-    issue_type: Optional[List[str]] = None
+    work_category: list[str] | None = None
+    issue_type: list[str] | None = None
 
 
 @strawberry.input
 class HowFilterInput:
     """Filter by how the work is progressing."""
 
-    flow_stage: Optional[List[str]] = None
+    flow_stage: list[str] | None = None
 
 
 @strawberry.input
@@ -106,11 +105,11 @@ class FilterInput:
     Filters are ANDed together when multiple are specified.
     """
 
-    scope: Optional[ScopeFilterInput] = None
-    who: Optional[WhoFilterInput] = None
-    what: Optional[WhatFilterInput] = None
-    why: Optional[WhyFilterInput] = None
-    how: Optional[HowFilterInput] = None
+    scope: ScopeFilterInput | None = None
+    who: WhoFilterInput | None = None
+    what: WhatFilterInput | None = None
+    why: WhyFilterInput | None = None
+    how: HowFilterInput | None = None
 
 
 @strawberry.input
@@ -145,12 +144,12 @@ class BreakdownRequestInput:
 class SankeyRequestInput:
     """Request for a Sankey flow query."""
 
-    path: List[DimensionInput]
+    path: list[DimensionInput]
     measure: MeasureInput
     date_range: DateRangeInput
     max_nodes: int = 100
     max_edges: int = 500
-    use_investment: Optional[bool] = None
+    use_investment: bool | None = None
 
 
 @strawberry.input
@@ -162,10 +161,10 @@ class PaginationInput:
     Only one direction should be used at a time.
     """
 
-    first: Optional[int] = None
-    after: Optional[str] = None
-    last: Optional[int] = None
-    before: Optional[str] = None
+    first: int | None = None
+    after: str | None = None
+    last: int | None = None
+    before: str | None = None
 
 
 @strawberry.input
@@ -177,11 +176,11 @@ class AnalyticsRequestInput:
     queries in the batch.
     """
 
-    timeseries: List[TimeseriesRequestInput] = strawberry.field(default_factory=list)
-    breakdowns: List[BreakdownRequestInput] = strawberry.field(default_factory=list)
-    sankey: Optional[SankeyRequestInput] = None
-    use_investment: Optional[bool] = None
-    filters: Optional[FilterInput] = None  # NEW: Filter parity with REST
+    timeseries: list[TimeseriesRequestInput] = strawberry.field(default_factory=list)
+    breakdowns: list[BreakdownRequestInput] = strawberry.field(default_factory=list)
+    sankey: SankeyRequestInput | None = None
+    use_investment: bool | None = None
+    filters: FilterInput | None = None  # NEW: Filter parity with REST
 
 
 @strawberry.input
@@ -191,7 +190,7 @@ class PaginatedBreakdownRequestInput:
     dimension: DimensionInput
     measure: MeasureInput
     date_range: DateRangeInput
-    pagination: Optional[PaginationInput] = None
+    pagination: PaginationInput | None = None
 
 
 @strawberry.input
@@ -199,8 +198,8 @@ class PaginatedCatalogValuesInput:
     """Request for paginated catalog dimension values."""
 
     dimension: DimensionInput
-    pagination: Optional[PaginationInput] = None
-    filters: Optional[FilterInput] = None
+    pagination: PaginationInput | None = None
+    filters: FilterInput | None = None
 
 
 @strawberry.enum
@@ -236,11 +235,11 @@ class WorkGraphEdgeTypeInput(Enum):
 class WorkGraphEdgeFilterInput:
     """Filter options for work graph edge queries."""
 
-    repo_ids: Optional[List[str]] = None
-    source_type: Optional[WorkGraphNodeTypeInput] = None
-    target_type: Optional[WorkGraphNodeTypeInput] = None
-    edge_type: Optional[WorkGraphEdgeTypeInput] = None
-    node_id: Optional[str] = None
+    repo_ids: list[str] | None = None
+    source_type: WorkGraphNodeTypeInput | None = None
+    target_type: WorkGraphNodeTypeInput | None = None
+    edge_type: WorkGraphEdgeTypeInput | None = None
+    node_id: str | None = None
     limit: int = 1000
 
 
@@ -248,10 +247,10 @@ class WorkGraphEdgeFilterInput:
 class CapacityForecastInput:
     """Input for on-demand capacity forecast computation."""
 
-    team_id: Optional[str] = None
-    work_scope_id: Optional[str] = None
-    target_items: Optional[int] = None
-    target_date: Optional[date] = None
+    team_id: str | None = None
+    work_scope_id: str | None = None
+    target_items: int | None = None
+    target_date: date | None = None
     history_days: int = 90
     simulations: int = 10000
 
@@ -260,8 +259,8 @@ class CapacityForecastInput:
 class CapacityForecastFilterInput:
     """Filter for querying persisted capacity forecasts."""
 
-    team_id: Optional[str] = None
-    work_scope_id: Optional[str] = None
-    from_date: Optional[date] = None
-    to_date: Optional[date] = None
+    team_id: str | None = None
+    work_scope_id: str | None = None
+    from_date: date | None = None
+    to_date: date | None = None
     limit: int = 10

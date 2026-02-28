@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 import yaml
 
-
-_ALIAS_CACHE: Optional[Dict[str, List[str]]] = None
+_ALIAS_CACHE: dict[str, list[str]] | None = None
 
 
 def _norm_key(value: str) -> str:
@@ -19,7 +18,7 @@ def _norm_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
-def load_identity_aliases() -> Dict[str, List[str]]:
+def load_identity_aliases() -> dict[str, list[str]]:
     global _ALIAS_CACHE
     if _ALIAS_CACHE is not None:
         return _ALIAS_CACHE
@@ -37,7 +36,7 @@ def load_identity_aliases() -> Dict[str, List[str]]:
     except FileNotFoundError:
         payload = {}
 
-    aliases: Dict[str, List[str]] = {}
+    aliases: dict[str, list[str]] = {}
     for entry in payload.get("identities") or []:
         canonical = entry.get("canonical")
         if not canonical:
@@ -69,7 +68,7 @@ def display_name_for_identity(identity: str) -> str:
     return identity
 
 
-def parse_identity(identity: str) -> Tuple[str, str]:
+def parse_identity(identity: str) -> tuple[str, str]:
     if "@" in identity:
         return "email", identity
     if ":" in identity:
@@ -80,9 +79,9 @@ def parse_identity(identity: str) -> Tuple[str, str]:
 
 def identities_for_person(
     identity: str, aliases: Iterable[str]
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     seen = set()
-    results: List[Dict[str, str]] = []
+    results: list[dict[str, str]] = []
     for item in [identity, *aliases]:
         if not item:
             continue
@@ -95,7 +94,7 @@ def identities_for_person(
     return results
 
 
-def identity_variants(identity: str, aliases: Iterable[str]) -> List[str]:
+def identity_variants(identity: str, aliases: Iterable[str]) -> list[str]:
     variants = {identity}
     for alias in aliases:
         if alias:

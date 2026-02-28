@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from dev_health_ops.work_graph.investment import queries as q
 from dev_health_ops.work_graph.investment.constants import MIN_EVIDENCE_CHARS
 from dev_health_ops.work_graph.investment.evidence import (
     _ensure_utc,
@@ -10,7 +11,6 @@ from dev_health_ops.work_graph.investment.evidence import (
     compute_time_bounds,
     evidence_quality_band_for_bundle,
 )
-from dev_health_ops.work_graph.investment import queries as q
 
 
 def test_min_evidence_chars_constant():
@@ -113,7 +113,11 @@ def test_queries_helpers_build_expected_params(monkeypatch):
         calls.append((query, params))
         if "FROM git_commit_stats" in query:
             return [{"commit_hash": "h1", "churn_loc": 42}]
-        if "FROM work_items" in query and "title" in query and "WHERE work_item_id IN" in query:
+        if (
+            "FROM work_items" in query
+            and "title" in query
+            and "WHERE work_item_id IN" in query
+        ):
             return [
                 {"work_item_id": "W1", "title": "Title 1"},
                 {"work_item_id": "W2", "title": None},

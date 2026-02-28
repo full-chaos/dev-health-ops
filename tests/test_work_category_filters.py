@@ -11,9 +11,9 @@ from dev_health_ops.api.models.filters import (
     TimeFilter,
     WhyFilter,
 )
+from dev_health_ops.api.queries import sankey as sankey_queries
 from dev_health_ops.api.services import investment as investment_service
 from dev_health_ops.api.services import sankey as sankey_service
-from dev_health_ops.api.queries import sankey as sankey_queries
 
 
 @asynccontextmanager

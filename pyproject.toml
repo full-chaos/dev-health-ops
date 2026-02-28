@@ -13,14 +13,15 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
 keywords = ["metrics", "git", "analytics", "developer-experience", "grafana"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "tqdm",
   "sqlalchemy",
@@ -62,19 +63,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-  "mypy",
-  "black",
-  "flake8",
-  "isort",
-  "pytest",
-  "pytest-asyncio",
-  "pytest-cov",
-]
-enterprise-sso = [
-  "defusedxml>=0.7.0",
-  "signxml>=3.0.0",
-]
+dev = ["mypy", "ruff>=0.4.0", "pytest", "pytest-asyncio", "pytest-cov"]
+enterprise-sso = ["defusedxml>=0.7.0", "signxml>=3.0.0"]
 
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"
@@ -86,9 +76,7 @@ local_scheme = "dirty-tag"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-packages = { find = { where = [
-  "src",
-], exclude = [
+packages = { find = { where = ["src"], exclude = [
   "tests*",
   "docs*",
   "examples*",
@@ -104,18 +92,54 @@ include-package-data = true
 [tool.setuptools.package-data]
 "*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.mako", "**/*.html", "**/*.txt"]
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
-line_length = 88
-
-[tool.black]
+[tool.ruff]
+target-version = "py310"
 line-length = 88
-target-version = ['py310', 'py311', 'py312']
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", # pycodestyle errors
+  "W", # pycodestyle warnings
+  "F", # pyflakes
+  "I", # isort
+  "UP", # pyupgrade
+  "B", # flake8-bugbear
+  "SIM", # flake8-simplify
+
+]
+ignore = [
+  "E501", # line too long (handled by formatter)
+  "B008", # do not perform function calls in argument defaults (FastAPI Depends)
+  "SIM108", # use ternary operator (readability trade-off)
+  # Existing violations suppressed to unblock CI — address incrementally
+  "B904", # raise-without-from-inside-except (58 violations)
+  "B905", # zip-without-explicit-strict (14 violations)
+  "B023", # function-uses-loop-variable (12 violations)
+  "B027", # empty-method-without-abstract-decorator (9 violations)
+  "B017", # assert-raises-exception (6 violations)
+  "B007", # unused-loop-control-variable (4 violations)
+  "UP045", # non-pep604-annotation-optional (requires unsafe fix)
+  "UP028", # yield-in-for-loop (8 violations)
+  "SIM102", # collapsible-if (25 violations)
+  "SIM117", # multiple-with-statements (13 violations)
+  "SIM113", # enumerate-for-loop (8 violations)
+  "SIM105", # suppressible-exception (7 violations)
+  "SIM103", # needless-bool (5 violations)
+  "SIM110", # reimplemented-builtin (4 violations)
+  "SIM118", # in-dict-keys (4 violations)
+  "SIM116", # if-else-block-instead-of-dict-lookup (2 violations)
+  "SIM101", # duplicate-isinstance-call (1 violation)
+  "SIM201", # negate-equal-op (1 violation)
+  "E402", # module-import-not-at-top-of-file (2 violations)
+
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"] # re-exports are intentional in __init__ files
+
+[tool.ruff.lint.isort]
+known-first-party = ["dev_health_ops"]
 
 [tool.poetry]
 name = "dev-health-ops"
@@ -172,9 +196,7 @@ priority = "supplemental"
 
 [tool.poetry.group.dev.dependencies]
 mypy = "*"
-black = "*"
-flake8 = "*"
-isort = "*"
+ruff = ">=0.4.0"
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"

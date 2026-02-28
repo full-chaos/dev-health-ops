@@ -4,8 +4,8 @@ import asyncio
 import importlib
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class ResendEmailProvider(EmailProvider):
         text_content: str | None,
     ) -> None:
         resend = importlib.import_module("resend")
-        setattr(resend, "api_key", self.api_key)
+        resend.api_key = self.api_key
         payload: dict[str, object] = {
             "from": from_address,
             "to": [to_address],
@@ -86,7 +86,7 @@ class ResendEmailProvider(EmailProvider):
         }
         if text_content is not None:
             payload["text"] = text_content
-        getattr(resend, "Emails").send(payload)
+        resend.Emails.send(payload)
 
 
 class EmailService:

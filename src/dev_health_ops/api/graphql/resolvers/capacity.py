@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -15,11 +15,10 @@ from ..models.outputs import (
     PageInfo,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
-def _row_to_forecast(row: Dict[str, Any]) -> CapacityForecast:
+def _row_to_forecast(row: dict[str, Any]) -> CapacityForecast:
     return CapacityForecast(
         forecast_id=str(row.get("forecast_id", "")),
         computed_at=str(row.get("computed_at", "")),
@@ -73,8 +72,8 @@ def _result_to_forecast(result: Any) -> CapacityForecast:
 
 async def resolve_capacity_forecast(
     context: GraphQLContext,
-    input: Optional[CapacityForecastInput] = None,
-) -> Optional[CapacityForecast]:
+    input: CapacityForecastInput | None = None,
+) -> CapacityForecast | None:
     from dev_health_ops.metrics.compute_capacity import forecast_capacity
     from dev_health_ops.metrics.job_capacity import (
         get_backlog_from_sink,
@@ -145,7 +144,7 @@ async def resolve_capacity_forecast(
 
 async def resolve_capacity_forecasts(
     context: GraphQLContext,
-    filters: Optional[CapacityForecastFilterInput] = None,
+    filters: CapacityForecastFilterInput | None = None,
 ) -> CapacityForecastConnection:
     from dev_health_ops.api.queries.client import query_dicts
 
@@ -156,8 +155,8 @@ async def resolve_capacity_forecasts(
         raise RuntimeError("Database client not available")
 
     limit = filters.limit if filters else 10
-    params: Dict[str, Any] = {"limit": int(limit)}
-    where_clauses: List[str] = []
+    params: dict[str, Any] = {"limit": int(limit)}
+    where_clauses: list[str] = []
 
     if filters:
         if filters.team_id:

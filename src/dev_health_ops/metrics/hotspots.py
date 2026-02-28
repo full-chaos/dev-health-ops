@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Any, Dict, List, Sequence, Optional
+from typing import Any
 
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    FileMetricsRecord,
-    FileHotspotDaily,
     FileComplexitySnapshot,
+    FileHotspotDaily,
+    FileMetricsRecord,
 )
 
 
@@ -19,7 +20,7 @@ def compute_file_hotspots(
     day: date,
     window_stats: Sequence[CommitStatRow],
     computed_at: datetime,
-) -> List[FileMetricsRecord]:
+) -> list[FileMetricsRecord]:
     """
     Compute file hotspot scores based on a window of commit stats.
 
@@ -27,7 +28,7 @@ def compute_file_hotspots(
     hotspot_raw = α*log(1 + churn_f) + β*contributors_f + γ*commit_count_f
     Weights: α=0.4, β=0.3, γ=0.3
     """
-    file_map: Dict[str, Dict[str, Any]] = {}
+    file_map: dict[str, dict[str, Any]] = {}
 
     for row in window_stats:
         if row["repo_id"] != repo_id:
@@ -55,7 +56,7 @@ def compute_file_hotspots(
         stats["authors"].add(author)
         stats["commits"].add(row["commit_hash"])
 
-    records: List[FileMetricsRecord] = []
+    records: list[FileMetricsRecord] = []
     alpha, beta, gamma = 0.4, 0.3, 0.3
 
     for path, stats in file_map.items():
@@ -92,10 +93,10 @@ def compute_file_risk_hotspots(
     repo_id: uuid.UUID,
     day: date,
     window_stats: Sequence[CommitStatRow],
-    complexity_map: Dict[str, FileComplexitySnapshot],
-    blame_map: Optional[Dict[str, float]] = None,
+    complexity_map: dict[str, FileComplexitySnapshot],
+    blame_map: dict[str, float] | None = None,
     computed_at: datetime,
-) -> List[FileHotspotDaily]:
+) -> list[FileHotspotDaily]:
     """
     Compute risk score merging churn (30d) and complexity.
 
@@ -104,7 +105,7 @@ def compute_file_risk_hotspots(
     Blame concentration can be provided (e.g., derived from git blame data).
     """
     # 1. Aggregate churn per file
-    churn_map: Dict[str, Dict[str, int]] = {}
+    churn_map: dict[str, dict[str, int]] = {}
     for row in window_stats:
         if row["repo_id"] != repo_id:
             continue
@@ -146,7 +147,7 @@ def compute_file_risk_hotspots(
 
     # 3. Compute Z-scores
     # Helper to compute z-scores for a list of values
-    def get_z_scores(values: List[float]) -> List[float]:
+    def get_z_scores(values: list[float]) -> list[float]:
         if not values:
             return []
         n = len(values)

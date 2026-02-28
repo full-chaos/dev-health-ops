@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -73,8 +73,8 @@ class JiraProvider(Provider):
     def __init__(
         self,
         *,
-        status_mapping: Optional[StatusMapping] = None,
-        identity: Optional[IdentityResolver] = None,
+        status_mapping: StatusMapping | None = None,
+        identity: IdentityResolver | None = None,
     ) -> None:
         """
         Initialize the Jira provider.
@@ -132,7 +132,7 @@ class JiraProvider(Provider):
         )
 
         # Determine project keys
-        project_keys: Optional[Sequence[str]] = None
+        project_keys: Sequence[str] | None = None
         if ctx.project_key:
             project_keys = [ctx.project_key]
         else:
@@ -149,12 +149,12 @@ class JiraProvider(Provider):
 
         client = JiraClient.from_env()
 
-        work_items: List[WorkItem] = []
-        transitions: List[WorkItemStatusTransition] = []
-        dependencies: List[WorkItemDependency] = []
-        reopen_events: List[WorkItemReopenEvent] = []
-        interactions: List[WorkItemInteractionEvent] = []
-        sprints: List[Sprint] = []
+        work_items: list[WorkItem] = []
+        transitions: list[WorkItemStatusTransition] = []
+        dependencies: list[WorkItemDependency] = []
+        reopen_events: list[WorkItemReopenEvent] = []
+        interactions: list[WorkItemInteractionEvent] = []
+        sprints: list[Sprint] = []
 
         fetch_comments = _env_flag("JIRA_FETCH_COMMENTS", True)
         raw_comments_limit = os.getenv("JIRA_COMMENTS_LIMIT")
@@ -167,12 +167,12 @@ class JiraProvider(Provider):
                     "Invalid JIRA_COMMENTS_LIMIT value %r; falling back to 0",
                     raw_comments_limit,
                 )
-        sprint_cache: Dict[str, Sprint] = {}
+        sprint_cache: dict[str, Sprint] = {}
         sprint_ids: set[str] = set()
 
         # Build time window parameters
-        updated_since: Optional[str] = None
-        active_until: Optional[str] = None
+        updated_since: str | None = None
+        active_until: str | None = None
         if ctx.window.updated_since:
             updated_since = _to_utc(ctx.window.updated_since).date().isoformat()
         if ctx.window.active_until:
@@ -181,7 +181,7 @@ class JiraProvider(Provider):
         logger.info("Jira: fetching work items (updated_since=%s)", updated_since)
 
         # Build JQL queries
-        jqls: List[str] = []
+        jqls: list[str] = []
         if jql_override:
             jqls = [jql_override]
             logger.info("Jira: using JIRA_JQL override")
@@ -331,8 +331,8 @@ class JiraProvider(Provider):
 
         from dev_health_ops.models.work_items import Worklog
         from dev_health_ops.providers.jira.atlassian_compat import (
-            build_atlassian_rest_client,
             build_atlassian_graphql_client,
+            build_atlassian_rest_client,
             get_atlassian_cloud_id,
         )
         from dev_health_ops.providers.jira.client import build_jira_jql
@@ -345,7 +345,7 @@ class JiraProvider(Provider):
             detect_reopen_events,
         )
 
-        project_keys: Optional[Sequence[str]] = None
+        project_keys: Sequence[str] | None = None
         if ctx.project_key:
             project_keys = [ctx.project_key]
         else:
@@ -355,14 +355,14 @@ class JiraProvider(Provider):
         jql_override = (os.getenv("JIRA_JQL") or "").strip()
         fetch_all = _env_flag("JIRA_FETCH_ALL", False)
 
-        updated_since: Optional[str] = None
-        active_until: Optional[str] = None
+        updated_since: str | None = None
+        active_until: str | None = None
         if ctx.window.updated_since:
             updated_since = _to_utc(ctx.window.updated_since).date().isoformat()
         if ctx.window.active_until:
             active_until = _to_utc(ctx.window.active_until).date().isoformat()
 
-        jqls: List[str] = []
+        jqls: list[str] = []
         if jql_override:
             jqls = [jql_override]
         elif fetch_all:
@@ -396,11 +396,11 @@ class JiraProvider(Provider):
                 "Set ATLASSIAN_CLOUD_ID or derive from ATLASSIAN_JIRA_BASE_URL."
             )
 
-        work_items: List[WorkItem] = []
-        transitions: List[WorkItemStatusTransition] = []
-        reopen_events: List[WorkItemReopenEvent] = []
-        sprints: List[Sprint] = []
-        worklogs: List[Worklog] = []
+        work_items: list[WorkItem] = []
+        transitions: list[WorkItemStatusTransition] = []
+        reopen_events: list[WorkItemReopenEvent] = []
+        sprints: list[Sprint] = []
+        worklogs: list[Worklog] = []
         sprint_ids: set[str] = set()
 
         fetch_worklogs = _env_flag("JIRA_FETCH_WORKLOGS", False)

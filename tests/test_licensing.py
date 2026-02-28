@@ -10,8 +10,8 @@ from dev_health_ops.licensing import (
     KeyPair,
     LicensePayload,
     LicenseTier,
-    LicenseValidator,
     LicenseValidationError,
+    LicenseValidator,
     generate_keypair,
     sign_license,
     sign_payload,
@@ -394,9 +394,9 @@ class TestRequireFeatureDecorator:
 
     def test_sync_function_denied(self, keypair: tuple[str, str]):
         from dev_health_ops.licensing import (
+            FeatureNotLicensedError,
             LicenseManager,
             require_feature,
-            FeatureNotLicensedError,
         )
 
         public_key, private_key = keypair
@@ -447,9 +447,9 @@ class TestRequireFeatureDecorator:
     @pytest.mark.asyncio
     async def test_async_function_denied(self, keypair: tuple[str, str]):
         from dev_health_ops.licensing import (
+            FeatureNotLicensedError,
             LicenseManager,
             require_feature,
-            FeatureNotLicensedError,
         )
 
         public_key, private_key = keypair
@@ -495,8 +495,8 @@ class TestRequireLimitDecorator:
     def test_sync_function_exceeds_limit(self, keypair: tuple[str, str]):
         from dev_health_ops.licensing import (
             LicenseManager,
-            require_limit,
             LimitExceededError,
+            require_limit,
         )
 
         public_key, private_key = keypair
@@ -552,8 +552,8 @@ class TestRequireLimitDecorator:
     async def test_async_function_exceeds_limit(self, keypair: tuple[str, str]):
         from dev_health_ops.licensing import (
             LicenseManager,
-            require_limit,
             LimitExceededError,
+            require_limit,
         )
 
         public_key, private_key = keypair
@@ -592,7 +592,6 @@ class TestLicenseAuditLogger:
 
     def test_singleton_pattern(self):
         from dev_health_ops.licensing.gating import (
-            LicenseAuditLogger,
             get_license_audit_logger,
         )
 

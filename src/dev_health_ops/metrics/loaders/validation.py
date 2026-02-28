@@ -21,15 +21,12 @@ Performance note:
 from __future__ import annotations
 
 import os
+import types
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime
 from typing import (
     Any,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Type,
     Union,
     get_args,
     get_origin,
@@ -59,7 +56,7 @@ class ValidationError:
 
     __slots__ = ("field", "message", "row_index")
 
-    def __init__(self, field: str, message: str, row_index: Optional[int] = None):
+    def __init__(self, field: str, message: str, row_index: int | None = None):
         self.field = field
         self.message = message
         self.row_index = row_index
@@ -79,6 +76,9 @@ def _is_optional(type_hint: Any) -> bool:
     if origin is Union:
         args = get_args(type_hint)
         return type(None) in args
+    # PEP 604: int | None creates types.UnionType in Python 3.10+
+    if isinstance(type_hint, types.UnionType):
+        return type(None) in type_hint.__args__
     return False
 
 
@@ -96,6 +96,11 @@ def _unwrap_optional(type_hint: Any) -> Any:
     if origin is Union:
         args = get_args(type_hint)
         non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    # PEP 604: int | None creates types.UnionType
+    if isinstance(type_hint, types.UnionType):
+        non_none = [a for a in type_hint.__args__ if a is not type(None)]
         if len(non_none) == 1:
             return non_none[0]
     return type_hint
@@ -168,10 +173,10 @@ def _check_type(value: Any, expected: Any) -> bool:
 
 
 def validate_typed_dict(
-    data: Dict[str, Any],
-    td_class: Type,
-    row_index: Optional[int] = None,
-) -> List[ValidationError]:
+    data: dict[str, Any],
+    td_class: type,
+    row_index: int | None = None,
+) -> list[ValidationError]:
     """Validate a dict against a TypedDict schema.
 
     Args:
@@ -200,7 +205,7 @@ def validate_typed_dict(
             )
         ]
 
-    errors: List[ValidationError] = []
+    errors: list[ValidationError] = []
 
     try:
         hints = get_type_hints(td_class, include_extras=True)
@@ -252,12 +257,12 @@ def validate_typed_dict(
 
 
 def validate_rows(
-    rows: Sequence[Dict[str, Any]],
-    td_class: Type,
+    rows: Sequence[dict[str, Any]],
+    td_class: type,
     *,
     max_errors: int = 10,
-    validate: Optional[bool] = None,
-) -> List[ValidationError]:
+    validate: bool | None = None,
+) -> list[ValidationError]:
     """Validate a sequence of dicts against a TypedDict schema.
 
     Args:
@@ -274,7 +279,7 @@ def validate_rows(
     if not should_validate:
         return []
 
-    errors: List[ValidationError] = []
+    errors: list[ValidationError] = []
     for idx, row in enumerate(rows):
         row_errors = validate_typed_dict(row, td_class, row_index=idx)
         errors.extend(row_errors)
@@ -285,11 +290,11 @@ def validate_rows(
 
 
 def validate_or_raise(
-    rows: Sequence[Dict[str, Any]],
-    td_class: Type,
+    rows: Sequence[dict[str, Any]],
+    td_class: type,
     context: str = "",
     *,
-    validate: Optional[bool] = None,
+    validate: bool | None = None,
 ) -> None:
     """Validate rows and raise ValueError if validation fails.
 

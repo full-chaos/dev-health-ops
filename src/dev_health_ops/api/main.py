@@ -1,27 +1,37 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from importlib import import_module
-import logging
-import os
-from typing import List, Literal, cast
+from typing import Literal, cast
 from urllib.parse import urlparse
 
-
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-import asyncio
-import json
 
-from dev_health_ops.metrics.sinks.factory import detect_backend, SinkBackend
+from dev_health_ops.api.middleware import OrgIdMiddleware
+from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
+from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.api.telemetry.router import router as telemetry_router
+from dev_health_ops.licensing import LicenseManager
+from dev_health_ops.metrics.sinks.factory import SinkBackend, detect_backend
 
-from .utils.logging import sanitize_for_log
-
+from .admin import router as admin_router
+from .admin.impersonation import router as impersonation_router
+from .auth import router as auth_router
+from .auth.router import get_current_user
+from .billing import router as billing_router
+from .graphql.app import create_graphql_app
+from .ingest import router as ingest_router
+from .licensing import router as licensing_router
 from .models.filters import (
     DrilldownRequest,
     ExplainRequest,
@@ -43,26 +53,31 @@ from .models.schemas import (
     HealthResponse,
     HeatmapResponse,
     HomeResponse,
+    InvestmentMixExplanation,
     InvestmentResponse,
     InvestmentSunburstSlice,
-    InvestmentMixExplanation,
     MetaResponse,
     OpportunitiesResponse,
-    QuadrantResponse,
-    WorkUnitExplanation,
-    WorkUnitInvestment,
     PersonDrilldownResponse,
     PersonMetricResponse,
     PersonSearchResult,
     PersonSummaryResponse,
+    QuadrantResponse,
     SankeyResponse,
+    WorkUnitExplanation,
+    WorkUnitInvestment,
 )
-from .queries.client import clickhouse_client, query_dicts, close_global_client
+from .orgs import router as orgs_router
+from .queries.client import clickhouse_client, close_global_client, query_dicts
 from .queries.drilldown import fetch_issues, fetch_pull_requests
 from .queries.filters import fetch_filter_options
+from .services.aggregated_flame import build_aggregated_flame_response
+from .services.auth import AuthenticatedUser
 from .services.cache import create_cache
 from .services.explain import build_explain_response
 from .services.filtering import scope_filter_for_metric, time_window
+from .services.flame import build_flame_response
+from .services.heatmap import build_heatmap_response
 from .services.home import build_home_response
 from .services.investment import build_investment_response, build_investment_sunburst
 from .services.investment_flow import (
@@ -78,29 +93,12 @@ from .services.people import (
     build_person_summary_response,
     search_people_response,
 )
-from .services.heatmap import build_heatmap_response
-from .services.flame import build_flame_response
-from .services.aggregated_flame import build_aggregated_flame_response
 from .services.quadrant import build_quadrant_response
 from .services.sankey import build_sankey_response
-from .services.work_units import build_work_unit_investments
 from .services.work_unit_explain import explain_work_unit
-from .graphql.app import create_graphql_app
+from .services.work_units import build_work_unit_investments
+from .utils.logging import sanitize_for_log
 from .webhooks import router as webhooks_router
-from .admin import router as admin_router
-from .admin.impersonation import router as impersonation_router
-from .auth import router as auth_router
-from .auth.router import get_current_user
-from .services.auth import AuthenticatedUser
-from .billing import router as billing_router
-from .orgs import router as orgs_router
-from .ingest import router as ingest_router
-from .licensing import router as licensing_router
-from dev_health_ops.api.telemetry.router import router as telemetry_router
-from dev_health_ops.licensing import LicenseManager
-from dev_health_ops.api.middleware import OrgIdMiddleware
-from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
-from dev_health_ops.api.middleware.rate_limit import limiter
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
@@ -608,7 +606,7 @@ async def heatmap(
 async def work_units_post(
     payload: WorkUnitRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
-) -> List[WorkUnitInvestment]:
+) -> list[WorkUnitInvestment]:
     try:
         include_textual = (
             True if payload.include_textual is None else payload.include_textual
@@ -650,7 +648,7 @@ async def work_units(
     limit: int = 200,
     include_textual: bool = True,
     current_user: AuthenticatedUser = Depends(get_current_user),
-) -> List[WorkUnitInvestment]:
+) -> list[WorkUnitInvestment]:
     try:
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date
@@ -1240,7 +1238,7 @@ async def investment_sunburst(
     end_date: date | None = None,
     limit: int = 500,
     current_user: AuthenticatedUser = Depends(get_current_user),
-) -> List[InvestmentSunburstSlice]:
+) -> list[InvestmentSunburstSlice]:
     try:
         filters = _filters_from_query(
             scope_type, scope_id, range_days, range_days, start_date, end_date

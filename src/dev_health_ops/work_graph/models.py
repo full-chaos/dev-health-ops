@@ -8,7 +8,6 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Optional
 
 
 class NodeType(str, Enum):
@@ -75,12 +74,12 @@ class WorkGraphEdge:
     provenance: Provenance
     confidence: float
     evidence: str
-    repo_id: Optional[uuid.UUID] = None
-    provider: Optional[str] = None
+    repo_id: uuid.UUID | None = None
+    provider: str | None = None
     discovered_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_synced: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     event_ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    day: Optional[date] = None
+    day: date | None = None
 
     def __post_init__(self):
         if not 0.0 <= self.confidence <= 1.0:

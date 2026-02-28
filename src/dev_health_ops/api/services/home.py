@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
@@ -133,7 +133,7 @@ _METRICS = [
 ]
 
 
-def _spark_points(rows: List[Dict[str, Any]], transform) -> List[SparkPoint]:
+def _spark_points(rows: list[dict[str, Any]], transform) -> list[SparkPoint]:
     points = []
     for row in rows:
         value = safe_float(row.get("value"))
@@ -161,8 +161,8 @@ async def _metric_deltas(
     compare_start: date,
     compare_end: date,
     org_id: str = "",
-) -> List[MetricDelta]:
-    deltas: List[MetricDelta] = []
+) -> list[MetricDelta]:
+    deltas: list[MetricDelta] = []
 
     for metric in _METRICS:
         scope_filter, scope_params = await scope_filter_for_metric(
@@ -242,7 +242,7 @@ async def _metric_deltas(
     return deltas
 
 
-def _select_constraint(deltas: List[MetricDelta]) -> MetricDelta:
+def _select_constraint(deltas: list[MetricDelta]) -> MetricDelta:
     if not deltas:
         return MetricDelta(
             metric="cycle_time",
@@ -294,7 +294,7 @@ async def build_home_response(
             "ci": "ok" if last_ingested else "down",
         }
 
-        summary_sentences: List[SummarySentence] = []
+        summary_sentences: list[SummarySentence] = []
         top_delta = max(deltas, key=lambda d: abs(d.delta_pct), default=None)
         if top_delta:
             scope_filter, scope_params = await scope_filter_for_metric(
@@ -359,7 +359,7 @@ async def build_home_response(
             ],
         )
 
-        events: List[EventItem] = []
+        events: list[EventItem] = []
         for delta in deltas:
             if abs(delta.delta_pct) >= 25:
                 events.append(

@@ -202,14 +202,14 @@ async def test_service_validates_not_paid_invoice():
         patch.object(
             service, "_get_existing_refunds_total", new=AsyncMock(return_value=0)
         ),
+        pytest.raises(ValueError, match="Invoice is not paid"),
     ):
-        with pytest.raises(ValueError, match="Invoice is not paid"):
-            await service.create_refund(
-                db=db,
-                org_id=uuid.uuid4(),
-                invoice_id=uuid.uuid4(),
-                amount=200,
-            )
+        await service.create_refund(
+            db=db,
+            org_id=uuid.uuid4(),
+            invoice_id=uuid.uuid4(),
+            amount=200,
+        )
 
 
 @pytest.mark.asyncio
@@ -235,16 +235,14 @@ async def test_service_validates_refund_amount_bounds():
         patch.object(
             service, "_get_existing_refunds_total", new=AsyncMock(return_value=900)
         ),
+        pytest.raises(ValueError, match="Refund amount exceeds refundable balance"),
     ):
-        with pytest.raises(
-            ValueError, match="Refund amount exceeds refundable balance"
-        ):
-            await service.create_refund(
-                db=db,
-                org_id=uuid.uuid4(),
-                invoice_id=uuid.uuid4(),
-                amount=200,
-            )
+        await service.create_refund(
+            db=db,
+            org_id=uuid.uuid4(),
+            invoice_id=uuid.uuid4(),
+            amount=200,
+        )
 
 
 @pytest.mark.asyncio
@@ -270,11 +268,11 @@ async def test_service_validates_already_refunded_invoice():
         patch.object(
             service, "_get_existing_refunds_total", new=AsyncMock(return_value=1000)
         ),
+        pytest.raises(ValueError, match="fully refunded"),
     ):
-        with pytest.raises(ValueError, match="fully refunded"):
-            await service.create_refund(
-                db=db,
-                org_id=uuid.uuid4(),
-                invoice_id=uuid.uuid4(),
-                amount=100,
-            )
+        await service.create_refund(
+            db=db,
+            org_id=uuid.uuid4(),
+            invoice_id=uuid.uuid4(),
+            amount=100,
+        )

@@ -3,7 +3,6 @@ from __future__ import annotations
 import ipaddress
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -16,7 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from dev_health_ops.models.git import Base, GUID
+from dev_health_ops.models.git import GUID, Base
 
 
 class OrgIPAllowlist(Base):
@@ -64,10 +63,10 @@ class OrgIPAllowlist(Base):
         self,
         org_id: uuid.UUID,
         ip_range: str,
-        description: Optional[str] = None,
+        description: str | None = None,
         is_active: bool = True,
-        created_by_id: Optional[uuid.UUID] = None,
-        expires_at: Optional[datetime] = None,
+        created_by_id: uuid.UUID | None = None,
+        expires_at: datetime | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id

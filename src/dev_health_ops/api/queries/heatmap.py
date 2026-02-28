@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
-from typing import Any, Dict, List, Sequence
+from typing import Any
+
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
-from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 async def fetch_review_wait_density(
@@ -13,9 +15,9 @@ async def fetch_review_wait_density(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             toDayOfWeek(created_at) AS weekday,
@@ -44,10 +46,10 @@ async def fetch_review_wait_evidence(
     weekday: int,
     hour: int,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             repo_id,
@@ -85,10 +87,10 @@ async def fetch_repo_touchpoints(
     start_ts: datetime,
     end_ts: datetime,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     top_query = f"""
         SELECT
             repos.repo AS repo,
@@ -142,10 +144,10 @@ async def fetch_hotspot_risk(
     start_day: date,
     end_day: date,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     top_query = f"""
         SELECT
             concat(repos.repo, ':', path) AS file_key,
@@ -202,10 +204,10 @@ async def fetch_hotspot_evidence(
     week_end: date,
     file_key: str,
     scope_filter: str,
-    scope_params: Dict[str, Any],
+    scope_params: dict[str, Any],
     limit: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     query = f"""
         SELECT
             day,
@@ -244,7 +246,7 @@ async def fetch_individual_active_hours(
     end_ts: datetime,
     identities: Sequence[str],
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if not identities:
         return []
     query = """
@@ -279,7 +281,7 @@ async def fetch_individual_active_evidence(
     identities: Sequence[str],
     limit: int,
     org_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if not identities:
         return []
     query = """

@@ -5,9 +5,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from celery.exceptions import Retry
-
 import pytest
+from celery.exceptions import Retry
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 

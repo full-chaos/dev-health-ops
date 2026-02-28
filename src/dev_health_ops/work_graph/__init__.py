@@ -6,12 +6,12 @@ that links work items, PRs, commits, and files together with provenance tracking
 """
 
 from dev_health_ops.work_graph.models import (
+    EdgeType,
+    NodeType,
+    Provenance,
     WorkGraphEdge,
     WorkGraphIssuePR,
     WorkGraphPRCommit,
-    NodeType,
-    EdgeType,
-    Provenance,
 )
 
 __all__ = [

@@ -3,30 +3,32 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from dev_health_ops.api.main import app
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.main import app
+from dev_health_ops.api.models.filters import MetricFilter
 from dev_health_ops.api.models.schemas import (
     ConstraintCard,
     ConstraintEvidence,
+    Contributor,
     Coverage,
     EventItem,
+    ExplainResponse,
     Freshness,
     HomeResponse,
     MetricDelta,
-    SparkPoint,
-    SummarySentence,
-    ExplainResponse,
-    Contributor,
     SankeyLink,
     SankeyNode,
     SankeyResponse,
+    SparkPoint,
+    SummarySentence,
 )
-from dev_health_ops.api.models.filters import MetricFilter
+from dev_health_ops.api.services.auth import AuthenticatedUser
 
 _FAKE_USER = AuthenticatedUser(
-    user_id="test-user", email="test@example.com",
-    org_id="test-org", role="admin",
+    user_id="test-user",
+    email="test@example.com",
+    org_id="test-org",
+    role="admin",
 )
 
 

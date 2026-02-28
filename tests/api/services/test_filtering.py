@@ -10,8 +10,12 @@ from dev_health_ops.api.services import filtering as filtering_mod
 
 def test_filter_cache_key_is_stable_for_equivalent_filters():
     filters = MetricFilter()
-    key_a = filtering_mod.filter_cache_key("home", "org-1", filters, extra={"scope": "org"})
-    key_b = filtering_mod.filter_cache_key("home", "org-1", filters, extra={"scope": "org"})
+    key_a = filtering_mod.filter_cache_key(
+        "home", "org-1", filters, extra={"scope": "org"}
+    )
+    key_b = filtering_mod.filter_cache_key(
+        "home", "org-1", filters, extra={"scope": "org"}
+    )
     assert key_a == key_b
 
 
@@ -70,7 +74,9 @@ async def test_scope_filter_for_metric_team(monkeypatch):
         assert repo_column == "repo"
         return " team_sql ", {"team_ids": ids}
 
-    monkeypatch.setattr(filtering_mod, "build_scope_filter_multi", fake_build_scope_filter_multi)
+    monkeypatch.setattr(
+        filtering_mod, "build_scope_filter_multi", fake_build_scope_filter_multi
+    )
 
     sql, params = await filtering_mod.scope_filter_for_metric(
         sink=object(),
@@ -96,8 +102,12 @@ async def test_scope_filter_for_metric_repo_uses_resolved_repo_ids(monkeypatch):
         assert ids == ["r1", "r2"]
         return " repo_sql ", {"repo_ids": ids}
 
-    monkeypatch.setattr(filtering_mod, "resolve_repo_filter_ids", fake_resolve_repo_filter_ids)
-    monkeypatch.setattr(filtering_mod, "build_scope_filter_multi", fake_build_scope_filter_multi)
+    monkeypatch.setattr(
+        filtering_mod, "resolve_repo_filter_ids", fake_resolve_repo_filter_ids
+    )
+    monkeypatch.setattr(
+        filtering_mod, "build_scope_filter_multi", fake_build_scope_filter_multi
+    )
 
     sql, params = await filtering_mod.scope_filter_for_metric(
         sink=object(),

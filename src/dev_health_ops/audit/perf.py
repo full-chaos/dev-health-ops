@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.storage import detect_db_type
@@ -15,11 +15,11 @@ DEFAULT_LIMIT = 20
 MAX_QUERY_LENGTH = 500
 
 
-def _result_rows(result: Any) -> List[Any]:
+def _result_rows(result: Any) -> list[Any]:
     return list(getattr(result, "result_rows", []) or [])
 
 
-def _column_names(result: Any) -> List[str]:
+def _column_names(result: Any) -> list[str]:
     return list(getattr(result, "column_names", []) or [])
 
 
@@ -30,12 +30,12 @@ def _truncate_query(query: str, max_length: int = MAX_QUERY_LENGTH) -> str:
     return f"{normalized[: max_length - 3]}..."
 
 
-def _describe_query_log_columns(client: Any) -> List[str]:
+def _describe_query_log_columns(client: Any) -> list[str]:
     result = client.query("DESCRIBE TABLE system.query_log")
     return [row[0] for row in _result_rows(result) if row]
 
 
-def _get_setting_value(client: Any, name: str) -> Optional[str]:
+def _get_setting_value(client: Any, name: str) -> str | None:
     result = client.query(
         "SELECT value FROM system.settings WHERE name = {name:String}",
         parameters={"name": name},
@@ -46,7 +46,7 @@ def _get_setting_value(client: Any, name: str) -> Optional[str]:
     return str(rows[0][0])
 
 
-def _pick_time_column(columns: List[str]) -> Optional[str]:
+def _pick_time_column(columns: list[str]) -> str | None:
     for candidate in ("event_time", "query_start_time", "event_time_microseconds"):
         if candidate in columns:
             return candidate
@@ -59,8 +59,8 @@ def run_perf_audit(
     threshold_ms: int = DEFAULT_THRESHOLD_MS,
     lookback_minutes: int = DEFAULT_LOOKBACK_MINUTES,
     limit: int = DEFAULT_LIMIT,
-) -> Dict[str, Any]:
-    report: Dict[str, Any] = {
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
         "status": "unchecked",
         "db_backend": None,
         "db_error": None,
@@ -183,7 +183,7 @@ def run_perf_audit(
             logger.warning("Failed to close ClickHouse client: %s", exc)
 
 
-def format_perf_report(report: Dict[str, Any]) -> str:
+def format_perf_report(report: dict[str, Any]) -> str:
     status = report.get("status", "unchecked")
     backend = report.get("db_backend") or "unknown"
     lines = [f"status: {status}", f"backend: {backend}"]

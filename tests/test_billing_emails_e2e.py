@@ -4,6 +4,7 @@ These tests verify the full flow from org owner lookup through email dispatch,
 using a real SQLite database for User/Organization/Membership queries and
 mocked email service to capture sent emails.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -17,8 +18,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.users import Membership, MemberRole, Organization, User
-
+from dev_health_ops.models.users import MemberRole, Membership, Organization, User
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -198,7 +198,10 @@ async def test_e2e_send_invoice_receipt_real_db(session_maker, seeded):
         ),
     ):
         await send_invoice_receipt(
-            uuid.UUID(seeded["org_id"]), 4900, "usd", "https://invoice.stripe.com/i/test"
+            uuid.UUID(seeded["org_id"]),
+            4900,
+            "usd",
+            "https://invoice.stripe.com/i/test",
         )
 
     mock_email_svc.send_template_email.assert_awaited_once()

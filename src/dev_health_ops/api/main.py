@@ -375,6 +375,21 @@ app.include_router(telemetry_router)
 app.include_router(ingest_router)
 app.include_router(orgs_router)
 
+# Prometheus metrics — expose /metrics endpoint
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/health", "/ready", "/metrics"],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+    logger.info("Prometheus /metrics endpoint enabled")
+except ImportError:
+    logger.warning(
+        "prometheus-fastapi-instrumentator not installed — /metrics endpoint disabled"
+    )
+
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:

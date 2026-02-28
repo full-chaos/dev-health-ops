@@ -61,6 +61,8 @@ dependencies = [
   # Observability
   "python-json-logger>=2.0.7",
   "sentry-sdk[fastapi,celery]>=2.0.0",
+  "prometheus-fastapi-instrumentator>=6.1.0",
+  "prometheus-client>=0.20.0",
 ]
 
 [project.optional-dependencies]

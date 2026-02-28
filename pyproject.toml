@@ -136,7 +136,7 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
-ignore = ["E203", "E501", "W503"]
+ignore = ["E203", "E501"]
 per-file-ignores = {"__init__.py" = ["F401"]}
 
 [tool.ruff.format]

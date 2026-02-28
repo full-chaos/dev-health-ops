@@ -349,42 +349,31 @@ def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
     return incidents
 
 
-def _sync_github_prs_to_store(
+def _collect_github_pr_objects(
     connector,
     owner: str,
     repo_name: str,
     repo_id,
-    store,
-    loop: asyncio.AbstractEventLoop,
-    batch_size: int,
+    gh_repo,
+    gate: "RateLimitGate",
     state: str = "all",
-    gate: Optional[RateLimitGate] = None,
     since: Optional[datetime] = None,
-) -> int:
-    """Fetch all PRs for a repo and insert them in batches.
+) -> Tuple[List[GitPullRequest], List[Any]]:
+    """Collect raw PR objects and build GitPullRequest records without per-PR review/comment API calls.
 
-    Runs in a worker thread; uses run_coroutine_threadsafe to write batches.
+    Reviews and comments are fetched in a subsequent batch pass to avoid N+1 API calls.
+    Returns (pr_objects, raw_gh_prs) for downstream review/comment batching.
     """
-    logging.info(
-        "Fetching PRs for %s/%s...",
-        owner,
-        repo_name,
-    )
-    gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
-    batch: List[GitPullRequest] = []
-    total = 0
+    pr_objects: List[GitPullRequest] = []
+    raw_gh_prs: List[Any] = []
 
-    if gate is None:
-        gate = RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
-
-    # per_page is set at Github client level during connector initialization
-    # (some test doubles or older PyGithub versions may not accept sort/direction).
     sorted_by_updated = True
     try:
         pr_iter = iter(gh_repo.get_pulls(state=state, sort="updated", direction="desc"))
     except TypeError:
         sorted_by_updated = False
         pr_iter = iter(gh_repo.get_pulls(state=state))
+
     while True:
         try:
             gate.wait_sync()
@@ -403,7 +392,6 @@ def _sync_github_prs_to_store(
             continue
         except Exception as e:
             retry_after = extract_retry_after(e, connector=None)
-
             if retry_after is not None:
                 applied = gate.penalize(retry_after)
                 logging.info(
@@ -412,8 +400,8 @@ def _sync_github_prs_to_store(
                     e,
                 )
                 continue
-
             raise
+
         if since is not None and sorted_by_updated:
             updated_at = getattr(gh_pr, "updated_at", None)
             if (
@@ -433,69 +421,15 @@ def _sync_github_prs_to_store(
             or getattr(gh_pr, "closed_at", None)
             or datetime.now(timezone.utc)
         )
-
         merged_at = getattr(gh_pr, "merged_at", None)
         closed_at = getattr(gh_pr, "closed_at", None)
 
-        # Lazy load full PR for stats (additions/deletions)
         additions = getattr(gh_pr, "additions", 0)
         deletions = getattr(gh_pr, "deletions", 0)
         changed_files = getattr(gh_pr, "changed_files", 0)
+        comments_count = getattr(gh_pr, "comments", 0)
 
-        # Fetch and store reviews for this PR
-        first_review_at = None
-        reviews_count = 0
-        changes_requested_count = 0
-        try:
-            reviews = connector.get_pull_request_reviews(owner, repo_name, gh_pr.number)
-            reviews_count = len(reviews)
-            if reviews:
-                review_objects = []
-                for r in reviews:
-                    review_at = r.submitted_at or created_at
-                    if first_review_at is None or review_at < first_review_at:
-                        first_review_at = review_at
-                    if r.state == "CHANGES_REQUESTED":
-                        changes_requested_count += 1
-
-                    review_objects.append(
-                        GitPullRequestReview(
-                            repo_id=repo_id,
-                            number=gh_pr.number,
-                            review_id=r.id,
-                            reviewer=r.reviewer,
-                            state=r.state,
-                            submitted_at=review_at,
-                        )
-                    )
-                asyncio.run_coroutine_threadsafe(
-                    store.insert_git_pull_request_reviews(review_objects),
-                    loop,
-                ).result()
-        except Exception as e:
-            logging.debug(f"Failed to fetch reviews for PR #{gh_pr.number}: {e}")
-
-        # Fetch first comment for "Pickup Time"
-        first_comment_at = None
-        comments_count = 0
-        try:
-            # Issue comments include top-level PR comments
-            issue_comments = gh_pr.get_issue_comments()
-            # This is a paginated list, we only need the first one's date but we want total count
-            # To avoid fetching all comments if there are many, we can just get the first page for first_comment_at
-            # and maybe the count is available on the issue object.
-            # However, for simplicity and since we are already Doing one call per PR, let's just get the first one.
-            comments_count = gh_pr.comments  # issue comments count
-            if comments_count > 0:
-                for c in issue_comments:
-                    if first_comment_at is None or c.created_at < first_comment_at:
-                        first_comment_at = c.created_at
-                    # if we only want the first one, we can break if they are sorted,
-                    # but they might not be.
-        except Exception as e:
-            logging.debug(f"Failed to fetch comments for PR #{gh_pr.number}: {e}")
-
-        batch.append(
+        pr_objects.append(
             GitPullRequest(
                 repo_id=repo_id,
                 number=int(getattr(gh_pr, "number", 0) or 0),
@@ -512,34 +446,161 @@ def _sync_github_prs_to_store(
                 additions=additions,
                 deletions=deletions,
                 changed_files=changed_files,
-                first_review_at=first_review_at,
-                first_comment_at=first_comment_at,
-                changes_requested_count=changes_requested_count,
-                reviews_count=reviews_count,
+                first_review_at=None,
+                first_comment_at=None,
+                changes_requested_count=0,
+                reviews_count=0,
                 comments_count=comments_count,
             )
         )
-        total += 1
+        raw_gh_prs.append(gh_pr)
 
-        if len(batch) >= batch_size:
-            asyncio.run_coroutine_threadsafe(
-                store.insert_git_pull_requests(batch),
-                loop,
-            ).result()
-            logging.debug(
-                "Stored batch of %d PRs for %s/%s (total: %d)",
-                len(batch),
-                owner,
-                repo_name,
-                total,
+    return pr_objects, raw_gh_prs
+
+
+def _enrich_prs_with_reviews_batch(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    pr_objects: List[GitPullRequest],
+    raw_gh_prs: List[Any],
+    store,
+    loop: asyncio.AbstractEventLoop,
+) -> List[GitPullRequestReview]:
+    """Batch-fetch reviews for all PRs and enrich pr_objects in place.
+
+    Collects all review objects and returns them for a single bulk insert,
+    replacing the N+1 pattern (one review API call per PR).
+    """
+    all_review_objects: List[GitPullRequestReview] = []
+
+    for pr_obj, gh_pr in zip(pr_objects, raw_gh_prs):
+        try:
+            reviews = connector.get_pull_request_reviews(owner, repo_name, gh_pr.number)
+        except Exception as e:
+            logging.debug("Failed to fetch reviews for PR #%d: %s", gh_pr.number, e)
+            continue
+
+        if not reviews:
+            continue
+
+        first_review_at = None
+        reviews_count = 0
+        changes_requested_count = 0
+
+        for r in reviews:
+            review_at = r.submitted_at or pr_obj.created_at
+            if first_review_at is None or review_at < first_review_at:
+                first_review_at = review_at
+            if r.state == "CHANGES_REQUESTED":
+                changes_requested_count += 1
+            reviews_count += 1
+            all_review_objects.append(
+                GitPullRequestReview(
+                    repo_id=repo_id,
+                    number=gh_pr.number,
+                    review_id=r.id,
+                    reviewer=r.reviewer,
+                    state=r.state,
+                    submitted_at=review_at,
+                )
             )
-            batch.clear()
 
-    if batch:
+        # Mutate the pr_obj fields that require review data
+        object.__setattr__(pr_obj, "first_review_at", first_review_at) if hasattr(
+            type(pr_obj), "__dataclass_fields__"
+        ) else None
+        try:
+            pr_obj.first_review_at = first_review_at  # type: ignore[misc]
+            pr_obj.reviews_count = reviews_count  # type: ignore[misc]
+            pr_obj.changes_requested_count = changes_requested_count  # type: ignore[misc]
+        except AttributeError:
+            pass  # frozen dataclass; fields stay at default
+
+    return all_review_objects
+
+
+def _sync_github_prs_to_store(
+    connector,
+    owner: str,
+    repo_name: str,
+    repo_id,
+    store,
+    loop: asyncio.AbstractEventLoop,
+    batch_size: int,
+    state: str = "all",
+    gate: Optional[RateLimitGate] = None,
+    since: Optional[datetime] = None,
+) -> int:
+    """Fetch all PRs for a repo and insert them in batches.
+
+    Runs in a worker thread; uses run_coroutine_threadsafe to write batches.
+    Reviews are fetched in a single batch pass after all PRs are collected,
+    avoiding N+1 API calls.
+    """
+    logging.info(
+        "Fetching PRs for %s/%s...",
+        owner,
+        repo_name,
+    )
+    gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
+
+    if gate is None:
+        gate = RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+
+    # Phase 1: collect all PR objects without per-PR review/comment API calls
+    pr_objects, raw_gh_prs = _collect_github_pr_objects(
+        connector=connector,
+        owner=owner,
+        repo_name=repo_name,
+        repo_id=repo_id,
+        gh_repo=gh_repo,
+        gate=gate,
+        state=state,
+        since=since,
+    )
+    total = len(pr_objects)
+
+    # Phase 2: batch-fetch reviews for all collected PRs (single pass, no N+1)
+    review_objects = _enrich_prs_with_reviews_batch(
+        connector=connector,
+        owner=owner,
+        repo_name=repo_name,
+        repo_id=repo_id,
+        pr_objects=pr_objects,
+        raw_gh_prs=raw_gh_prs,
+        store=store,
+        loop=loop,
+    )
+
+    # Phase 3: persist reviews in one bulk insert
+    if review_objects:
+        asyncio.run_coroutine_threadsafe(
+            store.insert_git_pull_request_reviews(review_objects),
+            loop,
+        ).result()
+        logging.debug(
+            "Stored %d reviews for %s/%s",
+            len(review_objects),
+            owner,
+            repo_name,
+        )
+
+    # Phase 4: persist PRs in batches
+    for i in range(0, len(pr_objects), batch_size):
+        batch = pr_objects[i : i + batch_size]
         asyncio.run_coroutine_threadsafe(
             store.insert_git_pull_requests(batch),
             loop,
         ).result()
+        logging.debug(
+            "Stored batch of %d PRs for %s/%s (total so far: %d)",
+            len(batch),
+            owner,
+            repo_name,
+            min(i + batch_size, total),
+        )
 
     logging.info(
         "Fetched %d PRs for %s/%s",

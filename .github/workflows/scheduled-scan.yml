@@ -1,0 +1,54 @@
+name: Scheduled Dependency Scan
+
+on:
+  schedule:
+    # Every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+jobs:
+  pip-audit-weekly:
+    name: Weekly Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install "pip-audit>=2.7.0"
+
+      - name: Run pip-audit
+        run: |
+          # Build ignore flags from repo-controlled allowlist (not user input)
+          IGNORE_ARGS=""
+          if [ -f .pip-audit-ignore ]; then
+            while IFS= read -r line; do
+              [[ "$line" =~ ^[[:space:]]*# ]] && continue
+              [[ -z "${line// }" ]] && continue
+              CVE=$(echo "$line" | awk '{print $1}')
+              IGNORE_ARGS="$IGNORE_ARGS --ignore-vuln $CVE"
+            done < .pip-audit-ignore
+          fi
+          # shellcheck disable=SC2086
+          pip-audit \
+            --requirement requirements.txt \
+            --vulnerability-service pypi \
+            --format markdown \
+            --output pip-audit-report.md \
+            $IGNORE_ARGS
+
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pip-audit-weekly-report
+          path: pip-audit-report.md
+          if-no-files-found: ignore
+          retention-days: 90

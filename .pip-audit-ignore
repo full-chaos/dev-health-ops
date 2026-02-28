@@ -1,0 +1,11 @@
+# pip-audit CVE allowlist
+# Format: <CVE-ID> <package-name> <reason> [<expiry-date>]
+#
+# Add entries here for acknowledged CVEs that have been reviewed and accepted.
+# Each entry should include the CVE ID, affected package, reason for acceptance,
+# and an optional expiry date after which the ignore should be reconsidered.
+#
+# Example:
+# PYSEC-2024-123 some-package Accepted risk, no fix available yet. Review by 2025-06-01.
+#
+# Currently no CVEs are acknowledged/ignored.

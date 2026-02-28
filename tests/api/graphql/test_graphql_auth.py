@@ -29,9 +29,7 @@ def client_auth_required(monkeypatch):
     monkeypatch.setenv("GRAPHQL_AUTH_REQUIRED", "true")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-for-graphql-auth")
     # Reset cached auth service so it picks up the test secret
-    monkeypatch.setattr(
-        "dev_health_ops.api.services.auth._auth_service", None
-    )
+    monkeypatch.setattr("dev_health_ops.api.services.auth._auth_service", None)
     from dev_health_ops.api.main import app
 
     return TestClient(app, raise_server_exceptions=False)

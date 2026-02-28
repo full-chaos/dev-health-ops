@@ -48,11 +48,7 @@ PYTEST_SINGLE_RETRY="${PYTEST_SINGLE_RETRY:-0}"
 PYTEST_DURATIONS="${PYTEST_DURATIONS:-25}"
 PYTEST_DIAGNOSTIC_OPTS=(-ra "--durations=${PYTEST_DURATIONS}")
 
-HAS_POETRY=0
 HAS_UV=0
-if command -v poetry >/dev/null 2>&1; then
-  HAS_POETRY=1
-fi
 if command -v uv >/dev/null 2>&1; then
   HAS_UV=1
   export UV_CACHE_DIR="${UV_CACHE_DIR:-${ROOT_DIR}/.uv-cache}"
@@ -68,11 +64,6 @@ run_cmd() {
     return $?
   fi
 
-  if [ "${HAS_POETRY}" -eq 1 ]; then
-    poetry run "${cmd}" "$@"
-    return $?
-  fi
-
   if [ "${HAS_UV}" -eq 1 ]; then
     uv run "${cmd}" "$@"
     return $?
@@ -83,7 +74,7 @@ run_cmd() {
 
 require_cmd() {
   local cmd="$1"
-  if ! command -v "$cmd" >/dev/null 2>&1 && [ "${HAS_POETRY}" -eq 0 ] && [ "${HAS_UV}" -eq 0 ]; then
+  if ! command -v "$cmd" >/dev/null 2>&1 && [ "${HAS_UV}" -eq 0 ]; then
     echo "ERROR: Required command '$cmd' is not available."
     exit "$EXIT_MISSING_DEP"
   fi

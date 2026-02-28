@@ -104,9 +104,9 @@ services:
       - ./:/app
     working_dir: /app
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/ready" ]
       interval: 15s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 30s
 
@@ -141,9 +141,9 @@ services:
       - ./:/app
     working_dir: /app
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/ready" ]
       interval: 15s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 30s
 

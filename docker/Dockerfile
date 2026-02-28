@@ -22,9 +22,12 @@ RUN mkdir -p /app
 FROM base AS api
 EXPOSE 8000
 
+# Readiness probe — fast check, no external dependency validation
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget --spider -q http://localhost:8000/ready || exit 1
+
 ENTRYPOINT ["dev-hops", "api"]
 CMD ["--host", "0.0.0.0", "--port", "8000"]
-
 
 
 FROM base AS runner

@@ -194,54 +194,6 @@ def _dsn_uses_async_driver(dsn: str) -> bool:
     return "+asyncpg" in scheme or "+aiosqlite" in scheme
 
 
-def _check_mongo_health(dsn: str) -> bool:
-    from pymongo import MongoClient
-
-    client = MongoClient(dsn, serverSelectionTimeoutMS=2000)
-    try:
-        client.admin.command("ping")
-        return True
-    except Exception:
-        return False
-    finally:
-        try:
-            client.close()
-        except Exception:
-            pass
-
-
-async def _check_database_service(dsn: str) -> tuple[str, str]:
-    try:
-        backend = detect_backend(dsn)
-    except Exception as exc:
-        logger.warning(
-            "Unable to detect database backend for health check: %s",
-            sanitize_for_log(exc),
-        )
-        return "database", "down"
-
-    if backend == SinkBackend.CLICKHOUSE:
-        try:
-            async with clickhouse_client(dsn) as sink:
-                rows = await query_dicts(sink, "SELECT 1 AS ok", {})
-            return backend.value, "ok" if rows else "down"
-        except Exception:
-            return backend.value, "down"
-
-    if backend in (SinkBackend.SQLITE, SinkBackend.POSTGRES):
-        if _dsn_uses_async_driver(dsn):
-            ok = await _check_sqlalchemy_health_async(dsn)
-        else:
-            ok = await asyncio.to_thread(_check_sqlalchemy_health, dsn)
-        return backend.value, "ok" if ok else "down"
-
-    if backend == SinkBackend.MONGO:
-        ok = await asyncio.to_thread(_check_mongo_health, dsn)
-        return backend.value, "ok" if ok else "down"
-
-    return backend.value, "down"
-
-
 async def _check_postgres_health() -> tuple[str, str]:
     uri = _postgres_url()
     if not uri:
@@ -263,6 +215,37 @@ async def _check_clickhouse_health() -> tuple[str, str]:
         return "clickhouse", "ok" if rows else "down"
     except Exception:
         return "clickhouse", "down"
+
+
+async def _check_redis_health() -> tuple[str, str]:
+    """Ping Redis directly to verify connectivity."""
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        import redis.asyncio as aioredis
+
+        client = aioredis.from_url(redis_url, socket_connect_timeout=2)
+        try:
+            await client.ping()
+            return "redis", "ok"
+        finally:
+            await client.aclose()
+    except Exception:
+        return "redis", "down"
+
+
+async def _check_celery_health() -> tuple[str, str]:
+    """Inspect active Celery workers via the broker."""
+    try:
+        from dev_health_ops.workers.celery_app import celery_app
+
+        # Use inspect with a very short timeout so health checks stay fast
+        inspect = celery_app.control.inspect(timeout=1.5)
+        active = await asyncio.to_thread(inspect.ping)
+        if active:
+            return "celery", "ok"
+        return "celery", "no_workers"
+    except Exception:
+        return "celery", "down"
 
 
 def _filters_from_query(
@@ -393,26 +376,39 @@ except ImportError:
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:
-    services = {}
-    required_services = []
+    """Deep health check: verifies all critical dependencies.
 
-    pg_key, pg_status = await _check_postgres_health()
-    services[pg_key] = pg_status
-    required_services.append(pg_status)
+    Returns 200 when all required services (Postgres, ClickHouse, Redis)
+    are reachable. Returns 503 if any required service is down.
+    Celery worker status is reported but does not affect the HTTP status
+    code (no workers may be a valid state during cold start).
+    """
+    services: dict[str, str] = {}
+    required_statuses: list[str] = []
 
-    ch_key, ch_status = await _check_clickhouse_health()
-    services[ch_key] = ch_status
-    required_services.append(ch_status)
+    # Run all checks concurrently for speed
+    results = await asyncio.gather(
+        _check_postgres_health(),
+        _check_clickhouse_health(),
+        _check_redis_health(),
+        _check_celery_health(),
+        return_exceptions=True,
+    )
 
-    try:
-        services["redis"] = HOME_CACHE.status()
-    except Exception:
-        services["redis"] = "down"
+    for result in results:
+        if isinstance(result, Exception):
+            services["unknown"] = "error"
+            required_statuses.append("error")
+        else:
+            key, status_val = result
+            services[key] = status_val
+            # Celery is informational only — don't fail the health check
+            if key != "celery":
+                required_statuses.append(status_val)
 
-    required_ok = all(state == "ok" for state in required_services)
-    status = "ok" if required_ok else "down"
-    response = HealthResponse(status=status, services=services)
-    if status != "ok":
+    overall = "ok" if all(s == "ok" for s in required_statuses) else "down"
+    response = HealthResponse(status=overall, services=services)
+    if overall != "ok":
         content = (
             response.model_dump()
             if hasattr(response, "model_dump")
@@ -420,6 +416,17 @@ async def health() -> HealthResponse | JSONResponse:
         )
         return JSONResponse(status_code=503, content=content)
     return response
+
+
+@app.api_route("/ready", methods=["GET", "HEAD"])
+async def ready() -> JSONResponse:
+    """Readiness probe: fast check that the API process is up.
+
+    Unlike /health, this does NOT verify external dependencies.
+    Kubernetes/Docker should use this for readiness probes and /health
+    for liveness probes.
+    """
+    return JSONResponse(status_code=200, content={"status": "ready"})
 
 
 async def keep_alive_wrapper(coro):

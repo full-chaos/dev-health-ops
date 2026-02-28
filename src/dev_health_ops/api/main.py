@@ -107,6 +107,7 @@ from dev_health_ops.licensing import LicenseManager
 from dev_health_ops.api.middleware import OrgIdMiddleware
 from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.api.middleware.correlation_id import CorrelationIdMiddleware
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
@@ -333,6 +334,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
 OriginValidationMiddleware = import_module(
     "dev_health_ops.api.middleware.csrf"
@@ -345,6 +347,7 @@ app.add_middleware(
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(OrgIdMiddleware)
 app.add_middleware(ImpersonationMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
 
 graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")

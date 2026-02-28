@@ -8,7 +8,6 @@ These tasks wrap the existing metrics jobs to enable async execution:
 
 from __future__ import annotations
 
-import asyncio
 import fnmatch
 import json
 import logging

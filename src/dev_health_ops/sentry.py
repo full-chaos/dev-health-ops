@@ -36,10 +36,10 @@ def init_sentry() -> bool:
 
     try:
         import sentry_sdk
-        from sentry_sdk.integrations.fastapi import FastApiIntegration
-        from sentry_sdk.integrations.starlette import StarletteIntegration
         from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.logging import LoggingIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
 
         environment = os.getenv("SENTRY_ENVIRONMENT", "production")
         traces_rate = float(os.getenv("SENTRY_TRACES_RATE", "0.1"))

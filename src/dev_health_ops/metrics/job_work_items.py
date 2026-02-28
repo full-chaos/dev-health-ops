@@ -4,19 +4,25 @@ import argparse
 import logging
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
-from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.analytics.investment import InvestmentClassifier
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.job_daily import (
+    REPO_ROOT,
+    _discover_repos,
+    _to_utc,
+)
 from dev_health_ops.metrics.schemas import (
     InvestmentClassificationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
 )
+from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.work_items import (
     fetch_github_project_v2_items,
     fetch_github_work_items,
@@ -24,12 +30,6 @@ from dev_health_ops.metrics.work_items import (
     fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
 )
-from dev_health_ops.metrics.job_daily import (
-    REPO_ROOT,
-    _discover_repos,
-    _to_utc,
-)
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
 from dev_health_ops.providers.teams import (
@@ -41,7 +41,7 @@ from dev_health_ops.storage import detect_db_type
 logger = logging.getLogger(__name__)
 
 
-def _date_range(end_day: date, backfill_days: int) -> List[date]:
+def _date_range(end_day: date, backfill_days: int) -> list[date]:
     if backfill_days <= 1:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
@@ -55,9 +55,9 @@ def run_work_items_sync_job(
     backfill_days: int,
     provider: str,
     sink: str = "auto",
-    repo_id: Optional[uuid.UUID] = None,
-    repo_name: Optional[str] = None,
-    search_pattern: Optional[str] = None,
+    repo_id: uuid.UUID | None = None,
+    repo_name: str | None = None,
+    search_pattern: str | None = None,
 ) -> None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
@@ -75,7 +75,7 @@ def run_work_items_sync_job(
         )
 
     provider = (provider or "none").strip().lower()
-    provider_set: Set[str]
+    provider_set: set[str]
     if provider in {"none", "off", "skip"}:
         raise ValueError(
             "work item sync requires --provider (jira|github|gitlab|linear|synthetic|all)"
@@ -102,7 +102,7 @@ def run_work_items_sync_job(
     until_dt = datetime.combine(max(days), time.max, tzinfo=timezone.utc)
 
     primary_sink = ClickHouseMetricsSink(db_url)
-    sinks: List[Any] = [primary_sink]
+    sinks: list[Any] = [primary_sink]
 
     try:
         for s in sinks:
@@ -150,12 +150,12 @@ def run_work_items_sync_job(
                 )
             )
 
-        work_items: List[Any] = []
-        transitions: List[Any] = []
-        dependencies: List[Any] = []
-        reopen_events: List[Any] = []
-        interactions: List[Any] = []
-        sprints: List[Any] = []
+        work_items: list[Any] = []
+        transitions: list[Any] = []
+        dependencies: list[Any] = []
+        reopen_events: list[Any] = []
+        interactions: list[Any] = []
+        sprints: list[Any] = []
 
         if "jira" in provider_set:
             (
@@ -306,7 +306,7 @@ def run_work_items_sync_job(
             )
 
             # --- Issue Type Metrics ---
-            issue_type_stats: Dict[Tuple[uuid.UUID, str, str, str], Dict[str, Any]] = {}
+            issue_type_stats: dict[tuple[uuid.UUID, str, str, str], dict[str, Any]] = {}
 
             def _get_team(wi: Any) -> str:
                 if pk_resolver:
@@ -322,7 +322,7 @@ def run_work_items_sync_job(
                         return t_id
                 return "unassigned"
 
-            def _normalize_investment_team_id(team_id: Optional[str]) -> Optional[str]:
+            def _normalize_investment_team_id(team_id: str | None) -> str | None:
                 if not team_id or team_id == "unassigned":
                     return None
                 return team_id
@@ -368,7 +368,7 @@ def run_work_items_sync_job(
                 ):
                     stats["active"] += 1
 
-            issue_type_metrics_rows: List[IssueTypeMetricsRecord] = []
+            issue_type_metrics_rows: list[IssueTypeMetricsRecord] = []
             for (r_id, prov, team_id, norm_type), stat in issue_type_stats.items():
                 cycles = sorted(stat["cycle_hours"])
                 p50 = cycles[len(cycles) // 2] if cycles else 0.0
@@ -391,8 +391,8 @@ def run_work_items_sync_job(
                 )
 
             # --- Investment areas ---
-            investment_classifications: List[InvestmentClassificationRecord] = []
-            inv_metrics_map: Dict[Tuple[uuid.UUID, str, str, str], Dict[str, Any]] = {}
+            investment_classifications: list[InvestmentClassificationRecord] = []
+            inv_metrics_map: dict[tuple[uuid.UUID, str, str, str], dict[str, Any]] = {}
 
             for item in work_items:
                 r_id = getattr(item, "repo_id", None) or uuid.UUID(int=0)
@@ -451,7 +451,7 @@ def run_work_items_sync_job(
                         if h >= 0:
                             inv_metrics_map[key]["cycles"].append(h)
 
-            investment_metrics_rows: List[InvestmentMetricsRecord] = []
+            investment_metrics_rows: list[InvestmentMetricsRecord] = []
             for (r_id, team_id, area, stream), data in inv_metrics_map.items():
                 cycles = sorted(data["cycles"])
                 p50 = cycles[len(cycles) // 2] if cycles else 0.0

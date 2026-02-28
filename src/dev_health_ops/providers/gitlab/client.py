@@ -219,8 +219,7 @@ class GitLabWorkClient:
         """Iterate milestones for a project."""
         project = self.get_project(project_id_or_path)
         milestones = project.milestones.list(state=state, iterator=True)
-        for ms in milestones:
-            yield ms
+        yield from milestones
 
     def iter_group_milestones(
         self,
@@ -234,8 +233,7 @@ class GitLabWorkClient:
             group = self.gl.groups.get(group_id_or_path)
             self.gate.reset()
             milestones = group.milestones.list(state=state, iterator=True)
-            for ms in milestones:
-                yield ms
+            yield from milestones
         except Exception as exc:
             logger.debug("Failed to fetch group milestones: %s", exc)
             self.gate.penalize(None)

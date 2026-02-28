@@ -10,11 +10,7 @@ ClickHouse queries auto-inject org_id via query_dicts().
 
 from __future__ import annotations
 
-import logging
-
 from starlette.types import ASGIApp, Receive, Scope, Send
-
-logger = logging.getLogger(__name__)
 
 
 class OrgIdMiddleware:

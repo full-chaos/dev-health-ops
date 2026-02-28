@@ -43,12 +43,12 @@ def init_tracing() -> bool:
 
     try:
         from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
             OTLPSpanExporter,
         )
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         service_name = os.getenv("OTEL_SERVICE_NAME", "dev-health-ops")
         environment = os.getenv("OTEL_ENVIRONMENT", "production")

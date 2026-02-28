@@ -20,11 +20,12 @@ Usage:
 from __future__ import annotations
 
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 try:
     from prometheus_client import Counter, Histogram
+
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
     _PROMETHEUS_AVAILABLE = False
@@ -34,10 +35,13 @@ def _noop_counter(*args, **kwargs):
     class _Noop:
         def labels(self, **kw):
             return self
+
         def inc(self, amount=1):
             pass
+
         def observe(self, amount):
             pass
+
     return _Noop()
 
 
@@ -115,6 +119,7 @@ else:
 # Convenience helpers
 # ---------------------------------------------------------------------------
 
+
 def record_celery_task(task_name: str, state: str, duration_seconds: float) -> None:
     """Record Celery task completion metrics."""
     CELERY_TASKS_TOTAL.labels(task_name=task_name, state=state).inc()
@@ -162,6 +167,4 @@ def clickhouse_query_timer(query_type: str = "query") -> Generator[None, None, N
         CLICKHOUSE_QUERY_DURATION_SECONDS.labels(query_type=query_type).observe(
             duration
         )
-        CLICKHOUSE_QUERIES_TOTAL.labels(
-            query_type=query_type, status=status
-        ).inc()
+        CLICKHOUSE_QUERIES_TOTAL.labels(query_type=query_type, status=status).inc()

@@ -13,7 +13,7 @@ and gitlab.py only contain provider-specific fetch logic.
 from __future__ import annotations
 
 import logging
-from typing import Any, List
+from typing import Any
 
 from dev_health_ops.models.git import GitBlame, GitCommitStat, GitFile
 from dev_health_ops.processors.fetch_utils import AsyncBatchCollector
@@ -87,7 +87,7 @@ async def check_backfill_needs(
 async def backfill_file_records(
     store: Any,
     repo_id: Any,
-    file_paths: List[str],
+    file_paths: list[str],
     repo_full_name: str,
 ) -> None:
     """Persist file path records from a pre-fetched list.
@@ -122,7 +122,7 @@ async def backfill_file_records(
 async def backfill_commit_stat_records(
     store: Any,
     repo_id: Any,
-    stat_rows: List[GitCommitStat],
+    stat_rows: list[GitCommitStat],
     repo_full_name: str,
 ) -> None:
     """Persist pre-built GitCommitStat rows via AsyncBatchCollector.
@@ -151,7 +151,7 @@ async def backfill_commit_stat_records(
 async def backfill_blame_records(
     store: Any,
     repo_id: Any,
-    blame_rows: List[GitBlame],
+    blame_rows: list[GitBlame],
     repo_full_name: str,
 ) -> None:
     """Persist pre-built GitBlame rows via AsyncBatchCollector.

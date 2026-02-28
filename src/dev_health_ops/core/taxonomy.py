@@ -7,8 +7,6 @@ from each other.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
-
 from dev_health_ops.investment_taxonomy import THEMES
 
 __all__ = [
@@ -21,7 +19,7 @@ __all__ = [
 ]
 
 # Canonical human-readable labels for each theme key.
-THEME_LABELS: Dict[str, str] = {
+THEME_LABELS: dict[str, str] = {
     "feature_delivery": "Feature Delivery",
     "operational": "Operational / Support",
     "maintenance": "Maintenance / Tech Debt",
@@ -30,7 +28,7 @@ THEME_LABELS: Dict[str, str] = {
 }
 
 # Reverse mapping: lowercase label -> theme key.
-THEME_KEYS_BY_LABEL: Dict[str, str] = {
+THEME_KEYS_BY_LABEL: dict[str, str] = {
     label.lower(): key for key, label in THEME_LABELS.items()
 }
 
@@ -61,7 +59,7 @@ def format_subcategory_label(subcategory_key: str) -> str:
     return f"{_title_case(theme)} · {_title_case(sub)}"
 
 
-def normalize_theme_key(theme_key: Optional[str]) -> Optional[str]:
+def normalize_theme_key(theme_key: str | None) -> str | None:
     """Normalise a theme key or label to a canonical key, or return None."""
     if theme_key is None:
         return None
@@ -77,8 +75,8 @@ def normalize_theme_key(theme_key: Optional[str]) -> Optional[str]:
 
 
 def split_category_filters(
-    work_category: Optional[List[Optional[str]]],
-) -> Tuple[List[str], List[str]]:
+    work_category: list[str | None] | None,
+) -> tuple[list[str], list[str]]:
     """Split work category filter values into (themes, subcategories).
 
     A value with a dot (e.g. "feature_delivery.customer") is treated as a
@@ -91,8 +89,8 @@ def split_category_filters(
     Returns:
         (themes, subcategories) — both deduplicated and ordered by first appearance.
     """
-    themes: List[str] = []
-    subcategories: List[str] = []
+    themes: list[str] = []
+    subcategories: list[str] = []
     for category in work_category or []:
         if not category:
             continue

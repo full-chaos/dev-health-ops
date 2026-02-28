@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, time, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
-from dev_health_ops.core.taxonomy import split_category_filters as _split_category_filters_core
+from dev_health_ops.core.taxonomy import (
+    split_category_filters as _split_category_filters_core,
+)
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+
 from ..models.filters import MetricFilter
 from ..models.schemas import (
     EvidenceQualityStats,
@@ -22,7 +25,7 @@ from ..queries.scopes import build_scope_filter_multi
 from .filtering import resolve_repo_filter_ids, time_window
 
 
-def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]]:
+def _split_category_filters(filters: MetricFilter) -> tuple[list[str], list[str]]:
     """Split MetricFilter work categories into (themes, subcategories).
 
     Delegates to core.taxonomy.split_category_filters for the pure logic.
@@ -30,7 +33,7 @@ def _split_category_filters(filters: MetricFilter) -> Tuple[List[str], List[str]
     return _split_category_filters_core(filters.why.work_category)
 
 
-async def _tables_present(sink: BaseMetricsSink, tables: List[str]) -> bool:
+async def _tables_present(sink: BaseMetricsSink, tables: list[str]) -> bool:
     if not tables:
         return True
     try:
@@ -53,7 +56,7 @@ async def _tables_present(sink: BaseMetricsSink, tables: List[str]) -> bool:
 
 
 async def _columns_present(
-    sink: BaseMetricsSink, table: str, columns: List[str]
+    sink: BaseMetricsSink, table: str, columns: list[str]
 ) -> bool:
     if not columns:
         return True
@@ -77,7 +80,7 @@ async def _columns_present(
     return all(column in present for column in columns)
 
 
-def _compute_quality_stats(quality_row: Dict[str, Any]) -> EvidenceQualityStats:
+def _compute_quality_stats(quality_row: dict[str, Any]) -> EvidenceQualityStats:
     """Compute evidence quality stats from query results."""
     if not quality_row:
         return EvidenceQualityStats()
@@ -101,7 +104,7 @@ def _compute_quality_stats(quality_row: Dict[str, Any]) -> EvidenceQualityStats:
     }
 
     # Determine quality drivers (algorithmic reasons for low quality)
-    quality_drivers: List[str] = []
+    quality_drivers: list[str] = []
     unknown_count = band_counts.get("unknown", 0)
     total_count = sum(band_counts.values())
 
@@ -190,8 +193,8 @@ async def build_investment_response(
             subcategories=subcategory_filters or None,
         )
 
-    theme_distribution: Dict[str, float] = {}
-    subcategory_distribution: Dict[str, float] = {}
+    theme_distribution: dict[str, float] = {}
+    subcategory_distribution: dict[str, float] = {}
     for row in rows:
         theme = str(row.get("theme") or "")
         subcategory = str(row.get("subcategory") or "")
@@ -220,7 +223,7 @@ async def build_investment_sunburst(
     filters: MetricFilter,
     limit: int = 500,
     org_id: str = "",
-) -> List[InvestmentSunburstSlice]:
+) -> list[InvestmentSunburstSlice]:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
     end_ts = datetime.combine(end_day, time.min, tzinfo=timezone.utc)

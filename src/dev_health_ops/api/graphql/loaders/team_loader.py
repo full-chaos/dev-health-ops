@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from .base import CachedDataLoader
 
@@ -21,7 +21,7 @@ class TeamData:
     member_count: int = 0
 
 
-class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
+class TeamLoader(CachedDataLoader[str, TeamData | None]):
     """
     DataLoader for batch loading team data by team ID.
 
@@ -102,7 +102,7 @@ class TeamLoader(CachedDataLoader[str, Optional[TeamData]]):
             return [None] * len(keys)
 
 
-class TeamByNameLoader(CachedDataLoader[str, Optional[TeamData]]):
+class TeamByNameLoader(CachedDataLoader[str, TeamData | None]):
     """
     DataLoader for batch loading team data by team name.
 

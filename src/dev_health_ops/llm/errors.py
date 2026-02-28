@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional, Type
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,7 @@ class LLMError(Exception):
         *,
         provider: str = "",
         model: str = "",
-        original: Optional[BaseException] = None,
+        original: BaseException | None = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
@@ -70,7 +69,7 @@ class LLMRateLimitError(LLMError):
         self,
         message: str,
         *,
-        retry_after: Optional[float] = None,
+        retry_after: float | None = None,
         **kwargs,
     ) -> None:
         super().__init__(message, **kwargs)
@@ -93,7 +92,7 @@ class LLMOutputError(LLMError):
 # Classification helpers
 # ---------------------------------------------------------------------------
 
-_RETRYABLE_TYPES: tuple[Type[LLMError], ...] = (
+_RETRYABLE_TYPES: tuple[type[LLMError], ...] = (
     LLMRateLimitError,
     LLMServerError,
     LLMOutputError,
@@ -128,12 +127,18 @@ def classify_provider_error(
     msg_lower = msg.lower()
 
     # Auth errors
-    if any(k in msg_lower for k in ("401", "invalid_api_key", "authentication", "unauthorized")):
+    if any(
+        k in msg_lower
+        for k in ("401", "invalid_api_key", "authentication", "unauthorized")
+    ):
         return LLMAuthError(msg, provider=provider, model=model, original=exc)
 
     # Rate limit errors
-    if any(k in msg_lower for k in ("429", "rate_limit", "rate limit", "quota", "too many requests")):
-        retry_after: Optional[float] = None
+    if any(
+        k in msg_lower
+        for k in ("429", "rate_limit", "rate limit", "quota", "too many requests")
+    ):
+        retry_after: float | None = None
         # Some SDKs expose retry_after on the exception object
         if hasattr(exc, "retry_after"):
             try:
@@ -158,7 +163,10 @@ def classify_provider_error(
         return LLMContextLengthError(msg, provider=provider, model=model, original=exc)
 
     # Server errors
-    if any(k in msg_lower for k in ("500", "502", "503", "504", "server error", "internal error")):
+    if any(
+        k in msg_lower
+        for k in ("500", "502", "503", "504", "server error", "internal error")
+    ):
         return LLMServerError(msg, provider=provider, model=model, original=exc)
 
     # Fallback: treat as generic LLM error (non-retryable)
@@ -204,7 +212,7 @@ async def call_with_retry(
         LLMError: On non-retryable errors or after exhausting retries.
     """
     attempt = 0
-    last_exc: Optional[BaseException] = None
+    last_exc: BaseException | None = None
 
     while attempt <= max_retries:
         try:

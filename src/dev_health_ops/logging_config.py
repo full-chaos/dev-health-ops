@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import Any, Dict
+from typing import Any
 
 
 def configure_logging(level: str | None = None) -> None:
@@ -57,7 +57,7 @@ def configure_logging(level: str | None = None) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def uvicorn_log_config(level: str | None = None) -> Dict[str, Any]:
+def uvicorn_log_config(level: str | None = None) -> dict[str, Any]:
     """Return a uvicorn log_config dict that emits JSON access logs.
 
     Pass to ``uvicorn.Config(log_config=uvicorn_log_config())``.
@@ -91,8 +91,20 @@ def uvicorn_log_config(level: str | None = None) -> Dict[str, Any]:
             },
         },
         "loggers": {
-            "uvicorn": {"handlers": ["default"], "level": log_level.upper(), "propagate": False},
-            "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
-            "uvicorn.access": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+            "uvicorn": {
+                "handlers": ["default"],
+                "level": log_level.upper(),
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["default"],
+                "level": "INFO",
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["default"],
+                "level": "WARNING",
+                "propagate": False,
+            },
         },
     }

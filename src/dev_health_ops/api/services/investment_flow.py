@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 from datetime import datetime, time, timezone
-from typing import Dict, List, Optional
 
 from dev_health_ops.core.taxonomy import (
     _title_case,
-    format_theme_label as _format_theme_label,
+)
+from dev_health_ops.core.taxonomy import (
     format_subcategory_label as _format_subcategory_label,
+)
+from dev_health_ops.core.taxonomy import (
+    format_theme_label as _format_theme_label,
+)
+from dev_health_ops.core.taxonomy import (
     normalize_theme_key as _normalize_theme_key,
 )
+
 from ..models.filters import MetricFilter
 from ..models.schemas import SankeyLink, SankeyNode, SankeyResponse
 from ..queries.client import clickhouse_client, require_clickhouse_backend
 from ..queries.investment import (
     fetch_investment_repo_team_edges,
     fetch_investment_subcategory_edges,
-    fetch_investment_team_edges,
     fetch_investment_team_category_repo_edges,
+    fetch_investment_team_edges,
     fetch_investment_team_subcategory_repo_edges,
     fetch_investment_unassigned_counts,
 )
@@ -32,9 +38,9 @@ OTHER_REPOS_LABEL = "Other repos"
 
 
 def _get_repo_rollup_map(
-    rows: List[Dict[str, object]], top_n_repos: int
-) -> Dict[str, str]:
-    repo_totals: Dict[str, float] = {}
+    rows: list[dict[str, object]], top_n_repos: int
+) -> dict[str, str]:
+    repo_totals: dict[str, float] = {}
     for row in rows:
         repo = str(row.get("repo") or UNASSIGNED_REPO)
         if repo == UNASSIGNED_REPO:
@@ -49,23 +55,23 @@ def _get_repo_rollup_map(
             repo_totals.items(), key=lambda item: item[1], reverse=True
         )[: max(1, top_n_repos)]
     }
-    rollup_map: Dict[str, str] = {}
+    rollup_map: dict[str, str] = {}
     for repo in repo_totals:
         rollup_map[repo] = repo if repo in top_repos else OTHER_REPOS_LABEL
     return rollup_map
 
 
 def _build_team_burden_sankey(
-    rows: List[Dict[str, object]],
+    rows: list[dict[str, object]],
     *,
     category_key: str,
     category_label_fn,
     top_n_repos: int,
-) -> tuple[List[SankeyNode], List[SankeyLink]]:
-    nodes_by_name: Dict[str, SankeyNode] = {}
-    link_totals: Dict[tuple[str, str], float] = {}
-    incoming: Dict[str, float] = {}
-    outgoing: Dict[str, float] = {}
+) -> tuple[list[SankeyNode], list[SankeyLink]]:
+    nodes_by_name: dict[str, SankeyNode] = {}
+    link_totals: dict[tuple[str, str], float] = {}
+    incoming: dict[str, float] = {}
+    outgoing: dict[str, float] = {}
 
     def add_node(name: str, group: str) -> None:
         if name not in nodes_by_name:
@@ -102,7 +108,7 @@ def _build_team_burden_sankey(
             link_totals.get((category_label, repo_label), 0.0) + value
         )
 
-    links: List[SankeyLink] = []
+    links: list[SankeyLink] = []
     for (source, target), value in link_totals.items():
         if value <= 0:
             continue
@@ -117,14 +123,14 @@ def _build_team_burden_sankey(
 
 
 def _build_team_theme_subcategory_repo_sankey(
-    rows: List[Dict[str, object]],
+    rows: list[dict[str, object]],
     *,
     top_n_repos: int,
-) -> tuple[List[SankeyNode], List[SankeyLink]]:
-    nodes_by_name: Dict[str, SankeyNode] = {}
-    link_totals: Dict[tuple[str, str], float] = {}
-    incoming: Dict[str, float] = {}
-    outgoing: Dict[str, float] = {}
+) -> tuple[list[SankeyNode], list[SankeyLink]]:
+    nodes_by_name: dict[str, SankeyNode] = {}
+    link_totals: dict[tuple[str, str], float] = {}
+    incoming: dict[str, float] = {}
+    outgoing: dict[str, float] = {}
 
     def add_node(name: str, group: str) -> None:
         if name not in nodes_by_name:
@@ -177,7 +183,7 @@ def _build_team_theme_subcategory_repo_sankey(
             link_totals.get((subcategory_label, repo_label), 0.0) + value
         )
 
-    links: List[SankeyLink] = []
+    links: list[SankeyLink] = []
     for (source, target), value in link_totals.items():
         if value <= 0:
             continue
@@ -195,9 +201,9 @@ async def build_investment_flow_response(
     *,
     db_url: str,
     filters: MetricFilter,
-    theme: Optional[str] = None,
-    flow_mode: Optional[str] = None,
-    drill_category: Optional[str] = None,
+    theme: str | None = None,
+    flow_mode: str | None = None,
+    drill_category: str | None = None,
     top_n_repos: int = 12,
     org_id: str = "",
 ) -> SankeyResponse:
@@ -434,8 +440,8 @@ async def build_investment_flow_response(
         chosen_mode = "fallback"
         rows_to_use = repo_rows  # Use repo rows to get source distribution
 
-    nodes_by_name: Dict[str, SankeyNode] = {}
-    links: List[SankeyLink] = []
+    nodes_by_name: dict[str, SankeyNode] = {}
+    links: list[SankeyLink] = []
 
     for row in rows_to_use:
         source_key = str(row.get("source") or "")
@@ -487,7 +493,7 @@ async def build_investment_repo_team_flow_response(
     *,
     db_url: str,
     filters: MetricFilter,
-    theme: Optional[str] = None,
+    theme: str | None = None,
     org_id: str = "",
 ) -> SankeyResponse:
     start_day, end_day, _, _ = time_window(filters)
@@ -532,8 +538,8 @@ async def build_investment_repo_team_flow_response(
             subcategories=subcategory_filters or None,
         )
 
-    nodes_by_name: Dict[str, SankeyNode] = {}
-    links: List[SankeyLink] = []
+    nodes_by_name: dict[str, SankeyNode] = {}
+    links: list[SankeyLink] = []
 
     def add_node(name: str, group: str) -> None:
         if name not in nodes_by_name:

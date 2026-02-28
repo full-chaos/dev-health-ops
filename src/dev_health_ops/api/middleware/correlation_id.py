@@ -12,8 +12,8 @@ Usage in log records:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
-from typing import Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -43,10 +43,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         self.header_name = header_name
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        request_id = (
-            request.headers.get(self.header_name)
-            or str(uuid.uuid4())
-        )
+        request_id = request.headers.get(self.header_name) or str(uuid.uuid4())
         token = _REQUEST_ID_VAR.set(request_id)
         try:
             response: Response = await call_next(request)

@@ -137,7 +137,7 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E203", "E501"]
-per-file-ignores = {"__init__.py" = ["F401"]}
+per-file-ignores = {"__init__.py" = ["F401"], "src/dev_health_ops/api/main.py" = ["E402"], "tests/test_ingest_streams.py" = ["E402"]}
 
 [tool.ruff.format]
 quote-style = "double"

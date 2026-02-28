@@ -3,7 +3,7 @@
 import time
 
 from celery import Celery
-from celery.signals import task_prerun, task_postrun
+from celery.signals import task_postrun, task_prerun
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry

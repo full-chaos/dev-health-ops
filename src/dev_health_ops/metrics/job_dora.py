@@ -5,11 +5,11 @@ import logging
 import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, List, Optional
+from typing import Any
 
-from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.connectors import GitLabConnector
 from dev_health_ops.connectors.exceptions import ConnectorException
+from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.job_daily import (
     _discover_repos,
 )
@@ -28,14 +28,14 @@ DEFAULT_DORA_METRICS = [
 ]
 
 
-def _date_range(end_day: date, backfill_days: int) -> List[date]:
+def _date_range(end_day: date, backfill_days: int) -> list[date]:
     if backfill_days <= 1:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
 
 
-def _parse_metrics(raw_metrics: Optional[str]) -> List[str]:
+def _parse_metrics(raw_metrics: str | None) -> list[str]:
     if not raw_metrics:
         return list(DEFAULT_DORA_METRICS)
     metrics = [m.strip() for m in raw_metrics.split(",") if m.strip()]
@@ -59,13 +59,13 @@ def run_dora_metrics_job(
     db_url: str,
     day: date,
     backfill_days: int,
-    repo_id: Optional[uuid.UUID] = None,
-    repo_name: Optional[str] = None,
+    repo_id: uuid.UUID | None = None,
+    repo_name: str | None = None,
     sink: str = "auto",
-    metrics: Optional[str] = None,
+    metrics: str | None = None,
     interval: str = "daily",
-    gitlab_url: Optional[str] = None,
-    auth: Optional[str] = None,
+    gitlab_url: str | None = None,
+    auth: str | None = None,
     org_id: str,
 ) -> None:
     if not db_url:
@@ -107,7 +107,6 @@ def run_dora_metrics_job(
     computed_at = datetime.now(timezone.utc)
 
     primary_sink: Any
-    secondary_sink: Optional[Any] = None
 
     if backend != "clickhouse":
         raise ValueError(
@@ -116,7 +115,7 @@ def run_dora_metrics_job(
         )
     primary_sink = ClickHouseMetricsSink(db_url)
 
-    sinks: List[Any] = [primary_sink]
+    sinks: list[Any] = [primary_sink]
 
     connector = GitLabConnector(url=gitlab_url, private_token=token)
 
@@ -140,7 +139,7 @@ def run_dora_metrics_job(
             if not _is_gitlab_repo(repo, allow_unknown):
                 continue
 
-            rows: List[DORAMetricsRecord] = []
+            rows: list[DORAMetricsRecord] = []
             for metric in metrics_list:
                 try:
                     dora_metrics = connector.get_dora_metrics(

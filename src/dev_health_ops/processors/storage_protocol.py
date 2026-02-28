@@ -19,7 +19,7 @@ ClickHouseStore is the only supported implementation.  The Protocol reflects the
 
 from __future__ import annotations
 
-from typing import List, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from dev_health_ops.models.git import (
     CiPipelineRun,
@@ -47,43 +47,41 @@ class GitSyncStore(Protocol):
         """Upsert a repository record."""
         ...
 
-    async def insert_git_commit_data(self, commit_data: List[GitCommit]) -> None:
+    async def insert_git_commit_data(self, commit_data: list[GitCommit]) -> None:
         """Insert a batch of commit records."""
         ...
 
-    async def insert_git_commit_stats(
-        self, commit_stats: List[GitCommitStat]
-    ) -> None:
+    async def insert_git_commit_stats(self, commit_stats: list[GitCommitStat]) -> None:
         """Insert a batch of per-file commit stat records."""
         ...
 
-    async def insert_blame_data(self, data_batch: List[GitBlame]) -> None:
+    async def insert_blame_data(self, data_batch: list[GitBlame]) -> None:
         """Insert a batch of git blame records."""
         ...
 
-    async def insert_git_file_data(self, file_data: List[GitFile]) -> None:
+    async def insert_git_file_data(self, file_data: list[GitFile]) -> None:
         """Insert a batch of file records."""
         ...
 
-    async def insert_git_pull_requests(self, pr_data: List[GitPullRequest]) -> None:
+    async def insert_git_pull_requests(self, pr_data: list[GitPullRequest]) -> None:
         """Insert a batch of pull/merge request records."""
         ...
 
     async def insert_git_pull_request_reviews(
-        self, review_data: List[GitPullRequestReview]
+        self, review_data: list[GitPullRequestReview]
     ) -> None:
         """Insert a batch of PR review records."""
         ...
 
-    async def insert_ci_pipeline_runs(self, runs: List[CiPipelineRun]) -> None:
+    async def insert_ci_pipeline_runs(self, runs: list[CiPipelineRun]) -> None:
         """Insert a batch of CI pipeline run records."""
         ...
 
-    async def insert_deployments(self, deployments: List[Deployment]) -> None:
+    async def insert_deployments(self, deployments: list[Deployment]) -> None:
         """Insert a batch of deployment records."""
         ...
 
-    async def insert_incidents(self, incidents: List[Incident]) -> None:
+    async def insert_incidents(self, incidents: list[Incident]) -> None:
         """Insert a batch of incident records."""
         ...
 

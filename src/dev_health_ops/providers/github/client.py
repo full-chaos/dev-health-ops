@@ -135,8 +135,7 @@ class GitHubWorkClient:
         Iterate comments on a pull request (issue comments + review comments).
         """
         # Issue-style comments
-        for comment in self.iter_issue_comments(pr, limit=limit):
-            yield comment
+        yield from self.iter_issue_comments(pr, limit=limit)
 
     def iter_pr_review_comments(
         self, pr: Any, *, limit: int | None = None

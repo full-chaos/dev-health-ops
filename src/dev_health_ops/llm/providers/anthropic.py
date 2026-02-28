@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 
-from dev_health_ops.llm.errors import classify_provider_error, call_with_retry
+from dev_health_ops.llm.errors import call_with_retry, classify_provider_error
 
 logger = logging.getLogger(__name__)
 

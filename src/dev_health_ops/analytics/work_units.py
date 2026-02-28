@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 from dev_health_ops.investment_taxonomy import (
@@ -32,8 +31,6 @@ __all__ = [
     "evidence_quality_band",
     "work_unit_id",
 ]
-
-logger = logging.getLogger(__name__)
 
 CANONICAL_INVESTMENT_THEMES: tuple[str, ...] = tuple(sorted(THEMES))
 CANONICAL_SUBCATEGORIES: tuple[str, ...] = tuple(sorted(SUBCATEGORIES))

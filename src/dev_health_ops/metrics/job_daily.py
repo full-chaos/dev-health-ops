@@ -23,9 +23,6 @@ from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
-from dev_health_ops.metrics.db_utils import (
-    normalize_sqlite_url as _normalize_sqlite_url,
-)
 from dev_health_ops.metrics.hotspots import compute_file_hotspots
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
@@ -100,7 +97,7 @@ def discover_repos(
         return []
 
 
-# Alias for backward compatibility
+# Backward-compat alias used by job_dora and job_work_items
 _discover_repos = discover_repos
 
 
@@ -166,7 +163,6 @@ async def run_daily_metrics_job(
     identity = load_identity_resolver()
 
     primary_sink: Any
-    secondary_sink: Any | None = None
 
     if backend != "clickhouse":
         raise ValueError(
@@ -429,7 +425,6 @@ async def run_daily_metrics_finalize(
         sink = backend
 
     primary_sink: Any
-    secondary_sink: Any | None = None
 
     if backend != "clickhouse":
         raise ValueError(

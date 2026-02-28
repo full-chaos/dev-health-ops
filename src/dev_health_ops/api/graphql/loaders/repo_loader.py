@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from .base import CachedDataLoader
 
@@ -22,7 +22,7 @@ class RepoData:
     language: str | None = None
 
 
-class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
+class RepoLoader(CachedDataLoader[str, RepoData | None]):
     """
     DataLoader for batch loading repository data by repo ID.
 
@@ -102,7 +102,7 @@ class RepoLoader(CachedDataLoader[str, Optional[RepoData]]):
             return [None] * len(keys)
 
 
-class RepoByNameLoader(CachedDataLoader[str, Optional[RepoData]]):
+class RepoByNameLoader(CachedDataLoader[str, RepoData | None]):
     """
     DataLoader for batch loading repository data by repo name.
 

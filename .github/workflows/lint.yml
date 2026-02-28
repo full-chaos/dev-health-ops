@@ -34,7 +34,6 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run ruff (format check)
-        continue-on-error: true
         run: |
           ruff format --check .
 

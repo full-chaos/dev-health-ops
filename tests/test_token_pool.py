@@ -38,7 +38,9 @@ def _fakeredis_supports_lua() -> bool:
 
 
 _HAS_LUA = _fakeredis_supports_lua()
-requires_lua = pytest.mark.skipif(not _HAS_LUA, reason="fakeredis Lua scripting unavailable")
+requires_lua = pytest.mark.skipif(
+    not _HAS_LUA, reason="fakeredis Lua scripting unavailable"
+)
 
 
 @pytest.fixture()

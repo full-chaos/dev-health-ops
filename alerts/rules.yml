@@ -1,0 +1,207 @@
+---
+# Prometheus alert rules for dev-health-ops
+# Reference: https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
+#
+# Load into Prometheus with:
+#   rule_files:
+#     - /etc/prometheus/alerts/rules.yml
+
+groups:
+  # ---------------------------------------------------------------------------
+  # API availability and latency
+  # ---------------------------------------------------------------------------
+  - name: api_availability
+    interval: 30s
+    rules:
+      - alert: APIHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "API error rate > 5% for 5 minutes"
+          description: |
+            The HTTP 5xx error rate is {{ $value | humanizePercentage }}.
+            Check application logs and Sentry for root cause.
+
+      - alert: APIHighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler)
+          ) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "API P99 latency > 2s on {{ $labels.handler }}"
+          description: |
+            The 99th-percentile response time on handler {{ $labels.handler }}
+            is {{ $value | humanizeDuration }}.
+
+      - alert: APIDown
+        expr: up{job="dev-health-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "API is unreachable"
+          description: "Prometheus cannot scrape the dev-health-ops API /metrics endpoint."
+
+  # ---------------------------------------------------------------------------
+  # ClickHouse
+  # ---------------------------------------------------------------------------
+  - name: clickhouse
+    interval: 60s
+    rules:
+      - alert: ClickHouseSlowQueries
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(devhealth_clickhouse_query_duration_seconds_bucket[5m])) by (le, query_type)
+          ) > 5.0
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "ClickHouse P95 query latency > 5s ({{ $labels.query_type }})"
+          description: |
+            ClickHouse {{ $labels.query_type }} queries are slow.
+            P95 latency: {{ $value | humanizeDuration }}.
+
+      - alert: ClickHouseHighErrorRate
+        expr: |
+          (
+            sum(rate(devhealth_clickhouse_queries_total{status="error"}[5m]))
+            /
+            sum(rate(devhealth_clickhouse_queries_total[5m]))
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "ClickHouse query error rate > 10%"
+          description: |
+            ClickHouse is returning errors on {{ $value | humanizePercentage }} of queries.
+
+  # ---------------------------------------------------------------------------
+  # Celery workers
+  # ---------------------------------------------------------------------------
+  - name: celery
+    interval: 60s
+    rules:
+      - alert: CeleryHighTaskFailureRate
+        expr: |
+          (
+            sum(rate(devhealth_celery_tasks_total{state="failure"}[15m])) by (task_name)
+            /
+            sum(rate(devhealth_celery_tasks_total[15m])) by (task_name)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Celery task {{ $labels.task_name }} failure rate > 10%"
+          description: |
+            {{ $labels.task_name }} is failing at {{ $value | humanizePercentage }}.
+            Check worker logs and Sentry.
+
+      - alert: CeleryLongRunningTask
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(devhealth_celery_task_duration_seconds_bucket[15m])) by (le, task_name)
+          ) > 300
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Celery task {{ $labels.task_name }} P95 > 5 minutes"
+          description: |
+            {{ $labels.task_name }} P95 duration is {{ $value | humanizeDuration }}.
+
+  # ---------------------------------------------------------------------------
+  # LLM API
+  # ---------------------------------------------------------------------------
+  - name: llm
+    interval: 60s
+    rules:
+      - alert: LLMHighErrorRate
+        expr: |
+          (
+            sum(rate(devhealth_llm_requests_total{status!="success"}[15m])) by (provider, model)
+            /
+            sum(rate(devhealth_llm_requests_total[15m])) by (provider, model)
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "LLM {{ $labels.provider }}/{{ $labels.model }} error rate > 20%"
+          description: |
+            LLM calls to {{ $labels.provider }} {{ $labels.model }} are failing at
+            {{ $value | humanizePercentage }}. Check API keys, rate limits, and quotas.
+
+      - alert: LLMHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(devhealth_llm_request_duration_seconds_bucket[10m])) by (le, provider, model)
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "LLM {{ $labels.provider }}/{{ $labels.model }} P95 > 30s"
+          description: |
+            LLM P95 latency for {{ $labels.model }} is {{ $value | humanizeDuration }}.
+
+  # ---------------------------------------------------------------------------
+  # GitHub API
+  # ---------------------------------------------------------------------------
+  - name: github
+    interval: 60s
+    rules:
+      - alert: GitHubAPIRateLimited
+        expr: |
+          sum(rate(devhealth_github_api_requests_total{status_code="429"}[5m])) by (endpoint) > 0
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "GitHub API rate-limited on {{ $labels.endpoint }}"
+          description: |
+            GitHub API is returning 429 responses for endpoint {{ $labels.endpoint }}.
+            Check token pool and rate limit headroom.
+
+      - alert: GitHubAPIHighErrorRate
+        expr: |
+          (
+            sum(rate(devhealth_github_api_requests_total{status_code=~"5.."}[10m])) by (endpoint)
+            /
+            sum(rate(devhealth_github_api_requests_total[10m])) by (endpoint)
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "GitHub API error rate > 10% on {{ $labels.endpoint }}"
+          description: |
+            GitHub API is returning {{ $value | humanizePercentage }} server errors
+            for endpoint {{ $labels.endpoint }}.

@@ -19,7 +19,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
-keywords = ["metrics", "git", "analytics", "developer-experience", "grafana"]
+keywords = ["metrics", "git", "analytics", "developer-experience"]
 requires-python = ">=3.10"
 dependencies = [
   "tqdm",
@@ -51,7 +51,6 @@ dependencies = [
   "redis>=5.0.0",
   # Shared Atlassian client library (Jira REST/GraphQL)
   "atlassian-gen-client>=0.1.0b3",
-  "pytest-xdist (>=3.8.0,<4.0.0)",
   # Authentication
   "PyJWT>=2.8.0",
   "bcrypt>=4.0.0",
@@ -64,12 +63,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "mypy",
-  "black",
-  "flake8",
-  "isort",
+  "ruff",
   "pytest",
   "pytest-asyncio",
   "pytest-cov",
+  "pytest-xdist>=3.8.0,<4.0.0",
+  "fakeredis",
 ]
 enterprise-sso = [
   "defusedxml>=0.7.0",
@@ -79,6 +78,10 @@ enterprise-sso = [
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"
 Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
+
+[project.scripts]
+dev-health-ops = "dev_health_ops.cli:main"
+dev-hops = "dev_health_ops.cli:main"
 
 [tool.setuptools_scm]
 version_scheme = "post-release"
@@ -104,93 +107,26 @@ include-package-data = true
 [tool.setuptools.package-data]
 "*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.mako"]
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
-line_length = 88
-
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ['py310', 'py311', 'py312']
-
-[tool.poetry]
-name = "dev-health-ops"
-version = "0.1.0"
-description = "Open Source Development Team Operation Analytics"
-authors = ["Chris Geo <chris@example.com>"]
-license = "MIT"
-readme = "README.md"
-packages = [{ include = "dev_health_ops", from = "src" }]
-include = [
-  "src/dev_health_ops/config/**/*",
-  "src/dev_health_ops/alembic.ini",
-  "src/dev_health_ops/alembic/**/*",
+target-version = "py310"
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "__pycache__",
+  "docs",
+  "build",
+  "dist",
+  "migrations",
+  "site",
 ]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-tqdm = "*"
-sqlalchemy = "*"
-clickhouse-connect = "*"
-fastapi = "*"
-slowapi = "*"
-httpx = "*"
-psycopg2-binary = "*"
-asyncpg = "*"
-aiosqlite = "*"
-python-gitlab = "*"
-GitPython = "*"
-PyGithub = ">=2.1.0,<3.0.0"
-requests = "*"
-pydantic = ">=2.7.0"
-PyYAML = "*"
-typing_extensions = "*"
-jira = "*"
-alembic = "*"
-motor = "*"
-uvicorn = "*"
-radon = "*"
-openai = "*"
-anthropic = "*"
-strawberry-graphql = { extras = ["fastapi"], version = "*" }
-celery = { extras = ["redis"], version = ">=5.3.0" }
-croniter = ">=1.3.0"
-redis = ">=5.0.0"
-atlassian-gen-client = ">=0.1.0b3"
-PyNaCl = ">=1.5.0"
-stripe = ">=7.0.0"
-resend = ">=2.5.0"
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E203", "E501", "W503"]
+per-file-ignores = {"__init__.py" = ["F401"]}
 
-[[tool.poetry.source]]
-name = "github"
-url = "https://pypi.pkg.github.com/full-chaos"
-priority = "supplemental"
-
-[tool.poetry.group.dev.dependencies]
-mypy = "*"
-black = "*"
-flake8 = "*"
-isort = "*"
-pytest = "*"
-pytest-asyncio = "*"
-pytest-cov = "*"
-fakeredis = "*"
-
-[tool.poetry.group.enterprise-sso]
-optional = true
-
-[tool.poetry.group.enterprise-sso.dependencies]
-defusedxml = ">=0.7.0"
-signxml = ">=3.0.0"
-
-[tool.poetry.scripts]
-dev-health-ops = "dev_health_ops.cli:main"
-dev-hops = "dev_health_ops.cli:main"
-
-[project.scripts]
-dev-health-ops = "dev_health_ops.cli:main"
-dev-hops = "dev_health_ops.cli:main"
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

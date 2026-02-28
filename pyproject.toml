@@ -102,7 +102,7 @@ py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-"*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.mako"]
+"*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.mako", "**/*.html", "**/*.txt"]
 
 [tool.isort]
 profile = "black"

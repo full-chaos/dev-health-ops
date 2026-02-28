@@ -211,6 +211,10 @@ async def call_with_retry(
     Raises:
         LLMError: On non-retryable errors or after exhausting retries.
     """
+    # Sanitize external inputs to prevent log injection (CWE-117)
+    provider_name = provider_name.replace("\n", "").replace("\r", "")
+    model = model.replace("\n", "").replace("\r", "")
+
     attempt = 0
     last_exc: BaseException | None = None
 

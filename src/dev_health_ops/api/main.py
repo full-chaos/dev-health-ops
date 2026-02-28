@@ -482,7 +482,7 @@ async def meta() -> MetaResponse | JSONResponse:
     """
     Return backend metadata including DB kind, version, limits, and supported endpoints.
     """
-    db_url = _db_url()
+    db_url = _analytics_db_url()
     backend = detect_backend(db_url).value  # Get string value from enum
 
     try:

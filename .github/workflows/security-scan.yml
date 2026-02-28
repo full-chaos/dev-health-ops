@@ -1,6 +1,8 @@
 name: Security Scan
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -9,6 +11,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pip-audit:
+    name: Dependency Vulnerability Scan (pip-audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install pip-audit
+        run: pip install "pip-audit>=2.7.0"
+
+      - name: Run pip-audit (fail on any vulnerability)
+        run: |
+          # Build ignore flags from repo-controlled allowlist (not user input)
+          IGNORE_ARGS=""
+          if [ -f .pip-audit-ignore ]; then
+            while IFS= read -r line; do
+              [[ "$line" =~ ^[[:space:]]*# ]] && continue
+              [[ -z "${line// }" ]] && continue
+              CVE=$(echo "$line" | awk '{print $1}')
+              IGNORE_ARGS="$IGNORE_ARGS --ignore-vuln $CVE"
+            done < .pip-audit-ignore
+          fi
+          # shellcheck disable=SC2086
+          pip-audit \
+            --requirement requirements.txt \
+            --vulnerability-service pypi \
+            --format markdown \
+            --output pip-audit-report.md \
+            $IGNORE_ARGS
+
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.md
+          if-no-files-found: ignore
+          retention-days: 30
+
   semgrep:
     name: Semgrep SAST
     runs-on: ubuntu-latest

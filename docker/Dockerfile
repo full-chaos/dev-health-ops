@@ -33,6 +33,10 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# GitPython requires the git binary at runtime
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy installed packages from builder (no build tools follow)
 COPY --from=builder /install /usr/local
 

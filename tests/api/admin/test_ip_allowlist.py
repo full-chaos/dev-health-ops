@@ -102,7 +102,7 @@ async def client(session_maker, seeded_state):
 @pytest.mark.asyncio
 async def test_list_ip_allowlist_empty(client, seeded_state):
     resp = await client.get(
-        f"/api/v1/admin/ip-allowlist",
+        "/api/v1/admin/ip-allowlist",
         headers={"X-Org-Id": seeded_state["org_id"]},
     )
     assert resp.status_code == 200

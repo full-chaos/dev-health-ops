@@ -15,7 +15,9 @@ from .schema import schema
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export GraphQL schema as SDL")
-    parser.add_argument("--out", metavar="PATH", help="Write SDL to file instead of stdout")
+    parser.add_argument(
+        "--out", metavar="PATH", help="Write SDL to file instead of stdout"
+    )
     args = parser.parse_args()
 
     sdl = schema.as_str()

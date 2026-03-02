@@ -140,14 +140,14 @@ async def test_create_ip_allowlist_entry_cidr_range(client, seeded_state):
 
 
 @pytest.mark.asyncio
-async def test_create_ip_allowlist_entry_invalid_ip_returns_400(client, seeded_state):
+async def test_create_ip_allowlist_entry_invalid_ip_returns_422(client, seeded_state):
     resp = await client.post(
         "/api/v1/admin/ip-allowlist",
         json={"ip_range": "not-an-ip", "description": "Bad entry"},
         headers={"X-User-Id": seeded_state["user_id"]},
     )
-    # Invalid IP: service raises ValueError → router catches → 400
-    assert resp.status_code == 400
+    # Invalid IP: service raises ValueError → router catches → 422
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -599,7 +599,7 @@ async def list_sync_configs(
     return [_sync_config_to_response(c) for c in configs]
 
 
-@router.post("/sync-configs", response_model=SyncConfigResponse)
+@router.post("/sync-configs", response_model=SyncConfigResponse, status_code=201)
 async def create_sync_config(
     payload: SyncConfigCreate,
     session: AsyncSession = Depends(get_session),
@@ -2435,7 +2435,7 @@ async def create_ip_allowlist_entry(
             expires_at=payload.expires_at,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e))
     return IPAllowlistResponse(
         id=str(entry.id),
         org_id=str(entry.org_id),

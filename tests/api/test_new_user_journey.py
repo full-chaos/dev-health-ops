@@ -240,7 +240,7 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
         "/api/v1/admin/sync-configs",
         json={"name": "journey-sync", "provider": "github", "sync_targets": []},
     )
-    assert sync_resp.status_code == 200
+    assert sync_resp.status_code == 201
     config_id = sync_resp.json()["id"]
 
     mock_task = MagicMock(id="fake-task-id")

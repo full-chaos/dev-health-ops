@@ -125,12 +125,12 @@ async def test_list_sync_configs_empty(client):
 
 
 @pytest.mark.asyncio
-async def test_create_sync_config_returns_200_with_shape(client):
+async def test_create_sync_config_returns_201_shape(client):
     ac, _ = client
 
     resp = await _create_sync_config(ac, name="test-sync", provider="github")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "test-sync"
     assert data["provider"] == "github"
@@ -145,7 +145,7 @@ async def test_create_sync_config_persists_to_db(client, session_maker):
 
     resp = await _create_sync_config(ac, name="persist-test", provider="gitlab")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     config_id = resp.json()["id"]
 
     async with session_maker() as session:
@@ -167,7 +167,7 @@ async def test_get_sync_config_by_id(client):
     ac, _ = client
 
     create_resp = await _create_sync_config(ac, name="get-test")
-    assert create_resp.status_code == 200
+    assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
     resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}")
@@ -192,7 +192,7 @@ async def test_update_sync_config_changes_is_active(client):
     ac, _ = client
 
     create_resp = await _create_sync_config(ac, name="update-test")
-    assert create_resp.status_code == 200
+    assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
     resp = await ac.patch(
@@ -211,7 +211,7 @@ async def test_delete_sync_config(client):
     ac, _ = client
 
     create_resp = await _create_sync_config(ac, name="delete-test")
-    assert create_resp.status_code == 200
+    assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
     del_resp = await ac.delete(f"/api/v1/admin/sync-configs/{config_id}")
@@ -236,7 +236,7 @@ async def test_trigger_sync_config_returns_202_with_task_id(client):
     ac, _ = client
 
     create_resp = await _create_sync_config(ac, name="trigger-test")
-    assert create_resp.status_code == 200
+    assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
     mock_task = MagicMock(id="fake-task-id")
@@ -267,7 +267,7 @@ async def test_trigger_sync_config_celery_unavailable_returns_503(client):
     ac, _ = client
 
     create_resp = await _create_sync_config(ac, name="celery-fail-test")
-    assert create_resp.status_code == 200
+    assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
     mock_run = MagicMock()
@@ -285,7 +285,7 @@ async def test_list_sync_config_jobs_empty(client):
     ac, _ = client
 
     create_resp = await _create_sync_config(ac, name="jobs-test")
-    assert create_resp.status_code == 200
+    assert create_resp.status_code == 201
     config_id = create_resp.json()["id"]
 
     resp = await ac.get(f"/api/v1/admin/sync-configs/{config_id}/jobs")

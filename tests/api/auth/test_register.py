@@ -109,7 +109,11 @@ async def test_register_creates_unverified_user_in_db(client, session_maker):
 async def test_register_creates_organization_in_db(client, session_maker):
     response = await client.post(
         "/api/v1/auth/register",
-        json={"email": "orgtest@example.com", "password": VALID_PASSWORD, "org_name": "Test Corp"},
+        json={
+            "email": "orgtest@example.com",
+            "password": VALID_PASSWORD,
+            "org_name": "Test Corp",
+        },
     )
     assert response.status_code == 201
     org_id = uuid.UUID(response.json()["org_id"])
@@ -152,7 +156,11 @@ async def test_register_creates_owner_membership(client, session_maker):
 async def test_register_with_explicit_org_name(client, session_maker):
     response = await client.post(
         "/api/v1/auth/register",
-        json={"email": "acme@example.com", "password": VALID_PASSWORD, "org_name": "Acme Corp"},
+        json={
+            "email": "acme@example.com",
+            "password": VALID_PASSWORD,
+            "org_name": "Acme Corp",
+        },
     )
     assert response.status_code == 201
     org_id = uuid.UUID(response.json()["org_id"])
@@ -168,7 +176,9 @@ async def test_register_with_explicit_org_name(client, session_maker):
 
 
 @pytest.mark.asyncio
-async def test_register_without_org_name_defaults_to_my_organization(client, session_maker):
+async def test_register_without_org_name_defaults_to_my_organization(
+    client, session_maker
+):
     response = await client.post(
         "/api/v1/auth/register",
         json={"email": "default-org@example.com", "password": VALID_PASSWORD},
@@ -281,7 +291,9 @@ async def test_register_sends_verification_email(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_register_email_send_failure_does_not_break_registration(client, monkeypatch):
+async def test_register_email_send_failure_does_not_break_registration(
+    client, monkeypatch
+):
     mock_send = AsyncMock(side_effect=Exception("SMTP connection failed"))
     monkeypatch.setattr(
         "dev_health_ops.api.services.email_verification.send_verification_email",

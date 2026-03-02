@@ -59,12 +59,14 @@ async def client(session_maker):
             yield session
             await session.commit()
 
-    app.dependency_overrides[auth_router_module.get_current_user] = lambda: AuthenticatedUser(
-        user_id=USER_ID,
-        email=ADMIN_EMAIL,
-        org_id=ORG_ID,
-        role="owner",
-        is_superuser=False,
+    app.dependency_overrides[auth_router_module.get_current_user] = lambda: (
+        AuthenticatedUser(
+            user_id=USER_ID,
+            email=ADMIN_EMAIL,
+            org_id=ORG_ID,
+            role="owner",
+            is_superuser=False,
+        )
     )
     app.dependency_overrides[admin_router_module.get_session] = _session_override
 
@@ -168,7 +170,10 @@ async def test_update_identity_by_canonical_id(client):
     # Should be same record (same id), updated fields
     assert data["id"] == original_id
     assert data["display_name"] == "Carol Updated"
-    assert data["provider_identities"] == {"github": ["carol-gh"], "jira": ["carol-jira"]}
+    assert data["provider_identities"] == {
+        "github": ["carol-gh"],
+        "jira": ["carol-jira"],
+    }
     assert data["team_ids"] == ["team-a", "team-b"]
 
     # Verify only one record in db

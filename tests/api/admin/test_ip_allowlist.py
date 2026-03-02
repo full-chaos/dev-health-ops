@@ -84,9 +84,7 @@ async def client(session_maker, seeded_state):
             yield session
             await session.commit()
 
-    app.dependency_overrides[auth_router_module.get_current_user] = (
-        lambda: current_user
-    )
+    app.dependency_overrides[auth_router_module.get_current_user] = lambda: current_user
     app.dependency_overrides[admin_router_module.get_session] = _session_override
 
     transport = ASGITransport(app=app)

@@ -24,7 +24,9 @@ from dev_health_ops.models.refresh_token import RefreshToken
 from dev_health_ops.models.users import Membership, Organization, User
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
-password_reset_module = importlib.import_module("dev_health_ops.api.services.password_reset")
+password_reset_module = importlib.import_module(
+    "dev_health_ops.api.services.password_reset"
+)
 
 KNOWN_PASSWORD = "OldPassword@123"
 KNOWN_PASSWORD_HASH = bcrypt.hashpw(

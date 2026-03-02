@@ -66,7 +66,9 @@ async def seeded_state(session_maker):
 @pytest_asyncio.fixture
 async def client(monkeypatch, session_maker, seeded_state):
     mock_sync = MagicMock()
-    monkeypatch.setattr("dev_health_ops.workers.tasks.sync_teams_to_analytics", mock_sync)
+    monkeypatch.setattr(
+        "dev_health_ops.workers.tasks.sync_teams_to_analytics", mock_sync
+    )
 
     app = FastAPI()
     app.include_router(admin_router_module.router)
@@ -178,7 +180,9 @@ async def test_get_team_by_id(client):
         "repo_patterns": ["data/*"],
         "project_keys": [],
     }
-    create_response = await async_client.post("/api/v1/admin/teams", json=create_payload)
+    create_response = await async_client.post(
+        "/api/v1/admin/teams", json=create_payload
+    )
     assert create_response.status_code == 200
 
     response = await async_client.get("/api/v1/admin/teams/data-team")
@@ -199,7 +203,9 @@ async def test_update_team_description(client):
         "repo_patterns": [],
         "project_keys": [],
     }
-    create_response = await async_client.post("/api/v1/admin/teams", json=create_payload)
+    create_response = await async_client.post(
+        "/api/v1/admin/teams", json=create_payload
+    )
     assert create_response.status_code == 200
 
     update_response = await async_client.patch(
@@ -221,7 +227,9 @@ async def test_delete_team(client):
         "repo_patterns": [],
         "project_keys": [],
     }
-    create_response = await async_client.post("/api/v1/admin/teams", json=create_payload)
+    create_response = await async_client.post(
+        "/api/v1/admin/teams", json=create_payload
+    )
     assert create_response.status_code == 200
 
     delete_response = await async_client.delete("/api/v1/admin/teams/temp-team")
@@ -240,8 +248,18 @@ async def test_delete_nonexistent_team_returns_404(client):
 async def test_list_teams_returns_multiple_teams(client):
     async_client, _, _ = client
     teams_to_create = [
-        {"team_id": "team-alpha", "name": "Team Alpha", "repo_patterns": [], "project_keys": []},
-        {"team_id": "team-beta", "name": "Team Beta", "repo_patterns": [], "project_keys": []},
+        {
+            "team_id": "team-alpha",
+            "name": "Team Alpha",
+            "repo_patterns": [],
+            "project_keys": [],
+        },
+        {
+            "team_id": "team-beta",
+            "name": "Team Beta",
+            "repo_patterns": [],
+            "project_keys": [],
+        },
     ]
     for t in teams_to_create:
         r = await async_client.post("/api/v1/admin/teams", json=t)

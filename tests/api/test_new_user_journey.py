@@ -87,16 +87,22 @@ async def journey_app(monkeypatch: pytest.MonkeyPatch, session_maker):
     async def _noop_refresh(*args, **kwargs):
         return None
 
-    app.dependency_overrides[auth_router_module.get_current_user] = lambda: current_user["value"]
+    app.dependency_overrides[auth_router_module.get_current_user] = lambda: (
+        current_user["value"]
+    )
     app.dependency_overrides[admin_router_module.get_session] = _admin_session_override
 
-    monkeypatch.setattr(auth_router_module, "get_postgres_session", _auth_session_override)
+    monkeypatch.setattr(
+        auth_router_module, "get_postgres_session", _auth_session_override
+    )
     monkeypatch.setattr(
         auth_router_module,
         "get_auth_service",
         lambda: AuthService(secret_key="journey-test-secret"),
     )
-    monkeypatch.setattr(auth_router_module, "create_refresh_token_record", _noop_refresh)
+    monkeypatch.setattr(
+        auth_router_module, "create_refresh_token_record", _noop_refresh
+    )
     monkeypatch.setattr(rate_limiter, "enabled", False)
     monkeypatch.setattr(
         "dev_health_ops.api.services.email_verification.send_verification_email",
@@ -137,7 +143,9 @@ async def test_register_creates_user_and_org(journey_app):
         user_result = await session.execute(select(User).where(User.id == user_id))
         user = user_result.scalar_one_or_none()
 
-        org_result = await session.execute(select(Organization).where(Organization.id == org_id))
+        org_result = await session.execute(
+            select(Organization).where(Organization.id == org_id)
+        )
         org = org_result.scalar_one_or_none()
 
         membership_result = await session.execute(
@@ -184,7 +192,9 @@ async def test_register_then_login_returns_tokens(journey_app):
 
 
 @pytest.mark.asyncio
-async def test_full_journey_register_login_create_credential_create_sync_config(journey_app):
+async def test_full_journey_register_login_create_credential_create_sync_config(
+    journey_app,
+):
     ac, current_user, session_maker = journey_app
 
     email = "journey3@example.com"

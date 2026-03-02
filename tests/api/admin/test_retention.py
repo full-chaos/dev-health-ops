@@ -217,9 +217,7 @@ async def test_delete_retention_policy(client):
 async def test_list_retention_resource_types(client):
     async_client, _ = client
 
-    response = await async_client.get(
-        "/api/v1/admin/retention-policies/resource-types"
-    )
+    response = await async_client.get("/api/v1/admin/retention-policies/resource-types")
 
     assert response.status_code == 200
     resource_types = response.json()

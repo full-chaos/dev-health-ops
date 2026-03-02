@@ -140,7 +140,7 @@ async def test_create_ip_allowlist_entry_cidr_range(client, seeded_state):
 
 
 @pytest.mark.asyncio
-async def test_create_ip_allowlist_entry_invalid_ip_returns_422(client, seeded_state):
+async def test_create_ip_allowlist_entry_invalid_ip_returns_400(client, seeded_state):
     resp = await client.post(
         "/api/v1/admin/ip-allowlist",
         json={"ip_range": "not-an-ip", "description": "Bad entry"},

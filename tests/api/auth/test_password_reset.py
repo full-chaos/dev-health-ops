@@ -29,9 +29,8 @@ password_reset_module = importlib.import_module(
 )
 
 KNOWN_PASSWORD = "OldPassword@123"
-KNOWN_PASSWORD_HASH = bcrypt.hashpw(
-    KNOWN_PASSWORD.encode("utf-8"), bcrypt.gensalt()
-).decode("utf-8")
+# Pre-computed bcrypt hash of KNOWN_PASSWORD (cost=4) to avoid hashing at import time.
+KNOWN_PASSWORD_HASH = "$2b$04$tgxalfE5Q58OGJE/0M0piOakqY90AzLsIFaz178yu6eMEkjMuYeJe"
 GENERIC_MSG = "If the account exists, a password reset email has been sent"
 
 

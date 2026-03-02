@@ -125,7 +125,7 @@ async def test_list_sync_configs_empty(client):
 
 
 @pytest.mark.asyncio
-async def test_create_sync_config_returns_201_shape(client):
+async def test_create_sync_config_returns_200_with_shape(client):
     ac, _ = client
 
     resp = await _create_sync_config(ac, name="test-sync", provider="github")

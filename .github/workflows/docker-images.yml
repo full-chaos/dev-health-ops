@@ -54,7 +54,6 @@ jobs:
               - '.dockerignore'
               - 'deploy/**'
               - 'Makefile'
-              - '.github/workflows/docker-images.yml'
 
   build:
     name: Build Image

@@ -34,7 +34,6 @@ jobs:
               - 'alembic.ini'
               - 'Makefile'
               - 'scripts/**'
-              - '.github/workflows/test.yml'
 
   test:
     needs: [changes]

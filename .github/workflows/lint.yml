@@ -34,7 +34,6 @@ jobs:
               - 'requirements.txt'
               - 'pyproject.toml'
               - 'scripts/**'
-              - '.github/workflows/lint.yml'
 
   lint:
     needs: [changes]

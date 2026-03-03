@@ -5,6 +5,10 @@ volumes:
     driver: local
   clickhouse_data:
     driver: local
+  signoz_data:
+    driver: local
+  glitchtip_db_data:
+    driver: local
 
 services:
   postgres:
@@ -172,3 +176,77 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
+
+  # ---------------------------------------------------------------------------
+  # Observability — SigNoz (distributed tracing + metrics)
+  # ---------------------------------------------------------------------------
+  # Single-binary all-in-one deployment.
+  # UI:         http://localhost:8080
+  # OTLP gRPC:  localhost:4317  (matches OTEL_EXPORTER_OTLP_ENDPOINT default)
+  # OTLP HTTP:  localhost:4318
+  # ---------------------------------------------------------------------------
+  signoz:
+    image: signoz/signoz:latest
+    container_name: signoz
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - signoz_data:/var/lib/signoz
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Observability — GlitchTip (error tracking / Sentry-compatible)
+  # ---------------------------------------------------------------------------
+  # Web UI + API: http://localhost:8800
+  # Set SENTRY_DSN to a project DSN from the GlitchTip UI to enable error
+  # reporting from dev-health-ops (glitchtip accepts the Sentry SDK protocol).
+  # ---------------------------------------------------------------------------
+  glitchtip-db:
+    image: postgres:16-alpine
+    container_name: glitchtip-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: glitchtip
+      POSTGRES_DB: glitchtip
+    volumes:
+      - glitchtip_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U glitchtip" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  glitchtip:
+    image: glitchtip/glitchtip:latest
+    container_name: glitchtip
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://glitchtip:glitchtip@glitchtip-db:5432/glitchtip"
+      REDIS_URL: "redis://redis:6379/2"
+      SECRET_KEY: ${GLITCHTIP_SECRET_KEY:?GLITCHTIP_SECRET_KEY must be set}
+      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN:-http://localhost:8800}
+      EMAIL_URL: ${EMAIL_URL:-consolemail://}
+      DEFAULT_FROM_EMAIL: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+    depends_on:
+      glitchtip-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8800:8000"
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s

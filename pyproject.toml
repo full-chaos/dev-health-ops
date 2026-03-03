@@ -20,11 +20,12 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 keywords = ["metrics", "git", "analytics", "developer-experience"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "tqdm",
   "sqlalchemy",
   "clickhouse-connect",
+  "numpy",
   "fastapi",
   "slowapi",
   "httpx",
@@ -83,10 +84,7 @@ dev = [
   "fakeredis",
   "pip-audit>=2.7.0",
 ]
-enterprise-sso = [
-  "defusedxml>=0.7.0",
-  "signxml>=3.0.0",
-]
+enterprise-sso = ["defusedxml>=0.7.0", "signxml>=3.0.0"]
 
 [project.urls]
 Repository = "https://github.com/chrisgeo/dev-health-ops"
@@ -118,7 +116,15 @@ py-modules = ["cli", "investment_taxonomy", "storage", "utils"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-"*" = ["**/*.sql", "**/*.yaml", "**/*.yml", "**/*.json", "**/*.mako", "**/*.html", "**/*.txt"]
+"*" = [
+  "**/*.sql",
+  "**/*.yaml",
+  "**/*.yml",
+  "**/*.json",
+  "**/*.mako",
+  "**/*.html",
+  "**/*.txt",
+]
 
 [tool.ruff]
 line-length = 88
@@ -138,7 +144,13 @@ exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E203", "E501"]
-per-file-ignores = {"__init__.py" = ["F401"], "src/dev_health_ops/api/main.py" = ["E402"], "tests/test_ingest_streams.py" = ["E402"]}
+per-file-ignores = { "__init__.py" = [
+  "F401",
+], "src/dev_health_ops/api/main.py" = [
+  "E402",
+], "tests/test_ingest_streams.py" = [
+  "E402",
+] }
 
 [tool.ruff.format]
 quote-style = "double"

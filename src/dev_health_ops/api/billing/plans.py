@@ -9,7 +9,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.admin.middleware import require_superuser
 from dev_health_ops.api.auth.router import get_current_user, get_current_user_optional
+from dev_health_ops.api.billing.plan_sync_service import pull_from_stripe
 from dev_health_ops.api.billing.stripe_client import get_stripe_client
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import postgres_session_dependency
@@ -88,6 +90,13 @@ class BillingPlanResponse(BaseModel):
     metadata: dict[str, Any]
     prices: list[BillingPriceResponse]
     bundles: list[FeatureBundleResponse]
+
+
+class PullStripeResponse(BaseModel):
+    created: list[str]
+    updated: list[str]
+    skipped: list[str]
+    errors: list[str]
 
 
 async def _require_superadmin(user: AuthenticatedUser) -> None:
@@ -264,6 +273,15 @@ async def list_billing_plans(
         await _plan_to_response(db, plan, include_inactive_prices=include_inactive)
         for plan in plans
     ]
+
+
+@router.post("/plans/pull-stripe", response_model=PullStripeResponse)
+async def pull_plans_from_stripe(
+    user: AuthenticatedUser = Depends(require_superuser),
+    db: AsyncSession = Depends(postgres_session_dependency),
+) -> PullStripeResponse:
+    report = await pull_from_stripe(db)
+    return PullStripeResponse(**report.to_dict())
 
 
 @router.get("/plans/{plan_id}", response_model=BillingPlanResponse)

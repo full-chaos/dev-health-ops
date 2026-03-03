@@ -104,6 +104,7 @@ async def create_refund(
                 raise HTTPException(status_code=404, detail=detail) from exc
             raise HTTPException(status_code=400, detail=detail) from exc
 
+
 @router.get("", response_model=RefundListResponse)
 async def list_refunds(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -130,6 +131,7 @@ async def list_refunds(
             limit=safe_limit,
             offset=safe_offset,
         )
+
 
 @router.get("/{refund_id}", response_model=RefundResponse)
 async def get_refund(

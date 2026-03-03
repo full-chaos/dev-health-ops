@@ -290,6 +290,7 @@ async def test_non_superuser_cannot_access_refund_endpoints(
     assert create_response.status_code == 403
     assert get_response.status_code == 403
 
+
 @pytest.mark.asyncio
 async def test_superadmin_subscription_list_endpoint(
     client, app_and_sessionmaker, monkeypatch

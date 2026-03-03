@@ -327,3 +327,38 @@ async def test_superadmin_subscription_list_endpoint(
     assert data["items"] == []
     assert data["total"] == 0
     assert captured["org_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_superadmin_with_invalid_org_id_still_resolves_globally(
+    client, app_and_sessionmaker, monkeypatch
+):
+    """Superusers whose session carries a non-UUID org_id should still
+    resolve to global (None) rather than raising 'Invalid organization'."""
+    app, _ = app_and_sessionmaker
+    app.dependency_overrides[get_current_user] = lambda: _build_user(
+        superuser=True,
+        org_id="not-a-uuid",
+    )
+
+    from dev_health_ops.api.billing import refund_routes
+
+    captured: dict[str, object] = {"orgs": []}
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield object()
+
+    async def _fake_list_refunds(db, org_id, limit, offset):
+        captured["orgs"].append(org_id)
+        return [], 0
+
+    monkeypatch.setattr(refund_routes, "get_postgres_session", _fake_session)
+    monkeypatch.setattr(
+        refund_routes.refund_service, "list_refunds", _fake_list_refunds
+    )
+
+    response = await client.get("/api/v1/billing/refunds")
+
+    assert response.status_code == 200
+    assert captured["orgs"] == [None]

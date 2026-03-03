@@ -15,6 +15,7 @@ from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session
 
+from ._helpers import _resolve_org_id
 from .invoice_service import InvoiceService
 from .stripe_client import get_stripe_client
 
@@ -126,10 +127,12 @@ async def list_invoices(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> InvoiceListResponse:
+    resolved_org_id = _resolve_org_id(user, org_id if user.is_superuser else None)
     invoices, total = await invoice_service.list_invoices(
         db=session,
-        org_id=uuid.UUID(user.org_id),
+        org_id=resolved_org_id,
         limit=limit,
         offset=offset,
         status_filter=status,
@@ -147,14 +150,15 @@ async def get_invoice(
     invoice_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     session: AsyncSession = Depends(get_session),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> InvoiceResponse:
     try:
         invoice_uuid = uuid.UUID(invoice_id)
-        org_uuid = uuid.UUID(user.org_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid invoice id")
 
-    invoice = await invoice_service.get_invoice(session, invoice_uuid, org_uuid)
+    resolved_org_id = _resolve_org_id(user, org_id if user.is_superuser else None)
+    invoice = await invoice_service.get_invoice(session, invoice_uuid, resolved_org_id)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
@@ -167,14 +171,16 @@ async def void_invoice(
     _: Annotated[AuthenticatedUser, Depends(require_admin)],
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     session: AsyncSession = Depends(get_session),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> InvoiceResponse:
     try:
         invoice_uuid = uuid.UUID(invoice_id)
-        org_uuid = uuid.UUID(user.org_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid invoice id")
 
-    invoice = await invoice_service.get_invoice(session, invoice_uuid, org_uuid)
+    resolved_org_id = _resolve_org_id(user, org_id if user.is_superuser else None)
+
+    invoice = await invoice_service.get_invoice(session, invoice_uuid, resolved_org_id)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     if invoice.status != "open":
@@ -196,7 +202,11 @@ async def void_invoice(
     )
     updated_invoice.amount_remaining = int(Decimal("0"))
     await session.commit()
-    refreshed = await invoice_service.get_invoice(session, updated_invoice.id, org_uuid)
+    refreshed = await invoice_service.get_invoice(
+        session,
+        updated_invoice.id,
+        resolved_org_id,
+    )
     if refreshed is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return _to_invoice_response(refreshed, include_line_items=True)

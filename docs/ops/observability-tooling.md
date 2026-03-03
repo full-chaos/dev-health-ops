@@ -278,7 +278,7 @@ The backend already exports OTLP to `localhost:4317`. Add SigNoz as a compose se
 signoz:
   image: signoz/signoz:latest
   ports:
-    - "3301:3301"    # SigNoz UI
+    - "8080:8080"    # SigNoz UI
     - "4317:4317"    # OTLP gRPC (already targeted by tracing.py)
     - "4318:4318"    # OTLP HTTP
   volumes:
@@ -286,7 +286,7 @@ signoz:
 ```
 
 !!! success "Result"
-    Traces, metrics, and logs visible in SigNoz UI at `http://localhost:3301` with zero code changes.
+    Traces, metrics, and logs visible in SigNoz UI at `http://localhost:8080` with zero code changes.
 
 ### Step 2: Add GlitchTip to Docker Compose
 

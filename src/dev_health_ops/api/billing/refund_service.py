@@ -112,30 +112,38 @@ class RefundService:
             await self._upsert_from_stripe_refund(db=db, stripe_refund=data_object)
 
     async def get_refund(
-        self, db: AsyncSession, refund_id: uuid.UUID, org_id: uuid.UUID
+        self,
+        db: AsyncSession,
+        refund_id: uuid.UUID,
+        org_id: uuid.UUID | None,
     ) -> Refund | None:
-        result = await db.execute(
-            select(Refund).where(Refund.id == refund_id, Refund.org_id == org_id)
-        )
+        query = select(Refund).where(Refund.id == refund_id)
+        if org_id is not None:
+            query = query.where(Refund.org_id == org_id)
+
+        result = await db.execute(query)
         return result.scalar_one_or_none()
 
     async def list_refunds(
         self,
         db: AsyncSession,
-        org_id: uuid.UUID,
+        org_id: uuid.UUID | None,
         limit: int,
         offset: int,
     ) -> tuple[list[Refund], int]:
-        items_result = await db.execute(
+        items_query = (
             select(Refund)
-            .where(Refund.org_id == org_id)
             .order_by(Refund.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
-        count_result = await db.execute(
-            select(func.count(Refund.id)).where(Refund.org_id == org_id)
-        )
+        count_query = select(func.count(Refund.id))
+        if org_id is not None:
+            items_query = items_query.where(Refund.org_id == org_id)
+            count_query = count_query.where(Refund.org_id == org_id)
+
+        items_result = await db.execute(items_query)
+        count_result = await db.execute(count_query)
         return list(items_result.scalars().all()), int(count_result.scalar_one() or 0)
 
     async def _get_invoice(

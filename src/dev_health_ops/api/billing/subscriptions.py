@@ -14,6 +14,8 @@ from dev_health_ops.api.billing.stripe_client import get_stripe_client
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import postgres_session_dependency
 
+from ._helpers import _resolve_org_id
+
 router = APIRouter(prefix="/subscriptions", tags=["billing-subscriptions"])
 
 
@@ -45,6 +47,13 @@ class SubscriptionHistoryItem(BaseModel):
 
 class SubscriptionHistoryResponse(BaseModel):
     items: list[SubscriptionHistoryItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class SubscriptionListResponse(BaseModel):
+    items: list[SubscriptionView]
     total: int
     limit: int
     offset: int
@@ -102,13 +111,56 @@ def _service(session: AsyncSession) -> Any:
     return module.SubscriptionService(session)
 
 
+@router.get("/list", response_model=SubscriptionListResponse)
+async def list_subscriptions(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    session: AsyncSession = Depends(postgres_session_dependency),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    org_id: uuid.UUID | None = Query(default=None),
+) -> SubscriptionListResponse:
+    service = _service(session)
+    resolved_org_id = _resolve_org_id(user, org_id)
+    subscriptions, total = await service.list_subscriptions(
+        resolved_org_id, limit, offset
+    )
+    items = []
+    for sub in subscriptions:
+        plan, price = await _load_plan_price(sub, session)
+        items.append(
+            SubscriptionView(
+                id=str(sub.id),
+                org_id=str(sub.org_id),
+                stripe_subscription_id=sub.stripe_subscription_id,
+                stripe_customer_id=sub.stripe_customer_id,
+                status=sub.status,
+                current_period_start=_to_iso(sub.current_period_start) or "",
+                current_period_end=_to_iso(sub.current_period_end) or "",
+                cancel_at_period_end=bool(sub.cancel_at_period_end),
+                canceled_at=_to_iso(sub.canceled_at),
+                trial_start=_to_iso(sub.trial_start),
+                trial_end=_to_iso(sub.trial_end),
+                plan=_serialize_record(plan) or None,
+                price=_serialize_record(price) or None,
+            )
+        )
+    return SubscriptionListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("", response_model=SubscriptionView)
 async def get_subscription(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     session: AsyncSession = Depends(postgres_session_dependency),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> SubscriptionView:
     service = _service(session)
-    subscription = await service.get_for_org(uuid.UUID(user.org_id))
+    resolved_org_id = _resolve_org_id(user, org_id)
+    subscription = await service.get_for_org(resolved_org_id)
     if subscription is None:
         raise HTTPException(status_code=404, detail="No active subscription")
 
@@ -136,9 +188,11 @@ async def get_subscription_history(
     session: AsyncSession = Depends(postgres_session_dependency),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> SubscriptionHistoryResponse:
     service = _service(session)
-    events, total = await service.get_history(uuid.UUID(user.org_id), limit, offset)
+    resolved_org_id = _resolve_org_id(user, org_id)
+    events, total = await service.get_history(resolved_org_id, limit, offset)
     return SubscriptionHistoryResponse(
         items=[
             SubscriptionHistoryItem(
@@ -163,9 +217,14 @@ async def change_plan(
     body: ChangePlanRequest,
     user: Annotated[AuthenticatedUser, Depends(require_admin)],
     session: AsyncSession = Depends(postgres_session_dependency),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> MutationResponse:
     service = _service(session)
-    subscription = await service.get_for_org(uuid.UUID(user.org_id))
+    resolved_org_id = _resolve_org_id(user, org_id)
+    if resolved_org_id is None:
+        raise HTTPException(status_code=400, detail="org_id required")
+
+    subscription = await service.get_for_org(resolved_org_id)
     if subscription is None:
         raise HTTPException(status_code=404, detail="No subscription found")
 
@@ -193,9 +252,14 @@ async def cancel_subscription(
     body: CancelSubscriptionRequest,
     user: Annotated[AuthenticatedUser, Depends(require_admin)],
     session: AsyncSession = Depends(postgres_session_dependency),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> MutationResponse:
     service = _service(session)
-    subscription = await service.get_for_org(uuid.UUID(user.org_id))
+    resolved_org_id = _resolve_org_id(user, org_id)
+    if resolved_org_id is None:
+        raise HTTPException(status_code=400, detail="org_id required")
+
+    subscription = await service.get_for_org(resolved_org_id)
     if subscription is None:
         raise HTTPException(status_code=404, detail="No subscription found")
 
@@ -214,9 +278,14 @@ async def cancel_subscription(
 async def reactivate_subscription(
     user: Annotated[AuthenticatedUser, Depends(require_admin)],
     session: AsyncSession = Depends(postgres_session_dependency),
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> MutationResponse:
     service = _service(session)
-    subscription = await service.get_for_org(uuid.UUID(user.org_id))
+    resolved_org_id = _resolve_org_id(user, org_id)
+    if resolved_org_id is None:
+        raise HTTPException(status_code=400, detail="org_id required")
+
+    subscription = await service.get_for_org(resolved_org_id)
     if subscription is None:
         raise HTTPException(status_code=404, detail="No subscription found")
 

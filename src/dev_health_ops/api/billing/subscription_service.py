@@ -133,47 +133,73 @@ class SubscriptionService:
             await self.db.rollback()
             return
 
-    async def get_for_org(self, org_id: uuid.UUID) -> Any | None:
+    async def get_for_org(self, org_id: uuid.UUID | None) -> Any | None:
         subscription_cls = self._subscription_cls()
-        result = await self.db.execute(
+        query = (
             select(subscription_cls)
-            .where(subscription_cls.org_id == org_id)
             .order_by(subscription_cls.updated_at.desc())
             .limit(1)
         )
+        if org_id is not None:
+            query = query.where(subscription_cls.org_id == org_id)
+
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
+
+    async def list_subscriptions(
+        self,
+        org_id: uuid.UUID | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Any], int]:
+        subscription_cls = self._subscription_cls()
+        query = (
+            select(subscription_cls)
+            .order_by(subscription_cls.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        count_query = select(func.count()).select_from(subscription_cls)
+        if org_id is not None:
+            query = query.where(subscription_cls.org_id == org_id)
+            count_query = count_query.where(subscription_cls.org_id == org_id)
+        result = await self.db.execute(query)
+        count_result = await self.db.execute(count_query)
+        return list(result.scalars().all()), int(count_result.scalar_one())
 
     async def get_history(
         self,
-        org_id: uuid.UUID,
+        org_id: uuid.UUID | None,
         limit: int,
         offset: int,
     ) -> tuple[list[Any], int]:
         subscription_cls = self._subscription_cls()
         subscription_event_cls = self._subscription_event_cls()
-        base_query: Select[Any] = (
-            select(subscription_event_cls)
-            .join(
-                subscription_cls,
-                subscription_cls.id == subscription_event_cls.subscription_id,
-            )
-            .where(subscription_cls.org_id == org_id)
+        base_query: Select[Any] = select(subscription_event_cls).join(
+            subscription_cls,
+            subscription_cls.id == subscription_event_cls.subscription_id,
         )
+        if org_id is not None:
+            base_query = base_query.where(subscription_cls.org_id == org_id)
+
         result = await self.db.execute(
             base_query.order_by(subscription_event_cls.processed_at.desc())
             .limit(limit)
             .offset(offset)
         )
 
-        count_result = await self.db.execute(
+        count_query: Select[Any] = (
             select(func.count())
             .select_from(subscription_event_cls)
             .join(
                 subscription_cls,
                 subscription_cls.id == subscription_event_cls.subscription_id,
             )
-            .where(subscription_cls.org_id == org_id)
         )
+        if org_id is not None:
+            count_query = count_query.where(subscription_cls.org_id == org_id)
+
+        count_result = await self.db.execute(count_query)
         return list(result.scalars().all()), int(count_result.scalar_one())
 
     async def _event_exists(self, stripe_event_id: str) -> bool:

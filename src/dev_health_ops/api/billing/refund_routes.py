@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from dev_health_ops.api.auth.router import get_current_user
@@ -12,6 +12,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.refunds import Refund
 
+from ._helpers import _resolve_org_id
 from .refund_service import refund_service
 
 router = APIRouter(prefix="/refunds", tags=["billing-refunds"])
@@ -77,13 +78,17 @@ def _as_response(refund: Refund) -> RefundResponse:
 async def create_refund(
     payload: CreateRefundRequest,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> RefundResponse:
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    resolved_org_id = _resolve_org_id(user, org_id)
+    if resolved_org_id is None:
+        raise HTTPException(status_code=400, detail="org_id required")
+
     try:
         invoice_id = uuid.UUID(payload.invoice_id)
-        org_id = uuid.UUID(user.org_id)
         actor_id = uuid.UUID(user.user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid identifier") from exc
@@ -92,7 +97,7 @@ async def create_refund(
         try:
             refund = await refund_service.create_refund(
                 db=db,
-                org_id=org_id,
+                org_id=resolved_org_id,
                 invoice_id=invoice_id,
                 amount=payload.amount,
                 reason=payload.reason,
@@ -112,14 +117,12 @@ async def list_refunds(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     limit: int = 20,
     offset: int = 0,
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> RefundListResponse:
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    try:
-        org_id = uuid.UUID(user.org_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid organization") from exc
+    resolved_org_id = _resolve_org_id(user, org_id)
 
     safe_limit = min(max(limit, 1), 100)
     safe_offset = max(offset, 0)
@@ -127,7 +130,7 @@ async def list_refunds(
     async with get_postgres_session() as db:
         refunds, total = await refund_service.list_refunds(
             db=db,
-            org_id=org_id,
+            org_id=resolved_org_id,
             limit=safe_limit,
             offset=safe_offset,
         )
@@ -143,13 +146,15 @@ async def list_refunds(
 async def get_refund(
     refund_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    org_id: uuid.UUID | None = Query(default=None),
 ) -> RefundResponse:
     if not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    resolved_org_id = _resolve_org_id(user, org_id)
+
     try:
         parsed_refund_id = uuid.UUID(refund_id)
-        org_id = uuid.UUID(user.org_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid identifier") from exc
 
@@ -157,7 +162,7 @@ async def get_refund(
         refund = await refund_service.get_refund(
             db=db,
             refund_id=parsed_refund_id,
-            org_id=org_id,
+            org_id=resolved_org_id,
         )
         if refund is None:
             raise HTTPException(status_code=404, detail="Refund not found")

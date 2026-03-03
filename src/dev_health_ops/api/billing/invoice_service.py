@@ -214,31 +214,38 @@ class InvoiceService:
         self,
         db: AsyncSession,
         invoice_id: UUID,
-        org_id: UUID,
+        org_id: UUID | None,
     ) -> Invoice | None:
-        result = await db.execute(
+        query = (
             select(Invoice)
             .options(selectinload(Invoice.line_items))
-            .where(Invoice.id == invoice_id, Invoice.org_id == org_id)
+            .where(Invoice.id == invoice_id)
         )
+        if org_id is not None:
+            query = query.where(Invoice.org_id == org_id)
+
+        result = await db.execute(query)
         return result.scalar_one_or_none()
 
     async def list_invoices(
         self,
         db: AsyncSession,
-        org_id: UUID,
+        org_id: UUID | None,
         limit: int,
         offset: int,
         status_filter: str | None,
     ) -> tuple[list[Invoice], int]:
-        count_stmt = select(func.count(Invoice.id)).where(Invoice.org_id == org_id)
+        count_stmt = select(func.count(Invoice.id))
         list_stmt = (
             select(Invoice)
-            .where(Invoice.org_id == org_id)
             .order_by(Invoice.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
+
+        if org_id is not None:
+            count_stmt = count_stmt.where(Invoice.org_id == org_id)
+            list_stmt = list_stmt.where(Invoice.org_id == org_id)
 
         if status_filter:
             count_stmt = count_stmt.where(Invoice.status == status_filter)

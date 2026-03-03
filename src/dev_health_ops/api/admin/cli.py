@@ -252,6 +252,255 @@ def seed_billing_plans(ns: argparse.Namespace) -> int:
     return asyncio.run(_seed_billing_plans_async(ns))
 
 
+async def _billing_list_async(ns: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from dev_health_ops.models.billing import BillingPlan, BillingPrice
+
+    session = await _get_session(ns)
+    try:
+        result = await session.execute(
+            select(BillingPlan).order_by(BillingPlan.display_order)
+        )
+        plans = list(result.scalars().all())
+        if not plans:
+            print("No billing plans found.")
+            return 0
+        print(
+            f"{'Key':<15} {'Name':<15} {'Tier':<12} {'Active':<8} {'Stripe Product ID':<30} {'Prices'}"
+        )
+        print("-" * 110)
+        for plan in plans:
+            prices_result = await session.execute(
+                select(BillingPrice).where(BillingPrice.plan_id == plan.id)
+            )
+            prices = list(prices_result.scalars().all())
+            prices_summary = (
+                ", ".join(f"{p.interval} ${p.amount / 100:.2f}" for p in prices)
+                if prices
+                else "none"
+            )
+            stripe_id = plan.stripe_product_id or "-"
+            active = "Yes" if plan.is_active else "No"
+            print(
+                f"{plan.key:<15} {plan.name:<15} {plan.tier:<12} {active:<8} {stripe_id:<30} {prices_summary}"
+            )
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def billing_list(ns: argparse.Namespace) -> int:
+    return asyncio.run(_billing_list_async(ns))
+
+
+async def _billing_pull_stripe_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.billing.plan_sync_service import pull_from_stripe
+
+    session = await _get_session(ns)
+    try:
+        report = await pull_from_stripe(session, dry_run=ns.dry_run)
+        if ns.dry_run:
+            print("[dry-run] No changes written.")
+        print(f"Created:  {report.created}")
+        print(f"Updated:  {report.updated}")
+        print(f"Skipped:  {report.skipped}")
+        if report.errors:
+            print(f"Errors:   {report.errors}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def billing_pull_stripe(ns: argparse.Namespace) -> int:
+    return asyncio.run(_billing_pull_stripe_async(ns))
+
+
+async def _billing_sync_stripe_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.billing.plan_sync_service import sync_all_to_stripe
+
+    session = await _get_session(ns)
+    try:
+        report = await sync_all_to_stripe(session)
+        print(f"Created:  {report.created}")
+        print(f"Updated:  {report.updated}")
+        print(f"Skipped:  {report.skipped}")
+        if report.errors:
+            print(f"Errors:   {report.errors}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def billing_sync_stripe(ns: argparse.Namespace) -> int:
+    return asyncio.run(_billing_sync_stripe_async(ns))
+
+
+async def _bundles_create_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.models.billing import FeatureBundle
+
+    features = [f.strip() for f in ns.features.split(",") if f.strip()]
+    session = await _get_session(ns)
+    try:
+        bundle = FeatureBundle(
+            key=ns.key,
+            name=ns.name,
+            description=ns.description,
+            features=features,
+        )
+        session.add(bundle)
+        await session.commit()
+        print(f"Created bundle: {bundle.key} ({len(features)} features)")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def bundles_create(ns: argparse.Namespace) -> int:
+    return asyncio.run(_bundles_create_async(ns))
+
+
+async def _bundles_list_async(ns: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from dev_health_ops.models.billing import (
+        BillingPlan,
+        FeatureBundle,
+        PlanFeatureBundle,
+    )
+
+    session = await _get_session(ns)
+    try:
+        result = await session.execute(
+            select(FeatureBundle).order_by(FeatureBundle.key)
+        )
+        bundles = list(result.scalars().all())
+        if not bundles:
+            print("No feature bundles found.")
+            return 0
+        for bundle in bundles:
+            pfb_result = await session.execute(
+                select(BillingPlan.key)
+                .join(PlanFeatureBundle, PlanFeatureBundle.plan_id == BillingPlan.id)
+                .where(PlanFeatureBundle.bundle_id == bundle.id)
+            )
+            plan_keys = [row[0] for row in pfb_result.all()]
+            features_str = ", ".join(bundle.features) if bundle.features else "none"
+            plans_str = ", ".join(plan_keys) if plan_keys else "none"
+            print(f"{bundle.key} ({bundle.name})")
+            print(f"  Features: {features_str}")
+            print(f"  Plans:    {plans_str}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def bundles_list(ns: argparse.Namespace) -> int:
+    return asyncio.run(_bundles_list_async(ns))
+
+
+async def _bundles_assign_plan_async(ns: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from dev_health_ops.models.billing import (
+        BillingPlan,
+        FeatureBundle,
+        PlanFeatureBundle,
+    )
+
+    session = await _get_session(ns)
+    try:
+        bundle_result = await session.execute(
+            select(FeatureBundle).where(FeatureBundle.key == ns.bundle_key)
+        )
+        bundle = bundle_result.scalar_one_or_none()
+        if not bundle:
+            print(f"Error: Bundle '{ns.bundle_key}' not found")
+            return 1
+
+        plan_result = await session.execute(
+            select(BillingPlan).where(BillingPlan.key == ns.plan_key)
+        )
+        plan = plan_result.scalar_one_or_none()
+        if not plan:
+            print(f"Error: Plan '{ns.plan_key}' not found")
+            return 1
+
+        link = PlanFeatureBundle(plan_id=plan.id, bundle_id=bundle.id)
+        session.add(link)
+        await session.commit()
+        print(f"Assigned bundle '{ns.bundle_key}' to plan '{ns.plan_key}'")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def bundles_assign_plan(ns: argparse.Namespace) -> int:
+    return asyncio.run(_bundles_assign_plan_async(ns))
+
+
+async def _bundles_assign_org_async(ns: argparse.Namespace) -> int:
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
+
+    session = await _get_session(ns)
+    try:
+        flag_result = await session.execute(
+            select(FeatureFlag).where(FeatureFlag.key == ns.feature_key)
+        )
+        flag = flag_result.scalar_one_or_none()
+        if not flag:
+            print(f"Error: Feature flag '{ns.feature_key}' not found")
+            return 1
+
+        expires_at = None
+        if ns.expires_days:
+            expires_at = datetime.now(timezone.utc) + timedelta(days=ns.expires_days)
+
+        override = OrgFeatureOverride(
+            org_id=ns.org_id,
+            feature_id=flag.id,
+            reason=ns.reason,
+            expires_at=expires_at,
+        )
+        session.add(override)
+        await session.commit()
+        print(f"Assigned feature '{ns.feature_key}' override to org '{ns.org_id}'")
+        if expires_at:
+            print(f"  Expires: {expires_at.isoformat()}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+def bundles_assign_org(ns: argparse.Namespace) -> int:
+    return asyncio.run(_bundles_assign_org_async(ns))
+
+
 def licenses_keygen_cmd(ns: argparse.Namespace) -> int:
     from dev_health_ops.licensing.generator import generate_keypair
 
@@ -397,3 +646,81 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Seed standard billing plans (Community, Team, Enterprise) with prices.",
     )
     billing_seed.set_defaults(func=seed_billing_plans)
+
+    billing_list_parser = billing_sub.add_parser(
+        "list", help="List all billing plans with prices and Stripe sync status."
+    )
+    billing_list_parser.set_defaults(func=billing_list)
+
+    billing_pull = billing_sub.add_parser(
+        "pull-stripe", help="Pull billing plans from Stripe into the database."
+    )
+    billing_pull.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Preview changes without writing to the database.",
+    )
+    billing_pull.set_defaults(func=billing_pull_stripe)
+
+    billing_sync = billing_sub.add_parser(
+        "sync-stripe", help="Push unsynced billing plans to Stripe."
+    )
+    billing_sync.set_defaults(func=billing_sync_stripe)
+
+    bundles_parser = admin_sub.add_parser("bundles", help="Feature bundle management.")
+    bundles_sub = bundles_parser.add_subparsers(dest="bundles_command", required=True)
+
+    bundles_create_parser = bundles_sub.add_parser(
+        "create", help="Create a new feature bundle."
+    )
+    bundles_create_parser.add_argument(
+        "--key", required=True, help="Unique bundle key."
+    )
+    bundles_create_parser.add_argument(
+        "--name", required=True, help="Bundle display name."
+    )
+    bundles_create_parser.add_argument(
+        "--features",
+        required=True,
+        help="Comma-separated list of feature keys.",
+    )
+    bundles_create_parser.add_argument("--description", help="Bundle description.")
+    bundles_create_parser.set_defaults(func=bundles_create)
+
+    bundles_list_parser = bundles_sub.add_parser(
+        "list",
+        help="List all feature bundles with their features and plan assignments.",
+    )
+    bundles_list_parser.set_defaults(func=bundles_list)
+
+    bundles_assign_plan_parser = bundles_sub.add_parser(
+        "assign-plan", help="Assign a feature bundle to a billing plan."
+    )
+    bundles_assign_plan_parser.add_argument(
+        "--bundle-key", dest="bundle_key", required=True, help="Feature bundle key."
+    )
+    bundles_assign_plan_parser.add_argument(
+        "--plan-key", dest="plan_key", required=True, help="Billing plan key."
+    )
+    bundles_assign_plan_parser.set_defaults(func=bundles_assign_plan)
+
+    bundles_assign_org_parser = bundles_sub.add_parser(
+        "assign-org", help="Grant an organization a feature override."
+    )
+    bundles_assign_org_parser.add_argument(
+        "--org-id", dest="org_id", required=True, help="Organization ID (UUID)."
+    )
+    bundles_assign_org_parser.add_argument(
+        "--feature-key", dest="feature_key", required=True, help="Feature flag key."
+    )
+    bundles_assign_org_parser.add_argument(
+        "--reason", help="Reason for the override (e.g., support ticket, promotion)."
+    )
+    bundles_assign_org_parser.add_argument(
+        "--expires-days",
+        dest="expires_days",
+        type=int,
+        help="Days until the override expires.",
+    )
+    bundles_assign_org_parser.set_defaults(func=bundles_assign_org)

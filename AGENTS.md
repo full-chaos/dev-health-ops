@@ -19,7 +19,8 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 5. **LLM contract (compute-time only)**: `docs/llm/categorization-contract.md`
 6. **Views and interpretation**: `docs/user-guide/views-index.md`, `docs/visualizations/patterns.md`
 7. **API surface**: `docs/api/graphql-overview.md`, `docs/api/view-mapping.md`
-8. **How to run it**: `README.md` (test tiers), `ci/run_tests.sh`, `ci/run_live_backend_e2e.sh`
+8. **How to run it**: `README.md` (test tiers), `ci/run_tests.sh`
+9. **Test patterns**: `tests/api/auth/test_invite_flow.py` (gold-standard fixture), `tests/api/auth/test_register.py`, `tests/api/admin/` (admin CRUD)
 
 ## Non-negotiables (summary)
 - **WorkUnits are evidence containers, not categories.**
@@ -275,7 +276,15 @@ If a `dev-health-ops` change affects `dev-health-web` rendering (e.g., API shape
 * Do not collapse responsibilities into one layer.
 * Do not add “helpful” outputs like file dumps. Persistence goes through sinks only.
 
-### 7.3 Performance and reliability
+### 7.3 Test patterns
+
+* **API endpoint tests** follow `tests/api/auth/test_invite_flow.py` — SQLite in-memory via `aiosqlite`, `monkeypatch.setattr` for `get_postgres_session`, `dependency_overrides` for admin guards, `httpx.ASGITransport` client.
+* Auth tests: `tests/api/auth/` (registration, password reset, email verification, invite flow, SSO).
+* Admin CRUD tests: `tests/api/admin/` (sync configs, teams, identities, IP allowlist, retention policies, impersonation).
+* Journey integration test: `tests/api/test_journey.py` chains register → login → onboard → admin CRUD → sync trigger.
+* GraphQL schema export: `src/dev_health_ops/api/graphql/export_schema.py` is used by `dev-health-web` CI to detect schema drift.
+
+### 7.4 Performance and reliability
 
 * Async/batching for network I/O.
 * Respect any existing rate limit/backoff mechanisms.

@@ -1,7 +1,7 @@
 # Testing Governance and Quality Gates
 
-> **Document Status**: Active  
-> **Last Updated**: 2026-02-19
+> **Document Status**: Active
+> **Last Updated**: 2026-03-02
 
 This policy defines the minimum quality bar for pull requests in `dev-health-ops`.
 
@@ -33,6 +33,20 @@ Example:
 TEST-EVIDENCE: ./ci/run_tests.sh unit (pass), pytest tests/test_metrics_daily.py -q (pass)
 RISK-NOTES: Low risk; metrics-only logic change, rollback by reverting commit.
 ```
+
+## Test suite layout
+
+| Directory | Scope | Count |
+| --- | --- | --- |
+| `tests/` (root) | Connectors, metrics, billing, licensing, sinks, graphql | ~120 files |
+| `tests/api/auth/` | Registration, password reset, email verification, invite flow, SSO | 6 files |
+| `tests/api/admin/` | Sync configs, teams, identities, IP allowlist, retention, impersonation | 6 files |
+| `tests/api/` (other) | GraphQL, queries, services, webhooks, utils | ~15 files |
+| `tests/graphql/` | Compiler, cost analysis, filters, resolvers, work graph | 5 files |
+| `tests/metrics/` | ClickHouse org scope, capacity, delivery ops, flow efficiency | 6 files |
+| `tests/work_graph/` | Builder, IDs, investment categorization, LLM schema, text parser | 8 files |
+
+Gold-standard fixture pattern: `tests/api/auth/test_invite_flow.py` (SQLite in-memory + monkeypatch + dependency overrides + httpx ASGITransport).
 
 ## Minimum local validation
 

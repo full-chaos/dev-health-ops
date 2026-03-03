@@ -146,6 +146,27 @@ class SubscriptionService:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
+    async def list_subscriptions(
+        self,
+        org_id: uuid.UUID | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[Any], int]:
+        subscription_cls = self._subscription_cls()
+        query = (
+            select(subscription_cls)
+            .order_by(subscription_cls.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        count_query = select(func.count()).select_from(subscription_cls)
+        if org_id is not None:
+            query = query.where(subscription_cls.org_id == org_id)
+            count_query = count_query.where(subscription_cls.org_id == org_id)
+        result = await self.db.execute(query)
+        count_result = await self.db.execute(count_query)
+        return list(result.scalars().all()), int(count_result.scalar_one())
+
     async def get_history(
         self,
         org_id: uuid.UUID | None,

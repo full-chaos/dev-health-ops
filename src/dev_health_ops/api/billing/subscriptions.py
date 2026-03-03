@@ -52,6 +52,13 @@ class SubscriptionHistoryResponse(BaseModel):
     offset: int
 
 
+class SubscriptionListResponse(BaseModel):
+    items: list[SubscriptionView]
+    total: int
+    limit: int
+    offset: int
+
+
 class ChangePlanRequest(BaseModel):
     price_id: str
 
@@ -102,6 +109,47 @@ def _serialize_record(record: Any) -> dict[str, Any]:
 def _service(session: AsyncSession) -> Any:
     module = importlib.import_module("dev_health_ops.api.billing.subscription_service")
     return module.SubscriptionService(session)
+
+
+@router.get("/list", response_model=SubscriptionListResponse)
+async def list_subscriptions(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    session: AsyncSession = Depends(postgres_session_dependency),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    org_id: uuid.UUID | None = Query(default=None),
+) -> SubscriptionListResponse:
+    service = _service(session)
+    resolved_org_id = _resolve_org_id(user, org_id)
+    subscriptions, total = await service.list_subscriptions(
+        resolved_org_id, limit, offset
+    )
+    items = []
+    for sub in subscriptions:
+        plan, price = await _load_plan_price(sub, session)
+        items.append(
+            SubscriptionView(
+                id=str(sub.id),
+                org_id=str(sub.org_id),
+                stripe_subscription_id=sub.stripe_subscription_id,
+                stripe_customer_id=sub.stripe_customer_id,
+                status=sub.status,
+                current_period_start=_to_iso(sub.current_period_start) or "",
+                current_period_end=_to_iso(sub.current_period_end) or "",
+                cancel_at_period_end=bool(sub.cancel_at_period_end),
+                canceled_at=_to_iso(sub.canceled_at),
+                trial_start=_to_iso(sub.trial_start),
+                trial_end=_to_iso(sub.trial_end),
+                plan=_serialize_record(plan) or None,
+                price=_serialize_record(price) or None,
+            )
+        )
+    return SubscriptionListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("", response_model=SubscriptionView)

@@ -295,3 +295,35 @@ async def test_superadmin_create_refund_requires_org_id(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "org_id required"
+
+
+@pytest.mark.asyncio
+async def test_superadmin_subscription_list_endpoint(
+    client, app_and_sessionmaker, monkeypatch
+):
+    app, _ = app_and_sessionmaker
+    app.dependency_overrides[get_current_user] = lambda: _build_user(
+        superuser=True,
+        org_id="",
+    )
+
+    from dev_health_ops.api.billing import subscriptions
+
+    captured: dict[str, object] = {}
+
+    class _FakeService:
+        async def list_subscriptions(self, org_id, limit, offset):
+            captured["org_id"] = org_id
+            captured["limit"] = limit
+            captured["offset"] = offset
+            return [], 0
+
+    monkeypatch.setattr(subscriptions, "_service", lambda _session: _FakeService())
+
+    response = await client.get("/api/v1/billing/subscriptions/list")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["items"] == []
+    assert data["total"] == 0
+    assert captured["org_id"] is None

@@ -34,10 +34,16 @@ nav:
       - Frontend Architecture: architecture/frontend-architecture.md
       - Middleware Impersonation: architecture/middleware-impersonation.md
       - Auth User Journeys: architecture/auth-journey.md
+  - Operations:
+      - Observability Tooling: ops/observability-tooling.md
+      - Deployment Guide: ops/deployment-guide.md
+      - Connector Inventory: ops/connector-inventory.md
+      - Stripe Billing Runbook: ops/stripe-billing-runbook.md
+      - Testing Governance: ops/testing-governance.md
+      - Enterprise Test Plan: ops/enterprise-test-plan.md
   - CLI:
       - Overview: cli.md
       - Reference: ops/cli-reference.md
-      - Testing Governance: ops/testing-governance.md
   - Connectors:
       - Usage: CONNECTOR_USAGE.md
       - Private Repos: PRIVATE_REPO_TESTING.md

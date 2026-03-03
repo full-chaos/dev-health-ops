@@ -3,11 +3,16 @@
 Initializes Sentry for FastAPI and Celery when SENTRY_DSN is set.
 Safe to call multiple times (no-op if already initialised or DSN absent).
 
+Compatible with Sentry SaaS, self-hosted Sentry, and BugSink.
+When using BugSink, set SENTRY_TRACES_RATE=0 (BugSink ignores traces)
+and SENTRY_SEND_PII=true (data stays on your infrastructure).
+
 Environment variables:
     SENTRY_DSN            — Sentry DSN (required to activate)
     SENTRY_ENVIRONMENT    — Environment tag (default: production)
-    SENTRY_TRACES_RATE    — Traces sample rate 0.0–1.0 (default: 0.1)
+    SENTRY_TRACES_RATE    — Traces sample rate 0.0–1.0 (default: 0.0)
     SENTRY_PROFILES_RATE  — Profiles sample rate 0.0–1.0 (default: 0.0)
+    SENTRY_SEND_PII       — Send PII with events (default: true for self-hosted)
 """
 
 from __future__ import annotations
@@ -42,8 +47,9 @@ def init_sentry() -> bool:
         from sentry_sdk.integrations.starlette import StarletteIntegration
 
         environment = os.getenv("SENTRY_ENVIRONMENT", "production")
-        traces_rate = float(os.getenv("SENTRY_TRACES_RATE", "0.1"))
+        traces_rate = float(os.getenv("SENTRY_TRACES_RATE", "0.0"))
         profiles_rate = float(os.getenv("SENTRY_PROFILES_RATE", "0.0"))
+        send_pii = os.getenv("SENTRY_SEND_PII", "true").lower() == "true"
 
         sentry_sdk.init(
             dsn=dsn,
@@ -59,8 +65,7 @@ def init_sentry() -> bool:
                     event_level=logging.ERROR,
                 ),
             ],
-            # Strip personally identifiable information from events
-            send_default_pii=False,
+            send_default_pii=send_pii,
         )
         _initialized = True
         logger.info(

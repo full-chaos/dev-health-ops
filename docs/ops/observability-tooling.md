@@ -152,34 +152,43 @@ The backend already has **production-grade OTEL instrumentation** exporting OTLP
 
 ## Recommendation
 
-**SigNoz** (traces/metrics/logs/APM) + **GlitchTip** (error tracking via existing Sentry SDKs)
+**SigNoz** (traces/metrics/logs/APM) + **BugSink** (error tracking via existing Sentry SDKs)
+
+!!! note "Why BugSink over GlitchTip"
+    BugSink was chosen over GlitchTip for the pre-revenue stage (<50 orgs) because:
+    single container vs 3 services, reuses existing Postgres vs dedicated instance,
+    handles 1.5M events/day on 4GB RAM, smart retention with no manual cleanup,
+    and supports Sentry CLI + source map uploads for the Next.js frontend.
+    GlitchTip remains a viable option if APM/uptime monitoring become needed later.
 
 ### Why This Combo
 
-1. **Zero backend code changes** — OTLP already exports to `localhost:4317`, GlitchTip speaks Sentry protocol
-2. **Minimal frontend changes** — swap `NEXT_PUBLIC_SENTRY_DSN`, remove replay config
-3. **Low resource footprint** — ~4-6GB RAM total vs Sentry's 16-32GB
-4. **Kubernetes-ready** — both have Helm charts, add Groundcover eBPF sensor later
+1. **Zero backend code changes** — OTLP already exports to `localhost:4317`, BugSink speaks Sentry protocol
+2. **Minimal frontend changes** — swap `NEXT_PUBLIC_SENTRY_DSN`, replay already conditional
+3. **Minimal resource footprint** — BugSink is a single container sharing existing Postgres
+4. **Kubernetes-ready** — SigNoz has Helm chart, BugSink is a single container, add Groundcover eBPF later
 5. **No vendor lock-in** — everything is OTEL standard
-6. **$0 software cost** with predictable infrastructure cost
+6. **$0 software cost** with near-zero incremental infrastructure cost
 
 ### What You Lose
 
 - Session replay (defer to OpenReplay when needed)
 - Sentry AI features (Seer)
+- APM/performance dashboards in error tracker (SigNoz covers this)
 
 ### What You Gain
 
 - Unlimited events with full data ownership
 - Unified traces + metrics + logs in SigNoz with signal correlation
 - Production-ready K8s path with eBPF auto-instrumentation
+- Minimal operational surface for error tracking
 
 ### Decision Matrix
 
 | Option | Score | Rationale |
 |--------|-------|-----------|
-| **SigNoz + GlitchTip** | **9/10** | OTEL-native platform + zero-migration error tracking |
-| SigNoz + BugSink | 7/10 | BugSink simpler but less mature than GlitchTip |
+| **SigNoz + BugSink** | **9/10** | OTEL-native platform + minimal-ops error tracking, ideal for <50 orgs |
+| SigNoz + GlitchTip | 7/10 | More features but heavier (3 services, dedicated Postgres, sparse docs) |
 | Highlight.io alone | 7/10 | Has replay, but requires full SDK swap |
 | Self-hosted Sentry | 5/10 | Feature parity but 16-32GB RAM is wasteful pre-revenue |
 | SigNoz alone | 6/10 | Good APM but error tracking less polished |
@@ -216,7 +225,7 @@ Replace Sentry SaaS with free alternatives at minimal infrastructure cost.
 │  └──────────┘                                       │
 └─────────────────────────────────────────────────────┘
 
-Error Tracking:  GlitchTip (Sentry SDK compatible, ~2GB RAM)
+Error Tracking:  BugSink (Sentry SDK compatible, single container)
 APM/Traces:      SigNoz (consumes existing OTLP traces)
 Metrics:         SigNoz (PromQL, replaces Prometheus+Grafana)
 Logs:            SigNoz (JSON log ingestion)
@@ -253,12 +262,12 @@ Add eBPF-based auto-instrumentation and scale the observability stack.
 │       └──── Sentry SDK (DSN) ──────────┘             │
 │                    ▼                                 │
 │  ┌──────────────────┐                               │
-│  │ GlitchTip (Helm) │                               │
+│  │ BugSink (single) │                               │
 │  └──────────────────┘                               │
 └─────────────────────────────────────────────────────┘
 
 eBPF Layer:      Groundcover (auto-instrumentation, free tier)
-Error Tracking:  GlitchTip (same Sentry SDKs, Helm deploy)
+Error Tracking:  BugSink (same Sentry SDKs, single container)
 APM/Traces:      SigNoz + Groundcover data
 Metrics:         SigNoz (PromQL + eBPF metrics)
 Logs:            SigNoz (centralized log aggregation)
@@ -288,29 +297,24 @@ signoz:
 !!! success "Result"
     Traces, metrics, and logs visible in SigNoz UI at `http://localhost:8080` with zero code changes.
 
-### Step 2: Add GlitchTip to Docker Compose
+### Step 2: Add BugSink to Docker Compose
+
+Single container, reuses the existing Postgres (with a `bugsink` database created via init script).
 
 ```yaml
-glitchtip:
-  image: glitchtip/glitchtip:latest
+bugsink:
+  image: bugsink/bugsink:latest
   ports:
     - "8800:8000"
   environment:
-    DATABASE_URL: postgres://glitchtip:glitchtip@glitchtip-db:5432/glitchtip
-    SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
-    GLITCHTIP_DOMAIN: http://localhost:8800
+    DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/bugsink"
+    SECRET_KEY: ${BUGSINK_SECRET_KEY:?BUGSINK_SECRET_KEY must be set}
+    BASE_URL: http://localhost:8800
+    PORT: "8000"
+    CREATE_SUPERUSER: "admin@example.com:changeme"  # first run only
   depends_on:
-    - glitchtip-db
-    - redis
-
-glitchtip-db:
-  image: postgres:16-alpine
-  environment:
-    POSTGRES_DB: glitchtip
-    POSTGRES_USER: glitchtip
-    POSTGRES_PASSWORD: glitchtip
-  volumes:
-    - glitchtip-pg-data:/var/lib/postgresql/data
+    postgres:
+      condition: service_healthy
 ```
 
 ### Step 3: Swap Sentry DSN
@@ -343,7 +347,7 @@ SigNoz supports PromQL. Migrate `alerts/rules.yml` into SigNoz's alerting config
 
 ### Step 5: Remove Sentry-Specific Features
 
-- **Session Replay**: Remove `replaysSessionSampleRate` / `replaysOnErrorSampleRate` from `sentry.client.config.ts` (or leave — they become no-ops with GlitchTip)
+- **Session Replay**: Controlled via `NEXT_PUBLIC_SENTRY_REPLAY_ENABLED` env var (defaults to false for BugSink compatibility)
 - **Profiles**: Already disabled (`SENTRY_PROFILES_RATE=0.0`)
 
 ### Step 6 (K8s): Deploy via Helm
@@ -353,8 +357,11 @@ SigNoz supports PromQL. Migrate `alerts/rules.yml` into SigNoz's alerting config
 helm repo add signoz https://charts.signoz.io
 helm install signoz signoz/signoz -n observability --create-namespace
 
-# GlitchTip
-helm install glitchtip glitchtip/glitchtip -n observability
+# BugSink — single container, point DATABASE_URL at your cluster Postgres
+kubectl run bugsink --image=bugsink/bugsink:latest \
+  --env="DATABASE_URL=postgresql://..." \
+  --env="SECRET_KEY=..." \
+  --port=8000 -n observability
 ```
 
 ### Step 7 (K8s): Add Groundcover eBPF Sensor
@@ -383,9 +390,9 @@ helm install groundcover groundcover/groundcover \
 | Tool | Infrastructure | Software | Events |
 |------|---------------|----------|--------|
 | SigNoz | ~$20-40/mo (2-4 CPU VPS or shared K8s) | $0 | Unlimited |
-| GlitchTip | ~$5-10/mo (shares resources) | $0 | Unlimited |
+| BugSink | ~$0/mo (shares existing Postgres) | $0 | Unlimited |
 | Groundcover (K8s) | In-cluster | $0 (free tier) | Per-node |
-| **Total** | **~$25-50/mo** | **$0** | **Unlimited** |
+| **Total** | **~$20-40/mo** | **$0** | **Unlimited** |
 
 ---
 
@@ -393,9 +400,9 @@ helm install groundcover groundcover/groundcover \
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| GlitchTip missing Sentry SDK features | Medium | Low | Core error tracking works; advanced features (replays) already removed |
+| BugSink missing Sentry SDK features | Medium | Low | Core error tracking works; unsupported features (replays, APM) silently ignored |
 | SigNoz ClickHouse resource growth | Medium | Medium | Set retention policies; app already runs ClickHouse |
-| Maintenance burden of self-hosting | Medium | Medium | SigNoz Helm + GlitchTip all-in-one mode minimize ops |
+| Maintenance burden of self-hosting | Low | Low | BugSink is single container; SigNoz has Helm chart |
 | No session replay | High | Low | Acceptable pre-revenue; add OpenReplay when needed |
 | Groundcover free tier limits | Low | Low | Per-node pricing, generous for small clusters |
 
@@ -405,9 +412,10 @@ helm install groundcover groundcover/groundcover \
 
 - [SigNoz Documentation](https://signoz.io/docs/)
 - [SigNoz Kubernetes Install](https://signoz.io/docs/install/kubernetes/)
-- [GlitchTip Documentation](https://glitchtip.com/documentation)
+- [BugSink Documentation](https://www.bugsink.com/docs/)
+- [BugSink: GlitchTip vs Sentry vs BugSink](https://www.bugsink.com/blog/glitchtip-vs-sentry-vs-bugsink/)
+- [GlitchTip](https://glitchtip.com/) (evaluated, deferred — heavier than BugSink for current scale)
 - [Highlight.io](https://www.highlight.io/)
-- [BugSink](https://www.bugsink.com/)
 - [OpenReplay](https://github.com/openreplay/openreplay)
 - [Self-Hosted Sentry](https://develop.sentry.dev/self-hosted/)
 - [Groundcover](https://www.groundcover.com/)

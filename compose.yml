@@ -7,8 +7,6 @@ volumes:
     driver: local
   signoz_data:
     driver: local
-  glitchtip_db_data:
-    driver: local
 
 services:
   postgres:
@@ -24,6 +22,7 @@ services:
       - "5555:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/
+      - ./docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
@@ -203,50 +202,25 @@ services:
       start_period: 60s
 
   # ---------------------------------------------------------------------------
-  # Observability — GlitchTip (error tracking / Sentry-compatible)
+  # Observability — BugSink (error tracking / Sentry-compatible)
   # ---------------------------------------------------------------------------
-  # Web UI + API: http://localhost:8800
-  # Set SENTRY_DSN to a project DSN from the GlitchTip UI to enable error
-  # reporting from dev-health-ops (glitchtip accepts the Sentry SDK protocol).
+  # Web UI: http://localhost:8800
+  # Single container, uses the existing postgres (database: bugsink).
+  # Set SENTRY_DSN to a project DSN from the BugSink UI to enable error
+  # reporting — the Sentry SDK sends events to BugSink transparently.
   # ---------------------------------------------------------------------------
-  glitchtip-db:
-    image: postgres:16-alpine
-    container_name: glitchtip-db
+  bugsink:
+    image: bugsink/bugsink:latest
+    container_name: bugsink
     restart: unless-stopped
     environment:
-      POSTGRES_USER: glitchtip
-      POSTGRES_PASSWORD: glitchtip
-      POSTGRES_DB: glitchtip
-    volumes:
-      - glitchtip_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U glitchtip" ]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-
-  glitchtip:
-    image: glitchtip/glitchtip:latest
-    container_name: glitchtip
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: "postgresql://glitchtip:glitchtip@glitchtip-db:5432/glitchtip"
-      REDIS_URL: "redis://redis:6379/2"
-      SECRET_KEY: ${GLITCHTIP_SECRET_KEY:?GLITCHTIP_SECRET_KEY must be set}
-      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN:-http://localhost:8800}
-      EMAIL_URL: ${EMAIL_URL:-consolemail://}
-      DEFAULT_FROM_EMAIL: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/bugsink"
+      SECRET_KEY: ${BUGSINK_SECRET_KEY:?BUGSINK_SECRET_KEY must be set}
+      BASE_URL: ${BUGSINK_BASE_URL:-http://localhost:8800}
+      PORT: "8000"
+      CREATE_SUPERUSER: ${BUGSINK_CREATE_SUPERUSER:-}
     depends_on:
-      glitchtip-db:
-        condition: service_healthy
-      redis:
+      postgres:
         condition: service_healthy
     ports:
       - "8800:8000"
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s

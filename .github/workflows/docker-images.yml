@@ -33,8 +33,35 @@ permissions:
   id-token: write
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+        id: filter
+        # Always run on workflow_dispatch and release events
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+              - 'docker/**'
+              - 'compose.yml'
+              - '.dockerignore'
+              - 'deploy/**'
+              - 'Makefile'
+
   build:
     name: Build Image
+    needs: [changes]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -163,4 +190,3 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/dev-hops-${{ matrix.target }}:${{ steps.meta.outputs.version }}
-

@@ -33,6 +33,7 @@ nav:
       - Repo Layout: architecture/repo-layout.md
       - Frontend Architecture: architecture/frontend-architecture.md
       - Middleware Impersonation: architecture/middleware-impersonation.md
+      - Auth User Journeys: architecture/auth-journey.md
   - CLI:
       - Overview: cli.md
       - Reference: ops/cli-reference.md
@@ -86,6 +87,10 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true

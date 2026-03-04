@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -35,9 +36,7 @@ async def get_global_sink(dsn: str) -> BaseMetricsSink:
 
 async def get_global_client(dsn: str) -> Any:
     sink = await get_global_sink(dsn)
-    if hasattr(sink, "client"):
-        return sink.client
-    return sink
+    return getattr(sink, "client", sink)
 
 
 @asynccontextmanager
@@ -57,7 +56,6 @@ async def close_global_client() -> None:
 
 def require_clickhouse_backend(sink: BaseMetricsSink) -> None:
     """Raise ValueError when the sink is not backed by ClickHouse.
-
     Call this at the top of any analytics service function that relies on
     ClickHouse-specific SQL (ARRAY JOIN, JSONExtract, argMax, etc.).
     """
@@ -95,9 +93,9 @@ async def query_dicts(
     logger.debug("Executing query: %s with params %s", safe_query, safe_params)
 
     if hasattr(sink, "query_dicts"):
-        return sink.query_dicts(query, params)
+        return await asyncio.to_thread(sink.query_dicts, query, params)
 
-    result = sink.query(query, parameters=params)
+    result = await asyncio.to_thread(sink.query, query, parameters=params)
 
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])

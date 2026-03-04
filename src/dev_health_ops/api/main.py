@@ -390,8 +390,6 @@ async def health() -> HealthResponse | JSONResponse:
 
     Returns 200 when all required services (Postgres, ClickHouse, Redis)
     are reachable. Returns 503 if any required service is down.
-    Celery worker status is reported but does not affect the HTTP status
-    code (no workers may be a valid state during cold start).
     """
     services: dict[str, str] = {}
     required_statuses: list[str] = []
@@ -401,7 +399,6 @@ async def health() -> HealthResponse | JSONResponse:
         _check_postgres_health(),
         _check_clickhouse_health(),
         _check_redis_health(),
-        _check_celery_health(),
         return_exceptions=True,
     )
 
@@ -412,9 +409,7 @@ async def health() -> HealthResponse | JSONResponse:
         else:
             key, status_val = result
             services[key] = status_val
-            # Celery is informational only — don't fail the health check
-            if key != "celery":
-                required_statuses.append(status_val)
+            required_statuses.append(status_val)
 
     overall = (
         "ok"
@@ -441,6 +436,22 @@ async def ready() -> JSONResponse:
     for liveness probes.
     """
     return JSONResponse(status_code=200, content={"status": "ready"})
+
+
+@app.api_route("/health/workers", methods=["GET", "HEAD"])
+async def health_workers() -> JSONResponse:
+    """Celery worker health check.
+
+    Separated from /health because Celery inspect.ping is slow (~2s).
+    Use this for worker monitoring dashboards, not for SSR readiness.
+    """
+    key, status_val = await _check_celery_health()
+    overall = "ok" if status_val in ("ok", "no_workers") else "down"
+    status_code = 200 if overall == "ok" else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": overall, "services": {key: status_val}},
+    )
 
 
 async def keep_alive_wrapper(coro):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-
 from typing import Any
 
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
@@ -97,7 +96,11 @@ async def fetch_filter_options(
 
     # -- run all five queries in parallel ---------------------------------------
     team_rows, repo_rows, dev_rows, issue_rows, stage_rows = await asyncio.gather(
-        team_coro, repo_coro, dev_coro, issue_coro, stage_coro,
+        team_coro,
+        repo_coro,
+        dev_coro,
+        issue_coro,
+        stage_coro,
     )
 
     options["teams"] = [row["value"] for row in team_rows if row.get("value")]

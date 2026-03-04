@@ -492,7 +492,9 @@ async def meta() -> MetaResponse | JSONResponse:
         if backend == "clickhouse":
             async with clickhouse_client(db_url) as sink:
                 try:
-                    result = await asyncio.to_thread(sink.query_dicts, "SELECT version() AS version", {})
+                    result = await asyncio.to_thread(
+                        sink.query_dicts, "SELECT version() AS version", {}
+                    )
                     version = str(result[0]["version"]) if result else "unknown"
                 except Exception:
                     # Silently ignore version query failures - not critical for meta endpoint

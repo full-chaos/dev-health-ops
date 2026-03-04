@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime, timezone
 from typing import Any
+
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from ..models.filters import MetricFilter

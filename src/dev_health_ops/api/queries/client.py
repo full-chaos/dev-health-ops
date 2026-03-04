@@ -12,6 +12,7 @@ from dev_health_ops.api.services.auth import get_current_org_id
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
+
 logger = logging.getLogger(__name__)
 
 _SHARED_SINK: BaseMetricsSink | None = None
@@ -99,6 +100,7 @@ async def query_dicts(
     # cheap because they share a global urllib3.PoolManager for HTTP connections.
     dsn = getattr(sink, "dsn", None)
     if isinstance(dsn, str) and dsn:
+
         def _thread_query() -> list[dict[str, Any]]:
             client = clickhouse_connect.get_client(
                 dsn=dsn, settings={"max_query_size": 1 * 1024 * 1024}

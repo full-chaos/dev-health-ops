@@ -62,7 +62,7 @@ def get_postgres_engine() -> AsyncEngine:
         _postgres_engine = create_async_engine(
             uri,
             pool_pre_ping=True,
-            pool_size=5,
+            pool_size=20,
             max_overflow=10,
         )
     return _postgres_engine
@@ -85,8 +85,8 @@ def get_clickhouse_engine() -> AsyncEngine:
 async def get_postgres_session() -> AsyncGenerator[AsyncSession, None]:
     """Async context manager for PostgreSQL sessions."""
     engine = get_postgres_engine()
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
         try:
             yield session
             await session.commit()
@@ -200,7 +200,7 @@ def get_postgres_sync_engine() -> Engine:
         _postgres_sync_engine = create_engine(
             uri,
             pool_pre_ping=True,
-            pool_size=5,
+            pool_size=20,
             max_overflow=10,
         )
     return _postgres_sync_engine

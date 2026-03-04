@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+
+import clickhouse_connect
 
 from dev_health_ops.api.services.auth import get_current_org_id
 from dev_health_ops.api.utils.logging import sanitize_for_log
@@ -35,9 +38,7 @@ async def get_global_sink(dsn: str) -> BaseMetricsSink:
 
 async def get_global_client(dsn: str) -> Any:
     sink = await get_global_sink(dsn)
-    if hasattr(sink, "client"):
-        return sink.client
-    return sink
+    return getattr(sink, "client", sink)
 
 
 @asynccontextmanager
@@ -57,7 +58,6 @@ async def close_global_client() -> None:
 
 def require_clickhouse_backend(sink: BaseMetricsSink) -> None:
     """Raise ValueError when the sink is not backed by ClickHouse.
-
     Call this at the top of any analytics service function that relies on
     ClickHouse-specific SQL (ARRAY JOIN, JSONExtract, argMax, etc.).
     """
@@ -94,10 +94,34 @@ async def query_dicts(
     }
     logger.debug("Executing query: %s with params %s", safe_query, safe_params)
 
-    if hasattr(sink, "query_dicts"):
-        return sink.query_dicts(query, params)
+    # Create a per-thread ClickHouse client for thread safety.
+    # clickhouse_connect.Client is NOT thread-safe for concurrent queries on the
+    # same instance (internal _active_session state is overwritten). New clients are
+    # cheap because they share a global urllib3.PoolManager for HTTP connections.
+    dsn = getattr(sink, "dsn", None)
+    if isinstance(dsn, str) and dsn:
 
-    result = sink.query(query, parameters=params)
+        def _thread_query() -> list[dict[str, Any]]:
+            client = clickhouse_connect.get_client(
+                dsn=dsn, settings={"max_query_size": 1 * 1024 * 1024}
+            )
+            try:
+                result = client.query(query, parameters=params)
+                col_names = list(getattr(result, "column_names", []) or [])
+                rows = list(getattr(result, "result_rows", []) or [])
+                if not col_names or not rows:
+                    return []
+                return [dict(zip(col_names, row)) for row in rows]
+            finally:
+                client.close()
+
+        return await asyncio.to_thread(_thread_query)
+
+    # Fallback for non-ClickHouse sinks (tests, etc.)
+    if hasattr(sink, "query_dicts"):
+        return await asyncio.to_thread(sink.query_dicts, query, params)
+
+    result = await asyncio.to_thread(sink.query, query, parameters=params)
 
     col_names = list(getattr(result, "column_names", []) or [])
     rows = list(getattr(result, "result_rows", []) or [])

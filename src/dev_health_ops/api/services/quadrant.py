@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -487,35 +488,37 @@ async def build_quadrant_response(
         x_spec = _metric_spec(definition.x.metric, group_scope)
         y_spec = _metric_spec(definition.y.metric, group_scope)
 
-        x_rows = await fetch_quadrant_metric(
-            sink,
-            table=x_spec.table,
-            value_expr=x_spec.value_expr,
-            start_day=start_day,
-            end_day=end_day,
-            bucket=bucket,
-            entity_expr=x_spec.entity_expr,
-            label_expr=x_spec.label_expr,
-            join_clause=x_spec.join_clause,
-            where_clause=x_spec.where_clause,
-            scope_filter=scope_filter,
-            scope_params=scope_params,
-            org_id=org_id,
-        )
-        y_rows = await fetch_quadrant_metric(
-            sink,
-            table=y_spec.table,
-            value_expr=y_spec.value_expr,
-            start_day=start_day,
-            end_day=end_day,
-            bucket=bucket,
-            entity_expr=y_spec.entity_expr,
-            label_expr=y_spec.label_expr,
-            join_clause=y_spec.join_clause,
-            where_clause=y_spec.where_clause,
-            scope_filter=scope_filter,
-            scope_params=scope_params,
-            org_id=org_id,
+        x_rows, y_rows = await asyncio.gather(
+            fetch_quadrant_metric(
+                sink,
+                table=x_spec.table,
+                value_expr=x_spec.value_expr,
+                start_day=start_day,
+                end_day=end_day,
+                bucket=bucket,
+                entity_expr=x_spec.entity_expr,
+                label_expr=x_spec.label_expr,
+                join_clause=x_spec.join_clause,
+                where_clause=x_spec.where_clause,
+                scope_filter=scope_filter,
+                scope_params=scope_params,
+                org_id=org_id,
+            ),
+            fetch_quadrant_metric(
+                sink,
+                table=y_spec.table,
+                value_expr=y_spec.value_expr,
+                start_day=start_day,
+                end_day=end_day,
+                bucket=bucket,
+                entity_expr=y_spec.entity_expr,
+                label_expr=y_spec.label_expr,
+                join_clause=y_spec.join_clause,
+                where_clause=y_spec.where_clause,
+                scope_filter=scope_filter,
+                scope_params=scope_params,
+                org_id=org_id,
+            ),
         )
 
     x_map: dict[tuple[str, date], dict[str, Any]] = {}

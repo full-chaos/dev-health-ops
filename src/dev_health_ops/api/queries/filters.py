@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES
@@ -20,7 +21,8 @@ async def fetch_filter_options(
         "flow_stage": [],
     }
 
-    team_rows = await query_dicts(
+    # -- build query coroutines ------------------------------------------------
+    team_coro = query_dicts(
         client,
         """
         SELECT DISTINCT value
@@ -49,16 +51,14 @@ async def fetch_filter_options(
         """,
         {"org_id": org_id},
     )
-    options["teams"] = [row["value"] for row in team_rows if row.get("value")]
 
-    repo_rows = await query_dicts(
+    repo_coro = query_dicts(
         client,
         "SELECT distinct repo AS value FROM repos WHERE repo != '' AND org_id = %(org_id)s ORDER BY repo",
         {"org_id": org_id},
     )
-    options["repos"] = [row["value"] for row in repo_rows if row.get("value")]
 
-    dev_rows = await query_dicts(
+    dev_coro = query_dicts(
         client,
         """
         SELECT distinct author_email AS value
@@ -69,11 +69,8 @@ async def fetch_filter_options(
         """,
         {"org_id": org_id},
     )
-    options["developers"] = [row["value"] for row in dev_rows if row.get("value")]
 
-    options["work_category"] = sorted(THEMES) + sorted(SUBCATEGORIES)
-
-    issue_rows = await query_dicts(
+    issue_coro = query_dicts(
         client,
         """
         SELECT distinct issue_type_norm AS value
@@ -84,9 +81,8 @@ async def fetch_filter_options(
         """,
         {"org_id": org_id},
     )
-    options["issue_type"] = [row["value"] for row in issue_rows if row.get("value")]
 
-    stage_rows = await query_dicts(
+    stage_coro = query_dicts(
         client,
         """
         SELECT distinct status AS value
@@ -97,6 +93,21 @@ async def fetch_filter_options(
         """,
         {"org_id": org_id},
     )
+
+    # -- run all five queries in parallel ---------------------------------------
+    team_rows, repo_rows, dev_rows, issue_rows, stage_rows = await asyncio.gather(
+        team_coro,
+        repo_coro,
+        dev_coro,
+        issue_coro,
+        stage_coro,
+    )
+
+    options["teams"] = [row["value"] for row in team_rows if row.get("value")]
+    options["repos"] = [row["value"] for row in repo_rows if row.get("value")]
+    options["developers"] = [row["value"] for row in dev_rows if row.get("value")]
+    options["work_category"] = sorted(THEMES) + sorted(SUBCATEGORIES)
+    options["issue_type"] = [row["value"] for row in issue_rows if row.get("value")]
     options["flow_stage"] = [row["value"] for row in stage_rows if row.get("value")]
 
     return options

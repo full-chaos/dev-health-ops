@@ -5,8 +5,6 @@ volumes:
     driver: local
   clickhouse_data:
     driver: local
-  signoz_data:
-    driver: local
 
 services:
   postgres:
@@ -94,6 +92,15 @@ services:
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
       EMAIL_API_KEY: ${EMAIL_API_KEY:-}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+      # Observability — OpenTelemetry (traces → SigNoz)
+      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-signoz-otel-collector:4317}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-dev-health-ops}
+      # Observability — Error reporting (Sentry SDK → BugSink)
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-development}
+      SENTRY_TRACES_RATE: ${SENTRY_TRACES_RATE:-0}
+      SENTRY_SEND_PII: ${SENTRY_SEND_PII:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,27 +186,17 @@ services:
   # ---------------------------------------------------------------------------
   # Observability — SigNoz (distributed tracing + metrics)
   # ---------------------------------------------------------------------------
-  # Single-binary all-in-one deployment.
-  # UI:         http://localhost:8080
-  # OTLP gRPC:  localhost:4317  (matches OTEL_EXPORTER_OTLP_ENDPOINT default)
-  # OTLP HTTP:  localhost:4318
+  # Run SigNoz separately from its own compose file:
+  #   git clone https://github.com/SigNoz/signoz.git && cd signoz/deploy
+  #   docker compose -f docker/clickhouse-setup/docker-compose.yaml up -d
+  #
+  # Then connect this stack to SigNoz's network:
+  #   docker network connect clickhouse-setup_default dev-health-api
+  #
+  # UI:         http://localhost:8080  (from SigNoz stack)
+  # OTLP gRPC:  signoz-otel-collector:4317
+  # OTLP HTTP:  signoz-otel-collector:4318
   # ---------------------------------------------------------------------------
-  signoz:
-    image: signoz/signoz:latest
-    container_name: signoz
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-      - "4317:4317"
-      - "4318:4318"
-    volumes:
-      - signoz_data:/var/lib/signoz
-    healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
 
   # ---------------------------------------------------------------------------
   # Observability — BugSink (error tracking / Sentry-compatible)

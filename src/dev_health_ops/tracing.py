@@ -6,7 +6,7 @@ instruments FastAPI, HTTPX, SQLAlchemy, and Celery.
 Environment variables:
     OTEL_ENABLED              — set to "false" to disable (default: true)
     OTEL_EXPORTER_OTLP_ENDPOINT — OTLP gRPC endpoint
-                                  (default: http://localhost:4317)
+                                  (default: localhost:4317)
     OTEL_SERVICE_NAME         — service name tag (default: dev-health-ops)
     OTEL_ENVIRONMENT          — deployment environment tag (default: production)
     OTEL_SAMPLE_RATE          — head-based sample rate 0.0–1.0 (default: 0.1)
@@ -52,9 +52,7 @@ def init_tracing() -> bool:
 
         service_name = os.getenv("OTEL_SERVICE_NAME", "dev-health-ops")
         environment = os.getenv("OTEL_ENVIRONMENT", "production")
-        otlp_endpoint = os.getenv(
-            "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
-        )
+        otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4317")
         sample_rate = float(os.getenv("OTEL_SAMPLE_RATE", "0.1"))
 
         # Build head-based sampler

@@ -15,13 +15,9 @@ def test_health_endpoint_returns_ok_when_required_services_ok(monkeypatch):
     async def _redis_ok():
         return "redis", "ok"
 
-    async def _celery_ok():
-        return "celery", "ok"
-
     monkeypatch.setattr(main, "_check_postgres_health", _pg_ok)
     monkeypatch.setattr(main, "_check_clickhouse_health", _ch_ok)
     monkeypatch.setattr(main, "_check_redis_health", _redis_ok)
-    monkeypatch.setattr(main, "_check_celery_health", _celery_ok)
 
     with TestClient(main.app) as client:
         response = client.get("/health")
@@ -44,13 +40,9 @@ def test_health_endpoint_returns_503_when_required_service_is_down(monkeypatch):
     async def _redis_ok():
         return "redis", "ok"
 
-    async def _celery_ok():
-        return "celery", "ok"
-
     monkeypatch.setattr(main, "_check_postgres_health", _pg_down)
     monkeypatch.setattr(main, "_check_clickhouse_health", _ch_ok)
     monkeypatch.setattr(main, "_check_redis_health", _redis_ok)
-    monkeypatch.setattr(main, "_check_celery_health", _celery_ok)
 
     with TestClient(main.app) as client:
         response = client.get("/health")
@@ -61,6 +53,36 @@ def test_health_endpoint_returns_503_when_required_service_is_down(monkeypatch):
     assert body["services"]["postgres"] == "down"
     assert body["services"]["clickhouse"] == "ok"
     assert body["services"]["redis"] == "ok"
+
+
+def test_health_workers_returns_celery_status(monkeypatch):
+    async def _celery_ok():
+        return "celery", "ok"
+
+    monkeypatch.setattr(main, "_check_celery_health", _celery_ok)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["services"]["celery"] == "ok"
+
+
+def test_health_workers_returns_503_when_celery_down(monkeypatch):
+    async def _celery_down():
+        return "celery", "down"
+
+    monkeypatch.setattr(main, "_check_celery_health", _celery_down)
+
+    with TestClient(main.app) as client:
+        response = client.get("/health/workers")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "down"
+    assert body["services"]["celery"] == "down"
 
 
 def test_readiness_route_reports_webhook_health_shape(monkeypatch):

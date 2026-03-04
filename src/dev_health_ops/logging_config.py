@@ -68,20 +68,25 @@ def uvicorn_log_config(level: str | None = None) -> dict[str, Any]:
     if use_json:
         formatter_class = "pythonjsonlogger.json.JsonFormatter"
         fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
+        formatter_config: dict[str, Any] = {
+            "()": formatter_class,
+            "fmt": fmt,
+            "datefmt": "%Y-%m-%dT%H:%M:%S",
+            "rename_fields": {"asctime": "timestamp", "levelname": "level"},
+        }
     else:
-        formatter_class = "logging.Formatter"
         fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
+        formatter_config = {
+            "()": "logging.Formatter",
+            "fmt": fmt,
+            "datefmt": "%Y-%m-%dT%H:%M:%S",
+        }
 
     return {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
-            "json": {
-                "()": formatter_class,
-                "fmt": fmt,
-                "datefmt": "%Y-%m-%dT%H:%M:%S",
-                "rename_fields": {"asctime": "timestamp", "levelname": "level"},
-            },
+            "json": formatter_config,
         },
         "handlers": {
             "default": {

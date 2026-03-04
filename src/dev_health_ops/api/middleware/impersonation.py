@@ -44,6 +44,13 @@ class ImpersonationMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Fast-path: peek at unverified JWT to check is_superuser before doing
+        # the full token validation.  Only superadmins can impersonate, so we skip
+        # the expensive _extract_user() call for ~99.9 % of requests.
+        if not _may_be_superuser(scope):
+            await self.app(scope, receive, send)
+            return
+
         real_user = _extract_user(scope)
         if real_user is None or not getattr(real_user, "is_superuser", False):
             await self.app(scope, receive, send)
@@ -88,6 +95,43 @@ class ImpersonationMiddleware:
         finally:
             _current_org_id.reset(org_token)
             _impersonation_ctx.reset(imp_token)
+
+
+def _may_be_superuser(scope: Scope) -> bool:
+    """Cheap check to see if the request *might* be from a superuser.
+
+    Checks scope state first (no cost), then falls back to an unverified JWT
+    peek.  This avoids the full JWT verification + AuthenticatedUser construction
+    for the vast majority of requests where is_superuser is absent or False.
+    A True return does NOT guarantee the user is a superuser — _extract_user()
+    still runs the full validation."""
+    # 1) Check scope state (cheapest — set by upstream middleware in tests/proxies)
+    state = scope.get("state")
+    if state is not None:
+        user = getattr(state, "user", None)
+        if user is None and isinstance(state, dict):
+            user = state.get("user")
+        if user is not None:
+            return bool(getattr(user, "is_superuser", False))
+
+    # 2) Fall back to unverified JWT peek (avoids full signature verification)
+    auth_header: str | None = None
+    for key, value in scope.get("headers", []):
+        if key == b"authorization":
+            auth_header = value.decode("latin-1")
+            break
+    if not auth_header:
+        return False
+    token = extract_token_from_header(auth_header)
+    if not token:
+        return False
+    try:
+        import jwt as pyjwt
+
+        claims = pyjwt.decode(token, options={"verify_signature": False}, algorithms=["HS256"])
+        return bool(claims.get("is_superuser"))
+    except Exception:
+        return False
 
 
 def _extract_user(scope: Scope) -> Any | None:

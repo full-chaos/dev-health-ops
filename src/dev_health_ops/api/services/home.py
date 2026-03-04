@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timezone
 from typing import Any
-
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from ..models.filters import MetricFilter
@@ -162,84 +162,85 @@ async def _metric_deltas(
     compare_end: date,
     org_id: str = "",
 ) -> list[MetricDelta]:
-    deltas: list[MetricDelta] = []
 
-    for metric in _METRICS:
+    async def _compute_one(metric: dict[str, Any]) -> MetricDelta:
         scope_filter, scope_params = await scope_filter_for_metric(
             sink, metric_scope=metric["scope"], filters=filters
         )
 
         if metric["metric"] == "blocked_work":
-            current_value, current_series = await fetch_blocked_hours(
-                sink,
-                start_day=start_day,
-                end_day=end_day,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                org_id=org_id,
-            )
-            previous_value, _ = await fetch_blocked_hours(
-                sink,
-                start_day=compare_start,
-                end_day=compare_end,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                org_id=org_id,
+            (current_value, current_series), (previous_value, _) = await asyncio.gather(
+                fetch_blocked_hours(
+                    sink,
+                    start_day=start_day,
+                    end_day=end_day,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    org_id=org_id,
+                ),
+                fetch_blocked_hours(
+                    sink,
+                    start_day=compare_start,
+                    end_day=compare_end,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    org_id=org_id,
+                ),
             )
             current_value = safe_float(current_value)
             previous_value = safe_float(previous_value)
             spark = _spark_points(current_series, metric["transform"])
         else:
-            current_value = await fetch_metric_value(
-                sink,
-                table=metric["table"],
-                column=metric["column"],
-                start_day=start_day,
-                end_day=end_day,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                aggregator=metric["aggregator"],
-                org_id=org_id,
-            )
-            previous_value = await fetch_metric_value(
-                sink,
-                table=metric["table"],
-                column=metric["column"],
-                start_day=compare_start,
-                end_day=compare_end,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                aggregator=metric["aggregator"],
-                org_id=org_id,
+            current_value, previous_value, series = await asyncio.gather(
+                fetch_metric_value(
+                    sink,
+                    table=metric["table"],
+                    column=metric["column"],
+                    start_day=start_day,
+                    end_day=end_day,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    aggregator=metric["aggregator"],
+                    org_id=org_id,
+                ),
+                fetch_metric_value(
+                    sink,
+                    table=metric["table"],
+                    column=metric["column"],
+                    start_day=compare_start,
+                    end_day=compare_end,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    aggregator=metric["aggregator"],
+                    org_id=org_id,
+                ),
+                fetch_metric_series(
+                    sink,
+                    table=metric["table"],
+                    column=metric["column"],
+                    start_day=start_day,
+                    end_day=end_day,
+                    scope_filter=scope_filter,
+                    scope_params=scope_params,
+                    aggregator=metric["aggregator"],
+                    org_id=org_id,
+                ),
             )
             current_value = safe_float(current_value)
             previous_value = safe_float(previous_value)
-            series = await fetch_metric_series(
-                sink,
-                table=metric["table"],
-                column=metric["column"],
-                start_day=start_day,
-                end_day=end_day,
-                scope_filter=scope_filter,
-                scope_params=scope_params,
-                aggregator=metric["aggregator"],
-                org_id=org_id,
-            )
             spark = _spark_points(series, metric["transform"])
 
         pct_change = safe_float(delta_pct(current_value, previous_value))
-        deltas.append(
-            MetricDelta(
-                metric=metric["metric"],
-                label=metric["label"],
-                value=safe_transform(metric["transform"], current_value),
-                unit=metric["unit"],
-                delta_pct=pct_change,
-                spark=spark,
-            )
+        return MetricDelta(
+            metric=metric["metric"],
+            label=metric["label"],
+            value=safe_transform(metric["transform"], current_value),
+            unit=metric["unit"],
+            delta_pct=pct_change,
+            spark=spark,
         )
 
-    return deltas
+    return list(await asyncio.gather(*[_compute_one(m) for m in _METRICS]))
 
 
 def _select_constraint(deltas: list[MetricDelta]) -> MetricDelta:
@@ -270,21 +271,23 @@ async def build_home_response(
     start_day, end_day, compare_start, compare_end = time_window(filters)
 
     async with clickhouse_client(db_url) as sink:
-        last_ingested = await fetch_last_ingested_at(sink, org_id=org_id)
-        coverage = await fetch_coverage(
-            sink,
-            start_day=start_day,
-            end_day=end_day,
-            org_id=org_id,
-        )
-        deltas = await _metric_deltas(
-            sink,
-            filters,
-            start_day,
-            end_day,
-            compare_start,
-            compare_end,
-            org_id=org_id,
+        last_ingested, coverage, deltas = await asyncio.gather(
+            fetch_last_ingested_at(sink, org_id=org_id),
+            fetch_coverage(
+                sink,
+                start_day=start_day,
+                end_day=end_day,
+                org_id=org_id,
+            ),
+            _metric_deltas(
+                sink,
+                filters,
+                start_day,
+                end_day,
+                compare_start,
+                compare_end,
+                org_id=org_id,
+            ),
         )
 
         sources = {

@@ -6,11 +6,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import clickhouse_connect
+
 from dev_health_ops.api.services.auth import get_current_org_id
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.sinks.factory import create_sink
-
 logger = logging.getLogger(__name__)
 
 _SHARED_SINK: BaseMetricsSink | None = None
@@ -92,6 +93,29 @@ async def query_dicts(
     }
     logger.debug("Executing query: %s with params %s", safe_query, safe_params)
 
+    # Create a per-thread ClickHouse client for thread safety.
+    # clickhouse_connect.Client is NOT thread-safe for concurrent queries on the
+    # same instance (internal _active_session state is overwritten). New clients are
+    # cheap because they share a global urllib3.PoolManager for HTTP connections.
+    dsn = getattr(sink, "dsn", None)
+    if isinstance(dsn, str) and dsn:
+        def _thread_query() -> list[dict[str, Any]]:
+            client = clickhouse_connect.get_client(
+                dsn=dsn, settings={"max_query_size": 1 * 1024 * 1024}
+            )
+            try:
+                result = client.query(query, parameters=params)
+                col_names = list(getattr(result, "column_names", []) or [])
+                rows = list(getattr(result, "result_rows", []) or [])
+                if not col_names or not rows:
+                    return []
+                return [dict(zip(col_names, row)) for row in rows]
+            finally:
+                client.close()
+
+        return await asyncio.to_thread(_thread_query)
+
+    # Fallback for non-ClickHouse sinks (tests, etc.)
     if hasattr(sink, "query_dicts"):
         return await asyncio.to_thread(sink.query_dicts, query, params)
 

@@ -268,33 +268,27 @@ async def test_superadmin_refund_endpoints_allow_cross_org_listing(
 
 
 @pytest.mark.asyncio
-async def test_superadmin_create_refund_requires_org_id(
-    client, app_and_sessionmaker, monkeypatch
+async def test_non_superuser_cannot_access_refund_endpoints(
+    client, app_and_sessionmaker
 ):
+    """Org admins (non-superusers) should be rejected from refund routes."""
     app, _ = app_and_sessionmaker
     app.dependency_overrides[get_current_user] = lambda: _build_user(
-        superuser=True,
-        org_id="",
+        superuser=False,
+        org_id=str(uuid.uuid4()),
+        role="admin",
     )
 
-    from dev_health_ops.api.billing import refund_routes
-
-    @asynccontextmanager
-    async def _fake_session():
-        yield object()
-
-    monkeypatch.setattr(refund_routes, "get_postgres_session", _fake_session)
-
-    response = await client.post(
+    list_response = await client.get("/api/v1/billing/refunds")
+    create_response = await client.post(
         "/api/v1/billing/refunds",
-        json={
-            "invoice_id": str(uuid.uuid4()),
-            "amount": 100,
-        },
+        json={"invoice_id": str(uuid.uuid4())},
     )
+    get_response = await client.get(f"/api/v1/billing/refunds/{uuid.uuid4()}")
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "org_id required"
+    assert list_response.status_code == 403
+    assert create_response.status_code == 403
+    assert get_response.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -327,3 +321,38 @@ async def test_superadmin_subscription_list_endpoint(
     assert data["items"] == []
     assert data["total"] == 0
     assert captured["org_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_superadmin_with_invalid_org_id_still_resolves_globally(
+    client, app_and_sessionmaker, monkeypatch
+):
+    """Superusers whose session carries a non-UUID org_id should still
+    resolve to global (None) rather than raising 'Invalid organization'."""
+    app, _ = app_and_sessionmaker
+    app.dependency_overrides[get_current_user] = lambda: _build_user(
+        superuser=True,
+        org_id="not-a-uuid",
+    )
+
+    from dev_health_ops.api.billing import refund_routes
+
+    captured: dict[str, object] = {"orgs": []}
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield object()
+
+    async def _fake_list_refunds(db, org_id, limit, offset):
+        captured["orgs"].append(org_id)
+        return [], 0
+
+    monkeypatch.setattr(refund_routes, "get_postgres_session", _fake_session)
+    monkeypatch.setattr(
+        refund_routes.refund_service, "list_refunds", _fake_list_refunds
+    )
+
+    response = await client.get("/api/v1/billing/refunds")
+
+    assert response.status_code == 200
+    assert captured["orgs"] == [None]

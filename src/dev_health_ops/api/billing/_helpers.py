@@ -13,13 +13,13 @@ def _resolve_org_id(
     if org_id_param is not None:
         return org_id_param
 
+    if user.is_superuser:
+        return None
+
     if user.org_id:
         try:
             return uuid.UUID(user.org_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid organization") from exc
-
-    if user.is_superuser:
-        return None
 
     raise HTTPException(status_code=400, detail="Organization context required")

@@ -29,6 +29,7 @@ def admin_user() -> AuthenticatedUser:
         email="admin@example.com",
         org_id=str(uuid.uuid4()),
         role="admin",
+        is_superuser=True,
     )
 
 
@@ -190,6 +191,7 @@ async def test_service_validates_not_paid_invoice():
             new=AsyncMock(
                 return_value={
                     "id": str(uuid.uuid4()),
+                    "org_id": str(uuid.uuid4()),
                     "status": "open",
                     "amount_paid": 1000,
                     "stripe_charge_id": "ch_123",
@@ -206,7 +208,6 @@ async def test_service_validates_not_paid_invoice():
     ):
         await service.create_refund(
             db=db,
-            org_id=uuid.uuid4(),
             invoice_id=uuid.uuid4(),
             amount=200,
         )
@@ -223,6 +224,7 @@ async def test_service_validates_refund_amount_bounds():
             new=AsyncMock(
                 return_value={
                     "id": str(uuid.uuid4()),
+                    "org_id": str(uuid.uuid4()),
                     "status": "paid",
                     "amount_paid": 1000,
                     "stripe_charge_id": "ch_123",
@@ -239,7 +241,6 @@ async def test_service_validates_refund_amount_bounds():
     ):
         await service.create_refund(
             db=db,
-            org_id=uuid.uuid4(),
             invoice_id=uuid.uuid4(),
             amount=200,
         )
@@ -256,6 +257,7 @@ async def test_service_validates_already_refunded_invoice():
             new=AsyncMock(
                 return_value={
                     "id": str(uuid.uuid4()),
+                    "org_id": str(uuid.uuid4()),
                     "status": "paid",
                     "amount_paid": 1000,
                     "stripe_charge_id": "ch_123",
@@ -272,7 +274,6 @@ async def test_service_validates_already_refunded_invoice():
     ):
         await service.create_refund(
             db=db,
-            org_id=uuid.uuid4(),
             invoice_id=uuid.uuid4(),
             amount=100,
         )

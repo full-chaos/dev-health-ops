@@ -22,16 +22,17 @@ class RefundService:
     async def create_refund(
         self,
         db: AsyncSession,
-        org_id: uuid.UUID,
         invoice_id: uuid.UUID,
         amount: int | None = None,
         reason: str | None = None,
         description: str | None = None,
         actor_id: uuid.UUID | None = None,
     ) -> Refund:
-        invoice = await self._get_invoice(db, org_id=org_id, invoice_id=invoice_id)
+        invoice = await self._get_invoice(db, invoice_id=invoice_id)
         if invoice is None:
             raise ValueError("Invoice not found")
+
+        org_id = uuid.UUID(str(invoice["org_id"]))
 
         invoice_status = str(invoice.get("status") or "")
         if invoice_status.lower() != "paid":
@@ -149,7 +150,6 @@ class RefundService:
     async def _get_invoice(
         self,
         db: AsyncSession,
-        org_id: uuid.UUID,
         invoice_id: uuid.UUID,
     ) -> dict[str, Any] | None:
         query = text(
@@ -164,16 +164,13 @@ class RefundService:
                 stripe_payment_intent_id,
                 subscription_id
             FROM invoices
-            WHERE id = :invoice_id AND org_id = :org_id
+            WHERE id = :invoice_id
             LIMIT 1
             """
         )
         result = await db.execute(
             query,
-            {
-                "invoice_id": str(invoice_id),
-                "org_id": str(org_id),
-            },
+            {"invoice_id": str(invoice_id)},
         )
         row = result.mappings().first()
         return dict(row) if row else None

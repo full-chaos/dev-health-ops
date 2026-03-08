@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.billing import BillingInterval, BillingPlan, BillingPrice
@@ -244,8 +245,19 @@ async def pull_from_stripe(
                         plan,
                         [_price_to_dict(p) for p in recurring_prices],
                     )
+                    # Keep lookup dicts current so later products can
+                    # match plans created earlier in this same loop.
+                    by_stripe_id[product_id] = plan
+                    by_key[plan_key] = plan
+                    by_slug[_slugify(name)] = plan
                 report.created.append(f"{plan_key} ← {product_id}")
 
+        except IntegrityError as exc:
+            await db.rollback()
+            report.errors.append(f"{name} ({product_id}): {exc}")
+            logger.exception("Error pulling product %s", product_id)
+            # Re-load lookups since rollback may have invalidated state
+            by_stripe_id, by_key, by_slug = await _load_existing_plans(db)
         except Exception as exc:
             report.errors.append(f"{name} ({product_id}): {exc}")
             logger.exception("Error pulling product %s", product_id)

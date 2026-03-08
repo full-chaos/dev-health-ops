@@ -303,6 +303,8 @@ async def _billing_pull_stripe_async(ns: argparse.Namespace) -> int:
     session = await _get_session(ns)
     try:
         report = await pull_from_stripe(session, dry_run=ns.dry_run)
+        if not ns.dry_run:
+            await session.commit()
         if ns.dry_run:
             print("[dry-run] No changes written.")
         print(f"Created:  {report.created}")
@@ -328,6 +330,7 @@ async def _billing_sync_stripe_async(ns: argparse.Namespace) -> int:
     session = await _get_session(ns)
     try:
         report = await sync_all_to_stripe(session)
+        await session.commit()
         print(f"Created:  {report.created}")
         print(f"Updated:  {report.updated}")
         print(f"Skipped:  {report.skipped}")

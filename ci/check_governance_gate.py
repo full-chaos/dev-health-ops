@@ -21,7 +21,9 @@ PLACEHOLDER_VALUES = {
     "todo",
     "pending",
     "<commands run and key results>",
+    "<commands + results>",
     "<blast radius, rollback approach, monitoring, follow-up issues>",
+    "<blast radius + rollback + follow-up>",
 }
 
 
@@ -55,31 +57,51 @@ def _git_changed_files(base_sha: str, head_sha: str) -> list[str]:
 
 
 def _extract_marker_value(body: str, marker: str) -> str:
-    """Extract marker value from body, allowing inline or following lines."""
+    """Extract marker value from body.
+
+    Recognises two formats:
+      1. Inline  — ``TEST-EVIDENCE: command output here``
+      2. Heading — ``## TEST-EVIDENCE`` (with content on following lines)
+
+    Markdown heading prefixes (``#``, ``##``, ``###``, etc.) are stripped
+    before matching so both styles work identically.
+    """
     lines = body.splitlines()
+    marker_upper = marker.upper()
     marker_prefix = f"{marker}:"
 
     for index, line in enumerate(lines):
-        if not line.strip().upper().startswith(marker_prefix):
+        raw = line.strip()
+        # Strip leading markdown heading marks (e.g. '## ')
+        stripped = re.sub(r"^#{1,6}\s+", "", raw).strip()
+        upper = stripped.upper()
+
+        # Match either 'MARKER: value' or bare 'MARKER' (heading style)
+        if upper.startswith(marker_prefix):
+            remainder = stripped.split(":", 1)[1].strip()
+        elif upper == marker_upper:
+            remainder = ""
+        else:
             continue
 
-        remainder = line.split(":", 1)[1].strip()
         values: list[str] = []
         if remainder:
             values.append(remainder)
 
         for next_line in lines[index + 1 :]:
-            stripped = next_line.strip()
-            if not stripped:
+            next_stripped = next_line.strip()
+            if not next_stripped:
                 continue
-            if re.match(r"^[A-Z][A-Z-]+:\s*", stripped):
+            # Stop at the next marker-style line or heading
+            next_clean = re.sub(r"^#{1,6}\s+", "", next_stripped).strip()
+            if re.match(r"^[A-Z][A-Z-]+:\s*", next_clean):
                 break
-            if stripped.startswith("##"):
+            if re.match(r"^#{1,6}\s+", next_stripped):
                 break
-            if stripped.startswith("<!--"):
+            if next_stripped.startswith("<!--"):
                 continue
 
-            cleaned = stripped.lstrip("-* ").strip()
+            cleaned = next_stripped.lstrip("-* ").strip()
             if cleaned:
                 values.append(cleaned)
 

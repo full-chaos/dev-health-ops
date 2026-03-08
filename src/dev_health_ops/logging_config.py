@@ -20,13 +20,31 @@ import os
 import sys
 from typing import Any
 
+# TRACE level (numeric 5, below DEBUG=10) — matches uvicorn's convention.
+# Registered here so LOG_LEVEL=trace works before uvicorn initialises.
+TRACE_LOG_LEVEL = 5
+if logging.getLevelName(TRACE_LOG_LEVEL) == f"Level {TRACE_LOG_LEVEL}":
+    logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")
+
+
+def _resolve_log_level(raw: str) -> int:
+    """Convert a level name to its numeric value, falling back to INFO."""
+    numeric = logging.getLevelName(raw)
+    if isinstance(numeric, int):
+        return numeric
+    logging.getLogger(__name__).warning(
+        "Unknown LOG_LEVEL %r, falling back to INFO",
+        raw,
+    )
+    return logging.INFO
+
 
 def configure_logging(level: str | None = None) -> None:
     """Set up JSON structured logging for the entire application.
 
     Safe to call multiple times (idempotent).
     """
-    log_level = (level or os.getenv("LOG_LEVEL", "INFO")).upper()
+    log_level = _resolve_log_level((level or os.getenv("LOG_LEVEL", "INFO")).upper())
     use_json = os.getenv("LOG_JSON", "true").lower() not in ("false", "0", "no")
 
     if use_json:

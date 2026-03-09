@@ -11,8 +11,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from dev_health_ops.api.middleware.rate_limit import limiter as rate_limiter
 from dev_health_ops.api.auth.router import router
+from dev_health_ops.api.middleware.rate_limit import limiter as rate_limiter
 
 
 @pytest.fixture

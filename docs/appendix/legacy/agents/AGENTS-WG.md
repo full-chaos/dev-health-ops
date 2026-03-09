@@ -18,7 +18,7 @@ These rules are non-negotiable. Violations are architectural regressions.
 
 ## 2. Compute-Time LLM Categorization (Required)
 
-- LLM output MUST be strict JSON matching the schema in `work_graph/investment/llm_schema.py`.
+- LLM output MUST be strict JSON matching the schema in `src/dev_health_ops/work_graph/investment/llm_schema.py`.
 - Keys must come from the canonical subcategory registry.
 - Probabilities must be valid and normalized.
 - Evidence quotes must be extractive substrings from provided inputs.
@@ -67,8 +67,8 @@ Forbidden language:
 
 ## 5. Persistence Contract
 
-- All compute outputs are persisted via `metrics/sinks/*` only.
-- No JSON/YAML dumps, no output paths, no debug files under `work_graph/` or investment modules.
+- All compute outputs are persisted via `src/dev_health_ops/metrics/sinks/*` only.
+- No JSON/YAML dumps, no output paths, no debug files under `src/dev_health_ops/work_graph/` or investment modules.
 
 ## Fix: OpenAI Response Handling (Production Bug)
 

@@ -1,5 +1,7 @@
 # Normalization Helpers
 
+> **Note:** All source paths in this document are relative to `src/dev_health_ops/`.
+
 This document describes the canonical locations for normalization and transformation utilities across the codebase.
 
 ## Module Locations

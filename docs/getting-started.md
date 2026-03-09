@@ -64,8 +64,8 @@ docker compose up -d postgres clickhouse redis
 export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
 export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
 
-# Run PostgreSQL migrations (for user management)
-cd src/dev_health_ops && alembic upgrade head
+# Run PostgreSQL migrations (for user management, from repo root)
+alembic upgrade head
 ```
 
 See [Database Architecture](architecture/database-architecture.md) for details.
@@ -82,3 +82,29 @@ CLI flags override environment variables.
 | `GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, `LINEAR_API_KEY` | Optional | Provider auth for sync commands |
 | `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM_ADDRESS` | Optional (`console` default) | Email delivery via [Resend](./email-setup.md) |
 | `APP_BASE_URL`, `JWT_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` | Optional in dev, required in production | API callback/auth/encryption settings |
+
+## Demo data (synthetic, end-to-end)
+
+Generate a complete demo dataset: teams, git facts, work items, and derived metrics
+(including issue type, investment, hotspots, IC, CI/CD, and complexity).
+
+```bash
+dev-hops fixtures generate \
+  --db "<DB_CONN>" \
+  --days 30 \
+  --with-metrics
+```
+
+Notes:
+- `dev-hops` is available after `pip install dev-health-ops` or `pip install -e .`.
+- Synthetic teams are inserted automatically.
+- `--with-metrics` writes the same derived tables as `metrics daily`, plus
+  complexity snapshots and hotspot risk metrics for demo dashboards.
+
+## Performance tuning
+
+Fixture generation uses batched inserts with concurrency for large datasets.
+Tune these environment variables when you need faster loads:
+
+- `BATCH_SIZE` (default: 1000) controls insert batch size.
+- `MAX_WORKERS` (default: 4) controls concurrent insert workers (non-SQL backends).

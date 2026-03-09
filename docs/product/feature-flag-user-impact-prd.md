@@ -114,7 +114,7 @@ The following methods must be added to `BaseMetricsSink` and implemented in `Cli
 - `write_telemetry_signal_buckets(records: list[TelemetrySignalBucketRecord])` — append telemetry buckets
 - `write_release_impact_daily(records: list[ReleaseImpactDailyRecord])` — append derived impact rollups
 
-Corresponding record dataclasses must be added to `metrics/schemas.py`.
+Corresponding record dataclasses must be added to `src/dev_health_ops/metrics/schemas.py`.
 
 ## Measurement Contract
 ### Event taxonomy (MVP)
@@ -189,20 +189,20 @@ Telemetry and flag events may arrive late (mobile clients, batch exports, retrie
 
 The following changes are required to support new graph nodes/edges:
 
-**`work_graph/models.py`:**
+**`src/dev_health_ops/work_graph/models.py`:**
 - Add `RELEASE`, `FEATURE_FLAG` to `NodeType` enum
 - Add `INTRODUCED_BY`, `CONFIG_CHANGED_BY`, `GUARDS`, `IMPACTS` to `EdgeType` enum
 
-**`work_graph/ids.py`:**
+**`src/dev_health_ops/work_graph/ids.py`:**
 - Add `generate_release_id(org_id, provider, release_ref)` function
 - Add `generate_feature_flag_id(org_id, provider, flag_key)` function
 
-**`work_graph/builder.py`:**
+**`src/dev_health_ops/work_graph/builder.py`:**
 - Add `_build_release_edges()` method (source: deployment/release data)
 - Add `_build_feature_flag_edges()` method (source: flag events + links)
 - Update `build()` orchestrator to include new discovery steps
 
-**`api/graphql/models/inputs.py` and `outputs.py`:**
+**`src/dev_health_ops/api/graphql/models/inputs.py` and `outputs.py`:**
 - Add new values to `WorkGraphNodeTypeInput`, `WorkGraphEdgeTypeInput`, `WorkGraphNodeType`, `WorkGraphEdgeType` strawberry enums
 
 ## Join Strategy (Canonical)
@@ -358,7 +358,7 @@ Mitigations:
 - define ClickHouse migration DDL for all 5 tables (explicit migrations in `migrations/clickhouse/`)
 - define Alembic migration for `feature_flag` registry in Postgres semantic layer
 - implement sink interface extensions (5 new `write_*` methods in `BaseMetricsSink` + `ClickHouseMetricsSink`)
-- add record dataclasses to `metrics/schemas.py`
+- add record dataclasses to `src/dev_health_ops/metrics/schemas.py`
 
 ### Phase 1: Ingestion and normalization MVP
 - **MVP providers:** GitHub (releases/deployments — already integrated), LaunchDarkly (feature flags — richest audit log + data export API), generic ingest API (telemetry signals — provider-agnostic)

@@ -100,11 +100,11 @@ All reviewers confirmed the PRD is **directionally sound** and aligned with plat
 | Field | Value |
 |-------|-------|
 | **PRD lines** | 229–232 (Phase 0 mentions "sink contracts" generically) |
-| **Reference** | `src/dev_health_ops/metrics/sinks/base.py` (364 lines, explicit `write_*` methods per record type) |
+| **Reference** | `src/dev_health_ops/metrics/sinks/base.py` (explicit `write_*` methods per record type) |
 | **Severity** | Major |
 | **Sources** | Momus, Explore (ClickHouse) |
 | **Issue** | The sink interface requires explicit write methods for each new record type. The PRD introduces 5 entities but doesn't mention the ~5 corresponding `write_feature_flag`, `write_feature_flag_event`, `write_feature_flag_link`, `write_telemetry_signal_bucket`, `write_release_impact_daily` methods needed in `BaseMetricsSink` and all implementations (`ClickHouseMetricsSink`, etc.). |
-| **Fix** | Add a "Sink Interface Extensions" subsection to Phase 0 listing the required methods. Also add corresponding record dataclasses to `metrics/schemas.py`. |
+| **Fix** | Add a "Sink Interface Extensions" subsection to Phase 0 listing the required methods. Also add corresponding record dataclasses to `src/dev_health_ops/metrics/schemas.py`. |
 
 ### M5: `WorkGraphBuilder` needs new builder methods — not mentioned
 
@@ -114,7 +114,7 @@ All reviewers confirmed the PRD is **directionally sound** and aligned with plat
 | **Reference** | `src/dev_health_ops/work_graph/builder.py` — orchestrates graph construction with `_build_*_edges` methods |
 | **Severity** | Major |
 | **Sources** | Momus, Explore (work graph) |
-| **Issue** | `WorkGraphBuilder.build()` currently handles issue/PR/commit/file nodes. New `release` and `feature_flag` node types require: (a) `_build_release_edges` and `_build_feature_flag_edges` methods; (b) ID generation functions in `work_graph/ids.py`; (c) GraphQL enum updates in `api/graphql/models/inputs.py` and `outputs.py`. |
+| **Issue** | `WorkGraphBuilder.build()` currently handles issue/PR/commit/file nodes. New `release` and `feature_flag` node types require: (a) `_build_release_edges` and `_build_feature_flag_edges` methods; (b) ID generation functions in `src/dev_health_ops/work_graph/ids.py`; (c) GraphQL enum updates in `src/dev_health_ops/api/graphql/models/inputs.py` and `outputs.py`. |
 | **Fix** | Add "Builder and API Extensions" subsection to Phase 2 listing: new builder methods, new ID generators, GraphQL enum additions. |
 
 ### M6: Incomplete metric formulas — missing denominators, baselines, window aggregation rules
@@ -190,7 +190,7 @@ All reviewers confirmed the PRD is **directionally sound** and aligned with plat
 | Field | Value |
 |-------|-------|
 | **PRD lines** | 114–116 |
-| **Reference** | `work_graph/models.py` — `WorkGraphEdge.evidence` is `str` |
+| **Reference** | `src/dev_health_ops/work_graph/models.py` — `WorkGraphEdge.evidence` is `str` |
 | **Source** | Momus |
 | **Fix** | Clarify whether evidence remains a JSON-encoded string or whether the edge schema changes to structured fields (which requires storage + API changes). |
 

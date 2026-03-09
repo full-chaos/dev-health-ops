@@ -8,5 +8,5 @@ This is the frontend usage and shape expectations for investment views, includin
 - Response parsing conventions
 
 Keep this aligned with:
-- backend taxonomy (`investment_taxonomy.py`)
-- GraphQL inputs/outputs (`api/graphql/models/*`)
+- backend taxonomy (`src/dev_health_ops/investment_taxonomy.py`)
+- GraphQL inputs/outputs (`src/dev_health_ops/api/graphql/models/*`)

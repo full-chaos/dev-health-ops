@@ -5,7 +5,9 @@ This repository computes daily “developer health” metrics from:
 - synced Git facts (`git_commits`, `git_commit_stats`, `git_pull_requests`)
 - optional work tracking data (Jira issues, GitHub issues/Projects v2, GitLab issues)
 
-Derived time series are written to **ClickHouse** (required) for Grafana. MongoDB, PostgreSQL, and SQLite are deprecated as analytics backends.
+Derived time series are written to **ClickHouse** (required) for Grafana.
+
+> **Backend status:** ClickHouse is the primary and recommended analytics backend. MongoDB, PostgreSQL, and SQLite sink implementations were removed in CHAOS-641. The sections below retain references for historical context, but only ClickHouse is supported at runtime.
 
 All timestamps are treated as **UTC** (ClickHouse stores DateTime in UTC; Mongo stores naive datetimes as UTC by convention).
 
@@ -118,7 +120,7 @@ Keyed by `(repo_id, day, author_email, commit_hash)`.
 
 ### Work item normalization + cycle times
 
-Work items are normalized into a unified `WorkItem` abstraction (`models/work_items.py`).
+Work items are normalized into a unified `WorkItem` abstraction (`src/dev_health_ops/models/work_items.py`).
 
 Best-effort fields:
 
@@ -226,9 +228,11 @@ ORDER BY day;
 
 Re-computations are **append-only** and distinguished by `computed_at`. To query the latest metrics for a key/day, use `argMax(..., computed_at)` in ClickHouse.
 
-### MongoDB (collections)
+### MongoDB (collections) — removed
 
-Collections are created automatically:
+> **Note:** MongoDB sink support was removed in CHAOS-641. This section is retained for historical reference only.
+
+Collections were created automatically:
 
 - `repo_metrics_daily`
 - `user_metrics_daily`
@@ -240,9 +244,11 @@ Collections are created automatically:
 
 Documents use stable compound `_id` keys and are written via upserts, so recomputation is safe.
 
-### SQLite (tables)
+### SQLite (tables) — removed
 
-Tables are created automatically in the same `.db` file:
+> **Note:** SQLite sink support was removed in CHAOS-641. This section is retained for historical reference only.
+
+Tables were created automatically in the same `.db` file:
 
 - `repo_metrics_daily`
 - `user_metrics_daily`
@@ -295,7 +301,7 @@ We compute canonical Individual Contributor (IC) metrics and "Developer Landscap
 ### Identity Resolution
 
 - Users are mapped to a canonical `identity_id` (preferring email) across providers.
-- Configuration: `config/teams.yaml` or `config/team_mapping.yaml`.
+- Configuration: `src/dev_health_ops/config/teams.yaml` or `src/dev_health_ops/config/team_mapping.yaml`.
 
 ### IC Metrics (`user_metrics_daily`)
 

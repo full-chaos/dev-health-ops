@@ -4,8 +4,8 @@ This is the contract between UI charts and backend query surfaces.
 
 ## Investment Mix (treemap/sunburst)
 - GraphQL: analytics → breakdowns
-- Backend: `api/graphql/resolvers/analytics.py`
-- Compiler: `api/graphql/sql/compiler.py::compile_breakdown`
+- Backend: `src/dev_health_ops/api/graphql/resolvers/analytics.py`
+- Compiler: `src/dev_health_ops/api/graphql/sql/compiler.py::compile_breakdown`
 - Dimensions: THEME, SUBCATEGORY
 - Measure: effort/count (depends on chart config)
 

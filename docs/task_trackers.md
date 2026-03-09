@@ -1,6 +1,6 @@
 # Task Trackers & Work Items
 
-This repo normalizes Jira issues, GitHub issues/Projects items, GitLab issues, and Linear issues into a unified `WorkItem` model (`models/work_items.py`) and computes daily aggregates + cycle times.
+This repo normalizes Jira issues, GitHub issues/Projects items, GitLab issues, and Linear issues into a unified `WorkItem` model (`src/dev_health_ops/models/work_items.py`) and computes daily aggregates + cycle times.
 
 Jira is used to track associated project work (planning/throughput/WIP). Pull request metrics are computed from PR/MR data synced via the CLI (`dev-hops sync ...`) and are independent of Jira.
 
@@ -53,7 +53,7 @@ dev-hops sync work-items --provider linear --repo ENG --db "$DATABASE_URI"
 
 ## Status & Type Normalization
 
-Status normalization is config-driven via `config/status_mapping.yaml`.
+Status normalization is config-driven via `src/dev_health_ops/config/status_mapping.yaml`.
 
 ### Status categories
 Normalized categories are:
@@ -78,7 +78,7 @@ If no label/status match exists:
 
 ## Identity Mapping (optional)
 
-To keep user metrics consistent across providers, populate `config/identity_mapping.yaml`.
+To keep user metrics consistent across providers, populate `src/dev_health_ops/config/identity_mapping.yaml`.
 
 Schema:
 - `canonical`: stable identity (prefer email)
@@ -89,10 +89,10 @@ Schema:
 To enable team filtering in Grafana, you can sync teams from various sources.
 
 ### Config-based Mapping
-Populate `config/team_mapping.yaml` (schema: `team_id`, `team_name`, `members`).
+Populate `src/dev_health_ops/config/team_mapping.yaml` (schema: `team_id`, `team_name`, `members`).
 Then run:
 ```bash
-dev-hops sync teams --path config/team_mapping.yaml
+dev-hops sync teams --path src/dev_health_ops/config/team_mapping.yaml
 ```
 
 ### Jira Project Mapping
@@ -114,6 +114,58 @@ Use `-s`/`--search` to filter repos by name (glob pattern), e.g.:
 ```bash
 dev-hops sync work-items --provider github -s "org/*" --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
 ```
+
+## Atlassian Client Migration
+
+The project is migrating from a legacy custom Jira client to a shared `atlassian` client library. This migration is managed via feature flags and runs in parallel with the legacy implementation.
+
+See [Atlassian Client Integration Plan](./plans/atlassian-client-integration.md) for the full phased roadmap.
+
+### Feature Flags
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLASSIAN_CLIENT_ENABLED` | `false` | Enable the new `atlassian` client library for Jira sync. When `false`, the legacy `JiraClient` is used. |
+| `ATLASSIAN_GQL_ENABLED` | `false` | Enable Atlassian GraphQL Gateway (AGG) enrichment (Phase 5). Requires OAuth credentials. |
+| `JIRA_USE_PROVIDER` | `false` | Use `JiraProvider` in the work items pipeline instead of the standalone sync function. |
+
+### New Atlassian Environment Variables
+
+When `ATLASSIAN_CLIENT_ENABLED=true`, configure these variables (they fall back to legacy `JIRA_*` vars if unset):
+
+| Variable | Description |
+|----------|-------------|
+| `ATLASSIAN_EMAIL` | Atlassian account email (falls back to `JIRA_EMAIL`) |
+| `ATLASSIAN_API_TOKEN` | API token (falls back to `JIRA_API_TOKEN`) |
+| `ATLASSIAN_JIRA_BASE_URL` | Jira Cloud base URL, e.g. `https://your-org.atlassian.net` (falls back to `JIRA_BASE_URL`) |
+| `ATLASSIAN_CLOUD_ID` | Atlassian Cloud ID (auto-derived from base URL if omitted) |
+
+#### Optional: Custom field IDs
+
+| Variable | Description |
+|----------|-------------|
+| `ATLASSIAN_JIRA_STORY_POINTS_FIELD` | Custom field ID for story points (e.g. `customfield_10016`) |
+| `ATLASSIAN_JIRA_SPRINT_IDS_FIELD` | Custom field ID for sprint (default: `customfield_10020`) |
+
+#### Optional: GraphQL / OAuth (Phase 5)
+
+| Variable | Description |
+|----------|-------------|
+| `ATLASSIAN_OAUTH_ACCESS_TOKEN` | OAuth access token for AGG |
+| `ATLASSIAN_OAUTH_REFRESH_TOKEN` | OAuth refresh token |
+| `ATLASSIAN_CLIENT_ID` | OAuth client ID |
+| `ATLASSIAN_CLIENT_SECRET` | OAuth client secret |
+| `ATLASSIAN_GQL_BASE_URL` | Tenant GraphQL endpoint (e.g. `https://your-org.atlassian.net/gateway/api/graphql`) |
+| `ATLASSIAN_GQL_EXPERIMENTAL_APIS` | Comma-separated experimental APIs (e.g. `jira-software`) |
+| `ATLASSIAN_COOKIES_JSON` | Cookie auth for AGG (JSON object) |
+
+### Migration Approach
+
+The migration uses a parallel-run strategy:
+1. Both legacy and new client run side by side
+2. Feature flag toggles which implementation is active
+3. Rollback is instant by setting `ATLASSIAN_CLIENT_ENABLED=false`
+4. No database schema changes are required for Phases 1-4
 
 ### Quick Jira API smoke test (curl)
 

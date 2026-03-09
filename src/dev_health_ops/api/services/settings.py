@@ -254,7 +254,7 @@ class IntegrationCredentialsService:
             return json.loads(decrypted), cred
         except (ValueError, json.JSONDecodeError):
             logger.error(
-                "Failed to decrypt/parse credential record for id=%s",
+                "Failed to decrypt/parse integration config for id=%s",
                 sanitize_for_log(str(credential_id)),
             )
             return None, cred

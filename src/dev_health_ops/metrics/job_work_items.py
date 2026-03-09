@@ -58,6 +58,7 @@ def run_work_items_sync_job(
     repo_id: uuid.UUID | None = None,
     repo_name: str | None = None,
     search_pattern: str | None = None,
+    org_id: str = "",
 ) -> None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
@@ -110,7 +111,9 @@ def run_work_items_sync_job(
 
         _teams_data = (
             primary_sink.query_dicts(
-                "SELECT id, name, project_keys FROM teams FINAL", {}
+                "SELECT id, name, project_keys FROM teams FINAL"
+                + (" WHERE org_id = {org_id:String}" if org_id else ""),
+                {"org_id": org_id} if org_id else {},
             )
             if hasattr(primary_sink, "query_dicts")
             else []
@@ -122,6 +125,7 @@ def run_work_items_sync_job(
             primary_sink=primary_sink,
             repo_id=repo_id,
             repo_name=repo_name,
+            org_id=org_id,
         )
         from dev_health_ops.utils import match_pattern
 

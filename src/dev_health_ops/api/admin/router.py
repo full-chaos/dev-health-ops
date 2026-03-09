@@ -476,9 +476,7 @@ async def test_connection(
     if stored is None:
         stored = await svc.get(payload.provider, payload.name)
     if stored:
-        await svc.update_test_result(
-            stored.provider, success, error, stored.name
-        )
+        await svc.update_test_result(stored.provider, success, error, stored.name)
     return TestConnectionResponse(success=success, error=error, details=details or None)
 
 

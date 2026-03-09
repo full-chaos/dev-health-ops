@@ -97,7 +97,9 @@ def _patch_queries(monkeypatch, edges, work_items, commits):
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_commit_churn",
-        lambda client, repo_commits, **kwargs: {f"{commits[0]['repo_id']}@abc123": 10.0},
+        lambda client, repo_commits, **kwargs: {
+            f"{commits[0]['repo_id']}@abc123": 10.0
+        },
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_parent_titles",

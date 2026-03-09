@@ -232,6 +232,7 @@ async def test_test_connection_db_creds_persists(client):
     svc.get_decrypted_credentials.assert_awaited_once_with("linear", "default")
     svc.update_test_result.assert_awaited_once_with("linear", True, None, "default")
 
+
 @pytest.mark.asyncio
 async def test_test_connection_by_credential_id(client):
     cred = _mock_credential(provider="github", name="default")

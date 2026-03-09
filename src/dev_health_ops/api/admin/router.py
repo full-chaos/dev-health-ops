@@ -439,8 +439,15 @@ async def test_connection(
     svc = IntegrationCredentialsService(session, org_id)
 
     creds = payload.credentials  # inline (pre-save) or fall back to stored
+    stored = None
     if not creds:
-        creds = await svc.get_decrypted_credentials(payload.provider, payload.name)
+        # Prefer credential_id (UUID) lookup; fall back to provider+name
+        if payload.credential_id:
+            creds, stored = await svc.get_decrypted_credentials_by_id(
+                payload.credential_id
+            )
+        else:
+            creds = await svc.get_decrypted_credentials(payload.provider, payload.name)
         if not creds:
             raise HTTPException(status_code=404, detail="Credential not found")
 
@@ -466,9 +473,12 @@ async def test_connection(
 
     # Always persist the test result when a stored credential exists
     # (covers both inline pre-save tests and DB-sourced tests)
-    stored = await svc.get(payload.provider, payload.name)
+    if stored is None:
+        stored = await svc.get(payload.provider, payload.name)
     if stored:
-        await svc.update_test_result(payload.provider, success, error, payload.name)
+        await svc.update_test_result(
+            stored.provider, success, error, stored.name
+        )
     return TestConnectionResponse(success=success, error=error, details=details or None)
 
 

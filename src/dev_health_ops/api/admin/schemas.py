@@ -70,6 +70,12 @@ class IntegrationCredentialUpdate(BaseModel):
 class TestConnectionRequest(BaseModel):
     provider: str
     name: str = "default"
+    credential_id: str | None = Field(
+        default=None,
+        description="UUID of the stored credential to test. "
+        "When provided (and no inline credentials), the credential is looked up by ID "
+        "instead of by provider+name.",
+    )
     credentials: dict[str, Any] | None = Field(
         default=None,
         description="Inline credentials to test without saving. "

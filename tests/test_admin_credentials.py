@@ -232,6 +232,57 @@ async def test_test_connection_db_creds_persists(client):
     svc.get_decrypted_credentials.assert_awaited_once_with("linear", "default")
     svc.update_test_result.assert_awaited_once_with("linear", True, None, "default")
 
+@pytest.mark.asyncio
+async def test_test_connection_by_credential_id(client):
+    cred = _mock_credential(provider="github", name="default")
+
+    with (
+        patch(
+            "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+        ) as mock_svc_cls,
+        patch(
+            "dev_health_ops.api.admin.router._test_github_connection",
+            new_callable=AsyncMock,
+        ) as mock_test,
+    ):
+        svc = AsyncMock()
+        svc.get_decrypted_credentials_by_id.return_value = ({"token": "ghp_test"}, cred)
+        svc.get.return_value = cred
+        mock_svc_cls.return_value = svc
+        mock_test.return_value = (True, {"user": "test-user"})
+
+        resp = await client.post(
+            "/api/v1/admin/credentials/test",
+            json={"provider": "github", "credential_id": "cred-1"},
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["details"] == {"user": "test-user"}
+    svc.get_decrypted_credentials_by_id.assert_awaited_once_with("cred-1")
+    svc.update_test_result.assert_awaited_once_with("github", True, None, "default")
+
+
+@pytest.mark.asyncio
+async def test_test_connection_by_credential_id_not_found(client):
+    with patch(
+        "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+    ) as mock_svc_cls:
+        svc = AsyncMock()
+        svc.get_decrypted_credentials_by_id.return_value = (None, None)
+        mock_svc_cls.return_value = svc
+
+        resp = await client.post(
+            "/api/v1/admin/credentials/test",
+            json={"provider": "github", "credential_id": "nonexistent-id"},
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Credential not found"
+
 
 @pytest.mark.asyncio
 async def test_delete_credential(client):

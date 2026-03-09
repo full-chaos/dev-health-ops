@@ -10,5 +10,5 @@ Canonical metric registry:
 - `docs/20-computations/03-metric-calculations.md`
 
 Investment compute:
-- `work_graph/investment/categorize.py`
-- `work_graph/investment/materialize.py`
+- `src/dev_health_ops/work_graph/investment/categorize.py`
+- `src/dev_health_ops/work_graph/investment/materialize.py`

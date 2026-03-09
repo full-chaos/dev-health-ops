@@ -1,5 +1,7 @@
 # AGENTS — Single Source of Truth (dev-health-ops)
 
+> **Note:** All bare source paths in this document (e.g. `connectors/`, `processors/`, `metrics/sinks/`) are relative to `src/dev_health_ops/`.
+
 This document is the **canonical** agent briefing for this repo: how it works, what not to break, and the minimum rules to move fast without causing architectural regressions. It consolidates prior agent guidance into one set of enforceable constraints.
 
 ---

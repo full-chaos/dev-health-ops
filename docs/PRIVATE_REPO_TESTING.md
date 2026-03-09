@@ -193,7 +193,7 @@ The test should:
 ### GitHub Token Verification
 
 ```python
-from connectors import GitHubConnector
+from dev_health_ops.connectors import GitHubConnector
 
 token = "ghp_your_token"
 connector = GitHubConnector(token=token)
@@ -212,7 +212,7 @@ connector.close()
 ### GitLab Token Verification
 
 ```python
-from connectors import GitLabConnector
+from dev_health_ops.connectors import GitLabConnector
 
 token = "glpat_your_token"
 connector = GitLabConnector(url="https://gitlab.com", private_token=token)
@@ -304,6 +304,6 @@ If you encounter issues:
 
 1. Check this documentation for troubleshooting steps
 2. Verify your token scopes and permissions
-3. Review the connector documentation in `connectors/README.md`
+3. Review the connector documentation in `src/dev_health_ops/connectors/README.md`
 4. Check example scripts in `examples/` directory
 5. Review test files for usage patterns

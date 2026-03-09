@@ -1,6 +1,6 @@
 # Persisted queries
 
-File: `api/graphql/persisted_queries.json`
+File: `src/dev_health_ops/api/graphql/persisted_queries.json`
 
 ## Purpose
 Persisted queries allow the UI to reference stable query identifiers instead of sending ad-hoc query text.
@@ -12,5 +12,5 @@ Persisted queries allow the UI to reference stable query identifiers instead of 
 
 ## Invalidation
 Invalidation hooks live in:
-- `api/graphql/cache_invalidation.py`
-- `api/graphql/pubsub.py`
+- `src/dev_health_ops/api/graphql/cache_invalidation.py`
+- `src/dev_health_ops/api/graphql/pubsub.py`

@@ -244,7 +244,7 @@ if imp_ctx:
 
 ### Login Fix (Independent)
 
-In `api/auth/router.py`, line 737:
+In `src/dev_health_ops/api/auth/router.py`, line 737:
 
 ```python
 # Before:
@@ -336,4 +336,4 @@ This means after starting/stopping impersonation, there's up to 30s staleness. F
 
 - django-impersonate: middleware swaps `request.user`, preserves `request.impersonator`
 - Supabase: server-side session with service-role key
-- Current code: `api/admin/impersonation.py`, `api/middleware/__init__.py`, `src/lib/auth.ts`
+- Current code: `src/dev_health_ops/api/admin/impersonation.py`, `src/dev_health_ops/api/middleware/__init__.py`, `src/lib/auth.ts`

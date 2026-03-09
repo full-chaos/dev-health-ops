@@ -130,12 +130,14 @@ def _dispatch_post_sync_tasks(
     if has_git:
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_daily_metrics",
+            kwargs={"org_id": org_id},
             queue="metrics",
         )
         dispatched.append("run_daily_metrics")
 
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_complexity_job",
+            kwargs={"org_id": org_id},
             queue="metrics",
         )
         dispatched.append("run_complexity_job")
@@ -150,6 +152,7 @@ def _dispatch_post_sync_tasks(
     if provider == "gitlab" and has_git:
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_dora_metrics",
+            kwargs={"org_id": org_id},
             queue="metrics",
         )
         dispatched.append("run_dora_metrics")
@@ -1099,6 +1102,7 @@ def dispatch_scheduled_metrics(self) -> dict:
                             "repo_name": job_config.get("repo_name"),
                             "sink": job_config.get("sink", "auto"),
                             "provider": job_config.get("provider", "auto"),
+                            "org_id": job.org_id or job_config.get("org_id"),
                         },
                         queue="metrics",
                     )
@@ -1127,6 +1131,7 @@ def run_daily_metrics(
     repo_name: str | None = None,
     sink: str = "auto",
     provider: str = "auto",
+    org_id: str | None = None,
 ) -> dict:
     """
     Compute and persist daily metrics asynchronously.
@@ -1139,6 +1144,7 @@ def run_daily_metrics(
         repo_name: Optional repository name to filter
         sink: Sink type (auto|clickhouse|mongo|sqlite|postgres|both)
         provider: Work item provider (auto|all|jira|github|gitlab|none)
+        org_id: Organization scope
 
     Returns:
         dict with job status and summary
@@ -1167,6 +1173,7 @@ def run_daily_metrics(
                 repo_name=repo_name,
                 sink=sink,
                 provider=provider,
+                org_id=org_id or "",
             )
         )
         # Invalidate GraphQL cache after successful metrics update
@@ -1522,6 +1529,7 @@ def run_complexity_job(
     language_globs: list[str] | None = None,
     exclude_globs: list[str] | None = None,
     max_files: int | None = None,
+    org_id: str | None = None,
 ) -> dict:
     """
     Compute code complexity metrics from ClickHouse git_files/git_blame.
@@ -1538,6 +1546,7 @@ def run_complexity_job(
         language_globs: Include language globs (e.g. ["*.py", "*.ts"])
         exclude_globs: Exclude path globs (e.g. ["*/tests/*"])
         max_files: Limit number of files scanned per repo
+        org_id: Organization scope
 
     Returns:
         dict with job status and summary
@@ -1565,6 +1574,7 @@ def run_complexity_job(
             max_files=max_files,
             search_pattern=search_pattern,
             exclude_globs=exclude_globs,
+            org_id=org_id or "",
         )
         return {
             "status": "success",
@@ -1795,6 +1805,7 @@ def run_dora_metrics(
     sink: str = "auto",
     metrics: str | None = None,
     interval: str = "daily",
+    org_id: str | None = None,
 ) -> dict:
     """
     Compute and persist DORA metrics asynchronously.
@@ -1808,6 +1819,7 @@ def run_dora_metrics(
             sink: Sink type (auto|clickhouse|mongo|sqlite|postgres|both)
             metrics: Specific metrics to compute (optional)
             interval: Metric interval (daily|weekly|monthly)
+            org_id: Organization scope
 
     Returns:
             dict with job status and summary
@@ -1835,6 +1847,7 @@ def run_dora_metrics(
             sink=sink,
             metrics=metrics,
             interval=interval,
+            org_id=org_id or "",
         )
 
         return {

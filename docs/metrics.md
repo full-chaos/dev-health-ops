@@ -118,7 +118,7 @@ Keyed by `(repo_id, day, author_email, commit_hash)`.
 
 ### Work item normalization + cycle times
 
-Work items are normalized into a unified `WorkItem` abstraction (`models/work_items.py`).
+Work items are normalized into a unified `WorkItem` abstraction (`src/dev_health_ops/models/work_items.py`).
 
 Best-effort fields:
 
@@ -295,7 +295,7 @@ We compute canonical Individual Contributor (IC) metrics and "Developer Landscap
 ### Identity Resolution
 
 - Users are mapped to a canonical `identity_id` (preferring email) across providers.
-- Configuration: `config/teams.yaml` or `config/team_mapping.yaml`.
+- Configuration: `src/dev_health_ops/config/teams.yaml` or `src/dev_health_ops/config/team_mapping.yaml`.
 
 ### IC Metrics (`user_metrics_daily`)
 

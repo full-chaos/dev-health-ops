@@ -1,6 +1,6 @@
 # Task Trackers & Work Items
 
-This repo normalizes Jira issues, GitHub issues/Projects items, GitLab issues, and Linear issues into a unified `WorkItem` model (`models/work_items.py`) and computes daily aggregates + cycle times.
+This repo normalizes Jira issues, GitHub issues/Projects items, GitLab issues, and Linear issues into a unified `WorkItem` model (`src/dev_health_ops/models/work_items.py`) and computes daily aggregates + cycle times.
 
 Jira is used to track associated project work (planning/throughput/WIP). Pull request metrics are computed from PR/MR data synced via the CLI (`dev-hops sync ...`) and are independent of Jira.
 
@@ -53,7 +53,7 @@ dev-hops sync work-items --provider linear --repo ENG --db "$DATABASE_URI"
 
 ## Status & Type Normalization
 
-Status normalization is config-driven via `config/status_mapping.yaml`.
+Status normalization is config-driven via `src/dev_health_ops/config/status_mapping.yaml`.
 
 ### Status categories
 Normalized categories are:
@@ -78,7 +78,7 @@ If no label/status match exists:
 
 ## Identity Mapping (optional)
 
-To keep user metrics consistent across providers, populate `config/identity_mapping.yaml`.
+To keep user metrics consistent across providers, populate `src/dev_health_ops/config/identity_mapping.yaml`.
 
 Schema:
 - `canonical`: stable identity (prefer email)
@@ -89,10 +89,10 @@ Schema:
 To enable team filtering in Grafana, you can sync teams from various sources.
 
 ### Config-based Mapping
-Populate `config/team_mapping.yaml` (schema: `team_id`, `team_name`, `members`).
+Populate `src/dev_health_ops/config/team_mapping.yaml` (schema: `team_id`, `team_name`, `members`).
 Then run:
 ```bash
-dev-hops sync teams --path config/team_mapping.yaml
+dev-hops sync teams --path src/dev_health_ops/config/team_mapping.yaml
 ```
 
 ### Jira Project Mapping

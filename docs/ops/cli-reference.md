@@ -160,7 +160,7 @@ Sync team definitions.
 
 ```bash
 # From config file
-dev-hops sync teams --path config/team_mapping.yaml
+dev-hops sync teams --path src/dev_health_ops/config/team_mapping.yaml
 
 # From Jira projects
 dev-hops sync teams --provider jira

@@ -4,13 +4,13 @@ The project follows a pipeline-style architecture that separates data collection
 
 ## Pipeline stages
 
-1. **Connectors** (`connectors/`)
+1. **Connectors** (`src/dev_health_ops/connectors/`)
    - Fetch raw data from providers (GitHub, GitLab, Jira).
-2. **Processors** (`processors/`)
+2. **Processors** (`src/dev_health_ops/processors/`)
    - Normalize and enrich connector payloads.
-3. **Storage** (`storage.py`, `models/`)
+3. **Storage** (`src/dev_health_ops/storage/`, `src/dev_health_ops/models/`)
    - Persist processed data into PostgreSQL, ClickHouse, MongoDB, or SQLite.
-4. **Metrics** (`metrics/`)
+4. **Metrics** (`src/dev_health_ops/metrics/`)
    - Compute high-level metrics like throughput, cycle time, rework, and predictability.
 5. **Visualization** (`dev-health-web`)
    - Web frontend for exploration and reporting via OTLP-native observability.
@@ -24,7 +24,7 @@ The project follows a pipeline-style architecture that separates data collection
 
 ## CLI entry points
 
-The CLI is implemented with argparse in `cli.py` and orchestrates sync and metrics workflows.
+The CLI is implemented with argparse in `src/dev_health_ops/cli.py` and orchestrates sync and metrics workflows.
 
 ## Work unit investment payload
 

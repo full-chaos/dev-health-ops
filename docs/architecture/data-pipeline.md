@@ -12,6 +12,8 @@ Each stage has clear responsibilities. Do not collapse layers or bypass stages.
 
 ---
 
+All paths below are relative to `src/dev_health_ops/`.
+
 ## 1. Connectors (`connectors/`)
 
 **Purpose:** Fetch raw data from external providers.

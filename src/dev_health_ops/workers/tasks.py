@@ -145,9 +145,9 @@ def _dispatch_post_sync_tasks(
     if has_git and has_work_items:
         celery_app.send_task(
             "dev_health_ops.workers.tasks.run_work_graph_build",
+            kwargs={"org_id": org_id},
             queue="metrics",
         )
-        dispatched.append("run_work_graph_build")
 
     if provider == "gitlab" and has_git:
         celery_app.send_task(
@@ -391,6 +391,7 @@ def run_sync_config(
                 day=date.today(),
                 backfill_days=backfill_days,
                 provider="jira",
+                org_id=org_id,
             )
             result_payload["backfill_days"] = backfill_days
 
@@ -406,6 +407,7 @@ def run_sync_config(
                 provider=provider,
                 repo_name=sync_options.get("repo"),
                 search_pattern=sync_options.get("search"),
+                org_id=org_id,
             )
             result_payload["work_items_synced"] = True
 
@@ -959,6 +961,7 @@ def _run_sync_for_repo(
                 provider=provider,
                 repo_name=sync_options_override.get("repo"),
                 search_pattern=sync_options_override.get("search"),
+                org_id=org_id,
             )
             result_payload["work_items_synced"] = True
 
@@ -1593,6 +1596,7 @@ def run_work_items_sync(
     db_url: str | None = None,
     provider: str = "auto",
     since_days: int = 30,
+    org_id: str = "",
 ) -> dict:
     """
     Sync work items from external providers.
@@ -1625,6 +1629,7 @@ def run_work_items_sync(
             day=since.date(),
             backfill_days=since_days,
             provider=provider,
+            org_id=org_id,
         )
 
         # Invalidate GraphQL cache after successful sync
@@ -1869,6 +1874,7 @@ def run_work_graph_build(
     repo_id: str | None = None,
     heuristic_window: int = 7,
     heuristic_confidence: float = 0.3,
+    org_id: str = "",
 ) -> dict:
     """Build work graph from evidence.
 
@@ -1917,6 +1923,7 @@ def run_work_graph_build(
             repo_id=parsed_repo_id,
             heuristic_days_window=heuristic_window,
             heuristic_confidence=heuristic_confidence,
+            org_id=org_id,
         )
         builder = WorkGraphBuilder(config)
         try:
@@ -2480,6 +2487,7 @@ def _process_jira_event(
             day=date.today(),
             backfill_days=1,
             provider="jira",
+            org_id=org_id or "",
         )
         return {"processed": True, "event": event_type}
     except Exception as e:

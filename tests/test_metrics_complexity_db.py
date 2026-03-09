@@ -24,9 +24,9 @@ class FakeClickHouseClient:
             return FakeQueryResult(self.files)
         if "FROM git_blame" in query:
             return FakeQueryResult([])
-        if "max(last_synced)" in query and "git_files" in query:
+        if "maxOrNull(last_synced)" in query and "git_files" in query:
             return FakeQueryResult([[self.last_synced]])
-        if "max(last_synced)" in query and "git_blame" in query:
+        if "maxOrNull(last_synced)" in query and "git_blame" in query:
             return FakeQueryResult([[None]])
         if "FROM repos" in query:
             return FakeQueryResult([])
@@ -112,9 +112,9 @@ class FakeClickHouseClientBlameOnly:
             return FakeQueryResult([[0, 0]])
         if "FROM git_files" in query and "contents" in query:
             return FakeQueryResult([])
-        if "max(last_synced)" in query and "git_files" in query:
+        if "maxOrNull(last_synced)" in query and "git_files" in query:
             return FakeQueryResult([[None]])
-        if "max(last_synced)" in query and "git_blame" in query:
+        if "maxOrNull(last_synced)" in query and "git_blame" in query:
             return FakeQueryResult([[self.last_synced]])
         if "FROM git_blame" in query:
             return FakeQueryResult(self.blame_files)

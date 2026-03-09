@@ -42,12 +42,17 @@ def _query_rows(client: Any, query: str, params: dict | None = None) -> list:
 
 
 def _load_repos(
-    client: Any, repo_id: uuid.UUID | None, search_pattern: str | None
+    client: Any, repo_id: uuid.UUID | None, search_pattern: str | None, org_id: str = ""
 ) -> list[tuple[uuid.UUID, str | None]]:
     if repo_id is not None:
         return [(repo_id, None)]
 
-    rows = _query_rows(client, "SELECT id, repo FROM repos")
+    query = "SELECT id, repo FROM repos"
+    params: dict[str, str] = {}
+    if org_id:
+        query += " WHERE org_id = {org_id:String}"
+        params["org_id"] = org_id
+    rows = _query_rows(client, query, params)
     repos: list[tuple[uuid.UUID, str | None]] = []
     for row in rows:
         repo_uuid = _coerce_uuid(row[0])
@@ -147,7 +152,7 @@ def _load_blame_contents(
 def _max_last_synced(client: Any, table: str, repo_id: uuid.UUID) -> datetime | None:
     rows = _query_rows(
         client,
-        f"SELECT max(last_synced) FROM {table} WHERE repo_id = {{repo_id:UUID}}",
+        f"SELECT maxOrNull(last_synced) FROM {table} WHERE repo_id = {{repo_id:UUID}}",
         {"repo_id": str(repo_id)},
     )
     if not rows:
@@ -222,7 +227,7 @@ def run_complexity_db_job(
         if exclude_globs:
             scanner.exclude_globs = list(exclude_globs)
 
-        repos = _load_repos(sink.client, repo_id, search_pattern)
+        repos = _load_repos(sink.client, repo_id, search_pattern, org_id=org_id)
         if not repos:
             logger.warning("No repositories found in database.")
             return 0

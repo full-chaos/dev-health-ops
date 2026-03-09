@@ -109,6 +109,59 @@ Every categorization run must persist:
 
 ---
 
+## LLM Provider Options
+
+The system supports multiple LLM backends. Set `LLM_PROVIDER` or let auto-detection pick the first configured provider.
+
+### Provider Configuration
+
+| Provider | Env Var for Selection | Required Env Vars | Default Model |
+|----------|----------------------|-------------------|---------------|
+| **OpenAI** | `LLM_PROVIDER=openai` | `OPENAI_API_KEY` | `gpt-5-mini` |
+| **Anthropic** | `LLM_PROVIDER=anthropic` | `ANTHROPIC_API_KEY` | `claude-3-haiku-20240307` |
+| **Gemini** | `LLM_PROVIDER=gemini` | `GEMINI_API_KEY` | `gemini-3` |
+| **Qwen (DashScope)** | `LLM_PROVIDER=qwen` | `QWEN_API_KEY` or `DASHSCOPE_API_KEY` | `qwen-plus` |
+| **Ollama** | `LLM_PROVIDER=ollama` | `OLLAMA_BASE_URL` or `OLLAMA_MODEL` | `llama3.2` |
+| **Local (generic)** | `LLM_PROVIDER=local` | `LOCAL_LLM_BASE_URL` | `llama3.2` |
+| **LM Studio** | `LLM_PROVIDER=lmstudio` | `LMSTUDIO_BASE_URL` | `local-model` |
+| **Qwen Local** | `LLM_PROVIDER=qwen-local` | `OLLAMA_BASE_URL` | `qwen2.5:7b` |
+| **Mock** | `LLM_PROVIDER=mock` | (none) | deterministic mock |
+
+### Auto-Detection Order
+
+When `LLM_PROVIDER` is unset or `auto`, the system checks in order:
+1. `OPENAI_API_KEY` -> OpenAI
+2. `ANTHROPIC_API_KEY` -> Anthropic
+3. `GEMINI_API_KEY` -> Gemini
+4. `LOCAL_LLM_BASE_URL` -> Local
+5. `DASHSCOPE_API_KEY` / `QWEN_API_KEY` -> Qwen
+6. `OLLAMA_MODEL` / `OLLAMA_BASE_URL` -> Ollama
+7. Falls back to mock provider
+
+### Common Configuration
+
+| Variable | Description |
+|----------|-------------|
+| `LLM_PROVIDER` | Explicit provider selection (see table above) |
+| `LLM_MODEL` | Override the default model for any provider |
+| `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint |
+| `DASHSCOPE_BASE_URL` | Regional DashScope endpoint (default: China; Singapore/US available) |
+| `GEMINI_BASE_URL` | Custom Gemini endpoint |
+
+### Provider-Specific Notes
+
+**OpenAI:** GPT-5+ models use the Responses API with structured outputs (json_schema). Legacy GPT-4 and below use Chat Completions. The provider auto-selects the correct API based on model name.
+
+**Anthropic:** Uses the Messages API. Requires `pip install anthropic`.
+
+**Gemini:** Uses Google's OpenAI-compatible endpoint at `generativelanguage.googleapis.com`.
+
+**Qwen:** Supports both official DashScope API (cloud) and local Ollama/LM Studio deployments.
+
+**Local providers:** Any OpenAI-compatible server (Ollama, vLLM, LM Studio) works. Falls back gracefully if the server doesn't support structured outputs.
+
+---
+
 ## OpenAI-Specific Handling
 
 ### JSON Mode

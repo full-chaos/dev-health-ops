@@ -115,6 +115,58 @@ Use `-s`/`--search` to filter repos by name (glob pattern), e.g.:
 dev-hops sync work-items --provider github -s "org/*" --date 2025-02-01 --backfill 30 --db "clickhouse://localhost:8123/default"
 ```
 
+## Atlassian Client Migration
+
+The project is migrating from a legacy custom Jira client to a shared `atlassian` client library. This migration is managed via feature flags and runs in parallel with the legacy implementation.
+
+See [Atlassian Client Integration Plan](./plans/atlassian-client-integration.md) for the full phased roadmap.
+
+### Feature Flags
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLASSIAN_CLIENT_ENABLED` | `false` | Enable the new `atlassian` client library for Jira sync. When `false`, the legacy `JiraClient` is used. |
+| `ATLASSIAN_GQL_ENABLED` | `false` | Enable Atlassian GraphQL Gateway (AGG) enrichment (Phase 5). Requires OAuth credentials. |
+| `JIRA_USE_PROVIDER` | `false` | Use `JiraProvider` in the work items pipeline instead of the standalone sync function. |
+
+### New Atlassian Environment Variables
+
+When `ATLASSIAN_CLIENT_ENABLED=true`, configure these variables (they fall back to legacy `JIRA_*` vars if unset):
+
+| Variable | Description |
+|----------|-------------|
+| `ATLASSIAN_EMAIL` | Atlassian account email (falls back to `JIRA_EMAIL`) |
+| `ATLASSIAN_API_TOKEN` | API token (falls back to `JIRA_API_TOKEN`) |
+| `ATLASSIAN_JIRA_BASE_URL` | Jira Cloud base URL, e.g. `https://your-org.atlassian.net` (falls back to `JIRA_BASE_URL`) |
+| `ATLASSIAN_CLOUD_ID` | Atlassian Cloud ID (auto-derived from base URL if omitted) |
+
+#### Optional: Custom field IDs
+
+| Variable | Description |
+|----------|-------------|
+| `ATLASSIAN_JIRA_STORY_POINTS_FIELD` | Custom field ID for story points (e.g. `customfield_10016`) |
+| `ATLASSIAN_JIRA_SPRINT_IDS_FIELD` | Custom field ID for sprint (default: `customfield_10020`) |
+
+#### Optional: GraphQL / OAuth (Phase 5)
+
+| Variable | Description |
+|----------|-------------|
+| `ATLASSIAN_OAUTH_ACCESS_TOKEN` | OAuth access token for AGG |
+| `ATLASSIAN_OAUTH_REFRESH_TOKEN` | OAuth refresh token |
+| `ATLASSIAN_CLIENT_ID` | OAuth client ID |
+| `ATLASSIAN_CLIENT_SECRET` | OAuth client secret |
+| `ATLASSIAN_GQL_BASE_URL` | Tenant GraphQL endpoint (e.g. `https://your-org.atlassian.net/gateway/api/graphql`) |
+| `ATLASSIAN_GQL_EXPERIMENTAL_APIS` | Comma-separated experimental APIs (e.g. `jira-software`) |
+| `ATLASSIAN_COOKIES_JSON` | Cookie auth for AGG (JSON object) |
+
+### Migration Approach
+
+The migration uses a parallel-run strategy:
+1. Both legacy and new client run side by side
+2. Feature flag toggles which implementation is active
+3. Rollback is instant by setting `ATLASSIAN_CLIENT_ENABLED=false`
+4. No database schema changes are required for Phases 1-4
+
 ### Quick Jira API smoke test (curl)
 
 Jira Cloud has removed `GET /rest/api/3/search`; use `GET /rest/api/3/search/jql`:

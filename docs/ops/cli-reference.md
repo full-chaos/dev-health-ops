@@ -217,6 +217,84 @@ dev-hops metrics daily \
 
 ---
 
+## Audit Commands
+
+Diagnostic audits for data completeness, schema integrity, provider coverage, and query performance.
+
+### `audit completeness`
+
+Check data freshness and completeness across providers within a time window.
+
+```bash
+# Table output (default)
+dev-hops audit completeness --db "clickhouse://localhost:8123/default" --days 7
+
+# JSON output
+dev-hops audit completeness --db "clickhouse://localhost:8123/default" --days 30 --format json
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--db` | Database connection string (required) |
+| `--days N` | Lookback window in days (default: 7) |
+| `--format` | Output format: `table` or `json` (default: `table`) |
+
+Checks work items, transitions, git commits, PRs, deployments, incidents, and CI pipeline runs across providers (jira, github, gitlab, synthetic). Reports staleness and missing data.
+
+### `audit schema`
+
+Verify the database schema matches expected migrations (tables, columns, types).
+
+```bash
+dev-hops audit schema
+```
+
+Supports ClickHouse (compares against SQL migration files) and PostgreSQL/SQLite (compares against SQLAlchemy model definitions). Reports missing tables, missing columns, and type mismatches with migration file hints.
+
+### `audit perf`
+
+Find slow queries in the ClickHouse query log.
+
+```bash
+# Default: queries > 1000ms in the last 60 minutes
+dev-hops audit perf
+
+# Custom thresholds
+dev-hops audit perf --threshold 500 --lookback 120 --limit 50
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--threshold` | Slow query threshold in ms (default: 1000) |
+| `--lookback` | Lookback window in minutes (default: 60) |
+| `--limit` | Max queries to display (default: 20) |
+
+### `audit coverage`
+
+Audit provider implementation coverage -- checks that collectors, config, schema, sinks, and CLI commands are wired up for each provider.
+
+```bash
+# All providers
+dev-hops audit coverage --db "clickhouse://localhost:8123/default"
+
+# Specific providers
+dev-hops audit coverage --db "clickhouse://localhost:8123/default" --provider jira,github
+
+# JSON output
+dev-hops audit coverage --db "clickhouse://localhost:8123/default" --format json
+```
+
+**Options:**
+| Option | Description |
+|--------|-------------|
+| `--db` | Database connection string (required) |
+| `--provider` | Comma-separated provider list (default: all) |
+| `--format` | Output format: `table` or `json` (default: `table`) |
+
+---
+
 ## Fixtures Commands
 
 ### `fixtures generate`
@@ -224,15 +302,53 @@ dev-hops metrics daily \
 Generate synthetic test data. Uses `CLICKHOUSE_URI`.
 
 ```bash
+# Basic generation
 dev-hops fixtures generate --days 30
+
+# Full generation with metrics and work graph
+dev-hops fixtures generate \
+  --sink "$CLICKHOUSE_URI" \
+  --repo-name "acme/demo-app" \
+  --repo-count 3 \
+  --days 60 \
+  --commits-per-day 10 \
+  --pr-count 40 \
+  --seed 42 \
+  --with-metrics \
+  --with-work-graph \
+  --team-count 8
+```
+
+**Options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--sink` | `$CLICKHOUSE_URI` | Analytics sink URI (ClickHouse) |
+| `--db-type` | auto-detect | Explicit DB type (`postgres`, `clickhouse`, etc.) |
+| `--repo-name` | `acme/demo-app` | Base repository name |
+| `--repo-count` | `1` | Number of repos to generate |
+| `--days` | `30` | Number of days of historical data |
+| `--commits-per-day` | `5` | Average commits per day |
+| `--pr-count` | `20` | Total pull requests to generate |
+| `--seed` | random | Deterministic seed for repeatable runs |
+| `--provider` | `synthetic` | Provider label: `synthetic`, `github`, `gitlab`, `jira` |
+| `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, etc.) |
+| `--with-work-graph` | off | Build work graph edges after generation (ClickHouse only) |
+| `--team-count` | `8` | Number of synthetic teams to create |
+
+### `fixtures validate`
+
+Validate that fixture data is sufficient for work graph and investment analysis.
+
+```bash
+dev-hops fixtures validate --sink "clickhouse://localhost:8123/default"
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--days N` | Number of days to generate |
-| `--teams N` | Number of teams |
-| `--repos-per-team N` | Repos per team |
+| `--sink` | Analytics sink URI (required, ClickHouse only) |
+
+Checks raw data counts, team mappings, cycle time metrics, work graph edges, connected components, and evidence bundle quality.
 
 ---
 

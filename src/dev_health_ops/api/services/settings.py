@@ -19,6 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
+from dev_health_ops.models.settings import (
+    IdentityMapping,
+    IntegrationCredential,
+    Setting,
+    SettingCategory,
+    SyncConfiguration,
+    TeamMapping,
+)
 
 # Normalize camelCase credential keys from frontend forms to snake_case for backend consistency.
 _CREDENTIAL_KEY_MAP: dict[str, dict[str, str]] = {
@@ -42,15 +50,6 @@ def _normalize_credential_keys(
         normalized[key_map.get(k, k)] = v
     return normalized
 
-
-from dev_health_ops.models.settings import (
-    IdentityMapping,
-    IntegrationCredential,
-    Setting,
-    SettingCategory,
-    SyncConfiguration,
-    TeamMapping,
-)
 
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import (

@@ -53,6 +53,7 @@ def get_auth_key(request: Request) -> str:
     email = _extract_login_email(request)
     return f"{ip}:{email}"
 
+
 def get_forwarded_ip(request: Request) -> str:
     """Return real client IP via X-Forwarded-For, falling back to peer IP.
 

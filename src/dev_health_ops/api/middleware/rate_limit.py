@@ -54,6 +54,19 @@ def get_auth_key(request: Request) -> str:
     return f"{ip}:{email}"
 
 
+def get_forwarded_ip(request: Request) -> str:
+    """Return real client IP via X-Forwarded-For, falling back to peer IP.
+
+    Behind a reverse proxy (Next.js rewrite, nginx, etc.) the TCP peer is
+    the proxy, not the end-user.  X-Forwarded-For carries the original IP.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        # First entry is the original client
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request) or "unknown"
+
+
 def get_admin_user_key(request: Request) -> str:
     ip = get_remote_address(request) or "unknown"
     auth_header = request.headers.get("authorization")

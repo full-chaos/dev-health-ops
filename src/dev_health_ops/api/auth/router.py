@@ -18,6 +18,7 @@ from dev_health_ops.api.middleware.rate_limit import (
     AUTH_REGISTER_LIMIT,
     AUTH_VALIDATE_LIMIT,
     get_auth_key,
+    get_forwarded_ip,
     limiter,
 )
 from dev_health_ops.api.services.auth import (
@@ -317,7 +318,7 @@ async def get_current_user_optional(
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
-@limiter.limit(AUTH_REGISTER_LIMIT)
+@limiter.limit(AUTH_REGISTER_LIMIT, key_func=get_forwarded_ip)
 async def register(payload: RegisterRequest, request: Request) -> RegisterResponse:
     from datetime import datetime, timezone
 

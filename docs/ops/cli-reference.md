@@ -21,7 +21,11 @@ The CLI is implemented in `cli.py` and orchestrates:
 | `--db` | `POSTGRES_URI` | PostgreSQL connection (semantic: users, settings) |
 | `--analytics-db` | `CLICKHOUSE_URI` | ClickHouse connection (analytics: metrics, data) |
 
-Subcommands like `metrics daily` also accept `--sink` for output format (`clickhouse`, `mongo`, `sqlite`, `postgres`, `both`, `auto`).
+`--db` and `--analytics-db` are **not** aliases. They point to different databases serving different roles (see Dual-Database Architecture below). If `POSTGRES_URI` is not set, `--db` falls back to `DATABASE_URI`.
+
+Subcommands like `metrics daily` also accept `--sink` to select the output backend. Only `clickhouse` (or `auto`, which resolves to ClickHouse) is supported at runtime. The legacy values `mongo`, `sqlite`, `postgres`, and `both` are accepted by the parser for backward compatibility but will fail at runtime (see CHAOS-641).
+
+> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
 
 ### Dual-Database Architecture
 

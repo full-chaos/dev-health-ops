@@ -23,10 +23,16 @@ nav:
       - Product Brief: product/product-brief.md
       - Concepts: product/concepts.md
       - Investment Taxonomy: product/investment-taxonomy.md
+      - Capacity Planning: product/capacity-planning.md
+      - Monetization Strategy: monetization-strategy.md
   - Getting Started: getting-started.md
+  - Self-Hosted Quickstart: self-hosted-quickstart.md
   - Configuration: configuration.md
+  - Team Configuration: team-configuration.md
   - Email Setup: email-setup.md
+  - SSO Setup: sso-setup.md
   - Webhooks: webhooks.md
+  - Alerting: alerting.md
   - Architecture:
       - Overview: architecture.md
       - Data Pipeline: architecture/data-pipeline.md
@@ -34,6 +40,11 @@ nav:
       - Frontend Architecture: architecture/frontend-architecture.md
       - Middleware Impersonation: architecture/middleware-impersonation.md
       - Auth User Journeys: architecture/auth-journey.md
+      - Database Architecture: architecture/database-architecture.md
+      - Normalization Helpers: architecture/normalization-helpers.md
+      - Enterprise Overview: architecture/enterprise-overview.md
+      - Licensing: architecture/licensing.md
+      - ADR-001 Enterprise Edition: architecture/adr/001-enterprise-edition.md
   - Operations:
       - Observability Tooling: ops/observability-tooling.md
       - Deployment Guide: ops/deployment-guide.md
@@ -41,6 +52,8 @@ nav:
       - Stripe Billing Runbook: ops/stripe-billing-runbook.md
       - Testing Governance: ops/testing-governance.md
       - Enterprise Test Plan: ops/enterprise-test-plan.md
+      - Workers: ops/workers.md
+      - SLOs: slos.md
   - CLI:
       - Overview: cli.md
       - Reference: ops/cli-reference.md
@@ -64,9 +77,10 @@ nav:
           - PR Flow: user-guide/views/pr-flow.md
           - Quadrants: user-guide/views/quadrants.md
           - Flame Diagrams: user-guide/views/flame-diagrams.md
+          - Capacity Planning: user-guide/views/capacity-planning.md
+          - Work Graph View: user-guide/views/work-graph.md
       - Work Graph: user-guide/work-graph.md
   - API:
-      - GraphQL (Legacy): graphql.md
       - GraphQL Overview: api/graphql-overview.md
       - Persisted Queries: api/persisted-queries.md
       - View Mapping: api/view-mapping.md

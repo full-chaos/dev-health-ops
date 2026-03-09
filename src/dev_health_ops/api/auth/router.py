@@ -317,7 +317,7 @@ async def get_current_user_optional(
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=201)
-@limiter.limit(AUTH_REGISTER_LIMIT)
+@limiter.limit(AUTH_REGISTER_LIMIT, key_func=get_auth_key)
 async def register(payload: RegisterRequest, request: Request) -> RegisterResponse:
     from datetime import datetime, timezone
 

@@ -77,35 +77,35 @@ def _sample_data():
 def _patch_queries(monkeypatch, edges, work_items, commits):
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_work_graph_edges",
-        lambda client, repo_ids=None: edges,
+        lambda client, repo_ids=None, **kwargs: edges,
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_work_items",
-        lambda client, work_item_ids: work_items,
+        lambda client, work_item_ids, **kwargs: work_items,
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_work_item_active_hours",
-        lambda client, work_item_ids: {},
+        lambda client, work_item_ids, **kwargs: {},
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_pull_requests",
-        lambda client, repo_numbers: [],
+        lambda client, repo_numbers, **kwargs: [],
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_commits",
-        lambda client, repo_commits: commits,
+        lambda client, repo_commits, **kwargs: commits,
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_commit_churn",
-        lambda client, repo_commits: {f"{commits[0]['repo_id']}@abc123": 10.0},
+        lambda client, repo_commits, **kwargs: {f"{commits[0]['repo_id']}@abc123": 10.0},
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.fetch_parent_titles",
-        lambda client, work_item_ids: {},
+        lambda client, work_item_ids, **kwargs: {},
     )
     monkeypatch.setattr(
         "dev_health_ops.work_graph.investment.materialize.resolve_repo_ids_for_teams",
-        lambda client, team_ids: [],
+        lambda client, team_ids, **kwargs: [],
     )
 
 

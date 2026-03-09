@@ -96,9 +96,24 @@ def _inject_provider_token(provider: str, token: str) -> None:
     env_var = {
         "github": "GITHUB_TOKEN",
         "gitlab": "GITLAB_TOKEN",
+        # Extended provider env var mappings
+        "linear": "LINEAR_API_KEY",
+        "jira": "JIRA_API_TOKEN",
+        "atlassian": "ATLASSIAN_API_TOKEN",
     }.get(provider.lower())
     if env_var and token:
         os.environ[env_var] = token
+
+
+# New helper to extract provider-specific tokens from credentials
+def _extract_provider_token(provider: str, credentials: dict[str, Any]) -> str:
+    provider = provider.lower()
+    if provider == "linear":
+        return str(credentials.get("api_key") or credentials.get("apiKey") or "")
+    if provider == "jira":
+        return str(credentials.get("api_token") or credentials.get("apiToken") or "")
+    # GitHub, GitLab, and others use "token"
+    return str(credentials.get("token") or "")
 
 
 def _resolve_env_credentials(provider: str) -> dict[str, str]:
@@ -396,7 +411,7 @@ def run_sync_config(
             result_payload["backfill_days"] = backfill_days
 
         if "work-items" in sync_targets and provider != "jira":
-            token = str(credentials.get("token") or "")
+            token = _extract_provider_token(provider, credentials)
             if token:
                 _inject_provider_token(provider, token)
             backfill_days = int(sync_options.get("backfill_days", 1))
@@ -950,7 +965,7 @@ def _run_sync_for_repo(
             )
 
         if "work-items" in sync_targets:
-            token = str(credentials.get("token") or "")
+            token = _extract_provider_token(provider, credentials)
             if token:
                 _inject_provider_token(provider, token)
             backfill_days = int(sync_options_override.get("backfill_days", 1))

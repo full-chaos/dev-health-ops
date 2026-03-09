@@ -238,7 +238,7 @@ async def test_expired_invite_rejected(client, session_maker, seeded_state):
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Invalid or expired invite"
+    assert response.json()["detail"]["message"] == "Invalid or expired invite"
 
 
 @pytest.mark.asyncio
@@ -294,4 +294,7 @@ async def test_accepting_as_already_member_returns_error(
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "User is already a member of this organization"
+    assert (
+        response.json()["detail"]["message"]
+        == "User is already a member of this organization"
+    )

@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -56,6 +58,23 @@ async def session_maker(tmp_path: Path):
 async def client(monkeypatch: pytest.MonkeyPatch, session_maker):
     app = FastAPI()
     app.include_router(auth_router_module.router)
+
+    async def _validation_error_handler(request, exc: Exception):
+        if isinstance(exc, RequestValidationError):
+            errors = [str(error.get("msg", "Invalid value")) for error in exc.errors()]
+        else:
+            errors = ["Invalid value"]
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": {
+                    "message": "Validation failed",
+                    "errors": errors,
+                }
+            },
+        )
+
+    app.add_exception_handler(RequestValidationError, _validation_error_handler)
 
     @asynccontextmanager
     async def _session_override():
@@ -229,7 +248,7 @@ async def test_register_duplicate_email_returns_400(client):
         json={"email": "dup@example.com", "password": VALID_PASSWORD},
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "Email already registered"
+    assert response.json()["detail"]["message"] == "Email already registered"
 
 
 @pytest.mark.asyncio
@@ -243,7 +262,7 @@ async def test_register_email_case_insensitive_duplicate_detection(client):
         json={"email": "testcase@example.com", "password": VALID_PASSWORD},
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "Email already registered"
+    assert response.json()["detail"]["message"] == "Email already registered"
 
 
 @pytest.mark.asyncio
@@ -253,6 +272,8 @@ async def test_register_password_too_short_returns_422(client):
         json={"email": "short@example.com", "password": "Short1"},
     )
     assert response.status_code == 422
+    assert response.json()["detail"]["message"] == "Password validation failed"
+    assert response.json()["detail"]["errors"]
 
 
 @pytest.mark.asyncio
@@ -262,6 +283,8 @@ async def test_register_password_no_digits_returns_422(client):
         json={"email": "nodigits@example.com", "password": "NoDigitsPassword!"},
     )
     assert response.status_code == 422
+    assert response.json()["detail"]["message"] == "Password validation failed"
+    assert response.json()["detail"]["errors"]
 
 
 @pytest.mark.asyncio
@@ -271,6 +294,8 @@ async def test_register_invalid_email_format_returns_422(client):
         json={"email": "not-an-email", "password": VALID_PASSWORD},
     )
     assert response.status_code == 422
+    assert response.json()["detail"]["message"] == "Validation failed"
+    assert response.json()["detail"]["errors"]
 
 
 @pytest.mark.asyncio

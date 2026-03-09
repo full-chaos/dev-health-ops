@@ -48,6 +48,7 @@ from dev_health_ops.api.services.refresh_tokens import (
     rotate_token,
 )
 from dev_health_ops.api.utils.audit import emit_audit_log
+from dev_health_ops.api.utils.errors import error_detail
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.api.utils.password_policy import validate_password
 from dev_health_ops.db import get_postgres_session
@@ -221,7 +222,7 @@ async def get_current_user(
     if not authorization:
         raise HTTPException(
             status_code=401,
-            detail="Not authenticated",
+            detail=error_detail("Not authenticated"),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -229,7 +230,7 @@ async def get_current_user(
     if not token:
         raise HTTPException(
             status_code=401,
-            detail="Invalid authorization header",
+            detail=error_detail("Invalid authorization header"),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -239,7 +240,7 @@ async def get_current_user(
     if not user:
         raise HTTPException(
             status_code=401,
-            detail="Invalid or expired token",
+            detail=error_detail("Invalid or expired token"),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -249,7 +250,7 @@ async def get_current_user(
     except ValueError:
         raise HTTPException(
             status_code=401,
-            detail="Invalid user identity",
+            detail=error_detail("Invalid user identity"),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -263,7 +264,7 @@ async def get_current_user(
         logger.warning("JWT valid but user not found in DB: %s", user.user_id)
         raise HTTPException(
             status_code=401,
-            detail="User no longer exists",
+            detail=error_detail("User no longer exists"),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -271,7 +272,7 @@ async def get_current_user(
         logger.warning("JWT valid but user is deactivated: %s", user.user_id)
         raise HTTPException(
             status_code=401,
-            detail="Account is disabled",
+            detail=error_detail("Account is disabled"),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -338,7 +339,9 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
         if password_violations:
             raise HTTPException(
                 status_code=422,
-                detail={"violations": password_violations},
+                detail=error_detail(
+                    "Password validation failed", errors=password_violations
+                ),
             )
 
         stmt = select(User).where(func.lower(User.email) == email_normalized)
@@ -366,7 +369,10 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
                     status="failure",
                     error_message="Email already registered",
                 )
-            raise HTTPException(status_code=400, detail="Email already registered")
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail("Email already registered"),
+            )
 
         password_hash = bcrypt.hashpw(
             payload.password.encode("utf-8"), bcrypt.gensalt()
@@ -457,7 +463,7 @@ async def verify_email(
         if user is None:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid or expired verification token",
+                detail=error_detail("Invalid or expired verification token"),
             )
         await db.commit()
 
@@ -561,7 +567,10 @@ async def reset_password(payload: ResetPasswordRequest) -> VerifyEmailResponse:
     async with get_postgres_session() as db:
         user = await reset_with_token(db, payload.token, payload.new_password)
         if user is None:
-            raise HTTPException(status_code=400, detail="Invalid or expired token")
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail("Invalid or expired token"),
+            )
         await db.commit()
 
     return VerifyEmailResponse(message="Password reset successful")
@@ -617,10 +626,10 @@ async def login(
 
             raise HTTPException(
                 status_code=429,
-                detail={
-                    "message": "Too many failed login attempts. Please try again later.",
-                    "retry_after_seconds": retry_after_seconds,
-                },
+                detail=error_detail(
+                    "Too many failed login attempts. Please try again later.",
+                    retry_after_seconds=retry_after_seconds,
+                ),
             )
 
         primary_org_id: uuid_mod.UUID | None = None
@@ -696,7 +705,10 @@ async def login(
                 logger.warning(
                     "Invalid password for user: %s", sanitize_for_log(payload.email)
                 )
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("Invalid credentials"),
+            )
 
         assert user is not None
         await clear_attempts(db, email_normalized)
@@ -748,7 +760,9 @@ async def login(
             if any_membership_result.first() is not None:
                 raise HTTPException(
                     status_code=401,
-                    detail="User is not a member of the selected organization",
+                    detail=error_detail(
+                        "User is not a member of the selected organization"
+                    ),
                 )
 
         # Update last login
@@ -923,29 +937,42 @@ async def accept_invite(
             user_uuid = uuid_mod.UUID(user.user_id)
         except ValueError as exc:
             raise HTTPException(
-                status_code=401, detail="Invalid user identity"
+                status_code=401,
+                detail=error_detail("Invalid user identity"),
             ) from exc
 
         user_result = await db.execute(select(User).where(User.id == user_uuid))
         db_user = user_result.scalar_one_or_none()
         if db_user is None:
-            raise HTTPException(status_code=401, detail="User not found")
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("User not found"),
+            )
 
         invite = await validate_org_invite(db, payload.token)
         if invite is None:
-            raise HTTPException(status_code=400, detail="Invalid or expired invite")
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail("Invalid or expired invite"),
+            )
 
         org_result = await db.execute(
             select(Organization).where(Organization.id == invite.org_id)
         )
         org = org_result.scalar_one_or_none()
         if org is None:
-            raise HTTPException(status_code=404, detail="Organization not found")
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail("Organization not found"),
+            )
 
         try:
             membership = await accept_org_invite(db, invite, db_user.id)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(str(exc)),
+            ) from exc
 
         emit_audit_log(
             db,
@@ -990,39 +1017,58 @@ async def onboard(
             user_uuid = uuid_mod.UUID(user.user_id)
         except ValueError as exc:
             raise HTTPException(
-                status_code=401, detail="Invalid user identity"
+                status_code=401,
+                detail=error_detail("Invalid user identity"),
             ) from exc
 
         user_result = await db.execute(select(User).where(User.id == user_uuid))
         db_user = user_result.scalar_one_or_none()
         if not db_user:
-            raise HTTPException(status_code=401, detail="User not found")
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("User not found"),
+            )
 
         membership_result = await db.execute(
             select(Membership.id).where(Membership.user_id == db_user.id)
         )
         if membership_result.first() is not None:
-            raise HTTPException(status_code=400, detail="Already onboarded")
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail("Already onboarded"),
+            )
 
         if payload.action == "join_org":
             if not payload.invite_code:
-                raise HTTPException(status_code=400, detail="invite_code is required")
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_detail("invite_code is required"),
+                )
 
             invite = await validate_org_invite(db, payload.invite_code)
             if invite is None:
-                raise HTTPException(status_code=400, detail="Invalid or expired invite")
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_detail("Invalid or expired invite"),
+                )
 
             org_result = await db.execute(
                 select(Organization).where(Organization.id == invite.org_id)
             )
             org = org_result.scalar_one_or_none()
             if org is None:
-                raise HTTPException(status_code=404, detail="Organization not found")
+                raise HTTPException(
+                    status_code=404,
+                    detail=error_detail("Organization not found"),
+                )
 
             try:
                 membership = await accept_org_invite(db, invite, db_user.id)
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_detail(str(exc)),
+                ) from exc
 
             emit_audit_log(
                 db,
@@ -1058,7 +1104,7 @@ async def onboard(
         if payload.action != "create_org":
             raise HTTPException(
                 status_code=400,
-                detail="Invalid action. Use 'create_org' or 'join_org'",
+                detail=error_detail("Invalid action. Use 'create_org' or 'join_org'"),
             )
 
         org_name = payload.org_name or "My Organization"
@@ -1161,24 +1207,34 @@ async def refresh_token(
                         error_message="Invalid or expired refresh token",
                     )
                     await db.commit()
-        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("Invalid or expired refresh token"),
+        )
 
     user_id = str(refresh_payload["sub"])
     org_id = str(refresh_payload.get("org_id", ""))
     token_jti = refresh_payload.get("jti")
     if not token_jti:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail("Invalid refresh token"),
+        )
 
     async with get_postgres_session() as db:
         token_record = await find_by_hash(db, str(token_jti))
         if token_record is None:
             raise HTTPException(
-                status_code=401, detail="Invalid or expired refresh token"
+                status_code=401,
+                detail=error_detail("Invalid or expired refresh token"),
             )
 
         if token_record.revoked_at is not None:
             await revoke_family(db, str(token_record.family_id))
-            raise HTTPException(status_code=401, detail="Refresh token reuse detected")
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("Refresh token reuse detected"),
+            )
 
         user_result = await db.execute(
             select(User).where(User.id == uuid_mod.UUID(user_id))
@@ -1199,7 +1255,10 @@ async def refresh_token(
                     error_message="User not found",
                 )
                 await db.commit()
-            raise HTTPException(status_code=401, detail="User not found")
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("User not found"),
+            )
 
         role = "member"
         if org_id:
@@ -1223,13 +1282,15 @@ async def refresh_token(
         )
         if not new_refresh_payload or not new_refresh_payload.get("jti"):
             raise HTTPException(
-                status_code=401, detail="Unable to rotate refresh token"
+                status_code=401,
+                detail=error_detail("Unable to rotate refresh token"),
             )
 
         new_expires_at = _expiry_to_utc(new_refresh_payload.get("exp"))
         if new_expires_at is None:
             raise HTTPException(
-                status_code=401, detail="Unable to rotate refresh token"
+                status_code=401,
+                detail=error_detail("Unable to rotate refresh token"),
             )
 
         rotated = await rotate_token(
@@ -1239,7 +1300,10 @@ async def refresh_token(
             new_expires_at=new_expires_at,
         )
         if rotated is None:
-            raise HTTPException(status_code=401, detail="Invalid refresh token")
+            raise HTTPException(
+                status_code=401,
+                detail=error_detail("Invalid refresh token"),
+            )
 
         parsed_org_id = _parse_uuid(org_id)
         if parsed_org_id is not None:

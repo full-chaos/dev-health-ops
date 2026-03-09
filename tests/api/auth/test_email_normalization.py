@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from dev_health_ops.api.auth.router import router
+from dev_health_ops.api.middleware.rate_limit import limiter as rate_limiter
 
 
 @pytest.fixture
@@ -19,6 +20,11 @@ def app():
     _app = FastAPI()
     _app.include_router(router)
     return _app
+
+
+@pytest.fixture(autouse=True)
+def disable_rate_limit(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(rate_limiter, "enabled", False)
 
 
 def _mock_session(*, scalar_return=None, flush_side_effect=None):
@@ -123,7 +129,7 @@ async def test_register_detects_existing_user_case_insensitive(app):
                 },
             )
             assert resp.status_code == 400
-            assert "already registered" in resp.json()["detail"].lower()
+            assert "already registered" in resp.json()["detail"]["message"].lower()
 
 
 # ---------------------------------------------------------------------------

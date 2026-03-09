@@ -11,9 +11,9 @@ from typing import Literal, cast
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
@@ -319,8 +319,30 @@ app = FastAPI(
 
 def _rate_limit_handler(request: Request, exc: Exception):
     if isinstance(exc, RateLimitExceeded):
-        return _rate_limit_exceeded_handler(request, exc)
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": {
+                    "message": "Rate limit exceeded. Please try again later.",
+                }
+            },
+        )
     raise exc
+
+
+def _validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    errors = [str(error.get("msg", "Invalid value")) for error in exc.errors()]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {
+                "message": "Validation failed",
+                "errors": errors,
+            }
+        },
+    )
 
 
 app.state.limiter = limiter
@@ -328,6 +350,7 @@ app.add_exception_handler(
     RateLimitExceeded,
     _rate_limit_handler,
 )
+app.add_exception_handler(RequestValidationError, _validation_error_handler)
 
 _cors_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 _cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
@@ -403,7 +426,7 @@ async def health() -> HealthResponse | JSONResponse:
     )
 
     for result in results:
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             services["unknown"] = "error"
             required_statuses.append("error")
         else:

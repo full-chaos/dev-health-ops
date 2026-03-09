@@ -251,7 +251,7 @@ async def test_onboard_when_already_onboarded_returns_400(monkeypatch):
     app.dependency_overrides.clear()
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Already onboarded"
+    assert response.json()["detail"]["message"] == "Already onboarded"
 
 
 @pytest.mark.asyncio

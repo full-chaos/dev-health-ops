@@ -70,7 +70,7 @@ async def test_get_current_user_rejects_nonexistent_user(auth_service):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(authorization=header)
         assert exc_info.value.status_code == 401
-        assert "no longer exists" in exc_info.value.detail
+        assert "no longer exists" in exc_info.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -101,7 +101,7 @@ async def test_get_current_user_rejects_inactive_user(auth_service):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(authorization=header)
         assert exc_info.value.status_code == 401
-        assert "disabled" in exc_info.value.detail
+        assert "disabled" in exc_info.value.detail["message"]
 
 
 @pytest.mark.asyncio

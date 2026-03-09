@@ -198,7 +198,7 @@ async def test_reset_password_invalid_token_returns_400(client):
         json={"token": "not-a-valid-token", "new_password": "NewPass@123"},
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "Invalid or expired token"
+    assert response.json()["detail"]["message"] == "Invalid or expired token"
 
 
 @pytest.mark.asyncio
@@ -219,4 +219,4 @@ async def test_reset_password_expired_token_returns_400(
         json={"token": token, "new_password": "NewPass@123"},
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "Invalid or expired token"
+    assert response.json()["detail"]["message"] == "Invalid or expired token"

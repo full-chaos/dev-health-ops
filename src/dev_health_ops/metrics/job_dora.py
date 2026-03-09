@@ -131,6 +131,7 @@ def run_dora_metrics_job(
             primary_sink=primary_sink,
             repo_id=repo_id,
             repo_name=repo_name,
+            org_id=org_id,
         )
 
         allow_unknown = repo_id is not None or repo_name is not None

@@ -58,14 +58,10 @@ def discover_repos(
     primary_sink: Any,
     repo_id: uuid.UUID | None = None,
     repo_name: str | None = None,
+    org_id: str = "",
 ) -> list[Any]:
     """Discover repositories from the database."""
     from dev_health_ops.metrics.work_items import DiscoveredRepo
-
-    # This is a simplified version of the original discovery logic
-    # In a real implementation, this would query the 'repos' table via the sink/backend
-    # For now, we'll delegate to the primary_sink's store if possible,
-    # or implement enough logic to satisfy typical usage.
 
     # If a specific repo is requested, return just that one
     if repo_id:
@@ -78,11 +74,14 @@ def discover_repos(
             )
         ]
 
-    # Fallback: query all repos from ClickHouse
+    # Query repos from ClickHouse, scoped by org_id
     try:
-        rows = primary_sink.client.query(
-            "SELECT id, repo, settings FROM repos"
-        ).result_rows
+        query = "SELECT id, repo, settings FROM repos"
+        params: dict[str, str] = {}
+        if org_id:
+            query += " WHERE org_id = {org_id:String}"
+            params["org_id"] = org_id
+        rows = primary_sink.client.query(query, parameters=params).result_rows
         return [
             DiscoveredRepo(
                 repo_id=uuid.UUID(str(r[0])),
@@ -192,6 +191,7 @@ async def run_daily_metrics_job(
             primary_sink=primary_sink,
             repo_id=repo_id,
             repo_name=repo_name,
+            org_id=org_id,
         )
     }
 
@@ -465,10 +465,15 @@ async def run_daily_metrics_finalize(
         um_field_names = {f.name for f in _dc.fields(UserMetricsDailyRecord)}
         wi_field_names = {f.name for f in _dc.fields(WorkItemUserMetricsDailyRecord)}
 
+        um_query = "SELECT * FROM user_metrics_daily WHERE day = {day:Date}"
+        um_params: dict[str, Any] = {"day": day}
+        if org_id:
+            um_query += " AND org_id = {org_id:String}"
+            um_params["org_id"] = org_id
         um_rows = clickhouse_query_dicts(
             ch_client,
-            "SELECT * FROM user_metrics_daily WHERE day = {day:Date}",
-            {"day": day},
+            um_query,
+            um_params,
         )
         for row in um_rows:
             try:
@@ -480,10 +485,15 @@ async def run_daily_metrics_finalize(
             except Exception:
                 logger.debug("Skipping malformed user_metrics row: %s", row)
 
+        wi_query = "SELECT * FROM work_item_user_metrics_daily WHERE day = {day:Date}"
+        wi_params: dict[str, Any] = {"day": day}
+        if org_id:
+            wi_query += " AND org_id = {org_id:String}"
+            wi_params["org_id"] = org_id
         wi_rows = clickhouse_query_dicts(
             ch_client,
-            "SELECT * FROM work_item_user_metrics_daily WHERE day = {day:Date}",
-            {"day": day},
+            wi_query,
+            wi_params,
         )
         for row in wi_rows:
             try:

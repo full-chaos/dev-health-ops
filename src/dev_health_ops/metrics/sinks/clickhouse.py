@@ -117,8 +117,13 @@ class ClickHouseMetricsSink(BaseMetricsSink):
 
     async def get_all_teams(self) -> list[dict[str, Any]]:
         """Fetch all teams from ClickHouse for identity resolution."""
+        _org_id = getattr(self, "org_id", None) or ""
         query = "SELECT id, name, members, project_keys, repo_patterns FROM teams FINAL"
-        result = await asyncio.to_thread(self.client.query, query)
+        params: dict[str, str] = {}
+        if _org_id:
+            query += " WHERE org_id = {org_id:String}"
+            params["org_id"] = _org_id
+        result = await asyncio.to_thread(self.client.query, query, parameters=params)
         teams: list[dict[str, Any]] = []
         for row in result.result_rows or []:
             teams.append(

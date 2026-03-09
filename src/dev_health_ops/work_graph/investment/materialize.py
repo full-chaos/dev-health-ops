@@ -279,11 +279,12 @@ def _resolve_repo_ids(
     sink: BaseMetricsSink,
     repo_ids: list[str] | None,
     team_ids: list[str] | None,
+    config_org_id: str = "",
 ) -> list[str] | None:
     if repo_ids:
         return repo_ids
     if team_ids:
-        return resolve_repo_ids_for_teams(sink, team_ids=team_ids)
+        return resolve_repo_ids_for_teams(sink, team_ids=team_ids, org_id=config_org_id)
     return None
 
 
@@ -296,8 +297,12 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
         # Initialize LLM provider once (reusing connection pool)
         provider_instance = get_provider(config.llm_provider, model=config.llm_model)
 
-        repo_ids = _resolve_repo_ids(sink, config.repo_ids, config.team_ids)
-        edges = fetch_work_graph_edges(sink, repo_ids=repo_ids)
+        repo_ids = _resolve_repo_ids(
+            sink, config.repo_ids, config.team_ids, config_org_id=config.org_id or ""
+        )
+        edges = fetch_work_graph_edges(
+            sink, repo_ids=repo_ids, org_id=config.org_id or ""
+        )
         components = _build_components(edges)
         if not components:
             logger.info(
@@ -321,13 +326,23 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             if node_type == "commit"
         }
 
-        work_items = fetch_work_items(sink, work_item_ids=issue_ids)
-        active_hours = fetch_work_item_active_hours(sink, work_item_ids=issue_ids)
+        work_items = fetch_work_items(
+            sink, work_item_ids=issue_ids, org_id=config.org_id or ""
+        )
+        active_hours = fetch_work_item_active_hours(
+            sink, work_item_ids=issue_ids, org_id=config.org_id or ""
+        )
         repo_prs = _group_prs_by_repo(pr_ids)
-        prs = fetch_pull_requests(sink, repo_numbers=repo_prs)
+        prs = fetch_pull_requests(
+            sink, repo_numbers=repo_prs, org_id=config.org_id or ""
+        )
         repo_commits = _group_commits_by_repo(commit_ids)
-        commits = fetch_commits(sink, repo_commits=repo_commits)
-        commit_churn = fetch_commit_churn(sink, repo_commits=repo_commits)
+        commits = fetch_commits(
+            sink, repo_commits=repo_commits, org_id=config.org_id or ""
+        )
+        commit_churn = fetch_commit_churn(
+            sink, repo_commits=repo_commits, org_id=config.org_id or ""
+        )
 
         work_item_map = {str(item.get("work_item_id")): item for item in work_items}
         pr_map = _map_prs(prs)
@@ -342,8 +357,12 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
         epic_ids = {
             str(item.get("epic_id") or "") for item in work_items if item.get("epic_id")
         }
-        parent_titles = fetch_parent_titles(sink, work_item_ids=parent_ids)
-        epic_titles = fetch_parent_titles(sink, work_item_ids=epic_ids)
+        parent_titles = fetch_parent_titles(
+            sink, work_item_ids=parent_ids, org_id=config.org_id or ""
+        )
+        epic_titles = fetch_parent_titles(
+            sink, work_item_ids=epic_ids, org_id=config.org_id or ""
+        )
 
         records: list[WorkUnitInvestmentRecord] = []
         quote_records: list[WorkUnitInvestmentEvidenceQuoteRecord] = []

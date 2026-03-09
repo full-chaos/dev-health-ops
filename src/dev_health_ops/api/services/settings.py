@@ -222,6 +222,43 @@ class IntegrationCredentialsService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_id(self, credential_id: str) -> IntegrationCredential | None:
+        """Get an integration credential by its UUID primary key."""
+        import uuid as uuid_module
+
+        try:
+            cred_uuid = uuid_module.UUID(credential_id)
+        except (ValueError, AttributeError):
+            return None
+        stmt = select(IntegrationCredential).where(
+            IntegrationCredential.org_id == self.org_id,
+            IntegrationCredential.id == cred_uuid,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_decrypted_credentials_by_id(
+        self,
+        credential_id: str,
+    ) -> tuple[dict[str, Any] | None, IntegrationCredential | None]:
+        """Get credentials as a decrypted dictionary, looked up by ID.
+
+        Returns (decrypted_dict, credential_record) tuple.
+        """
+        cred = await self.get_by_id(credential_id)
+        if cred is None or not cred.credentials_encrypted:
+            return None, cred
+
+        try:
+            decrypted = decrypt_value(cred.credentials_encrypted)
+            return json.loads(decrypted), cred
+        except (ValueError, json.JSONDecodeError):
+            logger.error(
+                "Failed to decrypt/parse integration config for id=%s",
+                sanitize_for_log(str(credential_id)),
+            )
+            return None, cred
+
     async def get_decrypted_credentials(
         self,
         provider: str,

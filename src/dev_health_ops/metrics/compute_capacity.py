@@ -367,6 +367,7 @@ async def load_throughput_history_clickhouse(
     team_id: str | None = None,
     work_scope_id: str | None = None,
     history_days: int = 90,
+    org_id: str = "",
 ) -> ThroughputHistory:
     """Load throughput history from ClickHouse.
 
@@ -382,6 +383,9 @@ async def load_throughput_history_clickhouse(
     conditions = [f"day >= today() - {history_days}"]
     params = {}
 
+    if org_id:
+        conditions.append("org_id = {org_id:String}")
+        params["org_id"] = org_id
     if team_id:
         conditions.append("team_id = {team_id:String}")
         params["team_id"] = team_id
@@ -502,6 +506,7 @@ async def get_backlog_size_clickhouse(
     client: clickhouse_connect.driver.Client,
     team_id: str | None = None,
     work_scope_id: str | None = None,
+    org_id: str = "",
 ) -> int:
     """Query current backlog size from ClickHouse.
 
@@ -518,6 +523,9 @@ async def get_backlog_size_clickhouse(
     conditions = ["status NOT IN ('done', 'closed', 'cancelled', 'resolved')"]
     params = {}
 
+    if org_id:
+        conditions.append("org_id = {org_id:String}")
+        params["org_id"] = org_id
     if team_id:
         conditions.append("team_id = {team_id:String}")
         params["team_id"] = team_id

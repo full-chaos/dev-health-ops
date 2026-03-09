@@ -77,7 +77,11 @@ class ClickHouseDataLoader(DataLoader):
             repo_filter = " AND c.repo_id = {repo_id:UUID}"
         elif repo_name is not None:
             params["repo_name"] = repo_name
-            repo_filter = " AND c.repo_id IN (SELECT id FROM repos WHERE repo = {repo_name:String})"
+            repo_filter = (
+                " AND c.repo_id IN (SELECT id FROM repos WHERE repo = {repo_name:String}"
+                + (" AND org_id = {org_id:String}" if self.org_id else "")
+                + ")"
+            )
 
         org_filter_c = self._org_filter(alias="c")
         org_filter = self._org_filter()

@@ -70,6 +70,7 @@ class BuildConfig:
     repo_id: uuid.UUID | None = None
     heuristic_days_window: int = 7
     heuristic_confidence: float = 0.3
+    org_id: str = ""
 
 
 class WorkGraphBuilder:
@@ -102,6 +103,12 @@ class WorkGraphBuilder:
     def close(self) -> None:
         """Close connections."""
         self.sink.close()
+
+    def _org_id_clause(self, *, alias: str = "") -> str:
+        if not self.config.org_id:
+            return ""
+        qualifier = f"{alias}." if alias else ""
+        return f"AND {qualifier}org_id = '{self.config.org_id}'"
 
     def _edge_to_record(self, edge: WorkGraphEdge) -> WorkGraphEdgeRecord:
         """Convert WorkGraphEdge to WorkGraphEdgeRecord for sink."""
@@ -233,6 +240,9 @@ class WorkGraphBuilder:
             last_synced
         FROM work_item_dependencies
         """
+        org_id_clause = self._org_id_clause()
+        if org_id_clause:
+            query += f" WHERE 1=1 {org_id_clause}"
 
         rows = self.sink.query_dicts(query, {})
         logger.info("Found %d rows in work_item_dependencies", len(rows))
@@ -329,6 +339,8 @@ class WorkGraphBuilder:
             )
         if self.config.repo_id:
             where_clauses.append(f"repo_id = '{self.config.repo_id}'")
+        if self.config.org_id:
+            where_clauses.append(f"org_id = '{self.config.org_id}'")
 
         if where_clauses:
             pr_query += " WHERE " + " AND ".join(where_clauses)
@@ -350,6 +362,8 @@ class WorkGraphBuilder:
             project_id
         FROM work_items
         """
+        if self.config.org_id:
+            wi_query += f" WHERE org_id = '{self.config.org_id}'"
         wi_rows = self.sink.query_dicts(wi_query, {})
         logger.info("Found %d work items for lookup", len(wi_rows))
 
@@ -623,6 +637,8 @@ class WorkGraphBuilder:
             )
         if self.config.repo_id:
             where_clauses.append(f"repo_id = '{self.config.repo_id}'")
+        if self.config.org_id:
+            where_clauses.append(f"org_id = '{self.config.org_id}'")
 
         if where_clauses:
             commit_query += " AND " + " AND ".join(where_clauses)
@@ -642,6 +658,8 @@ class WorkGraphBuilder:
             project_id
         FROM work_items
         """
+        if self.config.org_id:
+            wi_query += f" WHERE org_id = '{self.config.org_id}'"
         wi_rows = self.sink.query_dicts(wi_query, {})
 
         jira_key_lookup: dict[str, str] = {}
@@ -864,6 +882,9 @@ class WorkGraphBuilder:
         FROM work_items
         WHERE repo_id IS NOT NULL
         """
+        org_id_clause = self._org_id_clause()
+        if org_id_clause:
+            wi_query += f" {org_id_clause}"
         if self.config.from_date:
             wi_query += f" AND updated_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
         if self.config.to_date:
@@ -895,6 +916,8 @@ class WorkGraphBuilder:
             )
         if self.config.repo_id:
             where_clauses.append(f"repo_id = '{self.config.repo_id}'")
+        if self.config.org_id:
+            where_clauses.append(f"org_id = '{self.config.org_id}'")
 
         if where_clauses:
             pr_query += " WHERE " + " AND ".join(where_clauses)
@@ -1047,6 +1070,8 @@ class WorkGraphBuilder:
         where_parts: list[str] = []
         if self.config.repo_id:
             where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
+        if self.config.org_id:
+            where_parts.append(f"p.org_id = '{self.config.org_id}'")
         if self.config.from_date:
             where_parts.append(
                 f"pr.created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
@@ -1137,6 +1162,8 @@ class WorkGraphBuilder:
         where_parts: list[str] = []
         if self.config.repo_id:
             where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
+        if self.config.org_id:
+            where_parts.append(f"p.org_id = '{self.config.org_id}'")
         if self.config.from_date:
             where_parts.append(
                 f"c.author_when >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
@@ -1210,6 +1237,9 @@ class WorkGraphBuilder:
         # View work_graph_commit_file is specific to ClickHouse.
         # For others, we count git_commit_stats rows.
         query = "SELECT count(*) AS total FROM git_commit_stats"
+        org_id_clause = self._org_id_clause()
+        if org_id_clause:
+            query += f" WHERE 1=1 {org_id_clause}"
         try:
             rows = self.sink.query_dicts(query, {})
             count = rows[0].get("total") if rows else 0
@@ -1262,6 +1292,13 @@ Examples:
         help="Repository UUID to filter by",
     )
     parser.add_argument(
+        "--org-id",
+        dest="org_id",
+        type=str,
+        default="",
+        help="Organization ID to filter by",
+    )
+    parser.add_argument(
         "--heuristic-window",
         type=int,
         default=7,
@@ -1308,6 +1345,7 @@ Examples:
         repo_id=repo_uuid,
         heuristic_days_window=args.heuristic_window,
         heuristic_confidence=args.heuristic_confidence,
+        org_id=args.org_id,
     )
 
     builder = WorkGraphBuilder(config)

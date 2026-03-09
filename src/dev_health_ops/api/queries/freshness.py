@@ -11,7 +11,7 @@ async def fetch_last_ingested_at(
     sink: BaseMetricsSink, org_id: str = ""
 ) -> datetime | None:
     query = """
-        SELECT max(computed_at) AS last_ingested_at
+        SELECT maxOrNull(computed_at) AS last_ingested_at
         FROM repo_metrics_daily
         WHERE org_id = %(org_id)s
     """

@@ -220,7 +220,8 @@ def get_email_service() -> EmailService:
             port=int(os.getenv("SMTP_PORT", "1025")),
             username=os.getenv("SMTP_USERNAME", "").strip() or None,
             password=os.getenv("SMTP_PASSWORD", "").strip() or None,
-            use_tls=os.getenv("SMTP_USE_TLS", "false").strip().lower() in ("true", "1", "yes"),
+            use_tls=os.getenv("SMTP_USE_TLS", "false").strip().lower()
+            in ("true", "1", "yes"),
         )
     elif provider_name == "console":
         provider = ConsoleEmailProvider()

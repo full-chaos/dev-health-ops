@@ -702,6 +702,32 @@ class TeamDiscoveryService:
 
         return await asyncio.to_thread(_discover)
 
+    async def discover_linear(self, api_key: str) -> list[DiscoveredTeam]:
+        """Discover teams from Linear workspace."""
+
+        def _discover() -> list[DiscoveredTeam]:
+            from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+
+            DiscoveredTeam = _get_discovered_team_cls()
+            client = LinearClient(auth=LinearAuth(api_key=api_key))
+            try:
+                teams: list[DiscoveredTeam] = []
+                for team in client.iter_teams():
+                    teams.append(
+                        DiscoveredTeam(
+                            provider_type="linear",
+                            provider_team_id=team["key"],
+                            name=team["name"],
+                            description=team.get("description"),
+                            associations={"provider_org": "linear"},
+                        )
+                    )
+                return teams
+            finally:
+                client.close()
+
+        return await asyncio.to_thread(_discover)
+
     async def discover_gitlab(
         self,
         token: str,

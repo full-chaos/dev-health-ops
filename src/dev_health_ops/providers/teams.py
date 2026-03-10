@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.models.teams import Team
 
 DEFAULT_TEAM_MAPPING_PATH = Path("src/dev_health_ops/config/team_mapping.yaml")
 
@@ -228,7 +229,6 @@ def sync_teams(ns: argparse.Namespace) -> int:
     import asyncio
     import logging
 
-    from dev_health_ops.models.teams import Team
     from dev_health_ops.storage import resolve_db_type, run_with_store
 
     provider = (ns.provider or "config").lower()
@@ -449,6 +449,53 @@ def sync_teams(ns: argparse.Namespace) -> int:
             logging.error(f"Failed to fetch GitLab teams: {e}")
             return 1
 
+    elif provider == "linear":
+        from dev_health_ops.providers.linear.client import LinearClient
+
+        try:
+            client = LinearClient.from_env()
+        except ValueError as e:
+            logging.error(f"Linear configuration error: {e}")
+            return 1
+        try:
+            logging.info("Fetching teams from Linear...")
+            for t in client.iter_teams():
+                if t.get("archivedAt"):
+                    continue
+                team_key = t.get("key")
+                if not team_key:
+                    continue
+                team_id = f"linear:{team_key}"
+                name = t.get("name")
+                description = t.get("description")
+                members_nodes = (t.get("members", {}) or {}).get("nodes", [])
+                if t.get("members", {}).get("pageInfo", {}).get("hasNextPage"):
+                    try:
+                        full_members = client.get_team_members(t.get("id"))
+                    except Exception:
+                        full_members = members_nodes
+                    members_source = full_members
+                else:
+                    members_source = members_nodes
+                members = [
+                    (m.get("email") or m.get("name", "")) for m in members_source
+                ]
+                members = [m for m in members if m]
+                teams_data.append(
+                    Team(
+                        id=team_id, name=name, description=description, members=members
+                    )
+                )
+            logging.info(f"Fetched {len(teams_data)} teams from Linear.")
+        except Exception as e:
+            logging.error(f"Failed to fetch Linear teams: {e}")
+            return 1
+        finally:
+            if hasattr(client, "close"):
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001 — best-effort close, ignore errors
+                    pass
     elif provider == "ms-teams":
         from dev_health_ops.connectors.teams import TeamsConnector
 
@@ -582,6 +629,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
             "jira",
             "jira-ops",
             "synthetic",
+            "linear",
             "ms-teams",
             "github",
             "gitlab",

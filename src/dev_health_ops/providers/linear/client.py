@@ -94,10 +94,41 @@ query Teams($first: Int!, $after: String) {
       createdAt
       updatedAt
       timezone
+      members(first: 100) {
+        nodes {
+          id
+          name
+          email
+          active
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
     }
     pageInfo {
       hasNextPage
       endCursor
+    }
+  }
+}
+"""
+
+TEAM_MEMBERS_QUERY = """
+query TeamMembers($teamId: String!, $first: Int!, $after: String) {
+  team(id: $teamId) {
+    members(first: $first, after: $after) {
+      nodes {
+        id
+        name
+        email
+        active
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
     }
   }
 }
@@ -432,6 +463,34 @@ class LinearClient:
             if not page_info.get("hasNextPage"):
                 break
             cursor = page_info.get("endCursor")
+
+    def get_team_members(
+        self,
+        team_id: str,
+    ) -> list[dict[str, Any]]:
+        """Fetch all active members for a team, with pagination for teams >100 members."""
+        cursor: str | None = None
+        members: list[dict[str, Any]] = []
+
+        while True:
+            variables: dict[str, Any] = {
+                "teamId": team_id,
+                "first": self.per_page,
+                "after": cursor,
+            }
+            data = self._execute(TEAM_MEMBERS_QUERY, variables)  # type: ignore[arg-type]
+            team_data = data.get("team", {})
+            members_data = team_data.get("members", {})
+            nodes = members_data.get("nodes", [])
+            # Filter out inactive users
+            members.extend([m for m in nodes if m.get("active", True)])
+
+            page_info = members_data.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+
+        return members
 
     def iter_cycles(
         self,

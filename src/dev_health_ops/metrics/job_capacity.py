@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -175,6 +176,7 @@ async def run_capacity_forecast(
 ) -> list[ForecastResult]:
     sink = create_sink(db_url)
     try:
+        sink.org_id = org_id  # type: ignore[attr-defined]
         logger.info("Running capacity forecast for org_id=%s", org_id)
         results: list[ForecastResult] = []
 
@@ -221,7 +223,10 @@ async def run_capacity_forecast(
                 logger.warning(f"High throughput variance detected for team={tid}")
 
         if persist and results:
-            records = [_result_to_record(r) for r in results]
+            records = [
+                replace(r, org_id=org_id)
+                for r in (_result_to_record(r) for r in results)
+            ]
             sink.write_capacity_forecasts(records)
             logger.info(f"Persisted {len(records)} forecast(s)")
 

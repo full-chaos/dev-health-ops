@@ -220,6 +220,7 @@ def run_complexity_db_job(
     sink = ClickHouseMetricsSink(resolved_db_url)
     try:
         sink.ensure_tables()
+        sink.org_id = org_id  # type: ignore[attr-defined]
 
         scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
         if language_globs:

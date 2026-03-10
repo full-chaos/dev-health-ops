@@ -116,6 +116,8 @@ def run_dora_metrics_job(
     primary_sink = ClickHouseMetricsSink(db_url)
 
     sinks: list[Any] = [primary_sink]
+    for s in sinks:
+        s.org_id = org_id  # type: ignore[attr-defined]
 
     connector = GitLabConnector(url=gitlab_url, private_token=token)
 

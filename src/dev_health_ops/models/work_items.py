@@ -77,6 +77,7 @@ class WorkItem:
     priority_raw: str | None = None
     service_class: str | None = None
     due_at: datetime | None = None
+    org_id: str = ""
 
     @property
     def work_scope_id(self) -> str:
@@ -113,6 +114,7 @@ class WorkItemStatusTransition:
     from_status: WorkItemStatusCategory
     to_status: WorkItemStatusCategory
     actor: str | None = None  # canonical identity when resolvable
+    org_id: str = ""
 
 
 @dataclass(frozen=True)

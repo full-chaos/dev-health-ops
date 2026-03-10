@@ -1,7 +1,7 @@
 import importlib.util
 import os
 
-from dev_health_ops.utils.datetime import naive_utc, to_utc
+from dev_health_ops.utils.datetime import naive_utc, to_utc, utc_today
 
 _legacy_utils_path = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "utils.py"
@@ -32,6 +32,7 @@ _split_full_name = _legacy_utils._split_full_name
 __all__ = [
     "naive_utc",
     "to_utc",
+    "utc_today",
     "REPO_ROOT",
     "BATCH_SIZE",
     "MAX_WORKERS",

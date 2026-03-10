@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.utils.datetime import utc_today
 
 from ..models.schemas import (
     CollaborationItem,
@@ -232,7 +233,7 @@ def _metric_config(metric: str) -> dict[str, Any]:
 
 
 def _time_window(range_days: int, compare_days: int) -> tuple[date, date, date, date]:
-    end_day = date.today() + timedelta(days=1)
+    end_day = utc_today() + timedelta(days=1)
     range_days = max(1, range_days)
     compare_days = max(1, compare_days)
     start_day = end_day - timedelta(days=range_days)
@@ -404,7 +405,7 @@ async def search_people_response(
         )
 
     results: list[PersonSearchResult] = []
-    today = date.today()
+    today = utc_today()
     for row in rows:
         identity = str(row.get("identity_id") or "").strip()
         if not identity:

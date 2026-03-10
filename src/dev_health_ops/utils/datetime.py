@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import overload
 
 
@@ -26,3 +26,8 @@ def naive_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def utc_today() -> date:
+    """Return the current date in UTC, independent of container timezone."""
+    return datetime.now(timezone.utc).date()

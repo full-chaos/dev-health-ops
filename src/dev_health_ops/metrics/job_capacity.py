@@ -15,6 +15,7 @@ from dev_health_ops.metrics.compute_capacity import (
 )
 from dev_health_ops.metrics.schemas import CapacityForecastRecord
 from dev_health_ops.metrics.sinks.factory import create_sink
+from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ async def load_throughput_from_sink(
     history_days: int = 90,
 ) -> ThroughputHistory:
     backend = sink.backend_type
-    start_date = date.today() - timedelta(days=history_days)
+    start_date = utc_today() - timedelta(days=history_days)
 
     conditions = [f"day >= '{start_date.isoformat()}'"]
     params = {}

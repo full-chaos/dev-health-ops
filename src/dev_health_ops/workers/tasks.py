@@ -18,6 +18,7 @@ from typing import Any
 
 from celery import chord, group
 
+from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 
@@ -403,7 +404,7 @@ def run_sync_config(
             backfill_days = int(sync_options.get("backfill_days", 1))
             run_work_items_sync_job(
                 db_url=db_url,
-                day=date.today(),
+                day=utc_today(),
                 backfill_days=backfill_days,
                 provider="jira",
                 org_id=org_id,
@@ -417,7 +418,7 @@ def run_sync_config(
             backfill_days = int(sync_options.get("backfill_days", 1))
             run_work_items_sync_job(
                 db_url=db_url,
-                day=date.today(),
+                day=utc_today(),
                 backfill_days=backfill_days,
                 provider=provider,
                 repo_name=sync_options.get("repo"),
@@ -971,7 +972,7 @@ def _run_sync_for_repo(
             backfill_days = int(sync_options_override.get("backfill_days", 1))
             run_work_items_sync_job(
                 db_url=db_url,
-                day=date.today(),
+                day=utc_today(),
                 backfill_days=backfill_days,
                 provider=provider,
                 repo_name=sync_options_override.get("repo"),
@@ -1170,7 +1171,7 @@ def run_daily_metrics(
     from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 
     db_url = db_url or _get_db_url()
-    target_day = date.fromisoformat(day) if day else date.today()
+    target_day = date.fromisoformat(day) if day else utc_today()
     parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
 
     logger.info(
@@ -1240,7 +1241,7 @@ def dispatch_daily_metrics_partitioned(
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
     db_url = db_url or _get_db_url()
-    target_day = date.fromisoformat(day) if day else date.today()
+    target_day = date.fromisoformat(day) if day else utc_today()
 
     logger.info(
         "dispatch_daily_metrics_partitioned: day=%s backfill=%d batch_size=%d",
@@ -1572,7 +1573,7 @@ def run_complexity_job(
     from dev_health_ops.metrics.job_complexity_db import run_complexity_db_job
 
     db_url = db_url or _get_db_url()
-    target_day = date.fromisoformat(day) if day else date.today()
+    target_day = date.fromisoformat(day) if day else utc_today()
     parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
 
     logger.info(
@@ -1847,7 +1848,7 @@ def run_dora_metrics(
     from dev_health_ops.metrics.job_dora import run_dora_metrics_job
 
     db_url = db_url or _get_db_url()
-    target_day = date.fromisoformat(day) if day else date.today()
+    target_day = date.fromisoformat(day) if day else utc_today()
     parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
 
     logger.info(
@@ -2499,7 +2500,7 @@ def _process_jira_event(
         # the specific issue key.
         run_work_items_sync_job(
             db_url=_get_db_url(),
-            day=date.today(),
+            day=utc_today(),
             backfill_days=1,
             provider="jira",
             org_id=org_id or "",

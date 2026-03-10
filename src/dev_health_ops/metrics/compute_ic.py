@@ -11,6 +11,7 @@ from dev_health_ops.metrics.schemas import (
     UserMetricsDailyRecord,
     WorkItemUserMetricsDailyRecord,
 )
+from dev_health_ops.utils.datetime import utc_today
 
 
 def _percentile_rank(values: Sequence[float], value: float) -> float:
@@ -98,7 +99,7 @@ def compute_ic_metrics_daily(
             # Create a zero-filled base record using properties from w
             base = UserMetricsDailyRecord(
                 repo_id=uuid.uuid4(),  # We don't have a repo_id for pure WI users easily, use random or dummy
-                day=w.day if w else date.today(),
+                day=w.day if w else utc_today(),
                 author_email=identity,
                 commits_count=0,
                 loc_added=0,

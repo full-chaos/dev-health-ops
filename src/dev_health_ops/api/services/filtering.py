@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.utils.datetime import utc_today
 
 from ..models.filters import MetricFilter
 from ..queries.scopes import (
@@ -34,7 +35,7 @@ def filter_cache_key(
 def time_window(filters: MetricFilter) -> tuple[date, date, date, date]:
     range_days = max(1, filters.time.range_days)
     compare_days = max(1, filters.time.compare_days)
-    end_date = filters.time.end_date or date.today()
+    end_date = filters.time.end_date or utc_today()
     start_date = filters.time.start_date
     end_day = end_date + timedelta(days=1)
     if start_date:

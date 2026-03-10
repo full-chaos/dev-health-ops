@@ -17,6 +17,7 @@ from dev_health_ops.metrics.schemas import DORAMetricsRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +196,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     dora.add_argument(
         "--day",
         type=date.fromisoformat,
-        default=date.today().isoformat(),
+        default=utc_today().isoformat(),
         help="Target day (YYYY-MM-DD).",
     )
     dora.add_argument(

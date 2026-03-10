@@ -44,6 +44,7 @@ from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import build_repo_pattern_resolver
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
 
@@ -534,7 +535,7 @@ async def run_daily_metrics_finalize(
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     daily = subparsers.add_parser("daily", help="Compute daily metrics.")
     daily.add_argument(
-        "--day", type=date.fromisoformat, default=date.today().isoformat()
+        "--day", type=date.fromisoformat, default=utc_today().isoformat()
     )
     daily.add_argument("--backfill", type=int, default=1)
     daily.add_argument("--repo-id", type=uuid.UUID)

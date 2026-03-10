@@ -28,6 +28,29 @@ from dev_health_ops.models.settings import (
     TeamMapping,
 )
 
+# Normalize camelCase credential keys from frontend forms to snake_case for backend consistency.
+_CREDENTIAL_KEY_MAP: dict[str, dict[str, str]] = {
+    "linear": {"apiKey": "api_key"},
+    "jira": {"apiToken": "api_token", "baseUrl": "base_url"},
+    "github": {"baseUrl": "base_url"},
+    "gitlab": {"baseUrl": "base_url"},
+    "atlassian": {"apiToken": "api_token", "cloudId": "cloud_id"},
+}
+
+
+def _normalize_credential_keys(
+    provider: str, credentials: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize camelCase credential keys to snake_case based on provider."""
+    key_map = _CREDENTIAL_KEY_MAP.get(provider.lower(), {})
+    if not key_map:
+        return credentials
+    normalized: dict[str, Any] = {}
+    for k, v in credentials.items():
+        normalized[key_map.get(k, k)] = v
+    return normalized
+
+
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import (
         ConfirmInferredMemberAction,
@@ -296,6 +319,8 @@ class IntegrationCredentialsService:
         )
         result = await self.session.execute(stmt)
         cred = result.scalar_one_or_none()
+
+        credentials = _normalize_credential_keys(provider, credentials)
 
         encrypted_creds = encrypt_value(json.dumps(credentials))
 

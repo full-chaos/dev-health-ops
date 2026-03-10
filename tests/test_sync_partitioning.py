@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -643,3 +644,143 @@ class TestTaskRegistration:
         from dev_health_ops.workers.tasks import _run_sync_for_repo
 
         assert _run_sync_for_repo.queue == "sync"
+
+
+class TestInjectProviderToken:
+    def test_linear_sets_env(self, monkeypatch):
+        from dev_health_ops.workers.tasks import _inject_provider_token
+
+        monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+        _inject_provider_token("linear", "lin_api_test123")
+        assert os.environ["LINEAR_API_KEY"] == "lin_api_test123"
+        monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+
+    def test_github_sets_env(self, monkeypatch):
+        from dev_health_ops.workers.tasks import _inject_provider_token
+
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        _inject_provider_token("github", "ghp_test123")
+        assert os.environ["GITHUB_TOKEN"] == "ghp_test123"
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    def test_gitlab_sets_env(self, monkeypatch):
+        from dev_health_ops.workers.tasks import _inject_provider_token
+
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        _inject_provider_token("gitlab", "glpat-test123")
+        assert os.environ["GITLAB_TOKEN"] == "glpat-test123"
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+
+    def test_empty_token_does_not_set_env(self, monkeypatch):
+        from dev_health_ops.workers.tasks import _inject_provider_token
+
+        monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+        _inject_provider_token("linear", "")
+        assert "LINEAR_API_KEY" not in os.environ
+
+    def test_unknown_provider_does_nothing(self, monkeypatch):
+        from dev_health_ops.workers.tasks import _inject_provider_token
+
+        _inject_provider_token("unknown", "some_token")
+
+
+class TestExtractProviderToken:
+    def test_linear_apiKey(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert (
+            _extract_provider_token("linear", {"apiKey": "lin_api_xxx"})
+            == "lin_api_xxx"
+        )
+
+    def test_linear_api_key(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert (
+            _extract_provider_token("linear", {"api_key": "lin_api_yyy"})
+            == "lin_api_yyy"
+        )
+
+    def test_linear_prefers_api_key_over_apiKey(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        result = _extract_provider_token(
+            "linear", {"api_key": "snake", "apiKey": "camel"}
+        )
+        assert result == "snake"
+
+    def test_linear_empty_credentials(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert _extract_provider_token("linear", {}) == ""
+
+    def test_github_uses_token(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert _extract_provider_token("github", {"token": "ghp_xxx"}) == "ghp_xxx"
+
+    def test_gitlab_uses_token(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert _extract_provider_token("gitlab", {"token": "glpat-xxx"}) == "glpat-xxx"
+
+    def test_jira_uses_api_token(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert _extract_provider_token("jira", {"api_token": "jira_xxx"}) == "jira_xxx"
+
+    def test_jira_uses_apiToken(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert _extract_provider_token("jira", {"apiToken": "jira_yyy"}) == "jira_yyy"
+
+    def test_unknown_provider_falls_back_to_token(self):
+        from dev_health_ops.workers.tasks import _extract_provider_token
+
+        assert _extract_provider_token("unknown", {"token": "tok"}) == "tok"
+
+
+class TestNormalizeCredentialKeys:
+    def test_linear_apiKey_to_api_key(self):
+        from dev_health_ops.api.services.settings import _normalize_credential_keys
+
+        result = _normalize_credential_keys("linear", {"apiKey": "lin_api_xxx"})
+        assert result == {"api_key": "lin_api_xxx"}
+
+    def test_already_snake_case_unchanged(self):
+        from dev_health_ops.api.services.settings import _normalize_credential_keys
+
+        result = _normalize_credential_keys("linear", {"api_key": "lin_api_xxx"})
+        assert result == {"api_key": "lin_api_xxx"}
+
+    def test_jira_normalizes_multiple_keys(self):
+        from dev_health_ops.api.services.settings import _normalize_credential_keys
+
+        result = _normalize_credential_keys(
+            "jira",
+            {
+                "apiToken": "tok",
+                "baseUrl": "https://jira.example.com",
+                "email": "a@b.com",
+            },
+        )
+        assert result == {
+            "api_token": "tok",
+            "base_url": "https://jira.example.com",
+            "email": "a@b.com",
+        }
+
+    def test_unknown_provider_no_change(self):
+        from dev_health_ops.api.services.settings import _normalize_credential_keys
+
+        creds = {"someKey": "val"}
+        result = _normalize_credential_keys("unknown", creds)
+        assert result == {"someKey": "val"}
+
+    def test_github_normalizes_baseUrl(self):
+        from dev_health_ops.api.services.settings import _normalize_credential_keys
+
+        result = _normalize_credential_keys(
+            "github", {"token": "ghp_xxx", "baseUrl": "https://gh.example.com"}
+        )
+        assert result == {"token": "ghp_xxx", "base_url": "https://gh.example.com"}

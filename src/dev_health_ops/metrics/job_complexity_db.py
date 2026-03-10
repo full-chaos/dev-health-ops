@@ -15,6 +15,7 @@ from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +374,7 @@ def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
     complexity.add_argument(
         "--date",
         type=date.fromisoformat,
-        default=date.today().isoformat(),
+        default=utc_today().isoformat(),
         help="Target day (YYYY-MM-DD).",
     )
     complexity.add_argument(

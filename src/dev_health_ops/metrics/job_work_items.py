@@ -38,6 +38,7 @@ from dev_health_ops.providers.teams import (
     load_team_resolver,
 )
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
 
@@ -524,7 +525,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     wi.add_argument(
         "--day",
         type=date.fromisoformat,
-        default=date.today().isoformat(),
+        default=utc_today().isoformat(),
         help="Target day (YYYY-MM-DD).",
     )
     wi.add_argument(

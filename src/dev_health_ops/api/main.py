@@ -21,6 +21,7 @@ from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.metrics.sinks.factory import detect_backend
 from dev_health_ops.sentry import init_sentry
 from dev_health_ops.tracing import init_tracing, instrument_fastapi_app
+from dev_health_ops.utils.datetime import utc_today
 
 from .utils.logging import sanitize_for_log
 
@@ -905,7 +906,7 @@ async def flame_aggregated(
     # Calculate date window
 
     if end_date is None:
-        end_day = date.today()
+        end_day = utc_today()
     else:
         end_day = end_date
 

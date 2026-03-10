@@ -10,9 +10,10 @@ from typing import Any
 import yaml
 
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.models.teams import Team
+
 
 DEFAULT_TEAM_MAPPING_PATH = Path("src/dev_health_ops/config/team_mapping.yaml")
-from dev_health_ops.models.teams import Team
 
 
 def _norm_key(value: str) -> str:
@@ -229,7 +230,6 @@ def sync_teams(ns: argparse.Namespace) -> int:
     import asyncio
     import logging
 
-    from dev_health_ops.models.teams import Team
     from dev_health_ops.storage import resolve_db_type, run_with_store
 
     provider = (ns.provider or "config").lower()

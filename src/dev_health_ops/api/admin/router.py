@@ -895,7 +895,7 @@ async def delete_team(
 
 @router.get("/teams/discover", response_model=TeamDiscoverResponse)
 async def discover_teams(
-    provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
+    provider: str = Query(..., pattern="^(github|gitlab|jira|linear)$"),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamDiscoverResponse:
@@ -934,6 +934,14 @@ async def discover_teams(
             group_path=group_path,
             url=url,
         )
+    elif provider == "linear":
+        api_key = decrypted.get("apiKey") or decrypted.get("api_key")
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="Linear credentials require apiKey",
+            )
+        teams = await discovery_svc.discover_linear(api_key=api_key)
     else:
         email = decrypted.get("email")
         api_token = decrypted.get("api_token") or decrypted.get("token")

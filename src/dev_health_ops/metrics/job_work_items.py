@@ -261,14 +261,15 @@ def run_work_items_sync_job(
             len(transitions),
             sorted(provider_set),
         )
+        providers_label = ",".join(sorted(provider_set))
         if dependencies:
-            logger.info("Jira: extracted %d dependency edges", len(dependencies))
+            logger.info("%s: extracted %d dependency edges", providers_label, len(dependencies))
         if reopen_events:
-            logger.info("Jira: extracted %d reopen events", len(reopen_events))
+            logger.info("%s: extracted %d reopen events", providers_label, len(reopen_events))
         if interactions:
-            logger.info("Jira: extracted %d interaction events", len(interactions))
+            logger.info("%s: extracted %d interaction events", providers_label, len(interactions))
         if sprints:
-            logger.info("Jira: extracted %d sprint records", len(sprints))
+            logger.info("%s: extracted %d sprint records", providers_label, len(sprints))
 
         # Stamp org_id on work items and transitions before writing to sinks
         if org_id:

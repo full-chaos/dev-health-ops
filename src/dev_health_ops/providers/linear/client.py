@@ -94,7 +94,7 @@ query Teams($first: Int!, $after: String) {
       createdAt
       updatedAt
       timezone
-      members(first: 100) {
+      members(first: 10) {
         nodes {
           id
           name

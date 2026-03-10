@@ -12,7 +12,6 @@ import yaml
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.models.teams import Team
 
-
 DEFAULT_TEAM_MAPPING_PATH = Path("src/dev_health_ops/config/team_mapping.yaml")
 
 
@@ -495,7 +494,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
             if hasattr(client, "close"):
                 try:
                     client.close()
-                except Exception:
+                except Exception:  # noqa: BLE001 — best-effort close, ignore errors
                     pass
     elif provider == "ms-teams":
         from dev_health_ops.connectors.teams import TeamsConnector

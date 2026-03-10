@@ -57,10 +57,17 @@ def _mock_member(
     email: str = "alice@example.com",
     active: bool = True,
 ) -> dict[str, Any]:
-    return {"id": f"user-{name.lower()}", "name": name, "email": email, "active": active}
+    return {
+        "id": f"user-{name.lower()}",
+        "name": name,
+        "email": email,
+        "active": active,
+    }
 
 
-def _make_ns(provider: str = "linear", db: str = "sqlite+aiosqlite:///:memory:") -> argparse.Namespace:
+def _make_ns(
+    provider: str = "linear", db: str = "sqlite+aiosqlite:///:memory:"
+) -> argparse.Namespace:
     """Build a minimal argparse.Namespace for sync_teams()."""
     ns = argparse.Namespace()
     ns.provider = provider
@@ -271,9 +278,24 @@ class TestLinearTeamSync:
                 key="ENG",
                 name="Engineering",
                 members=[
-                    {"id": "u1", "name": "Alice", "email": "alice@example.com", "active": True},
-                    {"id": "u2", "name": "Bob", "email": None, "active": True},  # no email → use name
-                    {"id": "u3", "name": "", "email": None, "active": True},  # no email, no name → excluded
+                    {
+                        "id": "u1",
+                        "name": "Alice",
+                        "email": "alice@example.com",
+                        "active": True,
+                    },
+                    {
+                        "id": "u2",
+                        "name": "Bob",
+                        "email": None,
+                        "active": True,
+                    },  # no email → use name
+                    {
+                        "id": "u3",
+                        "name": "",
+                        "email": None,
+                        "active": True,
+                    },  # no email, no name → excluded
                 ],
             ),
         ]
@@ -309,7 +331,12 @@ class TestDiscoverLinear:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         mock_client.iter_teams.return_value = [
-            {"id": "team-eng", "key": "ENG", "name": "Engineering", "description": "Eng team"},
+            {
+                "id": "team-eng",
+                "key": "ENG",
+                "name": "Engineering",
+                "description": "Eng team",
+            },
             {"id": "team-prod", "key": "PROD", "name": "Product", "description": None},
         ]
 
@@ -327,7 +354,9 @@ class TestDiscoverLinear:
         assert prod.name == "Product"
 
     @patch("dev_health_ops.providers.linear.client.LinearClient")
-    def test_discover_linear_empty_workspace(self, mock_client_class: MagicMock) -> None:
+    def test_discover_linear_empty_workspace(
+        self, mock_client_class: MagicMock
+    ) -> None:
         """discover_linear() returns empty list when workspace has no teams."""
         from dev_health_ops.api.services.settings import TeamDiscoveryService
 
@@ -341,14 +370,21 @@ class TestDiscoverLinear:
         assert result == []
 
     @patch("dev_health_ops.providers.linear.client.LinearClient")
-    def test_discover_linear_associations_set(self, mock_client_class: MagicMock) -> None:
+    def test_discover_linear_associations_set(
+        self, mock_client_class: MagicMock
+    ) -> None:
         """discover_linear() sets associations with provider_org='linear'."""
         from dev_health_ops.api.services.settings import TeamDiscoveryService
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         mock_client.iter_teams.return_value = [
-            {"id": "team-eng", "key": "ENG", "name": "Engineering", "description": None},
+            {
+                "id": "team-eng",
+                "key": "ENG",
+                "name": "Engineering",
+                "description": None,
+            },
         ]
 
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)
@@ -358,14 +394,21 @@ class TestDiscoverLinear:
         assert result[0].associations == {"provider_org": "linear"}
 
     @patch("dev_health_ops.providers.linear.client.LinearClient")
-    def test_discover_linear_client_closed_on_success(self, mock_client_class: MagicMock) -> None:
+    def test_discover_linear_client_closed_on_success(
+        self, mock_client_class: MagicMock
+    ) -> None:
         """discover_linear() always closes the client (via finally block)."""
         from dev_health_ops.api.services.settings import TeamDiscoveryService
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         mock_client.iter_teams.return_value = [
-            {"id": "team-eng", "key": "ENG", "name": "Engineering", "description": None},
+            {
+                "id": "team-eng",
+                "key": "ENG",
+                "name": "Engineering",
+                "description": None,
+            },
         ]
 
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)

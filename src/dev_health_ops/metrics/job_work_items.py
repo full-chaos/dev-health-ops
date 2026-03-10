@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import uuid
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
@@ -104,6 +105,8 @@ def run_work_items_sync_job(
 
     primary_sink = ClickHouseMetricsSink(db_url)
     sinks: list[Any] = [primary_sink]
+    for s in sinks:
+        s.org_id = org_id  # type: ignore[attr-defined]
 
     try:
         for s in sinks:
@@ -265,6 +268,17 @@ def run_work_items_sync_job(
             logger.info("Jira: extracted %d interaction events", len(interactions))
         if sprints:
             logger.info("Jira: extracted %d sprint records", len(sprints))
+
+        # Stamp org_id on work items and transitions before writing to sinks
+        if org_id:
+            work_items = [
+                replace(wi, org_id=org_id) if hasattr(wi, "org_id") else wi
+                for wi in work_items
+            ]
+            transitions = [
+                replace(t, org_id=org_id) if hasattr(t, "org_id") else t
+                for t in transitions
+            ]
 
         # Write raw work items and transitions to sinks
         for s in sinks:

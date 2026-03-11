@@ -413,6 +413,15 @@ def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
         def __le__(self, _other):
             return True
 
+        def __lt__(self, _other):
+            return True
+
+        def __ge__(self, _other):
+            return True
+
+        def __gt__(self, _other):
+            return True
+
     class _DueCron:
         def get_next(self, _kind):
             return _AlwaysDue()

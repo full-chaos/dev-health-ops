@@ -554,10 +554,12 @@ def run_backfill(
     from dev_health_ops.backfill.runner import run_backfill_for_config
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import (
+        IntegrationCredential,
         JobRun,
         JobRunStatus,
         JobStatus,
         ScheduledJob,
+        SyncConfiguration,
     )
 
     sync_config_uuid = uuid.UUID(sync_config_id)
@@ -604,6 +606,40 @@ def run_backfill(
             job.is_running = True
             job.last_run_at = started_at
             session.flush()
+
+        with get_postgres_session_sync() as session:
+            config = (
+                session.query(SyncConfiguration)
+                .filter(
+                    SyncConfiguration.id == sync_config_uuid,
+                    SyncConfiguration.org_id == org_id,
+                )
+                .one_or_none()
+            )
+            if config is None:
+                raise ValueError(f"Sync configuration not found: {sync_config_id}")
+
+            provider = (config.provider or "").lower()
+            if config.credential_id:
+                credential = (
+                    session.query(IntegrationCredential)
+                    .filter(
+                        IntegrationCredential.id == config.credential_id,
+                        IntegrationCredential.org_id == org_id,
+                    )
+                    .one_or_none()
+                )
+                if credential is None:
+                    raise ValueError(
+                        f"Credential not found for sync configuration: {config.credential_id}"
+                    )
+                credentials = _decrypt_credential_sync(credential)
+            else:
+                credentials = _resolve_env_credentials(provider)
+
+            token = _extract_provider_token(provider, credentials)
+            if token:
+                _inject_provider_token(provider, token)
 
         if backfill_job_id:
             with get_postgres_session_sync() as session:

@@ -658,9 +658,7 @@ class TestLinearProviderIngest:
             {"id": "team-1", "key": "ENG", "name": "Engineering"}
         ]
         mock_client.iter_cycles.return_value = [_mock_linear_cycle()]
-        mock_client.iter_issues.return_value = [_mock_linear_issue()]
-        mock_client.get_issue_history.return_value = []
-        mock_client.get_issue_comments.return_value = []
+        mock_client.iter_issues_pages.return_value = [[_mock_linear_issue()]]
 
         provider = LinearProvider(
             status_mapping=mock_status_mapping,
@@ -694,9 +692,9 @@ class TestLinearProviderIngest:
             {"id": "team-2", "key": "PROD", "name": "Product"},
         ]
         mock_client.iter_cycles.return_value = []
-        mock_client.iter_issues.return_value = [_mock_linear_issue(team_key="ENG")]
-        mock_client.get_issue_history.return_value = []
-        mock_client.get_issue_comments.return_value = []
+        mock_client.iter_issues_pages.return_value = [
+            [_mock_linear_issue(team_key="ENG")]
+        ]
 
         provider = LinearProvider(
             status_mapping=mock_status_mapping,
@@ -711,7 +709,7 @@ class TestLinearProviderIngest:
         batch = provider.ingest(ctx)
 
         assert len(batch.work_items) == 1
-        mock_client.iter_issues.assert_called_once()
+        mock_client.iter_issues_pages.assert_called_once()
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
     @patch("dev_health_ops.providers.linear.client.LinearClient")
@@ -775,18 +773,19 @@ class TestLinearProviderIngest:
             {"id": "team-1", "key": "ENG", "name": "Engineering"}
         ]
         mock_client.iter_cycles.return_value = []
-        mock_client.iter_issues.return_value = [_mock_linear_issue()]
-        mock_client.get_issue_history.return_value = [
-            _mock_linear_history_entry(
-                from_state_name="Done",
-                from_state_type="completed",
-                to_state_name="In Progress",
-                to_state_type="started",
-            )
-        ]
-        mock_client.get_issue_comments.return_value = [
-            _mock_linear_comment(body="Test comment")
-        ]
+        issue = _mock_linear_issue()
+        issue["history"] = {
+            "nodes": [
+                _mock_linear_history_entry(
+                    from_state_name="Done",
+                    from_state_type="completed",
+                    to_state_name="In Progress",
+                    to_state_type="started",
+                )
+            ]
+        }
+        issue["comments"] = {"nodes": [_mock_linear_comment(body="Test comment")]}
+        mock_client.iter_issues_pages.return_value = [[issue]]
 
         provider = LinearProvider(
             status_mapping=mock_status_mapping,

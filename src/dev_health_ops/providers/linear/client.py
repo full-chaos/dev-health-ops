@@ -74,6 +74,40 @@ query Issues($first: Int!, $after: String, $filter: IssueFilter) {
         key
         name
       }
+      history(first: 50) {
+        nodes {
+          id
+          createdAt
+          fromState {
+            id
+            name
+            type
+          }
+          toState {
+            id
+            name
+            type
+          }
+          actor {
+            id
+            name
+            email
+          }
+        }
+      }
+      comments(first: 50) {
+        nodes {
+          id
+          body
+          createdAt
+          updatedAt
+          user {
+            id
+            name
+            email
+          }
+        }
+      }
     }
     pageInfo {
       hasNextPage
@@ -380,8 +414,27 @@ class LinearClient:
         include_archived: bool = False,
         limit: int | None = None,
     ) -> Iterable[dict[str, Any]]:
-        cursor: str | None = None
         count = 0
+
+        for nodes in self.iter_issues_pages(
+            team_keys=team_keys,
+            updated_after=updated_after,
+            include_archived=include_archived,
+        ):
+            for node in nodes:
+                yield node
+                count += 1
+                if limit is not None and count >= limit:
+                    return
+
+    def iter_issues_pages(
+        self,
+        *,
+        team_keys: list[str] | None = None,
+        updated_after: datetime | None = None,
+        include_archived: bool = False,
+    ) -> Iterable[list[dict[str, Any]]]:
+        cursor: str | None = None
 
         filter_obj: dict[str, Any] = {}
         if team_keys:
@@ -402,12 +455,8 @@ class LinearClient:
             data = self._execute(ISSUES_QUERY, variables)
             issues_data = data.get("issues", {})
             nodes = issues_data.get("nodes", [])
-
-            for node in nodes:
-                yield node
-                count += 1
-                if limit is not None and count >= limit:
-                    return
+            if nodes:
+                yield nodes
 
             page_info = issues_data.get("pageInfo", {})
             if not page_info.get("hasNextPage"):

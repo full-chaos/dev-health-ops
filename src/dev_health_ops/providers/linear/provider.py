@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from datetime import datetime
 
 from dev_health_ops.models.work_items import (
@@ -103,21 +104,18 @@ class LinearProvider(Provider):
         return self._identity
 
     def ingest(self, ctx: IngestionContext) -> ProviderBatch:
-        """
-        Ingest work items from Linear within the given context.
+        """Backward-compatible single-batch ingest that merges iter_ingest()."""
+        merged = ProviderBatch()
+        for batch in self.iter_ingest(ctx):
+            merged.work_items.extend(batch.work_items)
+            merged.status_transitions.extend(batch.status_transitions)
+            merged.reopen_events.extend(batch.reopen_events)
+            merged.interactions.extend(batch.interactions)
+            merged.sprints.extend(batch.sprints)
+        return merged
 
-        The ctx.repo field should contain the Linear team key (e.g., "ENG").
-        If not provided, all accessible teams will be synced.
-
-        Uses environment variables for authentication:
-        - LINEAR_API_KEY: Linear API key
-
-        Optional env vars:
-        - LINEAR_FETCH_COMMENTS: whether to fetch comments (default: true)
-        - LINEAR_FETCH_HISTORY: whether to fetch issue history (default: true)
-        - LINEAR_FETCH_CYCLES: whether to fetch cycles as sprints (default: true)
-        - LINEAR_COMMENTS_LIMIT: max comments per issue (default: 100)
-        """
+    def iter_ingest(self, ctx: IngestionContext) -> Iterable[ProviderBatch]:
+        """Yield one ProviderBatch per GraphQL page for memory-bounded ingestion."""
         from dev_health_ops.providers.linear.client import LinearClient
         from dev_health_ops.providers.linear.normalize import (
             detect_linear_reopen_events,
@@ -128,26 +126,9 @@ class LinearProvider(Provider):
 
         client = LinearClient.from_env()
 
-        work_items: list[WorkItem] = []
-        transitions: list[WorkItemStatusTransition] = []
-        reopen_events: list[WorkItemReopenEvent] = []
-        interactions: list[WorkItemInteractionEvent] = []
-        sprints: list[Sprint] = []
-
         fetch_comments = _env_flag("LINEAR_FETCH_COMMENTS", True)
         fetch_history = _env_flag("LINEAR_FETCH_HISTORY", True)
         fetch_cycles = _env_flag("LINEAR_FETCH_CYCLES", True)
-
-        raw_comments_limit = os.getenv("LINEAR_COMMENTS_LIMIT")
-        comments_limit = 100
-        if raw_comments_limit is not None:
-            try:
-                comments_limit = int(raw_comments_limit)
-            except ValueError:
-                logger.warning(
-                    "Invalid LINEAR_COMMENTS_LIMIT value %r; falling back to 100",
-                    raw_comments_limit,
-                )
 
         cycle_cache: dict[str, Sprint] = {}
 
@@ -179,6 +160,9 @@ class LinearProvider(Provider):
         )
 
         fetched_count = 0
+        fetched_transitions = 0
+        fetched_interactions = 0
+        yielded_batch = False
 
         for team in teams_to_sync:
             team_id = team.get("id")
@@ -189,12 +173,14 @@ class LinearProvider(Provider):
 
             logger.info("Linear: fetching issues for team %s", team_key_str)
 
+            batch_sprints: list[Sprint] = []
             if fetch_cycles:
                 try:
                     for cycle in client.iter_cycles(team_id=team_id):
                         sprint = linear_cycle_to_sprint(cycle)
-                        cycle_cache[sprint.sprint_id] = sprint
-                        sprints.append(sprint)
+                        if sprint.sprint_id not in cycle_cache:
+                            cycle_cache[sprint.sprint_id] = sprint
+                            batch_sprints.append(sprint)
                 except Exception as exc:
                     logger.warning(
                         "Linear: failed to fetch cycles for team %s: %s",
@@ -202,55 +188,53 @@ class LinearProvider(Provider):
                         exc,
                     )
 
+            if batch_sprints:
+                yield ProviderBatch(sprints=batch_sprints)
+                yielded_batch = True
+
             try:
-                for issue in client.iter_issues(
+                pages_seen = False
+                for issues_page in client.iter_issues_pages(
                     team_keys=[team_key_str] if team_key_str else None,
                     updated_after=updated_after,
                 ):
-                    if ctx.limit is not None and fetched_count >= ctx.limit:
-                        break
+                    pages_seen = True
+                    page_items: list[WorkItem] = []
+                    page_transitions: list[WorkItemStatusTransition] = []
+                    page_reopen_events: list[WorkItemReopenEvent] = []
+                    page_interactions: list[WorkItemInteractionEvent] = []
 
-                    issue_id = issue.get("id")
-                    if not issue_id:
-                        continue
+                    for issue in issues_page:
+                        if ctx.limit is not None and fetched_count >= ctx.limit:
+                            break
+                        if not issue.get("id"):
+                            continue
 
-                    history: list[dict] = []
-                    if fetch_history:
-                        try:
-                            history = client.get_issue_history(issue_id)
-                        except Exception as exc:
-                            logger.debug(
-                                "Linear: failed to fetch history for issue %s: %s",
-                                issue.get("identifier"),
-                                exc,
-                            )
+                        history: list[dict] = []
+                        if fetch_history:
+                            history = issue.get("history", {}).get("nodes", [])
 
-                    wi, wi_transitions = linear_issue_to_work_item(
-                        issue=issue,
-                        status_mapping=self.status_mapping,
-                        identity=self.identity,
-                        history=history,
-                    )
-
-                    work_items.append(wi)
-                    transitions.extend(wi_transitions)
-
-                    if history:
-                        reopen_events.extend(
-                            detect_linear_reopen_events(
-                                work_item_id=wi.work_item_id,
-                                history=history,
-                                identity=self.identity,
-                            )
+                        wi, wi_transitions = linear_issue_to_work_item(
+                            issue=issue,
+                            status_mapping=self.status_mapping,
+                            identity=self.identity,
+                            history=history,
                         )
 
-                    # Fetch comments for interactions (if enabled)
-                    if fetch_comments:
-                        try:
-                            comments = client.get_issue_comments(
-                                issue_id,
-                                limit=comments_limit,
+                        page_items.append(wi)
+                        page_transitions.extend(wi_transitions)
+
+                        if history:
+                            page_reopen_events.extend(
+                                detect_linear_reopen_events(
+                                    work_item_id=wi.work_item_id,
+                                    history=history,
+                                    identity=self.identity,
+                                )
                             )
+
+                        if fetch_comments:
+                            comments = issue.get("comments", {}).get("nodes", [])
                             for comment in comments:
                                 event = linear_comment_to_interaction_event(
                                     comment=comment,
@@ -258,15 +242,97 @@ class LinearProvider(Provider):
                                     identity=self.identity,
                                 )
                                 if event:
-                                    interactions.append(event)
-                        except Exception as exc:
-                            logger.debug(
-                                "Linear: failed to fetch comments for issue %s: %s",
-                                issue.get("identifier"),
-                                exc,
-                            )
+                                    page_interactions.append(event)
 
-                    fetched_count += 1
+                        fetched_count += 1
+
+                    if (
+                        page_items
+                        or page_transitions
+                        or page_reopen_events
+                        or page_interactions
+                    ):
+                        yield ProviderBatch(
+                            work_items=page_items,
+                            status_transitions=page_transitions,
+                            interactions=page_interactions,
+                            reopen_events=page_reopen_events,
+                        )
+                        yielded_batch = True
+                        fetched_transitions += len(page_transitions)
+                        fetched_interactions += len(page_interactions)
+
+                    if ctx.limit is not None and fetched_count >= ctx.limit:
+                        break
+
+                if not pages_seen:
+                    fallback_issues = list(
+                        client.iter_issues(
+                            team_keys=[team_key_str] if team_key_str else None,
+                            updated_after=updated_after,
+                            limit=ctx.limit,
+                        )
+                    )
+                    if fallback_issues:
+                        page_items = []
+                        page_transitions = []
+                        page_reopen_events = []
+                        page_interactions = []
+                        for issue in fallback_issues:
+                            if ctx.limit is not None and fetched_count >= ctx.limit:
+                                break
+                            if not issue.get("id"):
+                                continue
+
+                            history = (
+                                issue.get("history", {}).get("nodes", [])
+                                if fetch_history
+                                else []
+                            )
+                            wi, wi_transitions = linear_issue_to_work_item(
+                                issue=issue,
+                                status_mapping=self.status_mapping,
+                                identity=self.identity,
+                                history=history,
+                            )
+                            page_items.append(wi)
+                            page_transitions.extend(wi_transitions)
+                            if history:
+                                page_reopen_events.extend(
+                                    detect_linear_reopen_events(
+                                        work_item_id=wi.work_item_id,
+                                        history=history,
+                                        identity=self.identity,
+                                    )
+                                )
+                            if fetch_comments:
+                                for comment in issue.get("comments", {}).get(
+                                    "nodes", []
+                                ):
+                                    event = linear_comment_to_interaction_event(
+                                        comment=comment,
+                                        work_item_id=wi.work_item_id,
+                                        identity=self.identity,
+                                    )
+                                    if event:
+                                        page_interactions.append(event)
+                            fetched_count += 1
+
+                        if (
+                            page_items
+                            or page_transitions
+                            or page_reopen_events
+                            or page_interactions
+                        ):
+                            yield ProviderBatch(
+                                work_items=page_items,
+                                status_transitions=page_transitions,
+                                interactions=page_interactions,
+                                reopen_events=page_reopen_events,
+                            )
+                            yielded_batch = True
+                            fetched_transitions += len(page_transitions)
+                            fetched_interactions += len(page_interactions)
 
             except Exception as exc:
                 logger.error(
@@ -280,17 +346,13 @@ class LinearProvider(Provider):
                 break
 
         logger.info(
-            "Linear: fetched %d work items, %d cycles from %d team(s)",
-            len(work_items),
-            len(sprints),
+            "Linear: fetched %d work items, %d transitions, %d interactions, %d cycles from %d team(s)",
+            fetched_count,
+            fetched_transitions,
+            fetched_interactions,
+            len(cycle_cache),
             len(teams_to_sync),
         )
 
-        return ProviderBatch(
-            work_items=work_items,
-            status_transitions=transitions,
-            dependencies=[],
-            interactions=interactions,
-            sprints=sprints,
-            reopen_events=reopen_events,
-        )
+        if not yielded_batch:
+            yield ProviderBatch()

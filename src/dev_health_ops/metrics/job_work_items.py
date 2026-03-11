@@ -247,17 +247,23 @@ def run_work_items_sync_job(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
                 repo=None,
             )
-            batch = linear_provider.ingest(ctx)
-            work_items.extend(batch.work_items)
-            transitions.extend(batch.status_transitions)
-            reopen_events.extend(batch.reopen_events)
-            interactions.extend(batch.interactions)
-            sprints.extend(batch.sprints)
+            fetched_items = 0
+            fetched_transitions = 0
+            fetched_sprints = 0
+            for batch in linear_provider.iter_ingest(ctx):
+                work_items.extend(batch.work_items)
+                transitions.extend(batch.status_transitions)
+                reopen_events.extend(batch.reopen_events)
+                interactions.extend(batch.interactions)
+                sprints.extend(batch.sprints)
+                fetched_items += len(batch.work_items)
+                fetched_transitions += len(batch.status_transitions)
+                fetched_sprints += len(batch.sprints)
             logger.info(
                 "Linear: fetched %d work items, %d transitions, %d sprints",
-                len(batch.work_items),
-                len(batch.status_transitions),
-                len(batch.sprints),
+                fetched_items,
+                fetched_transitions,
+                fetched_sprints,
             )
 
         logger.info(

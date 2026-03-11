@@ -763,6 +763,80 @@ async def list_sync_config_jobs(
     ]
 
 
+@router.get("/backfill-jobs")
+async def list_backfill_jobs(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+):
+    from dev_health_ops.api.schemas.backfill import (
+        BackfillJobListResponse,
+        BackfillJobResponse,
+    )
+    from dev_health_ops.api.services.backfill import BackfillJobService
+
+    svc = BackfillJobService(session, org_id)
+    jobs, total = await svc.list_jobs(limit=limit, offset=offset)
+    return BackfillJobListResponse(
+        items=[
+            BackfillJobResponse(
+                id=str(j.id),
+                sync_config_id=str(j.sync_config_id),
+                status=j.status,
+                since_date=j.since_date,
+                before_date=j.before_date,
+                total_chunks=j.total_chunks,
+                completed_chunks=j.completed_chunks,
+                failed_chunks=j.failed_chunks,
+                progress_pct=(j.completed_chunks / j.total_chunks * 100)
+                if j.total_chunks > 0
+                else 0.0,
+                error_message=j.error_message,
+                started_at=j.started_at,
+                completed_at=j.completed_at,
+                created_at=j.created_at,
+            )
+            for j in jobs
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/backfill-jobs/{job_id}")
+async def get_backfill_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+):
+    from dev_health_ops.api.schemas.backfill import BackfillJobResponse
+    from dev_health_ops.api.services.backfill import BackfillJobService
+
+    svc = BackfillJobService(session, org_id)
+    job = await svc.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Backfill job not found")
+    return BackfillJobResponse(
+        id=str(job.id),
+        sync_config_id=str(job.sync_config_id),
+        status=job.status,
+        since_date=job.since_date,
+        before_date=job.before_date,
+        total_chunks=job.total_chunks,
+        completed_chunks=job.completed_chunks,
+        failed_chunks=job.failed_chunks,
+        progress_pct=(job.completed_chunks / job.total_chunks * 100)
+        if job.total_chunks > 0
+        else 0.0,
+        error_message=job.error_message,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        created_at=job.created_at,
+    )
+
+
 @router.get("/identities", response_model=list[IdentityMappingResponse])
 async def list_identities(
     active_only: bool = True,

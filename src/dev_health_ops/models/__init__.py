@@ -3,6 +3,7 @@ from .audit import (
     AuditLog,
     AuditResourceType,
 )
+from .backfill import BackfillJob
 from .billing import (
     BillingInterval,
     BillingPlan,
@@ -74,6 +75,7 @@ __all__ = [
     "AuditLog",
     "AuditResourceType",
     "AuthProvider",
+    "BackfillJob",
     "BillingInterval",
     "BillingPlan",
     "BillingPrice",

@@ -44,7 +44,12 @@ from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import build_repo_pattern_resolver
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.utils.datetime import utc_today
+from dev_health_ops.utils.cli import (
+    add_date_range_args,
+    add_sink_arg,
+    resolve_date_range,
+    validate_sink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -534,20 +539,12 @@ async def run_daily_metrics_finalize(
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     daily = subparsers.add_parser("daily", help="Compute daily metrics.")
-    daily.add_argument(
-        "--day", type=date.fromisoformat, default=utc_today().isoformat()
-    )
-    daily.add_argument("--backfill", type=int, default=1)
+    add_date_range_args(daily)
     daily.add_argument("--repo-id", type=uuid.UUID)
     daily.add_argument("--repo-name")
     daily.add_argument("--no-commits", dest="commit_metrics", action="store_false")
     daily.set_defaults(commit_metrics=True)
-    daily.add_argument(
-        "--sink",
-        choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
-        default="auto",
-        help="Sink backend (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
-    )
+    add_sink_arg(daily)
     daily.add_argument("--provider", default="auto")
     daily.set_defaults(func=_cmd_metrics_daily)
 
@@ -555,10 +552,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "rebuild",
         help="Rebuild metrics for specific repos with partitioned finalize.",
     )
-    rebuild.add_argument(
-        "--day", type=date.fromisoformat, required=True, help="Target date"
-    )
-    rebuild.add_argument("--backfill", type=int, default=1)
+    add_date_range_args(rebuild)
     rebuild.add_argument(
         "--repo-id",
         type=uuid.UUID,
@@ -567,21 +561,19 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         default=[],
         help="Repo UUID (repeatable)",
     )
-    rebuild.add_argument(
-        "--sink",
-        choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
-        default="auto",
-    )
+    add_sink_arg(rebuild)
     rebuild.add_argument("--provider", default="auto")
     rebuild.set_defaults(func=_cmd_metrics_rebuild)
 
 
 async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
     try:
+        validate_sink(ns)
+        end_day, backfill_days = resolve_date_range(ns)
         await run_daily_metrics_job(
             db_url=resolve_sink_uri(ns),
-            day=ns.day,
-            backfill_days=ns.backfill,
+            day=end_day,
+            backfill_days=backfill_days,
             repo_id=ns.repo_id,
             repo_name=ns.repo_name,
             include_commit_metrics=ns.commit_metrics,
@@ -597,10 +589,12 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
 
 async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
     try:
+        validate_sink(ns)
+        end_day, backfill_days = resolve_date_range(ns)
         db_url = resolve_sink_uri(ns)
         org_id = getattr(ns, "org", None)
         repo_ids: list[uuid.UUID] = ns.repo_ids or []
-        days = _date_range(ns.day, ns.backfill)
+        days = _date_range(end_day, backfill_days)
 
         for d in days:
             if repo_ids:

@@ -180,12 +180,21 @@ async def test_cli_sync_teams_synthetic():
     from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
 
     with patch("asyncio.run") as mock_run:
-        with patch("dev_health_ops.storage.resolve_db_type") as mock_resolve:
-            mock_resolve.return_value = "sqlite"
-
+        with (
+            patch("dev_health_ops.providers.teams.validate_sink") as mock_validate,
+            patch(
+                "dev_health_ops.providers.teams.resolve_sink_uri",
+                return_value="clickhouse://localhost:8123/default",
+            ) as mock_resolve_sink,
+            patch(
+                "dev_health_ops.providers.teams.detect_db_type",
+                return_value="clickhouse",
+            ) as mock_detect,
+        ):
             ns = MagicMock()
             ns.db = "sqlite:///:memory:"
-            ns.db_type = None
+            ns.sink = "clickhouse"
+            ns.analytics_db = None
             ns.provider = "synthetic"
             ns.path = None
 
@@ -193,6 +202,9 @@ async def test_cli_sync_teams_synthetic():
 
             assert result == 0
             assert mock_run.called
+            mock_validate.assert_called_once_with(ns)
+            mock_resolve_sink.assert_called_once_with(ns)
+            mock_detect.assert_called_once_with("clickhouse://localhost:8123/default")
             coro = mock_run.call_args[0][0]
             assert asyncio.iscoroutine(coro)
             coro.close()

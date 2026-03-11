@@ -15,7 +15,12 @@ from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.utils.datetime import utc_today
+from dev_health_ops.utils.cli import (
+    add_date_range_args,
+    add_sink_arg,
+    resolve_date_range,
+    validate_sink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -371,18 +376,8 @@ def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
         "complexity",
         help="Compute file complexity metrics from DB (git_files/git_blame).",
     )
-    complexity.add_argument(
-        "--date",
-        type=date.fromisoformat,
-        default=utc_today().isoformat(),
-        help="Target day (YYYY-MM-DD).",
-    )
-    complexity.add_argument(
-        "--backfill",
-        type=int,
-        default=1,
-        help="Compute for N days ending at --date.",
-    )
+    add_date_range_args(complexity)
+    add_sink_arg(complexity)
     complexity.add_argument(
         "--repo-id", type=uuid.UUID, help="Filter to specific repo."
     )
@@ -400,11 +395,13 @@ def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
 
 
 def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
+    validate_sink(ns)
+    end_day, backfill_days = resolve_date_range(ns)
     return run_complexity_db_job(
         repo_id=ns.repo_id,
         db_url=resolve_sink_uri(ns),
-        date=ns.date,
-        backfill_days=ns.backfill,
+        date=end_day,
+        backfill_days=backfill_days,
         language_globs=ns.lang,
         max_files=ns.max_files,
         search_pattern=ns.search,

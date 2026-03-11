@@ -15,7 +15,8 @@ def _ns(**overrides):
         sync_target="git",
         auth="token",
         db="clickhouse://localhost:8123/stats",
-        db_type="clickhouse",
+        sink="clickhouse",
+        analytics_db=None,
         org="default",
         repo_path=".",
         owner="octo",
@@ -31,7 +32,7 @@ def _ns(**overrides):
         use_async=False,
         max_commits_per_repo=None,
         since=None,
-        date=None,
+        before=None,
         backfill=1,
         repo_name=None,
     )
@@ -94,11 +95,10 @@ async def test_sync_local_target_blame_calls_local_blame(monkeypatch):
         assert org_id == "default"
         await handler(SimpleNamespace())
 
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(
-        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
-    )
-    monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: "2026-01-01")
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "resolve_since_datetime", lambda _ns: "2026-01-01")
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
     monkeypatch.setattr(sync_mod, "process_local_blame", process_local_blame)
 
@@ -117,12 +117,11 @@ async def test_sync_github_target_batch_mode_calls_batch_processor(monkeypatch):
         assert org_id == "default"
         await handler(SimpleNamespace())
 
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(
-        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
-    )
-    monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: "2026-01-01")
-    monkeypatch.setattr(sync_mod, "_resolve_max_commits", lambda _ns: 50)
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "resolve_since_datetime", lambda _ns: "2026-01-01")
+    monkeypatch.setattr(sync_mod, "resolve_max_commits", lambda _ns: 50)
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
     monkeypatch.setattr(sync_mod, "process_github_repos_batch", batch)
 
@@ -140,12 +139,11 @@ async def test_sync_github_target_requires_owner_repo_without_search(monkeypatch
         assert org_id == "default"
         await handler(SimpleNamespace())
 
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(
-        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
-    )
-    monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: None)
-    monkeypatch.setattr(sync_mod, "_resolve_max_commits", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "resolve_since_datetime", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_max_commits", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
 
     with pytest.raises(SystemExit, match="requires --owner and --repo"):
@@ -160,12 +158,11 @@ async def test_sync_gitlab_target_requires_project_id_without_search(monkeypatch
         assert org_id == "default"
         await handler(SimpleNamespace())
 
+    monkeypatch.setattr(sync_mod, "validate_sink", lambda _ns: None)
     monkeypatch.setattr(sync_mod, "resolve_sink_uri", lambda _ns: "db-uri")
-    monkeypatch.setattr(
-        sync_mod, "resolve_db_type", lambda _uri, _db_type: "clickhouse"
-    )
-    monkeypatch.setattr(sync_mod, "_resolve_since", lambda _ns: None)
-    monkeypatch.setattr(sync_mod, "_resolve_max_commits", lambda _ns: 10)
+    monkeypatch.setattr(sync_mod, "detect_db_type", lambda _uri: "clickhouse")
+    monkeypatch.setattr(sync_mod, "resolve_since_datetime", lambda _ns: None)
+    monkeypatch.setattr(sync_mod, "resolve_max_commits", lambda _ns: 10)
     monkeypatch.setattr(sync_mod, "run_with_store", fake_run_with_store)
 
     with pytest.raises(SystemExit, match="requires --project-id"):

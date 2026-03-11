@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib
+import json
+import os
 import uuid
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,7 +21,12 @@ from sqlalchemy.orm import Session
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
-from dev_health_ops.models.settings import JobRun, ScheduledJob, SyncConfiguration
+from dev_health_ops.models.settings import (
+    IntegrationCredential,
+    JobRun,
+    ScheduledJob,
+    SyncConfiguration,
+)
 from dev_health_ops.models.users import Organization, User
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
@@ -223,7 +231,7 @@ def test_run_backfill_progress_callback_updates_backfill_job_completed_chunks(
 
     from dev_health_ops.workers.tasks import run_backfill
 
-    task = run_backfill
+    task: Any = run_backfill
     task.push_request(id="backfill-integration")
     try:
         result = task(
@@ -239,14 +247,104 @@ def test_run_backfill_progress_callback_updates_backfill_job_completed_chunks(
     assert result["status"] == "success"
 
     with Session(engine) as session:
-        tracked_job = (
-            session.query(BackfillJob)
-            .filter(BackfillJob.id == uuid.UUID(backfill_job_id))
-            .one()
-        )
+        tracked_job = cast(Any, session.get(BackfillJob, uuid.UUID(backfill_job_id)))
+        assert tracked_job is not None
         assert tracked_job.status == "completed"
         assert tracked_job.completed_chunks == 2
         assert tracked_job.started_at is not None
         assert tracked_job.completed_at is not None
+
+    engine.dispose()
+
+
+def test_run_backfill_resolves_credentials_from_db(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            SyncConfiguration.__table__,
+            ScheduledJob.__table__,
+            JobRun.__table__,
+            BackfillJob.__table__,
+            IntegrationCredential.__table__,
+        ],
+    )
+
+    org_id = str(uuid.uuid4())
+    sync_config_id = uuid.uuid4()
+    credential_id = uuid.uuid4()
+
+    with Session(engine) as session:
+        credential = IntegrationCredential(
+            provider="linear",
+            name="linear-credential",
+            org_id=org_id,
+            credentials_encrypted="encrypted-payload",
+        )
+        credential.id = credential_id
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="sync-linear-integration",
+            provider="linear",
+            credential_id=credential_id,
+            sync_targets=[],
+            sync_options={},
+            is_active=True,
+        )
+        config.id = sync_config_id
+        session.add_all([credential, config])
+        session.commit()
+
+    @contextmanager
+    def _session_ctx():
+        with Session(engine) as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session_sync",
+        lambda: _session_ctx(),
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.core.encryption.decrypt_value",
+        lambda _value: json.dumps({"api_key": "lin_test_cred_from_db"}),
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_backfill_for_config(**kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "window_count": 1}
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_backfill_for_config",
+        _fake_run_backfill_for_config,
+    )
+
+    from dev_health_ops.workers.tasks import run_backfill
+
+    task: Any = run_backfill
+    task.push_request(id="backfill-credential-integration")
+    try:
+        result = task(
+            sync_config_id=str(sync_config_id),
+            since="2026-01-01",
+            before="2026-01-14",
+            org_id=org_id,
+        )
+    finally:
+        task.pop_request()
+
+    assert result["status"] == "success"
+    assert captured["sync_config_id"] == str(sync_config_id)
+    assert os.environ.get("LINEAR_API_KEY") == "lin_test_cred_from_db"
 
     engine.dispose()

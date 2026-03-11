@@ -103,6 +103,25 @@ class TestProviderBatch:
         assert len(batch.status_transitions) == 1
 
 
+class TestProviderIterIngest:
+    def test_default_iter_ingest_wraps_ingest(self) -> None:
+        class DummyProvider(Provider):
+            name = "dummy-iter"
+            capabilities = ProviderCapabilities()
+
+            def ingest(self, ctx: IngestionContext) -> ProviderBatch:
+                return expected_batch
+
+        expected_batch = ProviderBatch(work_items=[MagicMock()])
+        provider = DummyProvider()
+        ctx = IngestionContext(window=IngestionWindow())
+
+        batches = list(provider.iter_ingest(ctx))
+
+        assert len(batches) == 1
+        assert batches[0] is expected_batch
+
+
 class TestProviderRegistry:
     def test_jira_is_registered(self) -> None:
         assert is_registered("jira")

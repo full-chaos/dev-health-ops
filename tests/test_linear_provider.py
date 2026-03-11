@@ -803,3 +803,146 @@ class TestLinearProviderIngest:
         assert len(batch.status_transitions) > 0
         assert len(batch.reopen_events) == 1
         assert len(batch.interactions) == 1
+
+    @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
+    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    def test_iter_ingest_yields_per_page_batches(
+        self,
+        mock_client_class: MagicMock,
+        mock_identity: IdentityResolver,
+        mock_status_mapping: StatusMapping,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client_class.from_env.return_value = mock_client
+
+        mock_client.iter_teams.return_value = [
+            {"id": "team-1", "key": "ENG", "name": "Engineering"}
+        ]
+        mock_client.iter_cycles.return_value = []
+        mock_client.iter_issues_pages.return_value = [
+            [
+                _mock_linear_issue(identifier="ENG-1"),
+                _mock_linear_issue(identifier="ENG-2"),
+            ],
+            [
+                _mock_linear_issue(identifier="ENG-3"),
+                _mock_linear_issue(identifier="ENG-4"),
+            ],
+        ]
+
+        provider = LinearProvider(
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+        ctx = IngestionContext(window=IngestionWindow(), repo=None)
+
+        batches = list(provider.iter_ingest(ctx))
+        total_work_items = sum(len(batch.work_items) for batch in batches)
+        max_batch_work_items = max(len(batch.work_items) for batch in batches)
+
+        assert len(batches) >= 2
+        assert total_work_items == 4
+        assert max_batch_work_items < total_work_items
+
+    @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
+    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    def test_iter_ingest_reads_history_from_inline_data(
+        self,
+        mock_client_class: MagicMock,
+        mock_identity: IdentityResolver,
+        mock_status_mapping: StatusMapping,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client_class.from_env.return_value = mock_client
+
+        mock_client.iter_teams.return_value = [
+            {"id": "team-1", "key": "ENG", "name": "Engineering"}
+        ]
+        mock_client.iter_cycles.return_value = []
+        issue = _mock_linear_issue(identifier="ENG-999")
+        issue["history"] = {
+            "nodes": [
+                _mock_linear_history_entry(
+                    from_state_name="Todo",
+                    from_state_type="unstarted",
+                    to_state_name="In Progress",
+                    to_state_type="started",
+                )
+            ]
+        }
+        issue["comments"] = {"nodes": [_mock_linear_comment(body="Inline comment")]}
+        mock_client.iter_issues_pages.return_value = [[issue]]
+
+        provider = LinearProvider(
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+        ctx = IngestionContext(window=IngestionWindow(), repo=None)
+
+        batches = list(provider.iter_ingest(ctx))
+        all_transitions = [t for batch in batches for t in batch.status_transitions]
+        all_interactions = [i for batch in batches for i in batch.interactions]
+
+        assert all_transitions
+        assert all_interactions
+        mock_client.get_issue_history.assert_not_called()
+        mock_client.get_issue_comments.assert_not_called()
+
+    @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
+    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    def test_ingest_merges_all_iter_ingest_batches(
+        self,
+        mock_client_class: MagicMock,
+        mock_identity: IdentityResolver,
+        mock_status_mapping: StatusMapping,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client_class.from_env.return_value = mock_client
+
+        mock_client.iter_teams.return_value = [
+            {"id": "team-1", "key": "ENG", "name": "Engineering"}
+        ]
+        mock_client.iter_cycles.return_value = []
+        mock_client.iter_issues_pages.return_value = [
+            [
+                _mock_linear_issue(identifier="ENG-10"),
+                _mock_linear_issue(identifier="ENG-11"),
+            ],
+            [
+                _mock_linear_issue(identifier="ENG-12"),
+                _mock_linear_issue(identifier="ENG-13"),
+            ],
+        ]
+
+        provider = LinearProvider(
+            status_mapping=mock_status_mapping,
+            identity=mock_identity,
+        )
+        ctx = IngestionContext(window=IngestionWindow(), repo=None)
+
+        batch = provider.ingest(ctx)
+
+        assert isinstance(batch, ProviderBatch)
+        assert len(batch.work_items) == 4
+        assert {item.work_item_id for item in batch.work_items} == {
+            "linear:ENG-10",
+            "linear:ENG-11",
+            "linear:ENG-12",
+            "linear:ENG-13",
+        }
+
+
+class TestLinearClientInlineQuery:
+    def test_issues_query_includes_inline_history(self) -> None:
+        from dev_health_ops.providers.linear.client import ISSUES_QUERY
+
+        assert "history(first:" in ISSUES_QUERY, (
+            "ISSUES_QUERY must inline history to avoid N+1 HTTP calls"
+        )
+
+    def test_issues_query_includes_inline_comments(self) -> None:
+        from dev_health_ops.providers.linear.client import ISSUES_QUERY
+
+        assert "comments(first:" in ISSUES_QUERY, (
+            "ISSUES_QUERY must inline comments to avoid N+1 HTTP calls"
+        )

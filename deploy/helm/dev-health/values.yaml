@@ -1,0 +1,394 @@
+# -- Global settings
+global:
+  # -- Image pull secrets for private registries
+  imagePullSecrets: []
+  # -- Override the namespace
+  namespaceOverride: ""
+
+# -- Image configuration for the backend (API, worker, beat, cronjobs)
+image:
+  repository: ghcr.io/full-chaos/dev-health-ops
+  tag: ""  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# -- Image configuration for the frontend (web)
+webImage:
+  repository: ghcr.io/full-chaos/dev-health-web
+  tag: ""  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# -- Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# =============================================================================
+# API (FastAPI backend)
+# =============================================================================
+api:
+  enabled: true
+  replicas: 2
+  port: 8000
+  args:
+    - "--host"
+    - "0.0.0.0"
+    - "--port"
+    - "8000"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # -- Extra environment variables (list of name/value pairs)
+  extraEnv: []
+
+# =============================================================================
+# Billing Edge API
+# =============================================================================
+billingEdge:
+  enabled: false
+  replicas: 1
+  port: 8010
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# Celery Worker
+# =============================================================================
+worker:
+  enabled: true
+  replicas: 2
+  queues: "default,metrics,sync,webhooks"
+  concurrency: 4
+  logLevel: info
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  livenessProbe:
+    exec:
+      command:
+        - celery
+        - -A
+        - dev_health_ops.workers.celery_app
+        - inspect
+        - ping
+        - --timeout
+        - "10"
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 15
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# =============================================================================
+# Celery Beat (scheduler)
+# =============================================================================
+beat:
+  enabled: true
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# =============================================================================
+# Web Frontend (Next.js)
+# =============================================================================
+web:
+  enabled: true
+  replicas: 2
+  port: 3000
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  env:
+    BACKEND_URL: ""  # defaults to http://<release>-api:8000
+    AUTH_SECRET: ""
+    NODE_ENV: "production"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# =============================================================================
+# CronJobs
+# =============================================================================
+cronjobs:
+  dailyMetrics:
+    enabled: true
+    schedule: "0 2 * * *"
+    command: ["dev-hops", "metrics", "daily"]
+    activeDeadlineSeconds: 3600
+    backoffLimit: 3
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+  syncGithub:
+    enabled: true
+    schedule: "0 */6 * * *"
+    command: ["dev-hops", "sync", "work-items", "--provider", "github", "--backfill", "1"]
+    activeDeadlineSeconds: 7200
+    backoffLimit: 2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  syncGitlab:
+    enabled: false
+    schedule: "30 */6 * * *"
+    command: ["dev-hops", "sync", "work-items", "--provider", "gitlab", "--backfill", "1"]
+    activeDeadlineSeconds: 7200
+    backoffLimit: 2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  syncJira:
+    enabled: false
+    schedule: "0 */4 * * *"
+    command: ["dev-hops", "sync", "work-items", "--provider", "jira", "--backfill", "1"]
+    activeDeadlineSeconds: 3600
+    backoffLimit: 2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+
+# =============================================================================
+# Ingress
+# =============================================================================
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: dev-health.example.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: api
+        - path: /
+          pathType: Prefix
+          service: web
+  tls: []
+  #  - secretName: dev-health-tls
+  #    hosts:
+  #      - dev-health.example.com
+
+# =============================================================================
+# Network Policy
+# =============================================================================
+networkPolicy:
+  enabled: false
+
+# =============================================================================
+# Configuration (non-secret)
+# =============================================================================
+config:
+  # -- API
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  LOG_LEVEL: "INFO"
+  GRAPHQL_QUERY_TIMEOUT: "30"
+  BATCH_SIZE: "100"
+  MAX_WORKERS: "4"
+  # -- Celery (auto-set if redis.enabled, override for external broker)
+  CELERY_BROKER_URL: ""
+  CELERY_RESULT_BACKEND: ""
+  # -- Integration defaults
+  GITLAB_URL: "https://gitlab.com"
+  JIRA_FETCH_COMMENTS: "1"
+  GITHUB_INCLUDE_PRS: "true"
+  GITHUB_FETCH_COMMENTS: "true"
+  GITHUB_FETCH_MILESTONES: "true"
+
+# =============================================================================
+# Secrets
+# =============================================================================
+secrets:
+  # -- Create a Kubernetes Secret from these values. Set to false to use an
+  #    existing secret (externalSecretName).
+  create: true
+  # -- Name of an existing Secret to use instead of creating one
+  externalSecretName: ""
+  # -- Secret values (plaintext — Helm encodes to base64)
+  data:
+    DATABASE_URI: ""
+    CLICKHOUSE_URI: ""
+    REDIS_URL: ""
+    JWT_SECRET_KEY: ""
+    SETTINGS_ENCRYPTION_KEY: ""
+    ADMIN_API_KEY: ""
+    GITHUB_TOKEN: ""
+    GITLAB_TOKEN: ""
+    JIRA_BASE_URL: ""
+    JIRA_EMAIL: ""
+    JIRA_API_TOKEN: ""
+    STRIPE_SECRET_KEY: ""
+    STRIPE_PUBLISHABLE_KEY: ""
+    STRIPE_WEBHOOK_SECRET: ""
+    EMAIL_PROVIDER: "console"
+    SMTP_HOST: ""
+    SMTP_PORT: ""
+    RESEND_API_KEY: ""
+    SENTRY_DSN: ""
+    LICENSE_PUBLIC_KEY: ""
+    LICENSE_PRIVATE_KEY: ""
+
+# =============================================================================
+# In-cluster Redis (optional — disable for managed Redis)
+# =============================================================================
+redis:
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  maxmemory: "256mb"
+
+# =============================================================================
+# In-cluster ClickHouse (optional — disable for managed ClickHouse)
+# =============================================================================
+clickhouse:
+  enabled: true
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "latest"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  credentials:
+    user: "ch"
+    password: "ch"
+    database: "default"
+
+# =============================================================================
+# In-cluster PostgreSQL (optional — disable for managed Postgres)
+# =============================================================================
+postgresql:
+  enabled: false
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  credentials:
+    user: "devhealth"
+    password: "devhealth"
+    database: "devhealth"

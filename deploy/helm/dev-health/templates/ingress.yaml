@@ -1,0 +1,52 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "dev-health.fullname" . }}
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                {{- if eq .service "api" }}
+                name: {{ include "dev-health.fullname" $ }}-api
+                port:
+                  number: {{ $.Values.api.port }}
+                {{- else if eq .service "web" }}
+                name: {{ include "dev-health.fullname" $ }}-web
+                port:
+                  number: {{ $.Values.web.port }}
+                {{- else if eq .service "billing-edge" }}
+                name: {{ include "dev-health.fullname" $ }}-billing-edge
+                port:
+                  number: {{ $.Values.billingEdge.port }}
+                {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

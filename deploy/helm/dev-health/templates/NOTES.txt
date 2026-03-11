@@ -1,0 +1,61 @@
+=================================================================
+  Dev Health — Development Team Operation Analytics
+=================================================================
+
+Your release "{{ .Release.Name }}" has been deployed!
+
+{{- if .Values.api.enabled }}
+
+📊 API:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+{{- else }}
+  kubectl port-forward svc/{{ include "dev-health.fullname" . }}-api {{ .Values.api.port }}:{{ .Values.api.port }} -n {{ include "dev-health.namespace" . }}
+  Then visit: http://localhost:{{ .Values.api.port }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.web.enabled }}
+
+🌐 Web UI:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+{{- else }}
+  kubectl port-forward svc/{{ include "dev-health.fullname" . }}-web {{ .Values.web.port }}:{{ .Values.web.port }} -n {{ include "dev-health.namespace" . }}
+  Then visit: http://localhost:{{ .Values.web.port }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.worker.enabled }}
+
+⚙️  Worker: {{ .Values.worker.replicas }} replica(s), queues: {{ .Values.worker.queues }}
+{{- end }}
+
+{{- if .Values.beat.enabled }}
+⏰ Beat scheduler: enabled
+{{- end }}
+
+Components deployed:
+  {{- if .Values.api.enabled }}  ✅ API{{ end }}
+  {{- if .Values.web.enabled }}  ✅ Web{{ end }}
+  {{- if .Values.worker.enabled }}  ✅ Worker{{ end }}
+  {{- if .Values.beat.enabled }}  ✅ Beat{{ end }}
+  {{- if .Values.billingEdge.enabled }}  ✅ Billing Edge{{ end }}
+  {{- if .Values.redis.enabled }}  ✅ Redis (in-cluster){{ end }}
+  {{- if .Values.clickhouse.enabled }}  ✅ ClickHouse (in-cluster){{ end }}
+  {{- if .Values.postgresql.enabled }}  ✅ PostgreSQL (in-cluster){{ end }}
+
+{{- if not .Values.secrets.create }}
+
+⚠️  Using external secret: {{ .Values.secrets.externalSecretName }}
+   Ensure it contains all required keys.
+{{- end }}
+
+Quick commands:
+  helm status {{ .Release.Name }}
+  helm get values {{ .Release.Name }}
+  kubectl get pods -n {{ include "dev-health.namespace" . }} -l app.kubernetes.io/instance={{ .Release.Name }}

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: dev-health
+description: Dev Health — Open Source Development Team Operation Analytics
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - devops
+  - analytics
+  - developer-health
+  - dora-metrics
+home: https://github.com/full-chaos/dev-health-ops
+maintainers:
+  - name: Full Chaos
+    url: https://github.com/full-chaos

@@ -1,0 +1,89 @@
+{{- if .Values.billingEdge.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-billing-edge
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "billing-edge" "context" $) | nindent 4 }}
+spec:
+  replicas: {{ .Values.billingEdge.replicas }}
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "billing-edge" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "billing-edge" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      containers:
+        - name: billing-edge
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -m
+            - uvicorn
+            - dev_health_ops.api.billing_edge:app
+            - --host
+            - "0.0.0.0"
+            - --port
+            - {{ .Values.billingEdge.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.billingEdge.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.configMapName" . }}
+            - secretRef:
+                name: {{ include "dev-health.secretName" . }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.billingEdge.resources | nindent 12 }}
+      {{- with .Values.billingEdge.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.billingEdge.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.billingEdge.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-billing-edge
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "billing-edge" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "billing-edge" "context" $) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.billingEdge.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

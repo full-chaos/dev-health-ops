@@ -1,0 +1,47 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow ingress controller traffic
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.port }}
+        - protocol: TCP
+          port: {{ .Values.web.port }}
+    # Allow pod-to-pod within namespace
+    - from:
+        - podSelector: {}
+  egress:
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    # Internal communication
+    - to:
+        - podSelector: {}
+    # External HTTPS (GitHub, GitLab, Jira, Stripe APIs)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+{{- end }}

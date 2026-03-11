@@ -1,0 +1,150 @@
+# =============================================================================
+# Quickstart values — deploy the full stack with zero configuration
+# Usage: helm install dev-health ./deploy/helm/dev-health -f values-quickstart.yaml
+# =============================================================================
+# WARNING: Default credentials are for evaluation only. Do NOT use in production.
+
+# All databases run in-cluster
+postgresql:
+  enabled: true
+  credentials:
+    user: devhealth
+    password: devhealth
+    database: devhealth
+
+clickhouse:
+  enabled: true
+  credentials:
+    user: ch
+    password: ch
+    database: default
+
+redis:
+  enabled: true
+
+# Pre-filled secrets with generated defaults
+secrets:
+  create: true
+  data:
+    JWT_SECRET_KEY: "change-me-in-production-jwt-secret-key-0123456789"
+    SETTINGS_ENCRYPTION_KEY: "change-me-in-production-encryption-key-012345"
+    ADMIN_API_KEY: "change-me-admin-api-key"
+    EMAIL_PROVIDER: "console"
+
+# Sensible defaults for local evaluation
+config:
+  LOG_LEVEL: "DEBUG"
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  GRAPHQL_QUERY_TIMEOUT: "30"
+  BATCH_SIZE: "100"
+  MAX_WORKERS: "4"
+  GITLAB_URL: "https://gitlab.com"
+  GITHUB_INCLUDE_PRS: "true"
+  GITHUB_FETCH_COMMENTS: "true"
+  GITHUB_FETCH_MILESTONES: "true"
+  JIRA_FETCH_COMMENTS: "1"
+
+# Scale down for local/dev clusters
+api:
+  replicas: 1
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+worker:
+  replicas: 1
+  concurrency: 2
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+beat:
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "25m"
+    limits:
+      memory: "256Mi"
+      cpu: "125m"
+
+web:
+  replicas: 1
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "25m"
+    limits:
+      memory: "256Mi"
+      cpu: "125m"
+
+# Disable optional components
+billingEdge:
+  enabled: false
+
+# Disable sync cronjobs (no tokens configured)
+cronjobs:
+  dailyMetrics:
+    enabled: true
+    schedule: "0 2 * * *"
+    command: ["dev-hops", "metrics", "daily"]
+    activeDeadlineSeconds: 3600
+    backoffLimit: 3
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  syncGithub:
+    enabled: false
+    schedule: "0 */6 * * *"
+    command: ["dev-hops", "sync", "work-items", "--provider", "github", "--backfill", "1"]
+    activeDeadlineSeconds: 7200
+    backoffLimit: 2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  syncGitlab:
+    enabled: false
+    schedule: "30 */6 * * *"
+    command: ["dev-hops", "sync", "work-items", "--provider", "gitlab", "--backfill", "1"]
+    activeDeadlineSeconds: 7200
+    backoffLimit: 2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  syncJira:
+    enabled: false
+    schedule: "0 */4 * * *"
+    command: ["dev-hops", "sync", "work-items", "--provider", "jira", "--backfill", "1"]
+    activeDeadlineSeconds: 3600
+    backoffLimit: 2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"

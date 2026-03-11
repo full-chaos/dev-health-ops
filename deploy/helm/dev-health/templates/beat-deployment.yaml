@@ -1,0 +1,54 @@
+{{- if .Values.beat.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dev-health.fullname" . }}-beat
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "beat" "context" $) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "beat" "context" $) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "beat" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
+      containers:
+        - name: beat
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - dev_health_ops.workers.celery_app
+            - beat
+            - --loglevel=info
+            - --schedule=/tmp/celerybeat-schedule
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.configMapName" . }}
+            - secretRef:
+                name: {{ include "dev-health.secretName" . }}
+          resources:
+            {{- toYaml .Values.beat.resources | nindent 12 }}
+      {{- with .Values.beat.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.beat.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.beat.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

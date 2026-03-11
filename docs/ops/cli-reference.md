@@ -431,6 +431,39 @@ python -m dev_health_ops.cli admin orgs list --include-inactive
 
 ---
 
+## Backfill Commands
+
+### `backfill run`
+
+Run historical data backfill for a sync configuration. Data is synced in chunked 7-day windows. Uses `CLICKHOUSE_URI`.
+
+```bash
+dev-hops backfill run \
+  --config-id "550e8400-e29b-41d4-a716-446655440000" \
+  --since 2024-01-01 \
+  --before 2024-03-01
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--config-id` | Sync configuration UUID (required) |
+| `--since` | Start date (ISO 8601). Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, default: tomorrow) |
+| `--backfill N` | Backfill N days ending at `--before`. Mutually exclusive with `--since` |
+| `--sink` | Analytics backend (`clickhouse` only; default) |
+
+Backfill depth is limited by organization tier:
+
+| Tier | Max Backfill Depth |
+|------|-------------------|
+| Community | 30 days |
+| Team | 90 days |
+| Enterprise | Unlimited |
+
+> **Important:** Backfill never updates SyncWatermarks. Incremental sync state is preserved.
+
 ## Batch Processing Options
 
 For GitHub/GitLab batch operations:

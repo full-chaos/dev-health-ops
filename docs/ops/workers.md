@@ -49,6 +49,7 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `sync` | Git/PR/work-item syncs, team drift, batch sync |
 | `webhooks` | Webhook event processing, billing notifications |
 | `ingest` | Stream ingestion consumer |
+| `backfill` | Historical data backfill operations |
 
 ---
 
@@ -86,6 +87,12 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `run_ingest_consumer` | ingest | Consume from ingest streams (Redis) |
 | `health_check` | default | Worker health check |
 | `phone_home_heartbeat` | default | Daily heartbeat for deployment telemetry |
+
+### Backfill Tasks
+
+| Task | Queue | Description |
+|------|-------|-------------|
+| `run_backfill` | backfill | Chunked historical sync with BackfillJob progress tracking |
 
 ---
 

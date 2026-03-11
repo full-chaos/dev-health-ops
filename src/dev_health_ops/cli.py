@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 import dev_health_ops.api.billing.cli as billing_cli
+import dev_health_ops.backfill.cli as backfill_cli
 from dev_health_ops import migrate as migrate_mod
 from dev_health_ops.api import runner as api_runner
 from dev_health_ops.api.admin import cli as admin_cli
@@ -192,6 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- work-graph & investment ----
     work_graph_runner.register_commands(sub)
+
+    backfill_cli.register_backfill_commands(sub)
 
     # ---- migrate ----
     migrate_mod.register_commands(sub)

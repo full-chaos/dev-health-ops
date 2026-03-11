@@ -372,6 +372,19 @@ class TierLimitService:
         """Check if organization can add more repos."""
         return self.check_limit(org_id, "max_repos", current_repos)
 
+    def check_backfill_limit(
+        self, org_id: uuid.UUID, requested_days: int
+    ) -> tuple[bool, str | None]:
+        limit = self.get_limit(org_id, "backfill_days")
+        if limit is None:
+            return True, None
+        if requested_days > limit:
+            return (
+                False,
+                f"Backfill limit exceeded: requested {requested_days} days, limit is {limit} days",
+            )
+        return True, None
+
 
 @lru_cache(maxsize=1)
 def get_standard_feature_keys() -> frozenset[str]:

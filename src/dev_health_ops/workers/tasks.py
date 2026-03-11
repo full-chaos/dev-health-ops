@@ -542,6 +542,153 @@ def run_sync_config(
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
 
+@celery_app.task(bind=True, max_retries=3, queue="backfill")
+def run_backfill(
+    self,
+    sync_config_id: str,
+    since: str,
+    before: str,
+    org_id: str,
+) -> dict:
+    from dev_health_ops.backfill.runner import run_backfill_for_config
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import (
+        JobRun,
+        JobRunStatus,
+        JobStatus,
+        ScheduledJob,
+    )
+
+    sync_config_uuid = uuid.UUID(sync_config_id)
+    started_at = datetime.now(timezone.utc)
+    run_id: uuid.UUID | None = None
+    job_id: uuid.UUID | None = None
+
+    try:
+        with get_postgres_session_sync() as session:
+            job = (
+                session.query(ScheduledJob)
+                .filter(
+                    ScheduledJob.org_id == org_id,
+                    ScheduledJob.sync_config_id == sync_config_uuid,
+                    ScheduledJob.job_type == "backfill",
+                )
+                .one_or_none()
+            )
+            if job is None:
+                job = ScheduledJob(
+                    name=f"backfill-{sync_config_id}",
+                    job_type="backfill",
+                    schedule_cron="0 0 1 1 *",
+                    org_id=org_id,
+                    job_config={"sync_config_id": sync_config_id},
+                    sync_config_id=sync_config_uuid,
+                    status=JobStatus.ACTIVE.value,
+                )
+                session.add(job)
+                session.flush()
+
+            job_id = job.id
+            run = JobRun(
+                job_id=job.id,
+                triggered_by="manual",
+                status=JobRunStatus.PENDING.value,
+            )
+            session.add(run)
+            session.flush()
+            run_id = run.id
+
+            run.status = JobRunStatus.RUNNING.value
+            run.started_at = started_at
+            job.is_running = True
+            job.last_run_at = started_at
+            session.flush()
+
+        result_payload = run_backfill_for_config(
+            db_url=_get_db_url(),
+            sync_config_id=sync_config_id,
+            org_id=org_id,
+            since=date.fromisoformat(since),
+            before=date.fromisoformat(before),
+            sink="clickhouse",
+            chunk_days=7,
+        )
+
+        completed_at = datetime.now(timezone.utc)
+        duration_seconds = int((completed_at - started_at).total_seconds())
+
+        with get_postgres_session_sync() as session:
+            run = session.query(JobRun).filter(JobRun.id == run_id).one_or_none()
+            job = (
+                session.query(ScheduledJob)
+                .filter(ScheduledJob.id == job_id)
+                .one_or_none()
+            )
+
+            if run:
+                run.status = JobRunStatus.SUCCESS.value
+                run.completed_at = completed_at
+                run.duration_seconds = duration_seconds
+                run.result = result_payload
+                run.error = None
+
+            if job:
+                job.is_running = False
+                job.last_run_status = JobRunStatus.SUCCESS.value
+                job.last_run_duration_seconds = duration_seconds
+                job.last_run_error = None
+                job.run_count = int(job.run_count or 0) + 1
+
+            session.flush()
+
+        return {
+            "status": "success",
+            "job_run_id": str(run_id),
+            "result": result_payload,
+        }
+    except Exception as exc:
+        logger.exception(
+            "Backfill task failed: sync_config_id=%s org_id=%s error=%s",
+            sync_config_id,
+            org_id,
+            exc,
+        )
+        completed_at = datetime.now(timezone.utc)
+        duration_seconds = int((completed_at - started_at).total_seconds())
+
+        try:
+            if run_id is not None:
+                with get_postgres_session_sync() as session:
+                    run = (
+                        session.query(JobRun).filter(JobRun.id == run_id).one_or_none()
+                    )
+                    job = (
+                        session.query(ScheduledJob)
+                        .filter(ScheduledJob.id == job_id)
+                        .one_or_none()
+                    )
+
+                    if run:
+                        run.status = JobRunStatus.FAILED.value
+                        run.completed_at = completed_at
+                        run.duration_seconds = duration_seconds
+                        run.error = str(exc)
+
+                    if job:
+                        job.is_running = False
+                        job.last_run_status = JobRunStatus.FAILED.value
+                        job.last_run_duration_seconds = duration_seconds
+                        job.last_run_error = str(exc)
+                        job.run_count = int(job.run_count or 0) + 1
+                        job.failure_count = int(job.failure_count or 0) + 1
+
+                    session.flush()
+        except Exception as update_error:
+            logger.error("Failed updating backfill failure state: %s", update_error)
+
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
 def _is_batch_eligible(config) -> bool:
     """Check if a SyncConfiguration should be dispatched as a batch.
 

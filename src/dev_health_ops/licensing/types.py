@@ -16,6 +16,9 @@ class LicenseLimits(BaseModel):
     users: int = Field(description="Max users, -1 for unlimited")
     repos: int = Field(description="Max repos, -1 for unlimited")
     api_rate: int = Field(description="Requests per minute, -1 for unlimited")
+    backfill_days: int | None = Field(
+        default=None, description="Max backfill days, None for unlimited"
+    )
 
     def is_unlimited(self, field: str) -> bool:
         return getattr(self, field, 0) == -1
@@ -72,9 +75,13 @@ DEFAULT_FEATURES: dict[LicenseTier, dict[str, bool]] = {
 }
 
 DEFAULT_LIMITS: dict[LicenseTier, LicenseLimits] = {
-    LicenseTier.COMMUNITY: LicenseLimits(users=5, repos=3, api_rate=60),
-    LicenseTier.TEAM: LicenseLimits(users=25, repos=20, api_rate=300),
-    LicenseTier.ENTERPRISE: LicenseLimits(users=-1, repos=-1, api_rate=-1),
+    LicenseTier.COMMUNITY: LicenseLimits(
+        users=5, repos=3, api_rate=60, backfill_days=30
+    ),
+    LicenseTier.TEAM: LicenseLimits(users=25, repos=20, api_rate=300, backfill_days=90),
+    LicenseTier.ENTERPRISE: LicenseLimits(
+        users=-1, repos=-1, api_rate=-1, backfill_days=None
+    ),
 }
 
 GRACE_DAYS: dict[LicenseTier, int] = {

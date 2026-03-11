@@ -29,6 +29,7 @@ from dev_health_ops.api.services.audit import (
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.invites import create_invite, send_invite_email
 from dev_health_ops.api.services.ip_allowlist import IPAllowlistService
+from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.retention import RetentionService
 from dev_health_ops.api.services.settings import (
     IdentityMappingService,
@@ -63,6 +64,7 @@ from .schemas import (
     JOB_RUN_STATUS_LABELS,
     AuditLogListResponse,
     AuditLogResponse,
+    BackfillRequest,
     ConfirmInferredMembersRequest,
     ConfirmInferredMembersResponse,
     ConfirmMembersRequest,
@@ -711,6 +713,48 @@ async def trigger_sync_config(
             "status": "triggered",
             "config_id": str(config.id),
             "task_id": result.id,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")
+
+
+@router.post("/sync-configs/{config_id}/backfill", status_code=202)
+async def trigger_sync_config_backfill(
+    config_id: str,
+    payload: BackfillRequest,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> dict:
+    svc = SyncConfigurationService(session, org_id)
+    config = await svc.get_by_id(config_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
+
+    requested_days = (payload.before - payload.since).days
+
+    def _check_backfill_limit(sync_session) -> tuple[bool, str | None]:
+        tier_svc = TierLimitService(sync_session)
+        return tier_svc.check_backfill_limit(uuid.UUID(org_id), requested_days)
+
+    allowed, reason = await session.run_sync(_check_backfill_limit)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason or "Backfill not allowed")
+
+    try:
+        from dev_health_ops.workers.tasks import run_backfill
+
+        result = run_backfill.delay(
+            sync_config_id=str(config.id),
+            since=payload.since.isoformat(),
+            before=payload.before.isoformat(),
+            org_id=org_id,
+        )
+        return {
+            "status": "accepted",
+            "config_id": str(config.id),
+            "task_id": result.id,
+            "since": payload.since.isoformat(),
+            "before": payload.before.isoformat(),
         }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")

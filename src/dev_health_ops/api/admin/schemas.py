@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -118,6 +118,11 @@ class SyncConfigUpdate(BaseModel):
     sync_targets: list[str] | None = None
     sync_options: dict[str, Any] | None = None
     is_active: bool | None = None
+
+
+class BackfillRequest(BaseModel):
+    since: date
+    before: date
 
 
 JOB_RUN_STATUS_LABELS: dict[int, str] = {

@@ -32,6 +32,7 @@ task_queues = {
     "default": {},
     "metrics": {},
     "sync": {},
+    "backfill": {},
     "webhooks": {},
     "ingest": {},
 }

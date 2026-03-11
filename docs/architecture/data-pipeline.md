@@ -123,6 +123,46 @@ async def write_batch(records: List[Model], session: AsyncSession) -> int:
 
 ---
 
+## Backfill Pipeline
+
+Historical backfill reuses the same data pipeline (Connectors -> Processors -> Sinks) but operates differently from incremental sync:
+
+### How It Works
+
+1. **Date range splitting** -- The `BackfillChunker` divides the requested date range into 7-day windows
+2. **Sequential processing** -- Each chunk runs through the standard sync pipeline independently
+3. **Progress tracking** -- A `BackfillJob` record in PostgreSQL tracks chunk completion and overall progress
+
+### Key Differences from Incremental Sync
+
+| Aspect | Incremental Sync | Backfill |
+|--------|-----------------|----------|
+| Trigger | Scheduled / manual | Manual or API-triggered |
+| Date range | From watermark to now | Explicit `--since` / `--before` |
+| Watermarks | Updates SyncWatermarks | **Never** updates watermarks |
+| Chunking | Single pass | 7-day windows |
+| Progress | Job run status only | Per-chunk progress via BackfillJob |
+| Queue | `sync` | `backfill` (dedicated) |
+
+### Tier Limits
+
+Backfill depth is gated by organization billing tier:
+
+| Tier | Max Days |
+|------|----------|
+| Community | 30 |
+| Team | 90 |
+| Enterprise | Unlimited |
+
+### Components
+
+- `backfill/chunker.py` -- `chunk_date_range()` splits date ranges into windows
+- `backfill/runner.py` -- `run_backfill_for_config()` orchestrates chunked sync
+- `backfill/cli.py` -- `dev-hops backfill run` CLI command
+- `workers/tasks.py` -- `run_backfill` Celery task on `backfill` queue
+- `models/backfill.py` -- `BackfillJob` PostgreSQL model for progress tracking
+- `api/services/backfill.py` -- `BackfillJobService` async CRUD for API layer
+
 ## Storage Schema Highlights
 
 ### ClickHouse Tables

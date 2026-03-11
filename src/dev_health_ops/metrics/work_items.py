@@ -140,25 +140,38 @@ def fetch_jira_work_items_with_extras(
                     "JiraProvider supports a single project_key override; using env JIRA_PROJECT_KEYS instead"
                 )
 
-        batch = JiraProvider(
+        provider = JiraProvider(
             status_mapping=status_mapping,
             identity=identity,
-        ).ingest(ctx)
-        if batch.interactions == [] and _env_flag("JIRA_FETCH_COMMENTS", True):
+        )
+        batch_work_items: list[WorkItem] = []
+        batch_status_transitions: list[WorkItemStatusTransition] = []
+        batch_dependencies: list[WorkItemDependency] = []
+        batch_reopen_events: list[WorkItemReopenEvent] = []
+        batch_interactions: list[WorkItemInteractionEvent] = []
+        batch_sprints: list[Sprint] = []
+        for batch in provider.iter_ingest(ctx):
+            batch_work_items.extend(batch.work_items)
+            batch_status_transitions.extend(batch.status_transitions)
+            batch_dependencies.extend(batch.dependencies)
+            batch_reopen_events.extend(batch.reopen_events)
+            batch_interactions.extend(batch.interactions)
+            batch_sprints.extend(batch.sprints)
+        if batch_interactions == [] and _env_flag("JIRA_FETCH_COMMENTS", True):
             logger.info(
                 "JiraProvider does not fetch comments; set JIRA_USE_PROVIDER=0 to use legacy comment ingestion"
             )
-        if batch.dependencies == []:
+        if batch_dependencies == []:
             logger.info(
                 "JiraProvider does not fetch dependency edges; set JIRA_USE_PROVIDER=0 to use legacy dependency ingestion"
             )
         return (
-            batch.work_items,
-            batch.status_transitions,
-            batch.dependencies,
-            batch.reopen_events,
-            batch.interactions,
-            batch.sprints,
+            batch_work_items,
+            batch_status_transitions,
+            batch_dependencies,
+            batch_reopen_events,
+            batch_interactions,
+            batch_sprints,
         )
 
     client = JiraClient.from_env()

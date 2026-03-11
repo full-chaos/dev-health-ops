@@ -165,7 +165,7 @@ services:
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: worker
-    command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync,webhooks
+    command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync,webhooks,backfill
     environment:
       <<: *env
       CELERY_BROKER_URL: redis://redis:6379/0

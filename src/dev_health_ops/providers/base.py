@@ -8,6 +8,7 @@ along with capability flags and typed envelopes for consistent orchestration.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -112,3 +113,13 @@ class Provider(ABC):
         Returns a ProviderBatch with normalized entities. Only lists for
         supported capabilities will be populated.
         """
+
+    def iter_ingest(self, ctx: IngestionContext) -> Iterable[ProviderBatch]:
+        """
+        Yield batches of ingested data.
+
+        Default implementation wraps ingest() in a single-element iterable.
+        Providers with large result sets should override to yield smaller
+        batches for memory-bounded processing.
+        """
+        yield self.ingest(ctx)

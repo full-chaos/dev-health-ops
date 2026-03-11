@@ -2,6 +2,14 @@ import importlib.util
 import os
 
 from dev_health_ops.utils.datetime import naive_utc, to_utc, utc_today
+from dev_health_ops.utils.cli import (
+    add_date_range_args,
+    add_sink_arg,
+    resolve_date_range,
+    resolve_max_commits,
+    resolve_since_datetime,
+    validate_sink,
+)
 
 _legacy_utils_path = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "utils.py"
@@ -51,4 +59,10 @@ __all__ = [
     "_resolve_since",
     "_resolve_max_commits",
     "_split_full_name",
+    "add_date_range_args",
+    "add_sink_arg",
+    "resolve_date_range",
+    "resolve_max_commits",
+    "resolve_since_datetime",
+    "validate_sink",
 ]

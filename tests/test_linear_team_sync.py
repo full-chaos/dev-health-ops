@@ -69,7 +69,8 @@ def _make_ns(
     ns = argparse.Namespace()
     ns.provider = provider
     ns.db = db
-    ns.db_type = None
+    ns.sink = "clickhouse"
+    ns.analytics_db = None
     ns.path = None
     ns.owner = None
     ns.auth = None

@@ -7,26 +7,29 @@ The CLI is the primary way to run sync jobs, compute metrics, and manage dashboa
 ### Sync local Git data
 
 ```bash
-dev-hops sync git --provider local --db "<DB_CONN>" --repo-path /path/to/repo
+CLICKHOUSE_URI="clickhouse://localhost:8123/default" \
+dev-hops sync git --provider local --repo-path /path/to/repo
 ```
 
 ### Sync teams
 
 ```bash
-dev-hops sync teams --provider config --db "<DB_CONN>" --path /path/to/teams.yml
+POSTGRES_URI="postgresql+asyncpg://localhost:5555/postgres" \
+dev-hops sync teams --provider config --path /path/to/teams.yml
 ```
 
 ### Sync work items
 
 ```bash
-dev-hops sync work-items --provider github --auth "$GITHUB_TOKEN" -s "org/*" --db "<DB_CONN>"
+CLICKHOUSE_URI="clickhouse://localhost:8123/default" \
+dev-hops sync work-items --provider github --auth "$GITHUB_TOKEN" -s "org/*"
 ```
 
 ### Metrics
 
 ```bash
-dev-hops metrics daily --db "<DB_CONN>"
-dev-hops metrics complexity --repo-path . -s "*" --db "<DB_CONN>"
+CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops metrics daily
+CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops metrics complexity --repo-path . -s "*"
 ```
 
 `metrics daily` defaults to `--provider auto`, which loads work items from the database only.
@@ -34,9 +37,9 @@ dev-hops metrics complexity --repo-path . -s "*" --db "<DB_CONN>"
 ### Fixtures
 
 ```bash
-dev-hops fixtures generate --db "<DB_CONN>" --days 30
+CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops fixtures generate --days 30
 ```
 
 ## Flags and overrides
 
-CLI flags override environment variables. Use `--db` or `DATABASE_URI` to target a specific database.
+CLI flags override environment variables. Set `CLICKHOUSE_URI` for analytics and `POSTGRES_URI` for semantic data. Subcommands accept `--sink` for analytics and `--since`/`--before`/`--backfill` for date ranges.

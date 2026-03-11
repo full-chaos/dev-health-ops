@@ -17,7 +17,12 @@ from dev_health_ops.metrics.schemas import DORAMetricsRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.utils.datetime import utc_today
+from dev_health_ops.utils.cli import (
+    add_date_range_args,
+    add_sink_arg,
+    resolve_date_range,
+    validate_sink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,26 +198,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "dora",
         help="Fetch and persist DORA metrics from GitLab (supplemental).",
     )
-    dora.add_argument(
-        "--day",
-        type=date.fromisoformat,
-        default=utc_today().isoformat(),
-        help="Target day (YYYY-MM-DD).",
-    )
-    dora.add_argument(
-        "--backfill",
-        type=int,
-        default=1,
-        help="Fetch metrics for N days ending at --day.",
-    )
+    add_date_range_args(dora)
     dora.add_argument("--repo-id", type=uuid.UUID)
     dora.add_argument("--repo-name")
-    dora.add_argument(
-        "--sink",
-        choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
-        default="auto",
-        help="Sink backend (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
-    )
+    add_sink_arg(dora)
     dora.add_argument(
         "--metrics",
         help="Comma-separated metric names to fetch (default: GitLab DORA set).",
@@ -233,10 +222,12 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
 def _cmd_metrics_dora(ns: argparse.Namespace) -> int:
     try:
+        validate_sink(ns)
+        end_day, backfill_days = resolve_date_range(ns)
         run_dora_metrics_job(
             db_url=resolve_sink_uri(ns),
-            day=ns.day,
-            backfill_days=ns.backfill,
+            day=end_day,
+            backfill_days=backfill_days,
             repo_id=ns.repo_id,
             repo_name=ns.repo_name,
             sink=ns.sink,

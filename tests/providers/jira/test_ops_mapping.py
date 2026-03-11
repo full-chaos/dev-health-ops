@@ -15,7 +15,8 @@ def test_sync_teams_jira_ops():
     # Mock namespace
     ns = MagicMock()
     ns.db = "sqlite:///:memory:"
-    ns.db_type = "sqlite"
+    ns.sink = "clickhouse"
+    ns.analytics_db = None
     ns.provider = "jira-ops"
     ns.path = None
 
@@ -24,11 +25,6 @@ def test_sync_teams_jira_ops():
         project=JiraProject(cloud_id="cloud-1", key="PROJ", name="Project"),
         opsgenie_teams=[OpsgenieTeamRef(id="team-1", name="Ops Team")],
     )
-
-    def mock_async_run(coro):
-        # We need to close the coroutine to avoid RuntimeWarning
-        coro.close()
-        return 0
 
     with (
         patch(
@@ -43,10 +39,17 @@ def test_sync_teams_jira_ops():
             return_value=iter([mock_project]),
         ),
         patch(
+            "dev_health_ops.providers.teams.resolve_sink_uri",
+            return_value="clickhouse://localhost:8123/default",
+        ),
+        patch(
             "dev_health_ops.storage.run_with_store", new_callable=AsyncMock
         ) as mock_run_store,
-        patch("asyncio.run", side_effect=mock_async_run),
+        patch("dev_health_ops.providers.teams.validate_sink"),
+        patch(
+            "dev_health_ops.providers.teams.detect_db_type", return_value="clickhouse"
+        ),
     ):
         result = sync_teams(ns)
         assert result == 0
-        assert mock_run_store.called
+        mock_run_store.assert_awaited_once()

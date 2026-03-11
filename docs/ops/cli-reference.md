@@ -23,7 +23,7 @@ The CLI is implemented in `cli.py` and orchestrates:
 
 `--db` and `--analytics-db` are **not** aliases. They point to different databases serving different roles (see Dual-Database Architecture below). If `POSTGRES_URI` is not set, `--db` falls back to `DATABASE_URI`.
 
-Subcommands like `metrics daily` also accept `--sink` to select the output backend. Only `clickhouse` (or `auto`, which resolves to ClickHouse) is supported at runtime. The legacy values `mongo`, `sqlite`, `postgres`, and `both` are accepted by the parser for backward compatibility but will fail at runtime (see CHAOS-641).
+Subcommands like `metrics daily` also accept `--sink` to select the output backend. Legacy values (`mongo`, `sqlite`, `postgres`, `both`) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.
 
 > **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
 
@@ -77,8 +77,12 @@ dev-hops sync git --provider gitlab \
 | `--repo-path` | Path to local repo |
 | `--owner`, `--repo` | GitHub owner/repo |
 | `--project-id` | GitLab project ID |
-| `--since`, `--date` | Date filter |
-| `--backfill N` | Days to backfill |
+| `--since` | Start datetime (ISO 8601). Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, default: tomorrow) |
+| `--backfill N` | Backfill N days ending at `--before`. Mutually exclusive with `--since` |
+| `--sink` | Analytics backend (`clickhouse` only; default) |
+
+`--date` is a deprecated hidden alias for `--before`.
 
 ### `sync prs`
 
@@ -98,7 +102,7 @@ Sync work items from issue trackers. Uses `CLICKHOUSE_URI`.
 ```bash
 # All providers
 dev-hops sync work-items --provider all \
-  --date 2025-02-01 \
+  --before 2025-02-02 \
   --backfill 30
 
 # Jira only
@@ -194,30 +198,33 @@ Compute daily metrics. Uses `CLICKHOUSE_URI`.
 ```bash
 # Single day
 dev-hops metrics daily \
-  --date 2025-02-01
+  --before 2025-02-02 \
+  --backfill 1
 
-# With backfill
+# 7-day backfill
 dev-hops metrics daily \
-  --date 2025-02-01 \
+  --before 2025-02-02 \
   --backfill 7
 
 # Filter to one repo
 dev-hops metrics daily \
-  --date 2025-02-01 \
+  --before 2025-02-02 \
   --repo-id <uuid>
 
 # Specify output format
 dev-hops metrics daily \
-  --date 2025-02-01 \
+  --before 2025-02-02 \
   --sink clickhouse
 ```
 
 **Options:**
 | Option | Description |
 |--------|-------------|
-| `--date` | Target date |
-| `--backfill N` | Compute N days ending at date |
+| `--since` | Start date. Mutually exclusive with `--backfill` |
+| `--before` | End date (exclusive, default: tomorrow) |
+| `--backfill N` | Compute N days ending at `--before` (default: 1) |
 | `--repo-id` | Filter to specific repository |
+| `--sink` | Analytics backend (`clickhouse` only) |
 
 ---
 
@@ -327,7 +334,6 @@ dev-hops fixtures generate \
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--sink` | `$CLICKHOUSE_URI` | Analytics sink URI (ClickHouse) |
-| `--db-type` | auto-detect | Explicit DB type (`postgres`, `clickhouse`, etc.) |
 | `--repo-name` | `acme/demo-app` | Base repository name |
 | `--repo-count` | `1` | Number of repos to generate |
 | `--days` | `30` | Number of days of historical data |
@@ -338,6 +344,8 @@ dev-hops fixtures generate \
 | `--with-metrics` | off | Also generate derived metrics (daily, DORA, complexity, investment, etc.) |
 | `--with-work-graph` | off | Build work graph edges after generation (ClickHouse only) |
 | `--team-count` | `8` | Number of synthetic teams to create |
+
+Database type is auto-detected from the sink URI.
 
 ### `fixtures validate`
 
@@ -496,20 +504,19 @@ dev-hops sync git --provider github \
 
 # 2. Sync work items
 dev-hops sync work-items --provider jira \
-  --date 2025-02-01 \
+  --before 2025-02-02 \
   --backfill 30
 
 # 3. Compute metrics
 dev-hops metrics daily \
-  --date 2025-02-01 \
   --backfill 30
 ```
 
 ### Local Development
 
 ```bash
-# Use SQLite for local dev (analytics layer)
-export CLICKHOUSE_URI="sqlite+aiosqlite:///./dev.db"
+# Start local ClickHouse
+docker compose up -d clickhouse
 
 # Generate synthetic data
 dev-hops fixtures generate --days 30

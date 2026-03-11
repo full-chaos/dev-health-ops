@@ -38,6 +38,12 @@ from dev_health_ops.providers.teams import (
     load_team_resolver,
 )
 from dev_health_ops.storage import detect_db_type
+from dev_health_ops.utils.cli import (
+    add_date_range_args,
+    add_sink_arg,
+    resolve_date_range,
+    validate_sink,
+)
 from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
@@ -533,30 +539,14 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
         "work-items",
         help="Sync work tracking facts and compute derived work item tables.",
     )
-    wi.add_argument(
-        "--day",
-        type=date.fromisoformat,
-        default=utc_today().isoformat(),
-        help="Target day (YYYY-MM-DD).",
-    )
-    wi.add_argument(
-        "--backfill",
-        type=int,
-        default=1,
-        help="Sync/compute for N days ending at --day.",
-    )
+    add_date_range_args(wi)
     wi.add_argument(
         "--provider",
         choices=["all", "jira", "github", "gitlab", "linear", "synthetic", "none"],
         default="all",
         help="Provider to sync from (default: all).",
     )
-    wi.add_argument(
-        "--sink",
-        choices=["clickhouse", "mongo", "sqlite", "postgres", "both", "auto"],
-        default="auto",
-        help="Sink backend (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
-    )
+    add_sink_arg(wi)
     wi.add_argument("--repo-id", type=uuid.UUID, help="Filter to specific repo ID.")
     wi.add_argument("--repo-name", help="Filter to specific repo name.")
     wi.add_argument("-s", "--search", help="Repo name search pattern (glob).")
@@ -565,10 +555,12 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
 
 def _cmd_sync_work_items(ns: argparse.Namespace) -> int:
     try:
+        validate_sink(ns)
+        end_day, backfill_days = resolve_date_range(ns)
         run_work_items_sync_job(
             db_url=resolve_sink_uri(ns),
-            day=ns.day,
-            backfill_days=ns.backfill,
+            day=end_day,
+            backfill_days=backfill_days,
             provider=ns.provider,
             sink=ns.sink,
             repo_id=ns.repo_id,

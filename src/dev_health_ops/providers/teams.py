@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.storage import detect_db_type
+from dev_health_ops.utils.cli import add_sink_arg, validate_sink
 from dev_health_ops.models.teams import Team
 
 DEFAULT_TEAM_MAPPING_PATH = Path("src/dev_health_ops/config/team_mapping.yaml")
@@ -229,7 +231,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
     import asyncio
     import logging
 
-    from dev_health_ops.storage import resolve_db_type, run_with_store
+    from dev_health_ops.storage import run_with_store
 
     provider = (ns.provider or "config").lower()
     teams_data: list[Team] = []
@@ -540,8 +542,9 @@ def sync_teams(ns: argparse.Namespace) -> int:
         logging.warning("No teams found/generated.")
         return 0
 
+    validate_sink(ns)
     db_uri = resolve_sink_uri(ns)
-    db_type = resolve_db_type(db_uri, ns.db_type)
+    db_type = detect_db_type(db_uri)
 
     async def _handler(store):
         # Ensure table exists (for SQL stores)
@@ -615,13 +618,9 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> None:
 def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     teams = sync_subparsers.add_parser(
         "teams",
-        help="Sync teams from dev_health_ops.config/teams.yaml, Jira, or Synthetic.",
+        help="Sync teams from config, Jira, Jira Ops, GitHub, GitLab, Linear, MS Teams, or Synthetic.",
     )
-    teams.add_argument(
-        "--db-type",
-        choices=["postgres", "mongo", "sqlite", "clickhouse"],
-        help="Optional DB backend override (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
-    )
+    add_sink_arg(teams)
     teams.add_argument(
         "--provider",
         choices=[

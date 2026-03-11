@@ -393,20 +393,21 @@ class TestSyncTimeWindowCLIArguments:
         assert str(args.date) == "2025-01-02"
         assert args.backfill == 7
 
-    def test_sync_local_rejects_since_and_date_together(self):
+    def test_sync_local_accepts_since_and_date_together(self):
         parser = build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(
-                [
-                    "--db",
-                    "sqlite+aiosqlite:///:memory:",
-                    "sync",
-                    "git",
-                    "--provider",
-                    "local",
-                    "--since",
-                    "2025-01-01T00:00:00+00:00",
-                    "--date",
-                    "2025-01-02",
-                ]
-            )
+        args = parser.parse_args(
+            [
+                "--db",
+                "sqlite+aiosqlite:///:memory:",
+                "sync",
+                "git",
+                "--provider",
+                "local",
+                "--since",
+                "2025-01-01",
+                "--date",
+                "2025-01-02",
+            ]
+        )
+        assert str(args.since) == "2025-01-01"
+        assert str(args.date) == "2025-01-02"

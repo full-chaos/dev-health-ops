@@ -12,8 +12,15 @@ from dev_health_ops.processors.gitlab import (
     process_gitlab_projects_batch,
 )
 from dev_health_ops.processors.local import process_local_blame, process_local_repo
-from dev_health_ops.storage import resolve_db_type, run_with_store
-from dev_health_ops.utils import _resolve_max_commits, _resolve_since
+from dev_health_ops.storage import detect_db_type, run_with_store
+from dev_health_ops.utils.cli import (
+    add_date_range_args,
+    add_sink_arg,
+    resolve_date_range,
+    resolve_max_commits,
+    resolve_since_datetime,
+    validate_sink,
+)
 
 
 def _sync_flags_for_target(target: str) -> dict:
@@ -46,8 +53,9 @@ async def sync_local_target(ns: argparse.Namespace, target: str) -> int:
         raise SystemExit("Local provider supports only git, prs, or blame targets.")
 
     db_uri = resolve_sink_uri(ns)
-    db_type = resolve_db_type(db_uri, ns.db_type)
-    since = _resolve_since(ns)
+    validate_sink(ns)
+    db_type = detect_db_type(db_uri)
+    since = resolve_since_datetime(ns)
 
     async def _handler(store):
         if target == "blame":
@@ -77,36 +85,39 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
         raise SystemExit("Missing GitHub token (pass --auth or set GITHUB_TOKEN).")
 
     db_uri = resolve_sink_uri(ns)
-    db_type = resolve_db_type(db_uri, ns.db_type)
-    since = _resolve_since(ns)
-    max_commits = _resolve_max_commits(ns)
+    validate_sink(ns)
+    db_type = detect_db_type(db_uri)
+    since = resolve_since_datetime(ns)
+    max_commits = resolve_max_commits(ns)
     flags = _sync_flags_for_target(target)
 
     async def _handler(store):
         if ns.search:
             org_name = ns.group
-            user_name = ns.owner if not ns.group else None
-            await process_github_repos_batch(
-                store=store,
-                token=token,
-                org_name=org_name,
-                user_name=user_name,
-                pattern=ns.search,
-                batch_size=ns.batch_size,
-                max_concurrent=ns.max_concurrent,
-                rate_limit_delay=ns.rate_limit_delay,
-                max_commits_per_repo=max_commits,
-                max_repos=ns.max_repos,
-                use_async=ns.use_async,
-                sync_git=flags["sync_git"],
-                sync_prs=flags["sync_prs"],
-                sync_cicd=flags["sync_cicd"],
-                sync_deployments=flags["sync_deployments"],
-                sync_incidents=flags["sync_incidents"],
-                blame_only=flags["blame_only"],
-                backfill_missing=False,
-                since=since,
-            )
+            user_name = str(ns.owner or "") if not ns.group else ""
+            batch_kwargs = {
+                "store": store,
+                "token": token,
+                "org_name": org_name,
+                "user_name": user_name,
+                "pattern": ns.search,
+                "batch_size": ns.batch_size,
+                "max_concurrent": ns.max_concurrent,
+                "rate_limit_delay": ns.rate_limit_delay,
+                "max_repos": ns.max_repos,
+                "use_async": ns.use_async,
+                "sync_git": flags["sync_git"],
+                "sync_prs": flags["sync_prs"],
+                "sync_cicd": flags["sync_cicd"],
+                "sync_deployments": flags["sync_deployments"],
+                "sync_incidents": flags["sync_incidents"],
+                "blame_only": flags["blame_only"],
+                "backfill_missing": False,
+                "since": since,
+            }
+            if max_commits is not None:
+                batch_kwargs["max_commits_per_repo"] = max_commits
+            await process_github_repos_batch(**batch_kwargs)
             return
 
         if not (ns.owner and ns.repo):
@@ -138,34 +149,37 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
         raise SystemExit("Missing GitLab token (pass --auth or set GITLAB_TOKEN).")
 
     db_uri = resolve_sink_uri(ns)
-    db_type = resolve_db_type(db_uri, ns.db_type)
-    since = _resolve_since(ns)
-    max_commits = _resolve_max_commits(ns)
+    validate_sink(ns)
+    db_type = detect_db_type(db_uri)
+    since = resolve_since_datetime(ns)
+    max_commits = resolve_max_commits(ns)
     flags = _sync_flags_for_target(target)
 
     async def _handler(store):
         if ns.search:
-            await process_gitlab_projects_batch(
-                store=store,
-                token=token,
-                gitlab_url=ns.gitlab_url,
-                group_name=ns.group,
-                pattern=ns.search,
-                batch_size=ns.batch_size,
-                max_concurrent=ns.max_concurrent,
-                rate_limit_delay=ns.rate_limit_delay,
-                max_commits_per_project=max_commits,
-                max_projects=ns.max_repos,
-                use_async=ns.use_async,
-                sync_git=flags["sync_git"],
-                sync_prs=flags["sync_prs"],
-                sync_cicd=flags["sync_cicd"],
-                sync_deployments=flags["sync_deployments"],
-                sync_incidents=flags["sync_incidents"],
-                blame_only=flags["blame_only"],
-                backfill_missing=False,
-                since=since,
-            )
+            batch_kwargs = {
+                "store": store,
+                "token": token,
+                "gitlab_url": ns.gitlab_url,
+                "group_name": ns.group,
+                "pattern": ns.search,
+                "batch_size": ns.batch_size,
+                "max_concurrent": ns.max_concurrent,
+                "rate_limit_delay": ns.rate_limit_delay,
+                "max_projects": ns.max_repos,
+                "use_async": ns.use_async,
+                "sync_git": flags["sync_git"],
+                "sync_prs": flags["sync_prs"],
+                "sync_cicd": flags["sync_cicd"],
+                "sync_deployments": flags["sync_deployments"],
+                "sync_incidents": flags["sync_incidents"],
+                "blame_only": flags["blame_only"],
+                "backfill_missing": False,
+                "since": since,
+            }
+            if max_commits is not None:
+                batch_kwargs["max_commits_per_project"] = max_commits
+            await process_gitlab_projects_batch(**batch_kwargs)
             return
 
         if ns.project_id is None:
@@ -196,8 +210,10 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
 
     repo_name = _resolve_synthetic_repo_name(ns)
     db_uri = resolve_sink_uri(ns)
-    db_type = resolve_db_type(db_uri, ns.db_type)
-    days = max(1, int(ns.backfill))
+    validate_sink(ns)
+    db_type = detect_db_type(db_uri)
+    _, backfill_days = resolve_date_range(ns)
+    days = backfill_days
 
     async def _handler(store):
         generator = SyntheticDataGenerator(repo_name=repo_name)
@@ -257,11 +273,7 @@ def run_sync_target(ns: argparse.Namespace) -> int:
 
 
 def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--db-type",
-        choices=["postgres", "mongo", "sqlite", "clickhouse"],
-        help="Optional DB backend override (mongo, sqlite, postgres deprecated for analytics; use clickhouse)",
-    )
+    add_sink_arg(parser)
     parser.add_argument(
         "--provider",
         choices=["local", "github", "gitlab", "synthetic"],
@@ -297,18 +309,7 @@ def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--repo-name", help="Synthetic repo name (default: acme/demo-app)."
     )
-    time_group = parser.add_mutually_exclusive_group()
-    time_group.add_argument("--since", help="Lower-bound ISO date/time (UTC).")
-    time_group.add_argument(
-        "--date",
-        help="Target day (UTC) as YYYY-MM-DD (use with --backfill).",
-    )
-    parser.add_argument(
-        "--backfill",
-        type=int,
-        default=1,
-        help="Sync N days ending at --date (inclusive). Requires --date.",
-    )
+    add_date_range_args(parser)
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:

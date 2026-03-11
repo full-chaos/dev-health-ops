@@ -1117,6 +1117,20 @@ def _run_sync_for_repo(
             if token:
                 _inject_provider_token(provider, token)
             backfill_days = int(sync_options_override.get("backfill_days", 1))
+            chunk_index = int(sync_options_override.get("chunk_index", 0))
+            chunk_since = sync_options_override.get("since")
+            chunk_before = sync_options_override.get("before")
+            logger.info(
+                "backfill_chunk_start",
+                extra={
+                    "chunk": chunk_index,
+                    "job_id": sync_options_override.get("backfill_job_id"),
+                    "since": chunk_since,
+                    "before": chunk_before,
+                    "provider": provider,
+                },
+            )
+            started_backfill = datetime.now(timezone.utc)
             run_work_items_sync_job(
                 db_url=db_url,
                 day=utc_today(),
@@ -1125,6 +1139,20 @@ def _run_sync_for_repo(
                 repo_name=sync_options_override.get("repo"),
                 search_pattern=sync_options_override.get("search"),
                 org_id=org_id,
+            )
+            duration_ms = int(
+                (datetime.now(timezone.utc) - started_backfill).total_seconds() * 1000
+            )
+            logger.info(
+                "backfill_chunk_complete",
+                extra={
+                    "chunk": chunk_index,
+                    "job_id": sync_options_override.get("backfill_job_id"),
+                    "since": chunk_since,
+                    "before": chunk_before,
+                    "duration_ms": duration_ms,
+                    "provider": provider,
+                },
             )
             result_payload["work_items_synced"] = True
 
@@ -1136,6 +1164,15 @@ def _run_sync_for_repo(
         }
 
     except Exception as exc:
+        logger.info(
+            "backfill_chunk_failed",
+            extra={
+                "chunk": sync_options_override.get("chunk_index", 0),
+                "job_id": sync_options_override.get("backfill_job_id"),
+                "provider": provider,
+                "error": str(exc),
+            },
+        )
         logger.exception(
             "Batch child sync failed: config=%s provider=%s error=%s",
             config_id,

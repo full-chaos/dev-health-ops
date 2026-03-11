@@ -1,7 +1,6 @@
 import importlib.util
 import os
 
-from dev_health_ops.utils.datetime import naive_utc, to_utc, utc_today
 from dev_health_ops.utils.cli import (
     add_date_range_args,
     add_sink_arg,
@@ -10,6 +9,7 @@ from dev_health_ops.utils.cli import (
     resolve_since_datetime,
     validate_sink,
 )
+from dev_health_ops.utils.datetime import naive_utc, to_utc, utc_today
 
 _legacy_utils_path = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "utils.py"

@@ -740,6 +740,22 @@ async def trigger_sync_config_backfill(
     if not allowed:
         raise HTTPException(status_code=403, detail=reason or "Backfill not allowed")
 
+    from dev_health_ops.backfill.chunker import chunk_date_range
+    from dev_health_ops.models.backfill import BackfillJob as BackfillJobModel
+
+    windows = chunk_date_range(since=payload.since, before=payload.before, chunk_days=7)
+    backfill_job = BackfillJobModel(
+        org_id=org_id,
+        sync_config_id=uuid.UUID(config_id),
+        status="pending",
+        since_date=payload.since,
+        before_date=payload.before,
+        total_chunks=len(windows),
+    )
+    session.add(backfill_job)
+    await session.flush()
+    backfill_job_id = str(backfill_job.id)
+
     try:
         from dev_health_ops.workers.tasks import run_backfill
 
@@ -748,11 +764,15 @@ async def trigger_sync_config_backfill(
             since=payload.since.isoformat(),
             before=payload.before.isoformat(),
             org_id=org_id,
+            backfill_job_id=backfill_job_id,
         )
+        backfill_job.celery_task_id = result.id
+        await session.flush()
         return {
             "status": "accepted",
             "config_id": str(config.id),
             "task_id": result.id,
+            "backfill_job_id": backfill_job_id,
             "since": payload.since.isoformat(),
             "before": payload.before.isoformat(),
         }

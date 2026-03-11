@@ -549,6 +549,7 @@ def run_backfill(
     since: str,
     before: str,
     org_id: str,
+    backfill_job_id: str | None = None,
 ) -> dict:
     from dev_health_ops.backfill.runner import run_backfill_for_config
     from dev_health_ops.db import get_postgres_session_sync
@@ -604,6 +605,48 @@ def run_backfill(
             job.last_run_at = started_at
             session.flush()
 
+        if backfill_job_id:
+            with get_postgres_session_sync() as session:
+                from dev_health_ops.models.backfill import (
+                    BackfillJob as BackfillJobModel,
+                )
+
+                bf_job = (
+                    session.query(BackfillJobModel)
+                    .filter(BackfillJobModel.id == uuid.UUID(backfill_job_id))
+                    .one_or_none()
+                )
+                if bf_job:
+                    bf_job.status = "running"
+                    bf_job.started_at = started_at
+                    session.flush()
+
+        def _backfill_progress(
+            chunk_idx: int, total: int, w_since: date, w_before: date
+        ) -> None:
+            if not backfill_job_id:
+                return
+            try:
+                with get_postgres_session_sync() as session:
+                    from dev_health_ops.models.backfill import (
+                        BackfillJob as BackfillJobModel,
+                    )
+
+                    bf_job = (
+                        session.query(BackfillJobModel)
+                        .filter(BackfillJobModel.id == uuid.UUID(backfill_job_id))
+                        .one_or_none()
+                    )
+                    if bf_job:
+                        bf_job.completed_chunks = chunk_idx
+                        session.flush()
+            except Exception:
+                logger.debug(
+                    "Failed to update backfill progress for chunk %d/%d",
+                    chunk_idx,
+                    total,
+                )
+
         result_payload = run_backfill_for_config(
             db_url=_get_db_url(),
             sync_config_id=sync_config_id,
@@ -612,6 +655,7 @@ def run_backfill(
             before=date.fromisoformat(before),
             sink="clickhouse",
             chunk_days=7,
+            progress_cb=_backfill_progress,
         )
 
         completed_at = datetime.now(timezone.utc)
@@ -640,6 +684,27 @@ def run_backfill(
                 job.run_count = int(job.run_count or 0) + 1
 
             session.flush()
+
+        if backfill_job_id:
+            try:
+                with get_postgres_session_sync() as session:
+                    from dev_health_ops.models.backfill import (
+                        BackfillJob as BackfillJobModel,
+                    )
+
+                    bf_job = (
+                        session.query(BackfillJobModel)
+                        .filter(BackfillJobModel.id == uuid.UUID(backfill_job_id))
+                        .one_or_none()
+                    )
+                    if bf_job:
+                        bf_job.status = "completed"
+                        bf_job.completed_at = completed_at
+                        session.flush()
+            except Exception:
+                logger.debug(
+                    "Failed to mark backfill job completed: %s", backfill_job_id
+                )
 
         return {
             "status": "success",
@@ -685,6 +750,26 @@ def run_backfill(
                     session.flush()
         except Exception as update_error:
             logger.error("Failed updating backfill failure state: %s", update_error)
+
+        if backfill_job_id:
+            try:
+                with get_postgres_session_sync() as session:
+                    from dev_health_ops.models.backfill import (
+                        BackfillJob as BackfillJobModel,
+                    )
+
+                    bf_job = (
+                        session.query(BackfillJobModel)
+                        .filter(BackfillJobModel.id == uuid.UUID(backfill_job_id))
+                        .one_or_none()
+                    )
+                    if bf_job:
+                        bf_job.status = "failed"
+                        bf_job.error_message = str(exc)
+                        bf_job.completed_at = completed_at
+                        session.flush()
+            except Exception:
+                logger.debug("Failed to mark backfill job failed: %s", backfill_job_id)
 
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 

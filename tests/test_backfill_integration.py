@@ -24,6 +24,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
+    JobStatus,
     ScheduledJob,
     SyncConfiguration,
 )
@@ -36,6 +37,8 @@ _TABLES = [
     User.__table__,
     Organization.__table__,
     SyncConfiguration.__table__,
+    ScheduledJob.__table__,
+    JobRun.__table__,
     BackfillJob.__table__,
 ]
 
@@ -253,6 +256,208 @@ def test_run_backfill_progress_callback_updates_backfill_job_completed_chunks(
         assert tracked_job.completed_chunks == 2
         assert tracked_job.started_at is not None
         assert tracked_job.completed_at is not None
+
+    engine.dispose()
+
+
+def test_run_backfill_does_not_create_scheduled_job(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            SyncConfiguration.__table__,
+            ScheduledJob.__table__,
+            JobRun.__table__,
+            BackfillJob.__table__,
+        ],
+    )
+
+    org_id = str(uuid.uuid4())
+    sync_config_id = uuid.uuid4()
+
+    with Session(engine) as session:
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="sync-integration",
+            provider="github",
+            sync_targets=[],
+            sync_options={},
+            is_active=True,
+        )
+        config.id = sync_config_id
+        backfill_job = BackfillJob(
+            org_id=org_id,
+            sync_config_id=sync_config_id,
+            status="pending",
+            since_date=date(2026, 1, 1),
+            before_date=date(2026, 1, 14),
+            total_chunks=2,
+        )
+        session.add_all([config, backfill_job])
+        session.commit()
+        backfill_job_id = str(backfill_job.id)
+
+    @contextmanager
+    def _session_ctx():
+        with Session(engine) as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session_sync",
+        lambda: _session_ctx(),
+    )
+
+    def _fake_run_backfill_for_config(**kwargs):
+        progress_cb = kwargs["progress_cb"]
+        progress_cb(1, 2, date(2026, 1, 1), date(2026, 1, 7))
+        progress_cb(2, 2, date(2026, 1, 8), date(2026, 1, 14))
+        return {"status": "success", "window_count": 2}
+
+    monkeypatch.setattr(
+        "dev_health_ops.backfill.runner.run_backfill_for_config",
+        _fake_run_backfill_for_config,
+    )
+
+    from dev_health_ops.workers.tasks import run_backfill
+
+    task: Any = run_backfill
+    task.push_request(id="backfill-no-scheduled-job")
+    try:
+        result = task(
+            sync_config_id=str(sync_config_id),
+            since="2026-01-01",
+            before="2026-01-14",
+            org_id=org_id,
+            backfill_job_id=backfill_job_id,
+        )
+    finally:
+        task.pop_request()
+
+    assert result["status"] == "success"
+
+    with Session(engine) as session:
+        tracked_job = cast(Any, session.get(BackfillJob, uuid.UUID(backfill_job_id)))
+        assert tracked_job is not None
+        assert tracked_job.status == "completed"
+        assert cast(Any, session.query(ScheduledJob).count()) == 0
+        assert cast(Any, session.query(JobRun).count()) == 0
+
+    engine.dispose()
+
+
+def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            SyncConfiguration.__table__,
+            ScheduledJob.__table__,
+            JobRun.__table__,
+        ],
+    )
+
+    org_id = str(uuid.uuid4())
+    sync_config_id = uuid.uuid4()
+
+    with Session(engine) as session:
+        config = SyncConfiguration(
+            org_id=org_id,
+            name="sync-integration",
+            provider="github",
+            sync_targets=[],
+            sync_options={},
+            is_active=True,
+        )
+        config.id = sync_config_id
+        config.last_sync_at = date(2026, 1, 1)
+
+        sync_job = ScheduledJob(
+            name="sync-job",
+            job_type="sync",
+            schedule_cron="0 * * * *",
+            org_id=org_id,
+            sync_config_id=sync_config_id,
+            status=JobStatus.ACTIVE.value,
+        )
+        backfill_job = ScheduledJob(
+            name="backfill-job",
+            job_type="backfill",
+            schedule_cron="0 * * * *",
+            org_id=org_id,
+            sync_config_id=sync_config_id,
+            status=JobStatus.ACTIVE.value,
+        )
+        session.add_all([config, sync_job, backfill_job])
+        session.commit()
+
+    @contextmanager
+    def _session_ctx():
+        with Session(engine) as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    class _AlwaysDue:
+        def __le__(self, _other):
+            return True
+
+    class _DueCron:
+        def get_next(self, _kind):
+            return _AlwaysDue()
+
+    class _CroniterModule:
+        @staticmethod
+        def croniter(*_args):
+            return _DueCron()
+
+    dispatched: list[dict[str, Any]] = []
+
+    def _fake_run_sync_apply_async(*, kwargs, queue):
+        dispatched.append({"kwargs": kwargs, "queue": queue})
+
+    monkeypatch.setattr(
+        "dev_health_ops.db.get_postgres_session_sync",
+        lambda: _session_ctx(),
+    )
+    monkeypatch.setitem(
+        cast(Any, __import__("sys").modules), "croniter", _CroniterModule()
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.workers.tasks._is_batch_eligible", lambda _cfg: False
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.workers.tasks.run_sync_config.apply_async",
+        _fake_run_sync_apply_async,
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.workers.tasks.dispatch_batch_sync.apply_async",
+        lambda **_kwargs: None,
+    )
+
+    from dev_health_ops.workers.tasks import dispatch_scheduled_syncs
+
+    task: Any = dispatch_scheduled_syncs
+    task.push_request(id="dispatch-ignore-backfill-jobs")
+    try:
+        result = task()
+    finally:
+        task.pop_request()
+
+    assert str(sync_config_id) in result["dispatched"]
+    assert len(dispatched) == 1
+    assert dispatched[0]["kwargs"]["config_id"] == str(sync_config_id)
 
     engine.dispose()
 

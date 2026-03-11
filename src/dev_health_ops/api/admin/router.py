@@ -794,6 +794,7 @@ async def list_sync_config_jobs(
     job_stmt = select(ScheduledJob.id).where(
         ScheduledJob.org_id == org_id,
         ScheduledJob.sync_config_id == uuid.UUID(config_id),
+        ScheduledJob.job_type == "sync",
     )
     job_result = await session.execute(job_stmt)
     job_ids = list(job_result.scalars().all())

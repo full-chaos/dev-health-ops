@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import warnings
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -21,7 +21,6 @@ from dev_health_ops.utils.cli import (
     resolve_since_datetime,
     validate_sink,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

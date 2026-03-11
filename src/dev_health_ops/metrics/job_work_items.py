@@ -44,7 +44,6 @@ from dev_health_ops.utils.cli import (
     resolve_date_range,
     validate_sink,
 )
-from dev_health_ops.utils.datetime import utc_today
 
 logger = logging.getLogger(__name__)
 

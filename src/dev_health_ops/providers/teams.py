@@ -10,9 +10,9 @@ from typing import Any
 import yaml
 
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.models.teams import Team
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import add_sink_arg, validate_sink
-from dev_health_ops.models.teams import Team
 
 DEFAULT_TEAM_MAPPING_PATH = Path("src/dev_health_ops/config/team_mapping.yaml")
 

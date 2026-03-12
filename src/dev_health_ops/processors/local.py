@@ -577,7 +577,7 @@ async def process_local_repo(
         return
 
     repo_name = repo_root.name
-    repo = Repo(repo_path=str(repo_root), repo=repo_name)
+    repo = Repo(repo_path=str(repo_root), repo=repo_name, provider="local")
     await store.insert_repo(repo)
     logging.info("Repository stored: %s (%s)", repo.repo, repo.id)
 
@@ -644,7 +644,7 @@ async def process_local_blame(
         return
 
     repo_name = repo_root.name
-    repo = Repo(repo_path=str(repo_root), repo=repo_name)
+    repo = Repo(repo_path=str(repo_root), repo=repo_name, provider="local")
     await store.insert_repo(repo)
     logging.info("Repository stored: %s (%s)", repo.repo, repo.id)
 

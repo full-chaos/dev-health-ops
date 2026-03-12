@@ -209,6 +209,7 @@ class ClickHouseStore:
             "created_at": created_at,
             "settings": self._json_or_none(getattr(repo, "settings", None)),
             "tags": self._json_or_none(getattr(repo, "tags", None)),
+            "provider": getattr(repo, "provider", None) or "unknown",
             "last_synced": synced_at,
         }
         await self._insert_rows(
@@ -220,6 +221,7 @@ class ClickHouseStore:
                 "created_at",
                 "settings",
                 "tags",
+                "provider",
                 "last_synced",
             ],
             [row],
@@ -227,7 +229,7 @@ class ClickHouseStore:
 
     async def get_all_repos(self) -> list[Repo]:
         assert self.client is not None
-        query = "SELECT id, repo FROM repos"
+        query = "SELECT id, repo, provider FROM repos"
         async with self._lock:
             result = await asyncio.to_thread(self.client.query, query)
 
@@ -237,7 +239,13 @@ class ClickHouseStore:
                 r_id = uuid.UUID(str(row[0]))
                 r_name = row[1]
                 # We return minimal Repo objects
-                repos.append(Repo(id=r_id, repo=r_name))
+                repos.append(
+                    Repo(
+                        id=r_id,
+                        repo=r_name,
+                        provider=row[2] if len(row) > 2 else "unknown",
+                    )
+                )
         return repos
 
     async def get_complexity_snapshots(

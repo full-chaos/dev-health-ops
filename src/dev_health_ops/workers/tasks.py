@@ -8,7 +8,6 @@ These tasks wrap the existing metrics jobs to enable async execution:
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import logging
 import os
@@ -731,104 +730,6 @@ def _is_batch_eligible(config) -> bool:
     return False
 
 
-def _discover_repos_for_config(
-    config, credentials: dict[str, Any]
-) -> list[tuple[str, ...]]:
-    """Resolve wildcard/org-level search patterns to concrete repo lists.
-
-    For GitHub: Uses PyGithub to list org repos, filtered by pattern.
-    For GitLab: Uses python-gitlab to list group/user projects.
-
-    Returns:
-        List of (owner, repo_name) tuples for GitHub,
-        or (project_id,) tuples for GitLab.
-    """
-    provider = (config.provider or "").lower()
-    sync_options = dict(config.sync_options or {})
-    token = str(credentials.get("token") or "")
-
-    if provider == "github":
-        return _discover_github_repos(sync_options, token)
-    elif provider == "gitlab":
-        return _discover_gitlab_repos(sync_options, token)
-    return []
-
-
-def _discover_github_repos(
-    sync_options: dict[str, Any], token: str
-) -> list[tuple[str, str]]:
-    """Discover GitHub repos matching the search pattern."""
-    from github import Github
-
-    search = sync_options.get("search", "")
-    owner = sync_options.get("owner", "")
-
-    if isinstance(search, str) and "/" in search:
-        parts = search.split("/", 1)
-        owner = parts[0]
-        repo_pattern = parts[1]
-    else:
-        repo_pattern = "*"
-
-    if not owner:
-        return []
-
-    g = Github(token)
-    try:
-        org = g.get_organization(owner)
-        repos = org.get_repos()
-    except Exception:
-        try:
-            user = g.get_user(owner)
-            repos = user.get_repos()
-        except Exception:
-            return []
-
-    result: list[tuple[str, str]] = []
-    for repo in repos:
-        if fnmatch.fnmatch(repo.name, repo_pattern):
-            result.append((owner, repo.name))
-
-    return result
-
-
-def _discover_gitlab_repos(
-    sync_options: dict[str, Any], token: str
-) -> list[tuple[str,]]:
-    """Discover GitLab projects matching the search pattern."""
-    import gitlab as gitlab_lib
-
-    gitlab_url = str(sync_options.get("gitlab_url", "https://gitlab.com"))
-    search = sync_options.get("search", "")
-    group_path = sync_options.get("group", "")
-
-    if isinstance(search, str) and "/" in search:
-        parts = search.split("/", 1)
-        group_path = parts[0]
-        project_pattern = parts[1]
-    else:
-        project_pattern = "*"
-
-    if not group_path:
-        return []
-
-    gl = gitlab_lib.Gitlab(gitlab_url, private_token=token)
-    try:
-        grp = gl.groups.get(group_path)
-        projects = grp.projects.list(all=True)
-    except Exception:
-        return []
-
-    result: list[tuple[str,]] = []
-    for project in projects:
-        name = getattr(project, "name", "") or ""
-        project_id = getattr(project, "id", None)
-        if project_id is not None and fnmatch.fnmatch(name, project_pattern):
-            result.append((str(project_id),))
-
-    return result
-
-
 def _get_batch_size(sync_options: dict[str, Any]) -> int:
     """Get batch size from sync_options or environment, default 5."""
     size = sync_options.get("batch_size")
@@ -935,8 +836,10 @@ def dispatch_batch_sync(
             else:
                 credentials = _resolve_env_credentials(provider)
 
+        from dev_health_ops.discovery.repos import discover_repos_for_config
+
         try:
-            repos = _discover_repos_for_config(config, credentials)
+            repos = discover_repos_for_config(config, credentials)
         except Exception as disc_exc:
             logger.warning(
                 "Discovery failed for config %s, falling back to single dispatch: %s",

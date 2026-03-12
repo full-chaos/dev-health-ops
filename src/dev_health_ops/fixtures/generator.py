@@ -200,6 +200,7 @@ class SyntheticDataGenerator:
             id=self.repo_id,
             repo=self.repo_name,
             ref="main",
+            provider="synthetic",
             settings={
                 "source": "synthetic",
                 "repo_id": str(self.repo_id),

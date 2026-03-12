@@ -845,6 +845,7 @@ async def process_github_repo(
         db_repo = Repo(
             repo_path=None,
             repo=repo_info.full_name,
+            provider="github",
             settings={
                 "source": "github",
                 "repo_id": repo_info.id,
@@ -1058,6 +1059,7 @@ async def process_github_repos_batch(
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=repo_info.full_name,
+            provider="github",
             settings={
                 "source": "github",
                 "repo_id": repo_info.id,

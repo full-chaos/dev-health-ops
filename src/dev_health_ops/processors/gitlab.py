@@ -770,6 +770,7 @@ async def process_gitlab_project(
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=full_name,
+            provider="gitlab",
             settings={
                 "source": "gitlab",
                 "project_id": gl_project.id,
@@ -982,6 +983,7 @@ async def process_gitlab_projects_batch(
         db_repo = Repo(
             repo_path=None,  # Not a local repo
             repo=project_info.full_name,
+            provider="gitlab",
             settings={
                 "source": "gitlab",
                 "project_id": project_info.id,

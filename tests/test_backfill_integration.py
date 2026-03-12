@@ -7,6 +7,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -564,7 +565,6 @@ def test_run_backfill_resolves_credentials_from_db(
     engine.dispose()
 
 
-
 def test_discover_repos_sets_source_from_provider():
     """discover_repos must use the `provider` param as the `source` field
     on each DiscoveredRepo.  Before the fix, source was hardcoded to 'auto',
@@ -603,3 +603,24 @@ def test_discover_repos_sets_source_from_provider():
         provider="gitlab",
     )
     assert result_gl[0].source == "gitlab"
+
+    db_repo_id = uuid.uuid4()
+    legacy_repo_id = uuid.uuid4()
+    mock_sink = SimpleNamespace(client=MagicMock())
+    mock_sink.client.query.return_value = SimpleNamespace(
+        result_rows=[
+            (str(db_repo_id), "org/db-repo", {"source": "legacy"}, "gitlab"),
+            (str(legacy_repo_id), "org/legacy-repo", {"source": "legacy"}, "unknown"),
+        ]
+    )
+
+    result_db = discover_repos(
+        backend="clickhouse",
+        primary_sink=mock_sink,
+        provider="github",
+    )
+
+    assert result_db[0].repo_id == db_repo_id
+    assert result_db[0].source == "gitlab"
+    assert result_db[1].repo_id == legacy_repo_id
+    assert result_db[1].source == "github"

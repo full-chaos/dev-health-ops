@@ -626,7 +626,6 @@ def test_discover_repos_sets_source_from_provider():
     assert result_db[1].source == "github"
 
 
-
 class TestSourceFilteringInWorkItemFetchers:
     """Verify that work-item fetcher functions correctly filter repos by source.
 

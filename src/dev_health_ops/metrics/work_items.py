@@ -4,11 +4,10 @@ import logging
 import os
 import random
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from dev_health_ops.models.git import get_repo_uuid_from_repo
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -510,29 +509,3 @@ def fetch_gitlab_work_items(
         since_utc.isoformat(),
     )
     return list(work_items.values()), transitions
-
-
-def discover_repos_from_records(
-    records: Iterable[tuple[str, dict[str, object]]],
-) -> list[DiscoveredRepo]:
-    """
-    Convert (repo_full_name, settings) tuples into DiscoveredRepo rows.
-    """
-    repos: list[DiscoveredRepo] = []
-    for full_name, settings in records:
-        source = str((settings or {}).get("source") or "").strip().lower()
-        if not source:
-            continue
-        try:
-            repo_id = get_repo_uuid_from_repo(full_name)
-        except Exception:
-            continue
-        repos.append(
-            DiscoveredRepo(
-                repo_id=repo_id,
-                full_name=full_name,
-                source=source,
-                settings=settings or {},
-            )
-        )
-    return repos

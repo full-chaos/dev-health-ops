@@ -65,6 +65,7 @@ def discover_repos(
     repo_id: uuid.UUID | None = None,
     repo_name: str | None = None,
     org_id: str = "",
+    provider: str = "auto",
 ) -> list[Any]:
     """Discover repositories from the database."""
     from dev_health_ops.metrics.work_items import DiscoveredRepo
@@ -75,14 +76,14 @@ def discover_repos(
             DiscoveredRepo(
                 repo_id=repo_id,
                 full_name=repo_name or str(repo_id),
-                source="auto",
+                source=provider,
                 settings={},
             )
         ]
 
     # Query repos from ClickHouse, scoped by org_id
     try:
-        query = "SELECT id, repo, settings FROM repos"
+        query = "SELECT id, repo, settings, provider FROM repos"
         params: dict[str, str] = {}
         if org_id:
             query += " WHERE org_id = {org_id:String}"
@@ -92,7 +93,7 @@ def discover_repos(
             DiscoveredRepo(
                 repo_id=uuid.UUID(str(r[0])),
                 full_name=r[1],
-                source="auto",
+                source=r[3] if len(r) > 3 and r[3] != "unknown" else provider,
                 settings=r[2] or {},
             )
             for r in rows

@@ -129,44 +129,44 @@ class TestIsBatchEligible:
 
 
 class TestDiscoverReposForConfig:
-    @patch("dev_health_ops.workers.tasks._discover_github_repos")
+    @patch("dev_health_ops.discovery.repos.discover_github_repos")
     def test_github_delegates_to_github_discovery(self, mock_gh):
-        from dev_health_ops.workers.tasks import _discover_repos_for_config
+        from dev_health_ops.discovery.repos import discover_repos_for_config
 
         mock_gh.return_value = [("my-org", "repo-a"), ("my-org", "repo-b")]
         config = _make_config(
             provider="github",
             sync_options={"search": "my-org/*"},
         )
-        result = _discover_repos_for_config(config, {"token": "ghp_test"})
+        result = discover_repos_for_config(config, {"token": "ghp_test"})
         assert result == [("my-org", "repo-a"), ("my-org", "repo-b")]
         mock_gh.assert_called_once()
 
-    @patch("dev_health_ops.workers.tasks._discover_gitlab_repos")
+    @patch("dev_health_ops.discovery.repos.discover_gitlab_repos")
     def test_gitlab_delegates_to_gitlab_discovery(self, mock_gl):
-        from dev_health_ops.workers.tasks import _discover_repos_for_config
+        from dev_health_ops.discovery.repos import discover_repos_for_config
 
         mock_gl.return_value = [("123",), ("456",)]
         config = _make_config(
             provider="gitlab",
             sync_options={"search": "my-group/*"},
         )
-        result = _discover_repos_for_config(config, {"token": "glpat_test"})
+        result = discover_repos_for_config(config, {"token": "glpat_test"})
         assert result == [("123",), ("456",)]
         mock_gl.assert_called_once()
 
     def test_unsupported_provider_returns_empty(self):
-        from dev_health_ops.workers.tasks import _discover_repos_for_config
+        from dev_health_ops.discovery.repos import discover_repos_for_config
 
         config = _make_config(provider="jira")
-        result = _discover_repos_for_config(config, {"token": "test"})
+        result = discover_repos_for_config(config, {"token": "test"})
         assert result == []
 
 
 class TestDiscoverGithubRepos:
     @patch("github.Github")
     def test_lists_org_repos_filtered_by_pattern(self, mock_github_cls):
-        from dev_health_ops.workers.tasks import _discover_github_repos
+        from dev_health_ops.discovery.repos import discover_github_repos
 
         repo_a = SimpleNamespace(name="api-service")
         repo_b = SimpleNamespace(name="web-app")
@@ -176,24 +176,24 @@ class TestDiscoverGithubRepos:
         mock_org.get_repos.return_value = [repo_a, repo_b, repo_c]
         mock_github_cls.return_value.get_organization.return_value = mock_org
 
-        result = _discover_github_repos({"search": "my-org/api-*"}, "ghp_token")
+        result = discover_github_repos({"search": "my-org/api-*"}, "ghp_token")
         assert result == [("my-org", "api-service")]
 
     @patch("github.Github")
     def test_wildcard_star_matches_all(self, mock_github_cls):
-        from dev_health_ops.workers.tasks import _discover_github_repos
+        from dev_health_ops.discovery.repos import discover_github_repos
 
         repos = [SimpleNamespace(name=f"repo-{i}") for i in range(3)]
         mock_org = MagicMock()
         mock_org.get_repos.return_value = repos
         mock_github_cls.return_value.get_organization.return_value = mock_org
 
-        result = _discover_github_repos({"search": "org/*"}, "token")
+        result = discover_github_repos({"search": "org/*"}, "token")
         assert len(result) == 3
 
     @patch("github.Github")
     def test_falls_back_to_user_repos_on_org_error(self, mock_github_cls):
-        from dev_health_ops.workers.tasks import _discover_github_repos
+        from dev_health_ops.discovery.repos import discover_github_repos
 
         mock_g = mock_github_cls.return_value
         mock_g.get_organization.side_effect = Exception("Not an org")
@@ -201,31 +201,31 @@ class TestDiscoverGithubRepos:
         mock_user.get_repos.return_value = [SimpleNamespace(name="my-repo")]
         mock_g.get_user.return_value = mock_user
 
-        result = _discover_github_repos({"search": "user/*"}, "token")
+        result = discover_github_repos({"search": "user/*"}, "token")
         assert result == [("user", "my-repo")]
 
     @patch("github.Github")
     def test_returns_empty_on_total_failure(self, mock_github_cls):
-        from dev_health_ops.workers.tasks import _discover_github_repos
+        from dev_health_ops.discovery.repos import discover_github_repos
 
         mock_g = mock_github_cls.return_value
         mock_g.get_organization.side_effect = Exception("fail")
         mock_g.get_user.side_effect = Exception("fail")
 
-        result = _discover_github_repos({"search": "org/*"}, "token")
+        result = discover_github_repos({"search": "org/*"}, "token")
         assert result == []
 
     def test_returns_empty_without_owner(self):
-        from dev_health_ops.workers.tasks import _discover_github_repos
+        from dev_health_ops.discovery.repos import discover_github_repos
 
-        result = _discover_github_repos({"search": ""}, "token")
+        result = discover_github_repos({"search": ""}, "token")
         assert result == []
 
 
 class TestDiscoverGitlabRepos:
     @patch("gitlab.Gitlab")
     def test_lists_group_projects_filtered(self, mock_gitlab_cls):
-        from dev_health_ops.workers.tasks import _discover_gitlab_repos
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
 
         proj_a = SimpleNamespace(name="api", id=100)
         proj_b = SimpleNamespace(name="web", id=200)
@@ -235,21 +235,21 @@ class TestDiscoverGitlabRepos:
         mock_grp.projects.list.return_value = [proj_a, proj_b, proj_c]
         mock_gitlab_cls.return_value.groups.get.return_value = mock_grp
 
-        result = _discover_gitlab_repos({"search": "my-group/api*"}, "glpat_token")
+        result = discover_gitlab_repos({"search": "my-group/api*"}, "glpat_token")
         assert result == [("100",)]
 
     @patch("gitlab.Gitlab")
     def test_returns_empty_on_group_error(self, mock_gitlab_cls):
-        from dev_health_ops.workers.tasks import _discover_gitlab_repos
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
 
         mock_gitlab_cls.return_value.groups.get.side_effect = Exception("nope")
-        result = _discover_gitlab_repos({"search": "group/*"}, "token")
+        result = discover_gitlab_repos({"search": "group/*"}, "token")
         assert result == []
 
     def test_returns_empty_without_group(self):
-        from dev_health_ops.workers.tasks import _discover_gitlab_repos
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
 
-        result = _discover_gitlab_repos({"search": ""}, "token")
+        result = discover_gitlab_repos({"search": ""}, "token")
         assert result == []
 
 
@@ -280,7 +280,7 @@ class TestGetBatchSize:
 
 class TestDispatchBatchSync:
     @patch("dev_health_ops.workers.tasks.chord")
-    @patch("dev_health_ops.workers.tasks._discover_repos_for_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
     @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_dispatches_correct_number_of_child_tasks(
@@ -325,7 +325,7 @@ class TestDispatchBatchSync:
         mock_chord_instance.assert_called_once()
 
     @patch("dev_health_ops.workers.tasks.chord")
-    @patch("dev_health_ops.workers.tasks._discover_repos_for_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
     @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_empty_repo_list_returns_no_repos(
@@ -361,7 +361,7 @@ class TestDispatchBatchSync:
         mock_chord.assert_not_called()
 
     @patch("dev_health_ops.workers.tasks.run_sync_config")
-    @patch("dev_health_ops.workers.tasks._discover_repos_for_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
     @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_discovery_failure_falls_back_to_single_dispatch(
@@ -397,7 +397,7 @@ class TestDispatchBatchSync:
         mock_run_sync.apply_async.assert_called_once()
 
     @patch("dev_health_ops.workers.tasks.chord")
-    @patch("dev_health_ops.workers.tasks._discover_repos_for_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
     @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_chord_callback_is_batch_sync_callback(
@@ -440,7 +440,7 @@ class TestDispatchBatchSync:
         assert callback.task == _batch_sync_callback.name
 
     @patch("dev_health_ops.workers.tasks.chord")
-    @patch("dev_health_ops.workers.tasks._discover_repos_for_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
     @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_respects_custom_batch_size(

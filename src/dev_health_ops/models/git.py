@@ -206,6 +206,12 @@ class Repo(Base, GitRepo):
     settings = Column(
         JSON, nullable=False, default=dict, comment="JSON settings for the repo"
     )
+    provider = Column(
+        Text,
+        nullable=False,
+        default="unknown",
+        comment="sync provider (github, gitlab, local, synthetic)",
+    )
     repo_tags = Column(
         "tags",
         JSON,

@@ -265,6 +265,7 @@ def run_sync_config(
                 .filter(
                     ScheduledJob.org_id == org_id,
                     ScheduledJob.sync_config_id == config_uuid,
+                    ScheduledJob.job_type == "sync",
                 )
                 .one_or_none()
             )
@@ -1347,6 +1348,7 @@ def dispatch_daily_metrics_partitioned(
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
     db_url = db_url or _get_db_url()
+    org_id = org_id or "default"
     target_day = date.fromisoformat(day) if day else utc_today()
 
     logger.info(
@@ -1451,6 +1453,7 @@ def run_daily_metrics_batch(
     from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 
     db_url = db_url or _get_db_url()
+    org_id = org_id or "default"
     target_day = date.fromisoformat(day)
     checkpoint_day = datetime.combine(target_day, time.min, tzinfo=timezone.utc)
 
@@ -1562,6 +1565,7 @@ def run_daily_metrics_finalize_task(
     )
 
     db_url = db_url or _get_db_url()
+    org_id = org_id or "default"
     target_day = date.fromisoformat(day)
     checkpoint_day = datetime.combine(target_day, time.min, tzinfo=timezone.utc)
 

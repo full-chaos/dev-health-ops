@@ -135,6 +135,7 @@ def run_work_items_sync_job(
             repo_id=repo_id,
             repo_name=repo_name,
             org_id=org_id,
+            provider=provider if provider not in {"all", "*"} else "auto",
         )
         from dev_health_ops.utils import match_pattern
 

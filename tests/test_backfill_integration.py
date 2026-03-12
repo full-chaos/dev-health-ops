@@ -562,3 +562,44 @@ def test_run_backfill_resolves_credentials_from_db(
     assert os.environ.get("LINEAR_API_KEY") == "lin_test_cred_from_db"
 
     engine.dispose()
+
+
+
+def test_discover_repos_sets_source_from_provider():
+    """discover_repos must use the `provider` param as the `source` field
+    on each DiscoveredRepo.  Before the fix, source was hardcoded to 'auto',
+    causing provider-specific work-item fetchers to find 0 repos."""
+    from dev_health_ops.metrics.job_daily import discover_repos
+
+    repo_id = uuid.uuid4()
+
+    # --- specific repo_id path ---
+    result = discover_repos(
+        backend="clickhouse",
+        primary_sink=None,  # not used when repo_id is provided
+        repo_id=repo_id,
+        repo_name="org/repo",
+        provider="github",
+    )
+    assert len(result) == 1
+    assert result[0].source == "github"
+    assert result[0].repo_id == repo_id
+
+    # --- verify default keeps backward compat ---
+    result_default = discover_repos(
+        backend="clickhouse",
+        primary_sink=None,
+        repo_id=repo_id,
+        repo_name="org/repo",
+    )
+    assert result_default[0].source == "auto"
+
+    # --- gitlab provider ---
+    result_gl = discover_repos(
+        backend="clickhouse",
+        primary_sink=None,
+        repo_id=repo_id,
+        repo_name="org/repo",
+        provider="gitlab",
+    )
+    assert result_gl[0].source == "gitlab"

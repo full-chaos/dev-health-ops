@@ -140,6 +140,7 @@ def run_dora_metrics_job(
             repo_id=repo_id,
             repo_name=repo_name,
             org_id=org_id,
+            provider="gitlab",
         )
 
         allow_unknown = repo_id is not None or repo_name is not None

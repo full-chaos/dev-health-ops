@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import socket
 from datetime import datetime, timezone
 from importlib import import_module
-import socket
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 

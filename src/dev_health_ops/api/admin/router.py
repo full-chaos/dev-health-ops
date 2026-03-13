@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import logging
 import ipaddress
+import logging
 import socket
 import uuid
 from collections.abc import AsyncGenerator

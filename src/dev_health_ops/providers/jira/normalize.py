@@ -46,7 +46,7 @@ def _parse_sprint(value: object) -> tuple[str | None, str | None]:
     """
     if not value:
         return None, None
-    sprint = None
+    sprint: object | None = None
     if isinstance(value, list):
         sprint = value[-1] if value else None
     else:

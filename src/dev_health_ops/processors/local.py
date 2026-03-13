@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import (
     GitBlame,
     GitCommit,
@@ -168,7 +169,7 @@ def infer_open_pull_requests_from_refs(
 
 async def process_local_pull_requests(
     repo: Repo,
-    store: Any,
+    ingestion_sink: IngestionSink,
     repo_obj: Any,
     commits: list[Any] | None = None,
     since: datetime | None = None,
@@ -193,7 +194,7 @@ async def process_local_pull_requests(
     pr_objects.extend(merged)
 
     if pr_objects:
-        await store.insert_git_pull_requests(pr_objects)
+        await ingestion_sink.insert_git_pull_requests(pr_objects)
         logging.info(f"Inserted/updated {len(pr_objects)} local PR/MR records")
 
 
@@ -273,7 +274,7 @@ def _compute_commit_stats_sync(commit: Any, repo_id: uuid.UUID) -> list[GitCommi
 
 async def process_git_commits(
     repo: Repo,
-    store: Any,  # DataStore
+    ingestion_sink: IngestionSink,
     commits: Any | None = None,  # Iterable
     since: datetime | None = None,
 ) -> None:
@@ -322,13 +323,13 @@ async def process_git_commits(
                 commit_count += 1
 
             if len(commit_batch) >= BATCH_SIZE:
-                await store.insert_git_commit_data(commit_batch)
+                await ingestion_sink.insert_git_commit_data(commit_batch)
                 logging.info(f"Inserted {len(commit_batch)} commits")
                 commit_batch.clear()
 
         # Insert remaining
         if commit_batch:
-            await store.insert_git_commit_data(commit_batch)
+            await ingestion_sink.insert_git_commit_data(commit_batch)
             logging.info(f"Inserted final {len(commit_batch)} commits")
 
     except Exception as e:
@@ -337,7 +338,7 @@ async def process_git_commits(
 
 async def process_git_commit_stats(
     repo: Repo,
-    store: Any,
+    ingestion_sink: IngestionSink,
     commits: Any | None = None,
     since: datetime | None = None,
 ) -> None:
@@ -370,7 +371,7 @@ async def process_git_commit_stats(
             commit_count += 1
 
             if len(commit_stats_batch) >= BATCH_SIZE:
-                await store.insert_git_commit_stats(commit_stats_batch)
+                await ingestion_sink.insert_git_commit_stats(commit_stats_batch)
                 logging.info(
                     f"Inserted {len(commit_stats_batch)} commit stats ({commit_count} commits)"
                 )
@@ -378,7 +379,7 @@ async def process_git_commit_stats(
 
         # Insert remaining stats
         if commit_stats_batch:
-            await store.insert_git_commit_stats(commit_stats_batch)
+            await ingestion_sink.insert_git_commit_stats(commit_stats_batch)
             logging.info(
                 f"Inserted final {len(commit_stats_batch)} commit stats ({commit_count} commits)"
             )
@@ -446,7 +447,7 @@ async def process_files_and_blame(
     repo: Repo,
     all_files: list[Path],
     files_for_blame: set[Path],
-    store: Any,
+    ingestion_sink: IngestionSink,
     repo_root_path: str,  # Passed explicitly now
 ) -> None:
     """
@@ -546,11 +547,11 @@ async def process_files_and_blame(
 
         # Flush batches
         if len(file_batch) >= BATCH_SIZE:
-            await store.insert_git_file_data(file_batch)
+            await ingestion_sink.insert_git_file_data(file_batch)
             file_batch.clear()
 
         if len(blame_batch) >= BATCH_SIZE:
-            await store.insert_blame_data(blame_batch)
+            await ingestion_sink.insert_blame_data(blame_batch)
             blame_batch.clear()
 
     # Close progress bar
@@ -559,11 +560,11 @@ async def process_files_and_blame(
 
     # Flush remaining
     if file_batch:
-        await store.insert_git_file_data(file_batch)
+        await ingestion_sink.insert_git_file_data(file_batch)
         logging.info(f"Inserted final {len(file_batch)} git files")
 
     if blame_batch:
-        await store.insert_blame_data(blame_batch)
+        await ingestion_sink.insert_blame_data(blame_batch)
         logging.info(f"Inserted final {len(blame_batch)} git blame lines")
 
     if failed_files:
@@ -592,7 +593,8 @@ async def process_local_repo(
 
     repo_name = repo_root.name
     repo = Repo(repo_path=str(repo_root), repo=repo_name, provider="local")
-    await store.insert_repo(repo)
+    ingestion_sink = IngestionSink(store)
+    await ingestion_sink.insert_repo(repo)
     logging.info("Repository stored: %s (%s)", repo.repo, repo.id)
 
     from git import Repo as GitPythonRepo
@@ -601,12 +603,12 @@ async def process_local_repo(
     commits_iter = list(iter_commits_since(repo_obj, since))
 
     if sync_git:
-        await process_git_commits(repo, store, commits_iter, since)
+        await process_git_commits(repo, ingestion_sink, commits_iter, since)
 
     if sync_prs:
         await process_local_pull_requests(
             repo=repo,
-            store=store,
+            ingestion_sink=ingestion_sink,
             repo_obj=repo_obj,
             commits=commits_iter,
             since=since,
@@ -614,7 +616,7 @@ async def process_local_repo(
 
     if sync_git:
         commits_for_stats = list(iter_commits_since(repo_obj, since))
-        await process_git_commit_stats(repo, store, commits_for_stats, since)
+        await process_git_commit_stats(repo, ingestion_sink, commits_for_stats, since)
 
     if sync_blame or fetch_blame:
         files_for_blame = set()
@@ -636,7 +638,7 @@ async def process_local_repo(
             repo,
             all_files_path,
             files_for_blame_path,
-            store,
+            ingestion_sink,
             str(repo_root),
         )
 
@@ -659,7 +661,8 @@ async def process_local_blame(
 
     repo_name = repo_root.name
     repo = Repo(repo_path=str(repo_root), repo=repo_name, provider="local")
-    await store.insert_repo(repo)
+    ingestion_sink = IngestionSink(store)
+    await ingestion_sink.insert_repo(repo)
     logging.info("Repository stored: %s (%s)", repo.repo, repo.id)
 
     from git import Repo as GitPythonRepo
@@ -688,7 +691,7 @@ async def process_local_blame(
         repo,
         all_files_path,
         files_for_blame_path,
-        store,
+        ingestion_sink,
         str(repo_root),
     )
 

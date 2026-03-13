@@ -119,7 +119,7 @@ class BaseGitProcessor:
         to write batches to the async store while running in a sync thread.
 
         Args:
-            coro: The coroutine to schedule (e.g. ``store.insert_git_pull_requests(batch)``).
+            coro: The coroutine to schedule (e.g. ``ingestion_sink.insert_git_pull_requests(batch)``).
             loop: The running event loop to schedule the coroutine on.
 
         Returns:
@@ -192,7 +192,7 @@ async def check_backfill_needs(
 
 
 async def backfill_file_records(
-    store: Any,
+    ingestion_sink: Any,
     repo_id: Any,
     file_paths: list[str],
     repo_full_name: str,
@@ -203,7 +203,7 @@ async def backfill_file_records(
     listing happens upstream; this function only handles the write path.
 
     Args:
-        store: A GitSyncStore-compatible instance.
+        ingestion_sink: A GitSyncStore-compatible sink adapter.
         repo_id: The repository identifier.
         file_paths: List of repository-relative file paths.
         repo_full_name: Human-readable name used in log messages.
@@ -211,7 +211,7 @@ async def backfill_file_records(
     if not file_paths:
         return
 
-    async with AsyncBatchCollector(store.insert_git_file_data) as collector:
+    async with AsyncBatchCollector(ingestion_sink.insert_git_file_data) as collector:
         for path in file_paths:
             collector.add(
                 GitFile(
@@ -227,7 +227,7 @@ async def backfill_file_records(
 
 
 async def backfill_commit_stat_records(
-    store: Any,
+    ingestion_sink: Any,
     repo_id: Any,
     stat_rows: list[GitCommitStat],
     repo_full_name: str,
@@ -235,7 +235,7 @@ async def backfill_commit_stat_records(
     """Persist pre-built GitCommitStat rows via AsyncBatchCollector.
 
     Args:
-        store: A GitSyncStore-compatible instance.
+        ingestion_sink: A GitSyncStore-compatible sink adapter.
         repo_id: The repository identifier (used only for logging).
         stat_rows: Pre-constructed GitCommitStat records.
         repo_full_name: Human-readable name used in log messages.
@@ -243,7 +243,7 @@ async def backfill_commit_stat_records(
     if not stat_rows:
         return
 
-    async with AsyncBatchCollector(store.insert_git_commit_stats) as collector:
+    async with AsyncBatchCollector(ingestion_sink.insert_git_commit_stats) as collector:
         for stat in stat_rows:
             collector.add(stat)
             await collector.maybe_flush()

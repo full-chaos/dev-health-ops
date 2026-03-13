@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -215,7 +216,7 @@ def _sync_gitlab_mrs_to_store(
     connector,
     project_id: int,
     repo_id,
-    store,
+    ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     batch_size: int,
     state: str = "all",
@@ -321,7 +322,7 @@ def _sync_gitlab_mrs_to_store(
 
             if len(batch) >= batch_size:
                 BaseGitProcessor.persist_batch_threadsafe(
-                    store.insert_git_pull_requests(batch),
+                    ingestion_sink.insert_git_pull_requests(batch),
                     loop,
                 )
                 logging.debug(
@@ -338,7 +339,7 @@ def _sync_gitlab_mrs_to_store(
 
     if batch:
         BaseGitProcessor.persist_batch_threadsafe(
-            store.insert_git_pull_requests(batch),
+            ingestion_sink.insert_git_pull_requests(batch),
             loop,
         )
 
@@ -601,6 +602,7 @@ def _fetch_gitlab_blame_sync(gl_project, connector, project_id, repo_id, limit=5
 
 async def _backfill_gitlab_missing_data(
     store: Any,
+    ingestion_sink: IngestionSink,
     connector: GitLabConnector,
     db_repo: Repo,
     project_full_name: str,
@@ -641,7 +643,7 @@ async def _backfill_gitlab_missing_data(
 
         if needs.files and file_paths:
             await backfill_file_records(
-                store, db_repo.id, file_paths, project_full_name
+                ingestion_sink, db_repo.id, file_paths, project_full_name
             )
 
     if needs.commit_stats:
@@ -655,7 +657,7 @@ async def _backfill_gitlab_missing_data(
             )
 
         async with AsyncBatchCollector(
-            store.insert_git_commit_stats
+            ingestion_sink.insert_git_commit_stats
         ) as stats_collector:
             commit_count = 0
             for commit in commits or []:
@@ -688,7 +690,9 @@ async def _backfill_gitlab_missing_data(
                     )
 
     if needs.blame and file_paths:
-        async with AsyncBatchCollector(store.insert_blame_data) as blame_collector:
+        async with AsyncBatchCollector(
+            ingestion_sink.insert_blame_data
+        ) as blame_collector:
             for path in file_paths:
                 try:
                     blame_items = connector.rest_client.get_file_blame(
@@ -749,6 +753,7 @@ async def process_gitlab_project(
 
     logging.info(f"Processing GitLab project: {project_id}")
     loop = asyncio.get_running_loop()
+    ingestion_sink = IngestionSink(store)
 
     connector = GitLabConnector(url=gitlab_url, private_token=token)
     try:
@@ -784,12 +789,13 @@ async def process_gitlab_project(
             tags=["gitlab"],
         )
 
-        await store.insert_repo(db_repo)
+        await ingestion_sink.insert_repo(db_repo)
         logging.info(f"Project stored: {db_repo.repo} ({db_repo.id})")
 
         if blame_only:
             await _backfill_gitlab_missing_data(
                 store=store,
+                ingestion_sink=ingestion_sink,
                 connector=connector,
                 db_repo=db_repo,
                 project_full_name=full_name,
@@ -816,7 +822,7 @@ async def process_gitlab_project(
             )
 
             if commit_objects:
-                await store.insert_git_commit_data(commit_objects)
+                await ingestion_sink.insert_git_commit_data(commit_objects)
                 logging.info(f"Stored {len(commit_objects)} commits from GitLab")
 
             # 3. Fetch Stats
@@ -832,7 +838,7 @@ async def process_gitlab_project(
             )
 
             if stats_objects:
-                await store.insert_git_commit_stats(stats_objects)
+                await ingestion_sink.insert_git_commit_stats(stats_objects)
                 logging.info(f"Stored {len(stats_objects)} commit stats from GitLab")
 
         if sync_prs:
@@ -844,7 +850,7 @@ async def process_gitlab_project(
                 connector,
                 project_id,
                 db_repo.id,
-                store,
+                ingestion_sink,
                 loop,
                 BATCH_SIZE,
                 "all",
@@ -864,7 +870,7 @@ async def process_gitlab_project(
                 since,
             )
             if pipeline_runs:
-                await store.insert_ci_pipeline_runs(pipeline_runs)
+                await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
                 logging.info(f"Stored {len(pipeline_runs)} pipeline runs from GitLab")
 
         if sync_deployments:
@@ -879,7 +885,7 @@ async def process_gitlab_project(
                 since,
             )
             if deployments:
-                await store.insert_deployments(deployments)
+                await ingestion_sink.insert_deployments(deployments)
                 logging.info(f"Stored {len(deployments)} deployments from GitLab")
 
         if sync_incidents:
@@ -894,7 +900,7 @@ async def process_gitlab_project(
                 since,
             )
             if incidents:
-                await store.insert_incidents(incidents)
+                await ingestion_sink.insert_incidents(incidents)
                 logging.info(f"Stored {len(incidents)} incidents from GitLab")
 
         # 5. Fetch Blame (Optional)
@@ -911,7 +917,7 @@ async def process_gitlab_project(
             )
 
             if blame_batch:
-                await store.insert_blame_data(blame_batch)
+                await ingestion_sink.insert_blame_data(blame_batch)
                 logging.info(f"Stored {len(blame_batch)} blame records from GitLab")
 
         logging.info(f"Successfully processed GitLab project: {project_id}")
@@ -958,6 +964,7 @@ async def process_gitlab_projects_batch(
     logging.info("=== GitLab Batch Project Processing ===")
     connector = GitLabConnector(url=gitlab_url, private_token=token)
     loop = asyncio.get_running_loop()
+    ingestion_sink = IngestionSink(store)
 
     mr_gate = None
     mr_semaphore = None
@@ -994,7 +1001,7 @@ async def process_gitlab_projects_batch(
             tags=["gitlab"],
         )
 
-        await store.insert_repo(db_repo)
+        await ingestion_sink.insert_repo(db_repo)
         stored_count += 1
         logging.debug(f"Stored project ({stored_count}): {db_repo.repo}")
 
@@ -1002,6 +1009,7 @@ async def process_gitlab_projects_batch(
             try:
                 await _backfill_gitlab_missing_data(
                     store=store,
+                    ingestion_sink=ingestion_sink,
                     connector=connector,
                     db_repo=db_repo,
                     project_full_name=project_info.full_name,
@@ -1038,7 +1046,7 @@ async def process_gitlab_projects_batch(
                     since,
                 )
                 if commit_objects:
-                    await store.insert_git_commit_data(commit_objects)
+                    await ingestion_sink.insert_git_commit_data(commit_objects)
 
                 stats_objects = await loop.run_in_executor(
                     None,
@@ -1049,7 +1057,7 @@ async def process_gitlab_projects_batch(
                     50 if commit_limit is None else min(commit_limit, 50),
                 )
                 if stats_objects:
-                    await store.insert_git_commit_stats(stats_objects)
+                    await ingestion_sink.insert_git_commit_stats(stats_objects)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch commits for GitLab project %s: %s",
@@ -1067,7 +1075,7 @@ async def process_gitlab_projects_batch(
                         connector,
                         project_info.id,
                         db_repo.id,
-                        store,
+                        ingestion_sink,
                         loop,
                         BATCH_SIZE,
                         "all",
@@ -1096,7 +1104,7 @@ async def process_gitlab_projects_batch(
                     since,
                 )
                 if pipeline_runs:
-                    await store.insert_ci_pipeline_runs(pipeline_runs)
+                    await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch CI/CD runs for GitLab project %s: %s",
@@ -1116,7 +1124,7 @@ async def process_gitlab_projects_batch(
                     since,
                 )
                 if deployments:
-                    await store.insert_deployments(deployments)
+                    await ingestion_sink.insert_deployments(deployments)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch deployments for GitLab project %s: %s",
@@ -1136,7 +1144,7 @@ async def process_gitlab_projects_batch(
                     since,
                 )
                 if incidents:
-                    await store.insert_incidents(incidents)
+                    await ingestion_sink.insert_incidents(incidents)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch incidents for GitLab project %s: %s",
@@ -1154,12 +1162,13 @@ async def process_gitlab_projects_batch(
                 old_file_mode="unknown",
                 new_file_mode="unknown",
             )
-            await store.insert_git_commit_stats([stat])
+            await ingestion_sink.insert_git_commit_stats([stat])
 
         if backfill_missing:
             try:
                 await _backfill_gitlab_missing_data(
                     store=store,
+                    ingestion_sink=ingestion_sink,
                     connector=connector,
                     db_repo=db_repo,
                     project_full_name=project_info.full_name,

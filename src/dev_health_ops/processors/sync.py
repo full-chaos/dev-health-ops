@@ -3,6 +3,7 @@ import asyncio
 import os
 
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.processors.github import (
     process_github_repo,
     process_github_repos_batch,
@@ -216,36 +217,37 @@ async def sync_synthetic_target(ns: argparse.Namespace, target: str) -> int:
     days = backfill_days
 
     async def _handler(store):
+        ingestion_sink = IngestionSink(store)
         generator = SyntheticDataGenerator(repo_name=repo_name)
         repo = generator.generate_repo()
-        await store.insert_repo(repo)
+        await ingestion_sink.insert_repo(repo)
 
         if target == "git":
             commits = generator.generate_commits(days=days)
-            await store.insert_git_commit_data(commits)
+            await ingestion_sink.insert_git_commit_data(commits)
             stats = generator.generate_commit_stats(commits)
-            await store.insert_git_commit_stats(stats)
+            await ingestion_sink.insert_git_commit_stats(stats)
             return
 
         if target == "prs":
             pr_data = generator.generate_prs()
             prs = [p["pr"] for p in pr_data]
-            await store.insert_git_pull_requests(prs)
+            await ingestion_sink.insert_git_pull_requests(prs)
 
             reviews = []
             for p in pr_data:
                 reviews.extend(p["reviews"])
             if reviews:
-                await store.insert_git_pull_request_reviews(reviews)
+                await ingestion_sink.insert_git_pull_request_reviews(reviews)
             return
 
         if target == "blame":
             commits = generator.generate_commits(days=days)
             files = generator.generate_files()
-            await store.insert_git_file_data(files)
+            await ingestion_sink.insert_git_file_data(files)
             blame_data = generator.generate_blame(commits)
             if blame_data:
-                await store.insert_blame_data(blame_data)
+                await ingestion_sink.insert_blame_data(blame_data)
             return
 
     await run_with_store(db_uri, db_type, _handler, org_id=getattr(ns, "org", None))

@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     from atlassian import JiraChangelogEvent, JiraIssue, JiraSprint, JiraWorklog
 
 
-def _get_field(issue: Any, field_name: str) -> Any:
+def _get_field(issue: object, field_name: str) -> Any:
     if isinstance(issue, dict):
         fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else None
         if fields is None:
@@ -36,7 +37,7 @@ def _get_field(issue: Any, field_name: str) -> Any:
     return getattr(fields, field_name, None)
 
 
-def _parse_sprint(value: Any) -> tuple[str | None, str | None]:
+def _parse_sprint(value: object) -> tuple[str | None, str | None]:
     """
     Jira sprint fields vary by instance. Best-effort parsing:
     - list of strings with "id=...,name=..."
@@ -116,7 +117,7 @@ def _normalize_relationship_type(raw_value: str | None) -> str:
 
 def extract_jira_issue_dependencies(
     *,
-    issue: Any,
+    issue: object,
     work_item_id: str,
 ) -> list[WorkItemDependency]:
     links = _get_field(issue, "issuelinks") or []
@@ -195,7 +196,7 @@ def detect_reopen_events(
 def jira_comment_to_interaction_event(
     *,
     work_item_id: str,
-    comment: Any,
+    comment: object,
     identity: IdentityResolver,
 ) -> WorkItemInteractionEvent | None:
     if not isinstance(comment, dict):
@@ -224,7 +225,7 @@ def jira_comment_to_interaction_event(
     )
 
 
-def jira_sprint_payload_to_model(payload: Any) -> Sprint | None:
+def jira_sprint_payload_to_model(payload: object) -> Sprint | None:
     if not isinstance(payload, dict):
         return None
     sprint_id = payload.get("id")
@@ -243,10 +244,10 @@ def jira_sprint_payload_to_model(payload: Any) -> Sprint | None:
 
 def jira_issue_to_work_item(
     *,
-    issue: Any,
+    issue: object,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    repo_id: Any | None = None,
+    repo_id: UUID | None = None,
     story_points_field: str | None = None,
     sprint_field: str | None = None,
     epic_link_field: str | None = None,
@@ -405,7 +406,7 @@ def jira_issue_to_work_item(
         histories = getattr(changelog, "histories", None) if changelog else None
     if histories:
         # Jira returns newest-first sometimes; sort by created timestamp.
-        def _hist_dt(h: Any) -> datetime:
+        def _hist_dt(h: object) -> datetime:
             created = (
                 h.get("created") if isinstance(h, dict) else getattr(h, "created", None)
             )
@@ -531,7 +532,7 @@ def canonical_jira_issue_to_work_item(
     issue: JiraIssue,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    repo_id: Any | None = None,
+    repo_id: UUID | None = None,
 ) -> WorkItem:
     work_item_id = f"jira:{issue.key}"
 

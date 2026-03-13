@@ -11,7 +11,13 @@ from dev_health_ops.workers.task_utils import _get_db_url, _invalidate_sync_cach
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, max_retries=3, queue="webhooks", name="dev_health_ops.workers.tasks.process_webhook_event")
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="webhooks",
+    name="dev_health_ops.workers.tasks.process_webhook_event",
+)
 def process_webhook_event(
     self,
     provider: str,

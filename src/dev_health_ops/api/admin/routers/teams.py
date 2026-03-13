@@ -22,6 +22,7 @@ from .common import get_session
 
 router = APIRouter()
 
+
 @router.get("/teams", response_model=list[TeamMappingResponse])
 async def list_teams(
     active_only: bool = True,

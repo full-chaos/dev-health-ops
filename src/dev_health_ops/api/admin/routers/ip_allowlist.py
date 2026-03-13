@@ -21,6 +21,7 @@ from .common import get_session, get_user_id
 
 router = APIRouter()
 
+
 @router.get("/ip-allowlist", response_model=IPAllowlistListResponse)
 @require_feature("ip_allowlist", required_tier="enterprise")
 async def list_ip_allowlist_entries(

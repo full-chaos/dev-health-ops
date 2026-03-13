@@ -11,7 +11,10 @@ from dev_health_ops.workers.task_utils import _get_db_url, _invalidate_metrics_c
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, name="dev_health_ops.workers.tasks.dispatch_scheduled_metrics")
+
+@celery_app.task(
+    bind=True, name="dev_health_ops.workers.tasks.dispatch_scheduled_metrics"
+)
 def dispatch_scheduled_metrics(self) -> dict:
     """Check ScheduledJob entries with job_type='metrics' and dispatch any that are due."""
     from croniter import croniter
@@ -76,7 +79,13 @@ def dispatch_scheduled_metrics(self) -> dict:
     )
     return {"dispatched": dispatched, "skipped": skipped}
 
-@celery_app.task(bind=True, max_retries=3, queue="metrics", name="dev_health_ops.workers.tasks.run_daily_metrics")
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_daily_metrics",
+)
 def run_daily_metrics(
     self,
     db_url: str | None = None,

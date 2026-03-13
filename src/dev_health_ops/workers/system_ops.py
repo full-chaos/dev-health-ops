@@ -11,7 +11,10 @@ from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, queue="ingest", name="dev_health_ops.workers.tasks.run_ingest_consumer")
+
+@celery_app.task(
+    bind=True, queue="ingest", name="dev_health_ops.workers.tasks.run_ingest_consumer"
+)
 def run_ingest_consumer(self, max_iterations: int = 100):
     """Process buffered ingest stream entries."""
     from dev_health_ops.api.ingest.consumer import consume_streams
@@ -106,7 +109,10 @@ def send_billing_notification(
         )
         raise self.retry(exc=exc, countdown=30 * (2**self.request.retries))
 
-@celery_app.task(bind=True, queue="default", name="dev_health_ops.workers.tasks.phone_home_heartbeat")
+
+@celery_app.task(
+    bind=True, queue="default", name="dev_health_ops.workers.tasks.phone_home_heartbeat"
+)
 def phone_home_heartbeat(self) -> dict[str, Any]:
     import hashlib
     import time

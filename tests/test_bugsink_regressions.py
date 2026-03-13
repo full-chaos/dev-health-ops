@@ -117,7 +117,9 @@ def test_run_sync_config_with_multiple_job_types_no_collision(
 def test_dispatch_daily_metrics_partitioned_defaults_none_org_id(
     mock_sink_cls, mock_chord
 ):
-    from dev_health_ops.workers.metrics_partitioned import dispatch_daily_metrics_partitioned
+    from dev_health_ops.workers.metrics_partitioned import (
+        dispatch_daily_metrics_partitioned,
+    )
 
     mock_sink_instance = MagicMock()
     mock_sink_instance.client.query.return_value.result_rows = [(str(uuid.uuid4()),)]
@@ -179,7 +181,9 @@ def test_run_daily_metrics_batch_defaults_none_org_id(
 def test_run_daily_metrics_finalize_defaults_none_org_id(
     mock_get_session, mock_asyncio_run, mock_invalidate, db_session
 ):
-    from dev_health_ops.workers.metrics_partitioned import run_daily_metrics_finalize_task
+    from dev_health_ops.workers.metrics_partitioned import (
+        run_daily_metrics_finalize_task,
+    )
 
     mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
     mock_asyncio_run.return_value = None

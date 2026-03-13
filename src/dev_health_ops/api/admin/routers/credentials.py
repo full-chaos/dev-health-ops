@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 @router.get("/credentials", response_model=list[IntegrationCredentialResponse])
 async def list_credentials(
     provider: str | None = None,

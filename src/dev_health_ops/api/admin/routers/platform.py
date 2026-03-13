@@ -16,6 +16,7 @@ from .common import get_session
 
 router = APIRouter()
 
+
 @router.get("/platform/stats", response_model=PlatformStatsResponse)
 async def platform_stats(
     session: AsyncSession = Depends(get_session),

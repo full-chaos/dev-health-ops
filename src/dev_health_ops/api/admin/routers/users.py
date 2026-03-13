@@ -31,6 +31,7 @@ from .common import (
 
 router = APIRouter()
 
+
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     limit: int = 100,

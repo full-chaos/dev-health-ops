@@ -9,12 +9,12 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from dev_health_ops.api.admin import get_session
 from dev_health_ops.api.admin.middleware import (
     get_admin_org_id,
     require_admin,
     require_superuser,
 )
-from dev_health_ops.api.admin import get_session
 from dev_health_ops.api.main import app
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base

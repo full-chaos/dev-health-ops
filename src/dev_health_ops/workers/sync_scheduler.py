@@ -9,7 +9,10 @@ from dev_health_ops.workers.sync_runtime import run_sync_config
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, name="dev_health_ops.workers.tasks.dispatch_scheduled_syncs")
+
+@celery_app.task(
+    bind=True, name="dev_health_ops.workers.tasks.dispatch_scheduled_syncs"
+)
 def dispatch_scheduled_syncs(self) -> dict:
     """Check active sync configs and dispatch any that are due."""
     from croniter import croniter

@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 @router.get("/orgs", response_model=list[OrganizationResponse])
 async def list_organizations(
     limit: int = 100,
@@ -155,6 +156,7 @@ async def delete_organization(
     if not deleted:
         raise HTTPException(status_code=404, detail="Organization not found")
     return {"deleted": True}
+
 
 @router.get("/orgs/{org_id}/members", response_model=list[MembershipResponse])
 async def list_members(

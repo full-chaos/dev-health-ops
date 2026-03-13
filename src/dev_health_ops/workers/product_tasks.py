@@ -9,7 +9,13 @@ from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, max_retries=2, queue="metrics", name="dev_health_ops.workers.tasks.sync_teams_to_analytics")
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.sync_teams_to_analytics",
+)
 def sync_teams_to_analytics(self, org_id: str | None = None) -> dict:
     from dev_health_ops.providers.team_bridge import bridge_teams_to_clickhouse
 
@@ -20,7 +26,13 @@ def sync_teams_to_analytics(self, org_id: str | None = None) -> dict:
         logger.exception("sync_teams_to_analytics failed: %s", exc)
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
-@celery_app.task(bind=True, max_retries=2, queue="metrics", name="dev_health_ops.workers.tasks.run_capacity_forecast_job")
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_capacity_forecast_job",
+)
 def run_capacity_forecast_job(
     self,
     db_url: str | None = None,

@@ -10,7 +10,13 @@ from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, max_retries=3, queue="metrics", name="dev_health_ops.workers.tasks.run_complexity_job")
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_complexity_job",
+)
 def run_complexity_job(
     self,
     db_url: str | None = None,
@@ -78,7 +84,13 @@ def run_complexity_job(
         logger.exception("Complexity analysis task failed: %s", exc)
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
-@celery_app.task(bind=True, max_retries=3, queue="metrics", name="dev_health_ops.workers.tasks.run_dora_metrics")
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_dora_metrics",
+)
 def run_dora_metrics(
     self,
     db_url: str | None = None,

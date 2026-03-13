@@ -19,6 +19,7 @@ from .common import get_session
 
 router = APIRouter()
 
+
 @router.get("/feature-flags", response_model=list[FeatureFlagResponse])
 async def list_feature_flags(
     session: AsyncSession = Depends(get_session),

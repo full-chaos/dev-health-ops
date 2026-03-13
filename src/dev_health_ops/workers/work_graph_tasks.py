@@ -11,7 +11,13 @@ from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, max_retries=3, queue="metrics", name="dev_health_ops.workers.tasks.run_work_graph_build")
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_work_graph_build",
+)
 def run_work_graph_build(
     self,
     db_url: str | None = None,
@@ -81,7 +87,13 @@ def run_work_graph_build(
         logger.exception("Work graph build task failed: %s", exc)
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
-@celery_app.task(bind=True, max_retries=2, queue="metrics", name="dev_health_ops.workers.tasks.run_investment_materialize")
+
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    queue="metrics",
+    name="dev_health_ops.workers.tasks.run_investment_materialize",
+)
 def run_investment_materialize(
     self,
     db_url: str | None = None,

@@ -15,7 +15,13 @@ from dev_health_ops.workers.task_utils import (
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, max_retries=3, queue="backfill", name="dev_health_ops.workers.tasks.run_backfill")
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="backfill",
+    name="dev_health_ops.workers.tasks.run_backfill",
+)
 def run_backfill(
     self,
     sync_config_id: str,

@@ -7,6 +7,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 def _get_db_url() -> str:
     """Get data-store URL from environment.
 
@@ -109,8 +110,10 @@ def _resolve_env_credentials(provider: str) -> dict[str, str]:
         if (value := os.getenv(env_var))
     }
 
+
 _GIT_TARGETS = {"git", "prs"}
 _WORK_ITEM_TARGETS = {"work-items"}
+
 
 def _invalidate_metrics_cache(day: str, org_id: str) -> None:
     """Invalidate GraphQL caches after metrics update."""

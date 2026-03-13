@@ -20,6 +20,7 @@ from .common import get_session, get_user_id
 
 router = APIRouter()
 
+
 @router.get("/retention-policies", response_model=RetentionPolicyListResponse)
 @require_feature("retention_policies", required_tier="enterprise")
 async def list_retention_policies(

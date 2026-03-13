@@ -26,6 +26,7 @@ from .common import get_session
 
 router = APIRouter()
 
+
 @router.get("/identities", response_model=list[IdentityMappingResponse])
 async def list_identities(
     active_only: bool = True,
@@ -75,6 +76,7 @@ async def create_or_update_identity(
         created_at=mapping.created_at,
         updated_at=mapping.updated_at,
     )
+
 
 @router.get(
     "/teams/{team_id}/discover-members",

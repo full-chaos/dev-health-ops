@@ -26,6 +26,7 @@ from dev_health_ops.workers.task_utils import (
 
 logger = logging.getLogger(__name__)
 
+
 def _is_batch_eligible(config) -> bool:
     """Check if a SyncConfiguration should be dispatched as a batch.
 
@@ -60,7 +61,10 @@ def _get_batch_size(sync_options: dict[str, Any]) -> int:
         return int(env_size)
     return 5
 
-@celery_app.task(bind=True, queue="sync", name="dev_health_ops.workers.tasks._batch_sync_callback")
+
+@celery_app.task(
+    bind=True, queue="sync", name="dev_health_ops.workers.tasks._batch_sync_callback"
+)
 def _batch_sync_callback(
     self,
     results: list,
@@ -84,7 +88,13 @@ def _batch_sync_callback(
         "child_results": len(results) if results else 0,
     }
 
-@celery_app.task(bind=True, queue="sync", rate_limit="5/m", name="dev_health_ops.workers.tasks.dispatch_batch_sync")
+
+@celery_app.task(
+    bind=True,
+    queue="sync",
+    rate_limit="5/m",
+    name="dev_health_ops.workers.tasks.dispatch_batch_sync",
+)
 def dispatch_batch_sync(
     self,
     config_id: str,
@@ -255,7 +265,13 @@ def dispatch_batch_sync(
         )
         return {"status": "error", "error": str(exc)}
 
-@celery_app.task(bind=True, max_retries=3, queue="sync", name="dev_health_ops.workers.tasks._run_sync_for_repo")
+
+@celery_app.task(
+    bind=True,
+    max_retries=3,
+    queue="sync",
+    name="dev_health_ops.workers.tasks._run_sync_for_repo",
+)
 def _run_sync_for_repo(
     self,
     config_id: str,

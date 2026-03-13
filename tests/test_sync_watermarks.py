@@ -335,7 +335,9 @@ class TestRunSyncConfigWatermarks:
 
     @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
     @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
-    @patch("dev_health_ops.workers.sync_runtime._resolve_env_credentials", return_value={})
+    @patch(
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials", return_value={}
+    )
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_no_watermark_when_repo_id_missing(
         self,

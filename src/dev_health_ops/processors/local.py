@@ -24,6 +24,8 @@ from dev_health_ops.utils import (
     iter_commits_since,
 )
 
+logger = logging.getLogger(__name__)
+
 _GITHUB_MERGE_PR_RE = re.compile(
     r"^Merge pull request #(?P<number>\d+)\b",
     re.MULTILINE,
@@ -98,7 +100,11 @@ def infer_merged_pull_requests_from_commits(
                 head_branch=None,
                 base_branch=None,
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
+            logger.debug(
+                "Failed to infer merged pull request from commit; skipping",
+                exc_info=True,
+            )
             continue
 
     return list(inferred.values())
@@ -150,7 +156,11 @@ def infer_open_pull_requests_from_refs(
                 head_branch=ref_path,
                 base_branch=None,
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
+            logger.debug(
+                "Failed to infer open pull request from ref; skipping",
+                exc_info=True,
+            )
             continue
 
     return list(inferred.values())
@@ -392,8 +402,12 @@ def _process_file_and_blame_sync(
             if os.path.getsize(filepath) < 1_000_000:  # Skip files > 1MB
                 with open(filepath, encoding="utf-8", errors="ignore") as f:
                     contents = f.read()
-        except Exception:
-            pass  # Content read failed, but we still proceed
+        except OSError:
+            logger.debug(
+                "Failed reading file contents for blame processing; continuing",
+                extra={"path": str(filepath)},
+                exc_info=True,
+            )
 
         git_file = GitFile(
             repo_id=repo_id,

@@ -6,7 +6,6 @@ import pytest
 from sqlalchemy import create_engine
 
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
-from dev_health_ops.metrics.loaders.mongo import MongoDataLoader
 from dev_health_ops.metrics.loaders.sqlalchemy import SqlAlchemyDataLoader
 
 
@@ -36,23 +35,6 @@ async def test_clickhouse_loader_async():
     res = await loader.load_git_rows(start, end, uuid.uuid4())
     assert len(res) == 3
     assert isinstance(res[0], list)
-
-
-@pytest.mark.asyncio
-async def test_mongo_loader_async():
-    mock_db = MagicMock()
-    loader = MongoDataLoader(mock_db)
-    start = datetime.now(timezone.utc)
-    end = start + timedelta(days=1)
-
-    # Mock some mongo responses
-    mock_db["git_commits"].find.return_value = []
-    mock_db["git_commit_stats"].find.return_value = []
-    mock_db["git_pull_requests"].find.return_value = []
-    mock_db["git_pull_request_reviews"].find.return_value = []
-
-    res = await loader.load_git_rows(start, end, uuid.uuid4())
-    assert len(res) == 3
 
 
 @pytest.mark.asyncio

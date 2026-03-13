@@ -2,8 +2,8 @@
 Base interface for metrics sinks.
 
 All sink implementations must derive from BaseMetricsSink and implement the
-abstract methods. This ensures consistent behavior across ClickHouse, MongoDB,
-SQLite, and PostgreSQL backends.
+abstract methods. This ensures consistent behavior across analytics sink
+implementations.
 """
 
 from __future__ import annotations
@@ -57,12 +57,8 @@ class BaseMetricsSink(ABC):
     Abstract base class for metrics sinks.
 
     Sinks are responsible for persisting derived metrics data. Each backend
-    (ClickHouse, MongoDB, SQLite, PostgreSQL) implements this interface
+    (ClickHouse) implements this interface
     with backend-specific optimizations (e.g., bulk inserts, upserts).
-
-    DEPRECATION NOTICE:
-    ClickHouse is the only supported analytics backend. MongoDB, PostgreSQL, and
-    SQLite support is deprecated and will be removed in a future release.
 
     Lifecycle:
         1. Create sink instance with connection string/config
@@ -97,7 +93,7 @@ class BaseMetricsSink(ABC):
     @property
     @abstractmethod
     def backend_type(self) -> str:
-        """Return the backend type identifier (clickhouse, mongo, sqlite, postgres)."""
+        """Return the backend type identifier (clickhouse)."""
         ...
 
     @abstractmethod
@@ -108,11 +104,9 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def ensure_schema(self) -> None:
         """
-        Create tables/collections and indexes if they don't exist.
+        Create tables and indexes if they don't exist.
 
         For ClickHouse: runs SQL migration files.
-        For MongoDB: creates indexes via ensure_indexes().
-        For SQLite/Postgres: runs CREATE TABLE IF NOT EXISTS statements.
         """
         ...
 

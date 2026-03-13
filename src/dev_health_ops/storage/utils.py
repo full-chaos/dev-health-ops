@@ -73,23 +73,15 @@ def detect_db_type(conn_string: str) -> str:
     ):
         return "clickhouse"
 
-    if conn_lower.startswith("mongodb://") or conn_lower.startswith("mongodb+srv://"):
-        return "mongo"
-
     if conn_lower.startswith("postgresql://") or conn_lower.startswith("postgres://"):
         return "postgres"
     if conn_lower.startswith("postgresql+asyncpg://"):
         return "postgres"
 
-    if conn_lower.startswith("sqlite://") or conn_lower.startswith(
-        "sqlite+aiosqlite://"
-    ):
-        return "sqlite"
-
     scheme = conn_string.split("://", 1)[0] if "://" in conn_string else "unknown"
     raise ValueError(
         f"Could not detect database type from connection string. "
-        f"Supported: mongodb://, postgresql://, postgres://, sqlite://, "
+        f"Supported: postgresql://, postgres://, "
         f"clickhouse://, or variations with async drivers. Got scheme: '{scheme}', "
         f"connection string (first 100 chars): {conn_string[:100]}..."
     )
@@ -104,8 +96,6 @@ def resolve_db_type(db_url: str, db_type: str | None) -> str:
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
 
-    if resolved not in {"postgres", "mongo", "sqlite", "clickhouse"}:
-        raise SystemExit(
-            "DB_TYPE must be 'postgres', 'mongo', 'sqlite', or 'clickhouse'"
-        )
+    if resolved not in {"postgres", "clickhouse"}:
+        raise SystemExit("DB_TYPE must be 'postgres' or 'clickhouse'")
     return resolved

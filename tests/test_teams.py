@@ -1,14 +1,14 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import select
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
-from dev_health_ops.storage import ClickHouseStore, MongoStore, SQLAlchemyStore
+from dev_health_ops.storage import ClickHouseStore, SQLAlchemyStore
 
 
 @pytest.mark.asyncio
@@ -20,8 +20,8 @@ async def test_team_model():
         description="A test team",
         members=["alice@example.com", "bob@example.com"],
     )
-    assert team.id == "team-a"
-    assert team.name == "Team Alpha"
+    assert str(getattr(team, "id")) == "team-a"
+    assert str(getattr(team, "name")) == "Team Alpha"
     assert "alice@example.com" in team.members
     assert isinstance(team.updated_at, datetime)
 
@@ -51,6 +51,7 @@ async def test_sqlalchemy_store_teams():
         await store.insert_teams([updated_team])
 
         # Expire session to ensure we fetch from DB
+        assert store.session is not None
         store.session.expire_all()
 
         retrieved = await store.get_all_teams()
@@ -68,55 +69,12 @@ async def test_sqlalchemy_store_teams():
         ]
         await store.insert_jira_project_ops_team_links(links)
 
+        assert store.session is not None
         result = await store.session.execute(select(JiraProjectOpsTeamLink))
         rows = list(result.scalars().all())
         assert len(rows) == 1
-        assert rows[0].project_key == "OPS"
-        assert rows[0].ops_team_id == "team-1"
-
-
-@pytest.mark.asyncio
-async def test_mongo_store_teams():
-    """Test Team storage in Mongo (mocked)."""
-    with patch("dev_health_ops.storage.mongo.AsyncIOMotorClient") as mock_client:
-        store = MongoStore("mongodb://localhost:27017", db_name="testdb")
-        store.db = mock_client.return_value["testdb"]
-
-        # Mock insert_teams (uses _upsert_many)
-        store.db["teams"].bulk_write = AsyncMock()
-
-        teams = [Team(id="t1", name="Team 1")]
-        await store.insert_teams(teams)
-        assert store.db["teams"].bulk_write.called
-
-        store.db["jira_project_ops_team_links"].bulk_write = AsyncMock()
-        links = [
-            JiraProjectOpsTeamLink(
-                project_key="OPS",
-                ops_team_id="team-1",
-                project_name="Ops Project",
-                ops_team_name="Primary Ops",
-            )
-        ]
-        await store.insert_jira_project_ops_team_links(links)
-        assert store.db["jira_project_ops_team_links"].bulk_write.called
-
-        # Mock get_all_teams
-        mock_cursor = MagicMock()
-        mock_cursor.__aiter__.return_value = [
-            {
-                "id": "t1",
-                "team_uuid": uuid.uuid4(),
-                "name": "Team 1",
-                "members": ["m1"],
-                "updated_at": datetime.now(timezone.utc),
-            }
-        ]
-        store.db["teams"].find.return_value = mock_cursor
-
-        retrieved = await store.get_all_teams()
-        assert len(retrieved) == 1
-        assert retrieved[0].id == "t1"
+        assert str(getattr(rows[0], "project_key")) == "OPS"
+        assert str(getattr(rows[0], "ops_team_id")) == "team-1"
 
 
 @pytest.mark.asyncio
@@ -150,7 +108,7 @@ async def test_clickhouse_store_teams():
 
         retrieved = await store.get_all_teams()
         assert len(retrieved) == 1
-        assert retrieved[0].id == "t1"
+        assert str(getattr(retrieved[0], "id")) == "t1"
 
         links = [
             JiraProjectOpsTeamLink(
@@ -170,8 +128,8 @@ def test_synthetic_teams_generation():
     teams = generator.generate_teams(count=3)
     assert len(teams) == 3
     for team in teams:
-        assert team.id.startswith("team-")
-        assert len(team.members) > 0
+        assert str(getattr(team, "id")).startswith("team-")
+        assert len(list(getattr(team, "members") or [])) > 0
 
 
 @pytest.mark.asyncio

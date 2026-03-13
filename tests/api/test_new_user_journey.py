@@ -29,7 +29,7 @@ from dev_health_ops.models.settings import (
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
 VALID_PASSWORD = "SecurePass123!"
 

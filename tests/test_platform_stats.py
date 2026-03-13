@@ -14,7 +14,7 @@ from dev_health_ops.api.admin.middleware import (
     require_admin,
     require_superuser,
 )
-from dev_health_ops.api.admin.router import get_session
+from dev_health_ops.api.admin import get_session
 from dev_health_ops.api.main import app
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base

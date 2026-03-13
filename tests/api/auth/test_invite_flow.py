@@ -21,7 +21,7 @@ from dev_health_ops.models.org_invite import OrgInvite
 from dev_health_ops.models.users import Membership, Organization, User
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
 
 @pytest_asyncio.fixture

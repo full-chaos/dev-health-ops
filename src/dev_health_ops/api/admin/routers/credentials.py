@@ -1,0 +1,353 @@
+from __future__ import annotations
+
+import ipaddress
+import logging
+import socket
+from urllib.parse import urlparse
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from dev_health_ops.api.admin.middleware import get_admin_org_id
+from dev_health_ops.api.admin.schemas import (
+    IntegrationCredentialCreate,
+    IntegrationCredentialResponse,
+    IntegrationCredentialUpdate,
+    TestConnectionRequest,
+    TestConnectionResponse,
+)
+from dev_health_ops.api.services.settings import IntegrationCredentialsService
+
+from .common import get_session
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+@router.get("/credentials", response_model=list[IntegrationCredentialResponse])
+async def list_credentials(
+    provider: str | None = None,
+    active_only: bool = False,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> list[IntegrationCredentialResponse]:
+    svc = IntegrationCredentialsService(session, org_id)
+    if provider:
+        creds = await svc.list_by_provider(provider)
+    else:
+        creds = await svc.list_all(active_only=active_only)
+    return [
+        IntegrationCredentialResponse(
+            id=str(c.id),
+            provider=c.provider,
+            name=c.name,
+            is_active=c.is_active,
+            config=c.config or {},
+            last_test_at=c.last_test_at,
+            last_test_success=c.last_test_success,
+            last_test_error=c.last_test_error,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+        for c in creds
+    ]
+
+
+@router.get(
+    "/credentials/{provider}/{name}", response_model=IntegrationCredentialResponse
+)
+async def get_credential(
+    provider: str,
+    name: str = "default",
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> IntegrationCredentialResponse:
+    svc = IntegrationCredentialsService(session, org_id)
+    cred = await svc.get(provider, name)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    return IntegrationCredentialResponse(
+        id=str(cred.id),
+        provider=cred.provider,
+        name=cred.name,
+        is_active=cred.is_active,
+        config=cred.config or {},
+        last_test_at=cred.last_test_at,
+        last_test_success=cred.last_test_success,
+        last_test_error=cred.last_test_error,
+        created_at=cred.created_at,
+        updated_at=cred.updated_at,
+    )
+
+
+@router.post("/credentials", response_model=IntegrationCredentialResponse)
+async def create_credential(
+    payload: IntegrationCredentialCreate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> IntegrationCredentialResponse:
+    svc = IntegrationCredentialsService(session, org_id)
+    cred = await svc.set(
+        provider=payload.provider,
+        credentials=payload.credentials,
+        name=payload.name,
+        config=payload.config,
+    )
+    return IntegrationCredentialResponse(
+        id=str(cred.id),
+        provider=cred.provider,
+        name=cred.name,
+        is_active=cred.is_active,
+        config=cred.config or {},
+        last_test_at=cred.last_test_at,
+        last_test_success=cred.last_test_success,
+        last_test_error=cred.last_test_error,
+        created_at=cred.created_at,
+        updated_at=cred.updated_at,
+    )
+
+
+@router.patch(
+    "/credentials/{provider}/{name}", response_model=IntegrationCredentialResponse
+)
+async def update_credential(
+    provider: str,
+    name: str,
+    payload: IntegrationCredentialUpdate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> IntegrationCredentialResponse:
+    svc = IntegrationCredentialsService(session, org_id)
+    existing = await svc.get(provider, name)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    if payload.credentials is not None:
+        existing = await svc.set(
+            provider=provider,
+            credentials=payload.credentials,
+            name=name,
+            config=payload.config if payload.config is not None else existing.config,
+            is_active=payload.is_active
+            if payload.is_active is not None
+            else existing.is_active,
+        )
+    else:
+        if payload.config is not None:
+            existing.config = payload.config
+        if payload.is_active is not None:
+            existing.is_active = payload.is_active
+        await session.flush()
+
+    return IntegrationCredentialResponse(
+        id=str(existing.id),
+        provider=existing.provider,
+        name=existing.name,
+        is_active=existing.is_active,
+        config=existing.config or {},
+        last_test_at=existing.last_test_at,
+        last_test_success=existing.last_test_success,
+        last_test_error=existing.last_test_error,
+        created_at=existing.created_at,
+        updated_at=existing.updated_at,
+    )
+
+
+@router.delete("/credentials/{provider}/{name}")
+async def delete_credential(
+    provider: str,
+    name: str = "default",
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> dict:
+    svc = IntegrationCredentialsService(session, org_id)
+    deleted = await svc.delete(provider, name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    return {"deleted": True}
+
+
+@router.post("/credentials/test", response_model=TestConnectionResponse)
+async def test_connection(
+    payload: TestConnectionRequest,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> TestConnectionResponse:
+    svc = IntegrationCredentialsService(session, org_id)
+
+    creds = payload.credentials  # inline (pre-save) or fall back to stored
+    stored = None
+    if not creds:
+        # Prefer credential_id (UUID) lookup; fall back to provider+name
+        if payload.credential_id:
+            creds, stored = await svc.get_decrypted_credentials_by_id(
+                payload.credential_id
+            )
+        else:
+            creds = await svc.get_decrypted_credentials(payload.provider, payload.name)
+        if not creds:
+            raise HTTPException(status_code=404, detail="Credential not found")
+
+    success = False
+    error = None
+    details = {}
+
+    try:
+        if payload.provider == "github":
+            success, details = await _test_github_connection(creds)
+        elif payload.provider == "gitlab":
+            success, details = await _test_gitlab_connection(creds)
+        elif payload.provider == "jira":
+            success, details = await _test_jira_connection(creds)
+        elif payload.provider == "linear":
+            success, details = await _test_linear_connection(creds)
+        else:
+            error = f"Unknown provider: {payload.provider}"
+    except Exception as e:
+        error = str(e)
+        safe_provider = str(payload.provider).replace("\r", "").replace("\n", "")
+        logger.exception("Test connection failed for %s", safe_provider)
+
+    # Always persist the test result when a stored credential exists
+    # (covers both inline pre-save tests and DB-sourced tests)
+    if stored is None:
+        stored = await svc.get(payload.provider, payload.name)
+    if stored:
+        await svc.update_test_result(stored.provider, success, error, stored.name)
+    return TestConnectionResponse(success=success, error=error, details=details or None)
+
+
+def _validate_external_url(url: str) -> tuple[bool, str | None]:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, "Invalid URL scheme - only http and https are allowed"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "No hostname in URL"
+
+    blocked_hostnames = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
+    if hostname.lower() in blocked_hostnames:
+        return False, "Connection to localhost is not allowed"
+
+    try:
+        addr_info = socket.getaddrinfo(
+            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+        for family, _, _, _, sockaddr in addr_info:
+            if family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return False, "Connection to private/internal networks is not allowed"
+    except socket.gaierror:
+        return False, f"Cannot resolve hostname: {hostname}"
+
+    return True, None
+
+
+async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
+    import httpx
+
+    token = creds.get("token")
+    if not token:
+        return False, {"error": "No token provided"}
+
+    base_url = creds.get("base_url", "https://api.github.com")
+    is_valid, error = _validate_external_url(base_url)
+    if not is_valid:
+        return False, {"error": error}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{base_url}/user",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return True, {"user": data.get("login"), "name": data.get("name")}
+        return False, {"status": resp.status_code, "error": resp.text[:200]}
+
+
+async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
+    import httpx
+
+    token = creds.get("token")
+    if not token:
+        return False, {"error": "No token provided"}
+
+    base_url = creds.get("url") or creds.get("base_url", "https://gitlab.com/api/v4")
+    is_valid, error = _validate_external_url(base_url)
+    if not is_valid:
+        return False, {"error": error}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{base_url}/user",
+            headers={"PRIVATE-TOKEN": token},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return True, {"user": data.get("username"), "name": data.get("name")}
+        return False, {"status": resp.status_code, "error": resp.text[:200]}
+
+
+async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
+    import httpx
+
+    email = creds.get("email")
+    api_token = creds.get("token") or creds.get("api_token")
+    base_url = creds.get("url") or creds.get("base_url")
+
+    if not all([email, api_token, base_url]):
+        return False, {
+            "error": "Missing required credentials (email, api_token, base_url)"
+        }
+
+    is_valid, error = _validate_external_url(base_url)
+    if not is_valid:
+        return False, {"error": error}
+
+    import base64
+
+    auth = base64.b64encode(f"{email}:{api_token}".encode()).decode()
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{base_url}/rest/api/3/myself",
+            headers={"Authorization": f"Basic {auth}", "Accept": "application/json"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return True, {
+                "user": data.get("emailAddress"),
+                "name": data.get("displayName"),
+            }
+        return False, {"status": resp.status_code, "error": resp.text[:200]}
+
+
+async def _test_linear_connection(creds: dict) -> tuple[bool, dict]:
+    import httpx
+
+    api_key = creds.get("apiKey") or creds.get("api_key")
+    if not api_key:
+        return False, {"error": "No API key provided"}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.linear.app/graphql",
+            headers={"Authorization": api_key, "Content-Type": "application/json"},
+            json={"query": "{ viewer { id email name } }"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            viewer = data.get("data", {}).get("viewer", {})
+            if viewer:
+                return True, {"user": viewer.get("email"), "name": viewer.get("name")}
+        return False, {"status": resp.status_code, "error": resp.text[:200]}

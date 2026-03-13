@@ -17,7 +17,7 @@ from dev_health_ops.models.settings import IdentityMapping
 from dev_health_ops.models.users import Membership, Organization, User
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
 ORG_ID = str(uuid.uuid4())
 USER_ID = str(uuid.uuid4())

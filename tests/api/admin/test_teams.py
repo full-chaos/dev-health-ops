@@ -17,7 +17,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import TeamMapping
 from dev_health_ops.models.users import Membership, Organization, User
 
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
 

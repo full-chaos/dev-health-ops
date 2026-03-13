@@ -9,7 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.admin.middleware import require_admin
-from dev_health_ops.api.admin.router import get_session
+from dev_health_ops.api.admin import get_session
 from dev_health_ops.api.main import app
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base

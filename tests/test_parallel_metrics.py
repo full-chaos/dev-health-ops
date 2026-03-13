@@ -34,7 +34,9 @@ class TestDispatchDailyMetricsPartitioned:
     @patch("dev_health_ops.workers.metrics_partitioned.chord")
     @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
     def test_discovers_repos_and_creates_batches(self, mock_sink_cls, mock_chord):
-        from dev_health_ops.workers.tasks import dispatch_daily_metrics_partitioned
+        from dev_health_ops.workers.metrics_partitioned import (
+            dispatch_daily_metrics_partitioned,
+        )
 
         fake_rows = [(str(uuid.uuid4()),) for _ in range(7)]
         mock_sink_instance = MagicMock()
@@ -65,7 +67,9 @@ class TestDispatchDailyMetricsPartitioned:
     @patch("dev_health_ops.workers.metrics_partitioned.chord")
     @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
     def test_returns_no_repos_when_empty(self, mock_sink_cls, mock_chord):
-        from dev_health_ops.workers.tasks import dispatch_daily_metrics_partitioned
+        from dev_health_ops.workers.metrics_partitioned import (
+            dispatch_daily_metrics_partitioned,
+        )
 
         mock_sink_instance = MagicMock()
         mock_sink_instance.client.query.return_value.result_rows = []
@@ -85,7 +89,7 @@ class TestDispatchDailyMetricsPartitioned:
     @patch("dev_health_ops.workers.metrics_partitioned.chord")
     @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
     def test_chord_callback_is_finalize_task(self, mock_sink_cls, mock_chord):
-        from dev_health_ops.workers.tasks import (
+        from dev_health_ops.workers.metrics_partitioned import (
             dispatch_daily_metrics_partitioned,
             run_daily_metrics_finalize_task,
         )
@@ -116,7 +120,7 @@ class TestRunDailyMetricsBatch:
     def test_marks_running_then_completed_on_success(
         self, mock_get_session, mock_asyncio_run, db_session
     ):
-        from dev_health_ops.workers.tasks import run_daily_metrics_batch
+        from dev_health_ops.workers.metrics_partitioned import run_daily_metrics_batch
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_asyncio_run.return_value = None
@@ -151,7 +155,7 @@ class TestRunDailyMetricsBatch:
     def test_marks_failed_on_exception(
         self, mock_get_session, mock_asyncio_run, db_session
     ):
-        from dev_health_ops.workers.tasks import run_daily_metrics_batch
+        from dev_health_ops.workers.metrics_partitioned import run_daily_metrics_batch
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_asyncio_run.side_effect = RuntimeError("boom")
@@ -187,7 +191,7 @@ class TestRunDailyMetricsBatch:
     def test_skips_already_completed_repos(
         self, mock_get_session, mock_asyncio_run, db_session
     ):
-        from dev_health_ops.workers.tasks import run_daily_metrics_batch
+        from dev_health_ops.workers.metrics_partitioned import run_daily_metrics_batch
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
 
@@ -223,7 +227,9 @@ class TestRunDailyMetricsFinalizeTask:
     def test_calls_finalize_and_invalidates_cache(
         self, mock_get_session, mock_asyncio_run, mock_invalidate, db_session
     ):
-        from dev_health_ops.workers.tasks import run_daily_metrics_finalize_task
+        from dev_health_ops.workers.metrics_partitioned import (
+            run_daily_metrics_finalize_task,
+        )
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_asyncio_run.return_value = None
@@ -259,7 +265,9 @@ class TestRunDailyMetricsFinalizeTask:
     def test_marks_failed_on_finalize_error(
         self, mock_get_session, mock_asyncio_run, mock_invalidate, db_session
     ):
-        from dev_health_ops.workers.tasks import run_daily_metrics_finalize_task
+        from dev_health_ops.workers.metrics_partitioned import (
+            run_daily_metrics_finalize_task,
+        )
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_asyncio_run.side_effect = RuntimeError("finalize exploded")
@@ -292,7 +300,7 @@ class TestRunDailyMetricsFinalizeTask:
 
 class TestTaskRegistration:
     def test_tasks_have_celery_attributes(self):
-        from dev_health_ops.workers.tasks import (
+        from dev_health_ops.workers.metrics_partitioned import (
             dispatch_daily_metrics_partitioned,
             run_daily_metrics_batch,
             run_daily_metrics_finalize_task,
@@ -307,7 +315,7 @@ class TestTaskRegistration:
             assert hasattr(task, "delay")
 
     def test_task_queue_assignments(self):
-        from dev_health_ops.workers.tasks import (
+        from dev_health_ops.workers.metrics_partitioned import (
             dispatch_daily_metrics_partitioned,
             run_daily_metrics_batch,
             run_daily_metrics_finalize_task,

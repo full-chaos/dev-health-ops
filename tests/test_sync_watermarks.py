@@ -180,7 +180,7 @@ class TestRunSyncConfigWatermarks:
         mock_run_with_store,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_runtime import run_sync_config
 
         config = _make_config(
             provider="github",
@@ -226,7 +226,7 @@ class TestRunSyncConfigWatermarks:
         mock_run_with_store,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_runtime import run_sync_config
 
         config = _make_config(
             provider="github",
@@ -270,7 +270,7 @@ class TestRunSyncConfigWatermarks:
         mock_run_with_store,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_runtime import run_sync_config
 
         config = _make_config(
             provider="github",
@@ -309,7 +309,7 @@ class TestRunSyncConfigWatermarks:
         mock_run_with_store,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_runtime import run_sync_config
 
         config = _make_config(
             provider="github",
@@ -345,7 +345,7 @@ class TestRunSyncConfigWatermarks:
         mock_run_work_items,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_runtime import run_sync_config
 
         config = _make_config(
             provider="jira",
@@ -384,7 +384,7 @@ class TestRunSyncConfigWatermarks:
         mock_run_with_store,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_runtime import run_sync_config
 
         config = _make_config(
             provider="github",
@@ -428,7 +428,7 @@ class TestRunSyncConfigWatermarks:
         mock_run_with_store,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_runtime import run_sync_config
 
         config = _make_config(
             provider="gitlab",

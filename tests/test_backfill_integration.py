@@ -235,7 +235,7 @@ def test_run_backfill_progress_callback_updates_backfill_job_completed_chunks(
         _fake_run_backfill_for_config,
     )
 
-    from dev_health_ops.workers.tasks import run_backfill
+    from dev_health_ops.workers.sync_backfill import run_backfill
 
     task: Any = run_backfill
     task.push_request(id="backfill-integration")
@@ -328,7 +328,7 @@ def test_run_backfill_does_not_create_scheduled_job(
         _fake_run_backfill_for_config,
     )
 
-    from dev_health_ops.workers.tasks import run_backfill
+    from dev_health_ops.workers.sync_backfill import run_backfill
 
     task: Any = run_backfill
     task.push_request(id="backfill-no-scheduled-job")
@@ -458,7 +458,7 @@ def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
         lambda **_kwargs: None,
     )
 
-    from dev_health_ops.workers.tasks import dispatch_scheduled_syncs
+    from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
     task: Any = dispatch_scheduled_syncs
     task.push_request(id="dispatch-ignore-backfill-jobs")
@@ -546,7 +546,7 @@ def test_run_backfill_resolves_credentials_from_db(
         _fake_run_backfill_for_config,
     )
 
-    from dev_health_ops.workers.tasks import run_backfill
+    from dev_health_ops.workers.sync_backfill import run_backfill
 
     task: Any = run_backfill
     task.push_request(id="backfill-credential-integration")

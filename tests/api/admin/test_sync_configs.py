@@ -243,7 +243,7 @@ async def test_trigger_sync_config_returns_202_with_task_id(client):
     mock_run = MagicMock()
     mock_run.delay.return_value = mock_task
 
-    with patch("dev_health_ops.workers.tasks.run_sync_config", mock_run):
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert resp.status_code == 202
@@ -273,7 +273,7 @@ async def test_trigger_sync_config_celery_unavailable_returns_503(client):
     mock_run = MagicMock()
     mock_run.delay.side_effect = Exception("Celery broker connection refused")
 
-    with patch("dev_health_ops.workers.tasks.run_sync_config", mock_run):
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
         resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert resp.status_code == 503

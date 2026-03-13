@@ -67,7 +67,7 @@ async def seeded_state(session_maker):
 async def client(monkeypatch, session_maker, seeded_state):
     mock_sync = MagicMock()
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks.sync_teams_to_analytics", mock_sync
+        "dev_health_ops.workers.product_tasks.sync_teams_to_analytics", mock_sync
     )
 
     app = FastAPI()

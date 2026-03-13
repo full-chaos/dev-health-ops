@@ -5,7 +5,7 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
@@ -13,6 +13,28 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _ListManager(Protocol):
+    def list(self, *args: object, **kwargs: object) -> Iterable[object]: ...
+
+
+class _GitLabIssueLike(Protocol):
+    notes: _ListManager
+    resource_label_events: _ListManager
+    resource_state_events: _ListManager
+    links: _ListManager
+
+
+class _GitLabMergeRequestLike(Protocol):
+    notes: _ListManager
+    resource_state_events: _ListManager
+
+
+class _GitLabEpicLike(Protocol):
+    notes: _ListManager
+    issues: _ListManager
+    resource_state_events: _ListManager
 
 
 @dataclass(frozen=True)
@@ -106,7 +128,7 @@ class GitLabWorkClient:
 
     def get_issue_notes(
         self,
-        issue: Any,
+        issue: _GitLabIssueLike,
         *,
         limit: int = 500,
     ) -> list[Any]:
@@ -123,7 +145,7 @@ class GitLabWorkClient:
 
     def get_mr_notes(
         self,
-        mr: Any,
+        mr: _GitLabMergeRequestLike,
         *,
         limit: int = 500,
     ) -> list[Any]:
@@ -140,7 +162,7 @@ class GitLabWorkClient:
 
     def get_issue_resource_label_events(
         self,
-        issue: Any,
+        issue: _GitLabIssueLike,
         *,
         limit: int = 300,
     ) -> list[Any]:
@@ -159,7 +181,7 @@ class GitLabWorkClient:
 
     def get_issue_resource_state_events(
         self,
-        issue: Any,
+        issue: _GitLabIssueLike,
         *,
         limit: int = 100,
     ) -> list[Any]:
@@ -178,7 +200,7 @@ class GitLabWorkClient:
 
     def get_mr_resource_state_events(
         self,
-        mr: Any,
+        mr: _GitLabMergeRequestLike,
         *,
         limit: int = 100,
     ) -> list[Any]:
@@ -197,7 +219,7 @@ class GitLabWorkClient:
 
     def get_issue_links(
         self,
-        issue: Any,
+        issue: _GitLabIssueLike,
     ) -> list[Any]:
         """Get linked issues for an issue."""
         try:
@@ -308,7 +330,7 @@ class GitLabWorkClient:
 
     def get_epic_notes(
         self,
-        epic: Any,
+        epic: _GitLabEpicLike,
         *,
         limit: int = 500,
     ) -> list[Any]:
@@ -325,7 +347,7 @@ class GitLabWorkClient:
 
     def get_epic_issues(
         self,
-        epic: Any,
+        epic: _GitLabEpicLike,
     ) -> list[Any]:
         """
         Get issues linked to an epic.
@@ -344,7 +366,7 @@ class GitLabWorkClient:
 
     def get_epic_resource_state_events(
         self,
-        epic: Any,
+        epic: _GitLabEpicLike,
         *,
         limit: int = 100,
     ) -> list[Any]:

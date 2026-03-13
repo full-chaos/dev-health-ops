@@ -13,7 +13,6 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
-    WorkItemStatusCategory,
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.identity import IdentityResolver

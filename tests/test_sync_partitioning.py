@@ -279,9 +279,9 @@ class TestGetBatchSize:
 
 
 class TestDispatchBatchSync:
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_dispatches_correct_number_of_child_tasks(
         self,
@@ -324,9 +324,9 @@ class TestDispatchBatchSync:
         mock_chord.assert_called_once()
         mock_chord_instance.assert_called_once()
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_empty_repo_list_returns_no_repos(
         self,
@@ -360,9 +360,9 @@ class TestDispatchBatchSync:
         assert result["total_repos"] == 0
         mock_chord.assert_not_called()
 
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_batch.run_sync_config")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_discovery_failure_falls_back_to_single_dispatch(
         self,
@@ -396,9 +396,9 @@ class TestDispatchBatchSync:
         assert "API rate limited" in result["reason"]
         mock_run_sync.apply_async.assert_called_once()
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_chord_callback_is_batch_sync_callback(
         self,
@@ -439,9 +439,9 @@ class TestDispatchBatchSync:
         callback = args[1]
         assert callback.task == _batch_sync_callback.name
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_respects_custom_batch_size(
         self,
@@ -479,7 +479,7 @@ class TestDispatchBatchSync:
 
 
 class TestBatchSyncCallback:
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_batch._dispatch_post_sync_tasks")
     def test_fires_post_sync_tasks(self, mock_post_sync):
         from dev_health_ops.workers.tasks import _batch_sync_callback
 
@@ -513,8 +513,8 @@ def _setup_croniter_mock():
 
 
 class TestDispatchScheduledSyncsRouting:
-    @patch("dev_health_ops.workers.tasks.dispatch_batch_sync")
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")
+    @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_routes_batch_eligible_to_dispatch_batch_sync(
         self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
@@ -545,8 +545,8 @@ class TestDispatchScheduledSyncsRouting:
         mock_batch_sync.apply_async.assert_called_once()
         mock_run_sync.apply_async.assert_not_called()
 
-    @patch("dev_health_ops.workers.tasks.dispatch_batch_sync")
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")
+    @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_routes_normal_config_to_run_sync_config(
         self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
@@ -577,8 +577,8 @@ class TestDispatchScheduledSyncsRouting:
         mock_run_sync.apply_async.assert_called_once()
         mock_batch_sync.apply_async.assert_not_called()
 
-    @patch("dev_health_ops.workers.tasks.dispatch_batch_sync")
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")
+    @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_mixed_configs_route_correctly(
         self, mock_get_session, mock_run_sync, mock_batch_sync, db_session

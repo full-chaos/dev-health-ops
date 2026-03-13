@@ -135,7 +135,9 @@ async def test_trigger_backfill_creates_backfill_job_and_returns_id(
     mock_task = MagicMock(id="celery-backfill-task")
     mock_run_backfill = MagicMock()
     mock_run_backfill.delay.return_value = mock_task
-    monkeypatch.setattr("dev_health_ops.workers.tasks.run_backfill", mock_run_backfill)
+    monkeypatch.setattr(
+        "dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill
+    )
 
     response = await ac.post(
         f"/api/v1/admin/sync-configs/{seeded_state['sync_config_id']}/backfill",
@@ -445,14 +447,14 @@ def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
         cast(Any, __import__("sys").modules), "croniter", _CroniterModule()
     )
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks._is_batch_eligible", lambda _cfg: False
+        "dev_health_ops.workers.sync_scheduler._is_batch_eligible", lambda _cfg: False
     )
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks.run_sync_config.apply_async",
+        "dev_health_ops.workers.sync_scheduler.run_sync_config.apply_async",
         _fake_run_sync_apply_async,
     )
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks.dispatch_batch_sync.apply_async",
+        "dev_health_ops.workers.sync_scheduler.dispatch_batch_sync.apply_async",
         lambda **_kwargs: None,
     )
 

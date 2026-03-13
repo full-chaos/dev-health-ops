@@ -55,9 +55,9 @@ def _make_config(
 
 
 @patch("dev_health_ops.storage.run_with_store")
-@patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+@patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
 @patch(
-    "dev_health_ops.workers.tasks._resolve_env_credentials",
+    "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
     return_value={"token": "test"},
 )
 @patch("dev_health_ops.db.get_postgres_session_sync")
@@ -112,7 +112,7 @@ def test_run_sync_config_with_multiple_job_types_no_collision(
     assert result["status"] == "success"
 
 
-@patch("dev_health_ops.workers.tasks.chord")
+@patch("dev_health_ops.workers.metrics_partitioned.chord")
 @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
 def test_dispatch_daily_metrics_partitioned_defaults_none_org_id(
     mock_sink_cls, mock_chord
@@ -173,7 +173,7 @@ def test_run_daily_metrics_batch_defaults_none_org_id(
     assert cp.status == CheckpointStatus.COMPLETED
 
 
-@patch("dev_health_ops.workers.tasks._invalidate_metrics_cache")
+@patch("dev_health_ops.workers.metrics_partitioned._invalidate_metrics_cache")
 @patch("asyncio.run")
 @patch("dev_health_ops.db.get_postgres_session_sync")
 def test_run_daily_metrics_finalize_defaults_none_org_id(

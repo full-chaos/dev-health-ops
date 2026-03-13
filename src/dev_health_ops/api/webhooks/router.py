@@ -18,6 +18,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from dev_health_ops.workers.system_tasks import process_webhook_event
+
 from .auth import GitHubWebhookBody, GitLabWebhookBody, JiraWebhookBody
 from .models import (
     WebhookEvent,
@@ -42,8 +44,6 @@ def _dispatch_webhook_task(event: WebhookEvent) -> None:
     doesn't fail catastrophically).
     """
     try:
-        from dev_health_ops.workers.tasks import process_webhook_event
-
         process_webhook_event.delay(
             provider=event.provider,
             event_type=event.event_type,

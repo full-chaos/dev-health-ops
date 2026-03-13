@@ -31,7 +31,7 @@ def _fake_session_ctx(session):
 
 
 class TestDispatchDailyMetricsPartitioned:
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.metrics_partitioned.chord")
     @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
     def test_discovers_repos_and_creates_batches(self, mock_sink_cls, mock_chord):
         from dev_health_ops.workers.tasks import dispatch_daily_metrics_partitioned
@@ -62,7 +62,7 @@ class TestDispatchDailyMetricsPartitioned:
         mock_chord.assert_called_once()
         mock_chord_instance.assert_called_once()
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.metrics_partitioned.chord")
     @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
     def test_returns_no_repos_when_empty(self, mock_sink_cls, mock_chord):
         from dev_health_ops.workers.tasks import dispatch_daily_metrics_partitioned
@@ -82,7 +82,7 @@ class TestDispatchDailyMetricsPartitioned:
         assert result["dispatched"] == 0
         mock_chord.assert_not_called()
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.metrics_partitioned.chord")
     @patch("dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink")
     def test_chord_callback_is_finalize_task(self, mock_sink_cls, mock_chord):
         from dev_health_ops.workers.tasks import (
@@ -217,7 +217,7 @@ class TestRunDailyMetricsBatch:
 
 
 class TestRunDailyMetricsFinalizeTask:
-    @patch("dev_health_ops.workers.tasks._invalidate_metrics_cache")
+    @patch("dev_health_ops.workers.metrics_partitioned._invalidate_metrics_cache")
     @patch("asyncio.run")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_calls_finalize_and_invalidates_cache(
@@ -253,7 +253,7 @@ class TestRunDailyMetricsFinalizeTask:
         assert cp is not None
         assert cp.status == CheckpointStatus.COMPLETED
 
-    @patch("dev_health_ops.workers.tasks._invalidate_metrics_cache")
+    @patch("dev_health_ops.workers.metrics_partitioned._invalidate_metrics_cache")
     @patch("asyncio.run")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_marks_failed_on_finalize_error(

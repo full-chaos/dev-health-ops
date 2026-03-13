@@ -172,7 +172,7 @@ async def confirm_team_members(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> ConfirmMembersResponse:
-    from dev_health_ops.workers.tasks import sync_teams_to_analytics
+    from dev_health_ops.workers.product_tasks import sync_teams_to_analytics
 
     if payload.team_id != team_id:
         raise HTTPException(
@@ -274,7 +274,7 @@ async def confirm_inferred_team_members(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> ConfirmInferredMembersResponse:
-    from dev_health_ops.workers.tasks import sync_teams_to_analytics
+    from dev_health_ops.workers.product_tasks import sync_teams_to_analytics
 
     if payload.team_id != team_id:
         raise HTTPException(status_code=400, detail="team_id in path/body must match")

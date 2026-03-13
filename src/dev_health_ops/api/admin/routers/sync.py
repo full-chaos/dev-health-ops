@@ -32,6 +32,7 @@ PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
     "linear": ["work-items"],
 }
 
+
 @router.get("/sync-targets")
 async def get_provider_sync_targets() -> dict[str, list[str]]:
     return PROVIDER_SYNC_TARGETS
@@ -141,7 +142,7 @@ async def trigger_sync_config(
         raise HTTPException(status_code=404, detail="Sync configuration not found")
 
     try:
-        from dev_health_ops.workers.tasks import run_sync_config
+        from dev_health_ops.workers.sync_tasks import run_sync_config
 
         result = run_sync_config.delay(
             config_id=str(config.id),
@@ -196,7 +197,7 @@ async def trigger_sync_config_backfill(
     backfill_job_id = str(backfill_job.id)
 
     try:
-        from dev_health_ops.workers.tasks import run_backfill
+        from dev_health_ops.workers.sync_tasks import run_backfill
 
         result = run_backfill.delay(
             sync_config_id=str(config.id),

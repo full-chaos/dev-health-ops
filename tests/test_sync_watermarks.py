@@ -166,9 +166,9 @@ class TestSetWatermark:
 
 class TestRunSyncConfigWatermarks:
     @patch("dev_health_ops.storage.run_with_store")
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
     @patch(
-        "dev_health_ops.workers.tasks._resolve_env_credentials",
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
         return_value={"token": "ghp_test"},
     )
     @patch("dev_health_ops.db.get_postgres_session_sync")
@@ -212,9 +212,9 @@ class TestRunSyncConfigWatermarks:
         assert prs_wm is not None
 
     @patch("dev_health_ops.storage.run_with_store")
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
     @patch(
-        "dev_health_ops.workers.tasks._resolve_env_credentials",
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
         return_value={"token": "ghp_test"},
     )
     @patch("dev_health_ops.db.get_postgres_session_sync")
@@ -256,9 +256,9 @@ class TestRunSyncConfigWatermarks:
         assert result["status"] == "success"
 
     @patch("dev_health_ops.storage.run_with_store")
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
     @patch(
-        "dev_health_ops.workers.tasks._resolve_env_credentials",
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
         return_value={"token": "ghp_test"},
     )
     @patch("dev_health_ops.db.get_postgres_session_sync")
@@ -298,7 +298,7 @@ class TestRunSyncConfigWatermarks:
 
     @patch("dev_health_ops.storage.run_with_store")
     @patch(
-        "dev_health_ops.workers.tasks._resolve_env_credentials",
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
         return_value={"token": "ghp_test"},
     )
     @patch("dev_health_ops.db.get_postgres_session_sync")
@@ -334,8 +334,8 @@ class TestRunSyncConfigWatermarks:
         assert git_wm is None
 
     @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials", return_value={})
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_runtime._resolve_env_credentials", return_value={})
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_no_watermark_when_repo_id_missing(
         self,
@@ -370,9 +370,9 @@ class TestRunSyncConfigWatermarks:
         assert count == 0
 
     @patch("dev_health_ops.storage.run_with_store")
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
     @patch(
-        "dev_health_ops.workers.tasks._resolve_env_credentials",
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
         return_value={"token": "ghp_test"},
     )
     @patch("dev_health_ops.db.get_postgres_session_sync")
@@ -414,9 +414,9 @@ class TestRunSyncConfigWatermarks:
         assert prs_wm is not None
 
     @patch("dev_health_ops.storage.run_with_store")
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
     @patch(
-        "dev_health_ops.workers.tasks._resolve_env_credentials",
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
         return_value={"token": "glpat_test"},
     )
     @patch("dev_health_ops.db.get_postgres_session_sync")

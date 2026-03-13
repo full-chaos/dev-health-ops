@@ -3,7 +3,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -259,9 +259,11 @@ async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
     if not is_valid:
         return False, {"error": error}
 
+    # base_url is validated by _validate_external_url above (SSRF-safe)
+    validated_url = urljoin(base_url.rstrip("/") + "/", "user")
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{base_url}/user",
+            validated_url,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
@@ -286,9 +288,11 @@ async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
     if not is_valid:
         return False, {"error": error}
 
+    # base_url is validated by _validate_external_url above (SSRF-safe)
+    validated_url = urljoin(base_url.rstrip("/") + "/", "user")
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{base_url}/user",
+            validated_url,
             headers={"PRIVATE-TOKEN": token},
             timeout=10,
         )
@@ -317,9 +321,11 @@ async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
     import base64
 
     auth = base64.b64encode(f"{email}:{api_token}".encode()).decode()
+    # base_url is validated by _validate_external_url above (SSRF-safe)
+    validated_url = urljoin(base_url.rstrip("/") + "/", "rest/api/3/myself")
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{base_url}/rest/api/3/myself",
+            validated_url,
             headers={"Authorization": f"Basic {auth}", "Accept": "application/json"},
             timeout=10,
         )

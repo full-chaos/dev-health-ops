@@ -17,7 +17,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import TeamMapping
 from dev_health_ops.models.users import Membership, Organization, User
 
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
 
@@ -67,7 +67,7 @@ async def seeded_state(session_maker):
 async def client(monkeypatch, session_maker, seeded_state):
     mock_sync = MagicMock()
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks.sync_teams_to_analytics", mock_sync
+        "dev_health_ops.workers.product_tasks.sync_teams_to_analytics", mock_sync
     )
 
     app = FastAPI()

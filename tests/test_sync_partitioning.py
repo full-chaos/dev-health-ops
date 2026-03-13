@@ -56,7 +56,7 @@ def _make_config(
 
 class TestIsBatchEligible:
     def test_github_with_wildcard_search(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="github",
@@ -65,7 +65,7 @@ class TestIsBatchEligible:
         assert _is_batch_eligible(config) is True
 
     def test_github_with_question_mark_wildcard(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="github",
@@ -74,7 +74,7 @@ class TestIsBatchEligible:
         assert _is_batch_eligible(config) is True
 
     def test_github_with_discover_flag(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="github",
@@ -83,7 +83,7 @@ class TestIsBatchEligible:
         assert _is_batch_eligible(config) is True
 
     def test_github_without_wildcard_not_eligible(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="github",
@@ -92,7 +92,7 @@ class TestIsBatchEligible:
         assert _is_batch_eligible(config) is False
 
     def test_gitlab_with_wildcard_search(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="gitlab",
@@ -101,7 +101,7 @@ class TestIsBatchEligible:
         assert _is_batch_eligible(config) is True
 
     def test_jira_never_batch_eligible(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="jira",
@@ -110,7 +110,7 @@ class TestIsBatchEligible:
         assert _is_batch_eligible(config) is False
 
     def test_local_provider_not_eligible(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="local",
@@ -119,7 +119,7 @@ class TestIsBatchEligible:
         assert _is_batch_eligible(config) is False
 
     def test_discover_false_not_eligible(self):
-        from dev_health_ops.workers.tasks import _is_batch_eligible
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
         config = _make_config(
             provider="github",
@@ -255,33 +255,33 @@ class TestDiscoverGitlabRepos:
 
 class TestGetBatchSize:
     def test_from_sync_options(self):
-        from dev_health_ops.workers.tasks import _get_batch_size
+        from dev_health_ops.workers.sync_batch import _get_batch_size
 
         assert _get_batch_size({"batch_size": 10}) == 10
 
     def test_from_env_var(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _get_batch_size
+        from dev_health_ops.workers.sync_batch import _get_batch_size
 
         monkeypatch.setenv("SYNC_BATCH_SIZE", "8")
         assert _get_batch_size({}) == 8
 
     def test_default_is_five(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _get_batch_size
+        from dev_health_ops.workers.sync_batch import _get_batch_size
 
         monkeypatch.delenv("SYNC_BATCH_SIZE", raising=False)
         assert _get_batch_size({}) == 5
 
     def test_sync_options_takes_precedence_over_env(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _get_batch_size
+        from dev_health_ops.workers.sync_batch import _get_batch_size
 
         monkeypatch.setenv("SYNC_BATCH_SIZE", "8")
         assert _get_batch_size({"batch_size": 3}) == 3
 
 
 class TestDispatchBatchSync:
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_dispatches_correct_number_of_child_tasks(
         self,
@@ -291,7 +291,7 @@ class TestDispatchBatchSync:
         mock_chord,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import dispatch_batch_sync
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
         config = _make_config(
             provider="github",
@@ -324,9 +324,9 @@ class TestDispatchBatchSync:
         mock_chord.assert_called_once()
         mock_chord_instance.assert_called_once()
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_empty_repo_list_returns_no_repos(
         self,
@@ -336,7 +336,7 @@ class TestDispatchBatchSync:
         mock_chord,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import dispatch_batch_sync
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
         config = _make_config(
             provider="github",
@@ -360,9 +360,9 @@ class TestDispatchBatchSync:
         assert result["total_repos"] == 0
         mock_chord.assert_not_called()
 
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_batch.run_sync_config")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_discovery_failure_falls_back_to_single_dispatch(
         self,
@@ -372,7 +372,7 @@ class TestDispatchBatchSync:
         mock_run_sync,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import dispatch_batch_sync
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
         config = _make_config(
             provider="github",
@@ -396,9 +396,9 @@ class TestDispatchBatchSync:
         assert "API rate limited" in result["reason"]
         mock_run_sync.apply_async.assert_called_once()
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_chord_callback_is_batch_sync_callback(
         self,
@@ -439,9 +439,9 @@ class TestDispatchBatchSync:
         callback = args[1]
         assert callback.task == _batch_sync_callback.name
 
-    @patch("dev_health_ops.workers.tasks.chord")
+    @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
-    @patch("dev_health_ops.workers.tasks._resolve_env_credentials")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_respects_custom_batch_size(
         self,
@@ -451,7 +451,7 @@ class TestDispatchBatchSync:
         mock_chord,
         db_session,
     ):
-        from dev_health_ops.workers.tasks import dispatch_batch_sync
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
         config = _make_config(
             provider="github",
@@ -479,9 +479,9 @@ class TestDispatchBatchSync:
 
 
 class TestBatchSyncCallback:
-    @patch("dev_health_ops.workers.tasks._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.workers.sync_batch._dispatch_post_sync_tasks")
     def test_fires_post_sync_tasks(self, mock_post_sync):
-        from dev_health_ops.workers.tasks import _batch_sync_callback
+        from dev_health_ops.workers.sync_batch import _batch_sync_callback
 
         task = _batch_sync_callback
         task.push_request(id="callback-1")
@@ -513,13 +513,13 @@ def _setup_croniter_mock():
 
 
 class TestDispatchScheduledSyncsRouting:
-    @patch("dev_health_ops.workers.tasks.dispatch_batch_sync")
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")
+    @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_routes_batch_eligible_to_dispatch_batch_sync(
         self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
     ):
-        from dev_health_ops.workers.tasks import dispatch_scheduled_syncs
+        from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
         _setup_croniter_mock()
 
@@ -545,13 +545,13 @@ class TestDispatchScheduledSyncsRouting:
         mock_batch_sync.apply_async.assert_called_once()
         mock_run_sync.apply_async.assert_not_called()
 
-    @patch("dev_health_ops.workers.tasks.dispatch_batch_sync")
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")
+    @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_routes_normal_config_to_run_sync_config(
         self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
     ):
-        from dev_health_ops.workers.tasks import dispatch_scheduled_syncs
+        from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
         _setup_croniter_mock()
 
@@ -577,13 +577,13 @@ class TestDispatchScheduledSyncsRouting:
         mock_run_sync.apply_async.assert_called_once()
         mock_batch_sync.apply_async.assert_not_called()
 
-    @patch("dev_health_ops.workers.tasks.dispatch_batch_sync")
-    @patch("dev_health_ops.workers.tasks.run_sync_config")
+    @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")
+    @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_mixed_configs_route_correctly(
         self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
     ):
-        from dev_health_ops.workers.tasks import dispatch_scheduled_syncs
+        from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
         _setup_croniter_mock()
 
@@ -631,24 +631,24 @@ class TestTaskRegistration:
             assert hasattr(task, "delay")
 
     def test_dispatch_batch_sync_queue(self):
-        from dev_health_ops.workers.tasks import dispatch_batch_sync
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
         assert dispatch_batch_sync.queue == "sync"
 
     def test_dispatch_batch_sync_rate_limit(self):
-        from dev_health_ops.workers.tasks import dispatch_batch_sync
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
         assert dispatch_batch_sync.rate_limit == "5/m"
 
     def test_run_sync_for_repo_queue(self):
-        from dev_health_ops.workers.tasks import _run_sync_for_repo
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
 
         assert _run_sync_for_repo.queue == "sync"
 
 
 class TestInjectProviderToken:
     def test_linear_sets_env(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _inject_provider_token
+        from dev_health_ops.workers.task_utils import _inject_provider_token
 
         monkeypatch.delenv("LINEAR_API_KEY", raising=False)
         _inject_provider_token("linear", "lin_api_test123")
@@ -656,7 +656,7 @@ class TestInjectProviderToken:
         monkeypatch.delenv("LINEAR_API_KEY", raising=False)
 
     def test_github_sets_env(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _inject_provider_token
+        from dev_health_ops.workers.task_utils import _inject_provider_token
 
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         _inject_provider_token("github", "ghp_test123")
@@ -664,7 +664,7 @@ class TestInjectProviderToken:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     def test_gitlab_sets_env(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _inject_provider_token
+        from dev_health_ops.workers.task_utils import _inject_provider_token
 
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
         _inject_provider_token("gitlab", "glpat-test123")
@@ -672,21 +672,21 @@ class TestInjectProviderToken:
         monkeypatch.delenv("GITLAB_TOKEN", raising=False)
 
     def test_empty_token_does_not_set_env(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _inject_provider_token
+        from dev_health_ops.workers.task_utils import _inject_provider_token
 
         monkeypatch.delenv("LINEAR_API_KEY", raising=False)
         _inject_provider_token("linear", "")
         assert "LINEAR_API_KEY" not in os.environ
 
     def test_unknown_provider_does_nothing(self, monkeypatch):
-        from dev_health_ops.workers.tasks import _inject_provider_token
+        from dev_health_ops.workers.task_utils import _inject_provider_token
 
         _inject_provider_token("unknown", "some_token")
 
 
 class TestExtractProviderToken:
     def test_linear_apiKey(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert (
             _extract_provider_token("linear", {"apiKey": "lin_api_xxx"})
@@ -694,7 +694,7 @@ class TestExtractProviderToken:
         )
 
     def test_linear_api_key(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert (
             _extract_provider_token("linear", {"api_key": "lin_api_yyy"})
@@ -702,7 +702,7 @@ class TestExtractProviderToken:
         )
 
     def test_linear_prefers_api_key_over_apiKey(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         result = _extract_provider_token(
             "linear", {"api_key": "snake", "apiKey": "camel"}
@@ -710,32 +710,32 @@ class TestExtractProviderToken:
         assert result == "snake"
 
     def test_linear_empty_credentials(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert _extract_provider_token("linear", {}) == ""
 
     def test_github_uses_token(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert _extract_provider_token("github", {"token": "ghp_xxx"}) == "ghp_xxx"
 
     def test_gitlab_uses_token(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert _extract_provider_token("gitlab", {"token": "glpat-xxx"}) == "glpat-xxx"
 
     def test_jira_uses_api_token(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert _extract_provider_token("jira", {"api_token": "jira_xxx"}) == "jira_xxx"
 
     def test_jira_uses_apiToken(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert _extract_provider_token("jira", {"apiToken": "jira_yyy"}) == "jira_yyy"
 
     def test_unknown_provider_falls_back_to_token(self):
-        from dev_health_ops.workers.tasks import _extract_provider_token
+        from dev_health_ops.workers.task_utils import _extract_provider_token
 
         assert _extract_provider_token("unknown", {"token": "tok"}) == "tok"
 

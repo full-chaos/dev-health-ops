@@ -20,6 +20,7 @@ from dev_health_ops.metrics.sinks.factory import (
     create_sink,
     detect_backend,
 )
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 
 __all__ = [
     "BaseMetricsSink",
@@ -27,4 +28,5 @@ __all__ = [
     "create_sink",
     "detect_backend",
     "ClickHouseMetricsSink",
+    "IngestionSink",
 ]

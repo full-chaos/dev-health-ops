@@ -65,7 +65,7 @@ class TestCommunityEndpointsNotGated:
 
     def test_admin_user_endpoints_not_gated(self):
         """User CRUD endpoints should not be gated."""
-        from dev_health_ops.api.admin.router import router
+        from dev_health_ops.api.admin import router
 
         community_endpoints = {
             "list_users",
@@ -87,7 +87,7 @@ class TestCommunityEndpointsNotGated:
 
     def test_admin_org_endpoints_not_gated(self):
         """Organization CRUD endpoints should not be gated."""
-        from dev_health_ops.api.admin.router import router
+        from dev_health_ops.api.admin import router
 
         community_endpoints = {
             "list_organizations",
@@ -109,7 +109,7 @@ class TestCommunityEndpointsNotGated:
 
     def test_admin_membership_endpoints_not_gated(self):
         """Membership management endpoints should not be gated."""
-        from dev_health_ops.api.admin.router import router
+        from dev_health_ops.api.admin import router
 
         community_endpoints = {
             "list_members",
@@ -157,7 +157,7 @@ class TestEnterpriseEndpointsGated:
 
     def test_audit_log_endpoints_are_gated(self):
         """Audit log endpoints should require enterprise license."""
-        from dev_health_ops.api.admin.router import router
+        from dev_health_ops.api.admin import router
 
         audit_endpoints = {
             "list_audit_logs",
@@ -178,7 +178,7 @@ class TestEnterpriseEndpointsGated:
 
     def test_ip_allowlist_endpoints_are_gated(self):
         """IP allowlist endpoints should require enterprise license."""
-        from dev_health_ops.api.admin.router import router
+        from dev_health_ops.api.admin import router
 
         ip_endpoints = {
             "list_ip_allowlist_entries",
@@ -201,7 +201,7 @@ class TestEnterpriseEndpointsGated:
 
     def test_retention_policy_endpoints_are_gated(self):
         """Retention policy endpoints should require enterprise license."""
-        from dev_health_ops.api.admin.router import router
+        from dev_health_ops.api.admin import router
 
         retention_endpoints = {
             "list_retention_policies",

@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -469,7 +470,7 @@ def _enrich_prs_with_reviews_batch(
     repo_id,
     pr_objects: list[GitPullRequest],
     raw_gh_prs: list[Any],
-    store,
+    ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
 ) -> list[GitPullRequestReview]:
     """Batch-fetch reviews for all PRs and enrich pr_objects in place.
@@ -530,7 +531,7 @@ def _sync_github_prs_to_store(
     owner: str,
     repo_name: str,
     repo_id,
-    store,
+    ingestion_sink: IngestionSink,
     loop: asyncio.AbstractEventLoop,
     batch_size: int,
     state: str = "all",
@@ -573,14 +574,14 @@ def _sync_github_prs_to_store(
         repo_id=repo_id,
         pr_objects=pr_objects,
         raw_gh_prs=raw_gh_prs,
-        store=store,
+        ingestion_sink=ingestion_sink,
         loop=loop,
     )
 
     # Phase 3: persist reviews in one bulk insert
     if review_objects:
         BaseGitProcessor.persist_batch_threadsafe(
-            store.insert_git_pull_request_reviews(review_objects),
+            ingestion_sink.insert_git_pull_request_reviews(review_objects),
             loop,
         )
         logging.debug(
@@ -594,7 +595,7 @@ def _sync_github_prs_to_store(
     for i in range(0, len(pr_objects), batch_size):
         batch = pr_objects[i : i + batch_size]
         BaseGitProcessor.persist_batch_threadsafe(
-            store.insert_git_pull_requests(batch),
+            ingestion_sink.insert_git_pull_requests(batch),
             loop,
         )
         logging.debug(
@@ -649,6 +650,7 @@ def _split_full_name(full_name: str) -> tuple[str, str]:
 
 async def _backfill_github_missing_data(
     store: Any,
+    ingestion_sink: IngestionSink,
     connector: GitHubConnector,
     db_repo: Repo,
     repo_full_name: str,
@@ -684,7 +686,7 @@ async def _backfill_github_missing_data(
 
             if needs.files and file_paths:
                 await backfill_file_records(
-                    store, db_repo.id, file_paths, repo_full_name
+                    ingestion_sink, db_repo.id, file_paths, repo_full_name
                 )
         except Exception as e:
             logging.warning(
@@ -699,7 +701,7 @@ async def _backfill_github_missing_data(
             )
             commits_iter = gh_repo.get_commits()
             async with AsyncBatchCollector(
-                store.insert_git_commit_stats
+                ingestion_sink.insert_git_commit_stats
             ) as stats_collector:
                 commit_count = 0
                 for commit in commits_iter:
@@ -749,7 +751,9 @@ async def _backfill_github_missing_data(
                 len(file_paths),
                 repo_full_name,
             )
-            async with AsyncBatchCollector(store.insert_blame_data) as blame_collector:
+            async with AsyncBatchCollector(
+                ingestion_sink.insert_blame_data
+            ) as blame_collector:
                 processed_files = 0
                 for path in file_paths:
                     try:
@@ -818,6 +822,7 @@ async def process_github_repo(
 
     logging.info(f"Processing GitHub repository: {owner}/{repo_name}")
     loop = asyncio.get_running_loop()
+    ingestion_sink = IngestionSink(store)
 
     connector = GitHubConnector(token=token)
     try:
@@ -860,12 +865,13 @@ async def process_github_repo(
             else ["github"],
         )
 
-        await store.insert_repo(db_repo)
+        await ingestion_sink.insert_repo(db_repo)
         logging.info(f"Repository stored: {db_repo.repo} ({db_repo.id})")
 
         if blame_only:
             await _backfill_github_missing_data(
                 store=store,
+                ingestion_sink=ingestion_sink,
                 connector=connector,
                 db_repo=db_repo,
                 repo_full_name=db_repo.repo,
@@ -896,7 +902,7 @@ async def process_github_repo(
             )
 
             if commit_objects:
-                await store.insert_git_commit_data(commit_objects)
+                await ingestion_sink.insert_git_commit_data(commit_objects)
                 logging.info(f"Stored {len(commit_objects)} commits from GitHub")
 
             # 3. Fetch Stats
@@ -912,7 +918,7 @@ async def process_github_repo(
             )
 
             if stats_objects:
-                await store.insert_git_commit_stats(stats_objects)
+                await ingestion_sink.insert_git_commit_stats(stats_objects)
                 logging.info(
                     "Stored %d commit stats from GitHub",
                     len(stats_objects),
@@ -928,7 +934,7 @@ async def process_github_repo(
                 owner,
                 repo_name,
                 db_repo.id,
-                store,
+                ingestion_sink,
                 loop,
                 BATCH_SIZE,
                 "all",
@@ -948,7 +954,7 @@ async def process_github_repo(
                 since,
             )
             if pipeline_runs:
-                await store.insert_ci_pipeline_runs(pipeline_runs)
+                await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
                 logging.info("Stored %d workflow runs", len(pipeline_runs))
 
         if sync_deployments:
@@ -962,7 +968,7 @@ async def process_github_repo(
                 since,
             )
             if deployments:
-                await store.insert_deployments(deployments)
+                await ingestion_sink.insert_deployments(deployments)
                 logging.info("Stored %d deployments", len(deployments))
 
         if sync_incidents:
@@ -976,7 +982,7 @@ async def process_github_repo(
                 since,
             )
             if incidents:
-                await store.insert_incidents(incidents)
+                await ingestion_sink.insert_incidents(incidents)
                 logging.info("Stored %d incidents", len(incidents))
 
         # 5. Fetch Blame (Optional & Stubbed)
@@ -1033,6 +1039,7 @@ async def process_github_repos_batch(
     logging.info("=== GitHub Batch Repository Processing ===")
     connector = GitHubConnector(token=token)
     loop = asyncio.get_running_loop()
+    ingestion_sink = IngestionSink(store)
 
     pr_gate = None
     pr_semaphore = None
@@ -1075,7 +1082,7 @@ async def process_github_repos_batch(
             else ["github"],
         )
 
-        await store.insert_repo(db_repo)
+        await ingestion_sink.insert_repo(db_repo)
         stored_count += 1
         logging.debug(f"Stored repository ({stored_count}): {db_repo.repo}")
 
@@ -1083,6 +1090,7 @@ async def process_github_repos_batch(
             try:
                 await _backfill_github_missing_data(
                     store=store,
+                    ingestion_sink=ingestion_sink,
                     connector=connector,
                     db_repo=db_repo,
                     repo_full_name=repo_info.full_name,
@@ -1117,7 +1125,7 @@ async def process_github_repos_batch(
                     since,
                 )
                 if commit_objects:
-                    await store.insert_git_commit_data(commit_objects)
+                    await ingestion_sink.insert_git_commit_data(commit_objects)
 
                 stats_objects = await loop.run_in_executor(
                     None,
@@ -1128,7 +1136,7 @@ async def process_github_repos_batch(
                     since,
                 )
                 if stats_objects:
-                    await store.insert_git_commit_stats(stats_objects)
+                    await ingestion_sink.insert_git_commit_stats(stats_objects)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch commits for GitHub repo %s: %s",
@@ -1149,7 +1157,7 @@ async def process_github_repos_batch(
                         owner,
                         repo_name,
                         db_repo.id,
-                        store,
+                        ingestion_sink,
                         loop,
                         BATCH_SIZE,
                         "all",
@@ -1177,7 +1185,7 @@ async def process_github_repos_batch(
                     since,
                 )
                 if pipeline_runs:
-                    await store.insert_ci_pipeline_runs(pipeline_runs)
+                    await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch CI/CD runs for GitHub repo %s: %s",
@@ -1198,7 +1206,7 @@ async def process_github_repos_batch(
                     since,
                 )
                 if deployments:
-                    await store.insert_deployments(deployments)
+                    await ingestion_sink.insert_deployments(deployments)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch deployments for GitHub repo %s: %s",
@@ -1219,7 +1227,7 @@ async def process_github_repos_batch(
                     since,
                 )
                 if incidents:
-                    await store.insert_incidents(incidents)
+                    await ingestion_sink.insert_incidents(incidents)
             except Exception as e:
                 logging.warning(
                     "Failed to fetch incidents for GitHub repo %s: %s",
@@ -1237,12 +1245,13 @@ async def process_github_repos_batch(
                 old_file_mode="unknown",
                 new_file_mode="unknown",
             )
-            await store.insert_git_commit_stats([stat])
+            await ingestion_sink.insert_git_commit_stats([stat])
 
         if backfill_missing:
             try:
                 await _backfill_github_missing_data(
                     store=store,
+                    ingestion_sink=ingestion_sink,
                     connector=connector,
                     db_repo=db_repo,
                     repo_full_name=repo_info.full_name,

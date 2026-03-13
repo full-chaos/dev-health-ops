@@ -101,12 +101,12 @@ class TestBeatScheduleMetrics:
         assert isinstance(schedule, crontab)
 
     def test_dispatch_scheduled_metrics_task_registered(self):
-        from dev_health_ops.workers.tasks import dispatch_scheduled_metrics
+        from dev_health_ops.workers.metrics_daily import dispatch_scheduled_metrics
 
         assert callable(dispatch_scheduled_metrics)
 
     def test_dispatch_scheduled_metrics_is_celery_task(self):
-        from dev_health_ops.workers.tasks import dispatch_scheduled_metrics
+        from dev_health_ops.workers.metrics_daily import dispatch_scheduled_metrics
 
         assert hasattr(dispatch_scheduled_metrics, "apply_async")
         assert hasattr(dispatch_scheduled_metrics, "delay")

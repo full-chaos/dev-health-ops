@@ -18,7 +18,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.models.users import Organization, User
 
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
 _TABLES = [

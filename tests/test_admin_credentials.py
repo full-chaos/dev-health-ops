@@ -13,11 +13,11 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from dev_health_ops.api.admin import get_session, router
 from dev_health_ops.api.admin.middleware import get_admin_org_id, require_admin
-from dev_health_ops.api.admin.router import get_session, router
 from dev_health_ops.api.services.auth import AuthenticatedUser
 
-admin_router_module = import_module("dev_health_ops.api.admin.router")
+admin_router_module = import_module("dev_health_ops.api.admin.routers.credentials")
 
 HEADERS = {}
 
@@ -138,7 +138,7 @@ async def test_create_credential(client):
     cred = _mock_credential(provider="github", name="primary")
 
     with patch(
-        "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+        "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
     ) as mock_svc_cls:
         svc = AsyncMock()
         svc.set.return_value = cred
@@ -174,7 +174,7 @@ async def test_list_credentials(client):
     cred = _mock_credential(provider="jira", name="default")
 
     with patch(
-        "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+        "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
     ) as mock_svc_cls:
         svc = AsyncMock()
         svc.list_all.return_value = [cred]
@@ -196,10 +196,10 @@ async def test_test_connection_inline_persists_when_stored(client):
 
     with (
         patch(
-            "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+            "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
         ) as mock_svc_cls,
         patch(
-            "dev_health_ops.api.admin.router._test_github_connection",
+            "dev_health_ops.api.admin.routers.credentials._test_github_connection",
             new_callable=AsyncMock,
         ) as mock_test,
     ):
@@ -231,10 +231,10 @@ async def test_test_connection_inline_persists_when_stored(client):
 async def test_test_connection_inline_no_persist_when_not_stored(client):
     with (
         patch(
-            "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+            "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
         ) as mock_svc_cls,
         patch(
-            "dev_health_ops.api.admin.router._test_jira_connection",
+            "dev_health_ops.api.admin.routers.credentials._test_jira_connection",
             new_callable=AsyncMock,
         ) as mock_test,
     ):
@@ -270,10 +270,10 @@ async def test_test_connection_db_creds_persists(client):
 
     with (
         patch(
-            "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+            "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
         ) as mock_svc_cls,
         patch(
-            "dev_health_ops.api.admin.router._test_linear_connection",
+            "dev_health_ops.api.admin.routers.credentials._test_linear_connection",
             new_callable=AsyncMock,
         ) as mock_test,
     ):
@@ -303,10 +303,10 @@ async def test_test_connection_by_credential_id(client):
 
     with (
         patch(
-            "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+            "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
         ) as mock_svc_cls,
         patch(
-            "dev_health_ops.api.admin.router._test_github_connection",
+            "dev_health_ops.api.admin.routers.credentials._test_github_connection",
             new_callable=AsyncMock,
         ) as mock_test,
     ):
@@ -333,7 +333,7 @@ async def test_test_connection_by_credential_id(client):
 @pytest.mark.asyncio
 async def test_test_connection_by_credential_id_not_found(client):
     with patch(
-        "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+        "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
     ) as mock_svc_cls:
         svc = AsyncMock()
         svc.get_decrypted_credentials_by_id.return_value = (None, None)
@@ -352,7 +352,7 @@ async def test_test_connection_by_credential_id_not_found(client):
 @pytest.mark.asyncio
 async def test_delete_credential(client):
     with patch(
-        "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+        "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
     ) as mock_svc_cls:
         svc = AsyncMock()
         svc.delete.return_value = True
@@ -371,7 +371,7 @@ async def test_delete_credential(client):
 @pytest.mark.asyncio
 async def test_get_credential_not_found(client):
     with patch(
-        "dev_health_ops.api.admin.router.IntegrationCredentialsService"
+        "dev_health_ops.api.admin.routers.credentials.IntegrationCredentialsService"
     ) as mock_svc_cls:
         svc = AsyncMock()
         svc.get.return_value = None

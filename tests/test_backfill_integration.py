@@ -31,7 +31,7 @@ from dev_health_ops.models.settings import (
 )
 from dev_health_ops.models.users import Organization, User
 
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
 _TABLES = [
@@ -135,7 +135,9 @@ async def test_trigger_backfill_creates_backfill_job_and_returns_id(
     mock_task = MagicMock(id="celery-backfill-task")
     mock_run_backfill = MagicMock()
     mock_run_backfill.delay.return_value = mock_task
-    monkeypatch.setattr("dev_health_ops.workers.tasks.run_backfill", mock_run_backfill)
+    monkeypatch.setattr(
+        "dev_health_ops.workers.sync_tasks.run_backfill", mock_run_backfill
+    )
 
     response = await ac.post(
         f"/api/v1/admin/sync-configs/{seeded_state['sync_config_id']}/backfill",
@@ -233,7 +235,7 @@ def test_run_backfill_progress_callback_updates_backfill_job_completed_chunks(
         _fake_run_backfill_for_config,
     )
 
-    from dev_health_ops.workers.tasks import run_backfill
+    from dev_health_ops.workers.sync_backfill import run_backfill
 
     task: Any = run_backfill
     task.push_request(id="backfill-integration")
@@ -326,7 +328,7 @@ def test_run_backfill_does_not_create_scheduled_job(
         _fake_run_backfill_for_config,
     )
 
-    from dev_health_ops.workers.tasks import run_backfill
+    from dev_health_ops.workers.sync_backfill import run_backfill
 
     task: Any = run_backfill
     task.push_request(id="backfill-no-scheduled-job")
@@ -445,18 +447,18 @@ def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
         cast(Any, __import__("sys").modules), "croniter", _CroniterModule()
     )
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks._is_batch_eligible", lambda _cfg: False
+        "dev_health_ops.workers.sync_scheduler._is_batch_eligible", lambda _cfg: False
     )
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks.run_sync_config.apply_async",
+        "dev_health_ops.workers.sync_scheduler.run_sync_config.apply_async",
         _fake_run_sync_apply_async,
     )
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks.dispatch_batch_sync.apply_async",
+        "dev_health_ops.workers.sync_scheduler.dispatch_batch_sync.apply_async",
         lambda **_kwargs: None,
     )
 
-    from dev_health_ops.workers.tasks import dispatch_scheduled_syncs
+    from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
     task: Any = dispatch_scheduled_syncs
     task.push_request(id="dispatch-ignore-backfill-jobs")
@@ -544,7 +546,7 @@ def test_run_backfill_resolves_credentials_from_db(
         _fake_run_backfill_for_config,
     )
 
-    from dev_health_ops.workers.tasks import run_backfill
+    from dev_health_ops.workers.sync_backfill import run_backfill
 
     task: Any = run_backfill
     task.push_request(id="backfill-credential-integration")

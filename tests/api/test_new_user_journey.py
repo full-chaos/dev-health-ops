@@ -29,7 +29,7 @@ from dev_health_ops.models.settings import (
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
-admin_router_module = importlib.import_module("dev_health_ops.api.admin.router")
+admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
 VALID_PASSWORD = "SecurePass123!"
 
@@ -109,7 +109,7 @@ async def journey_app(monkeypatch: pytest.MonkeyPatch, session_maker):
         AsyncMock(),
     )
     monkeypatch.setattr(
-        "dev_health_ops.workers.tasks.sync_teams_to_analytics",
+        "dev_health_ops.workers.product_tasks.sync_teams_to_analytics",
         MagicMock(),
     )
     monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "journey-test-encryption-key")
@@ -247,7 +247,7 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
     mock_run = MagicMock()
     mock_run.delay.return_value = mock_task
 
-    with patch("dev_health_ops.workers.tasks.run_sync_config", mock_run):
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
         trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert trigger_resp.status_code == 202

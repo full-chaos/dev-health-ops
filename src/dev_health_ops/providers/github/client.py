@@ -4,7 +4,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict
 
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
 from dev_health_ops.connectors.utils.rate_limit_queue import (
@@ -29,14 +29,14 @@ class _GitHubPullRequestLike(_GitHubIssueLike, Protocol):
 
 class _GitHubRepositoryLike(Protocol):
     def get_issues(
-        self, *, state: str, since: datetime | None = None
+        self, *args: object, **kwargs: object
     ) -> Iterable[_GitHubIssueLike]: ...
 
     def get_pulls(
-        self, *, state: str, sort: str, direction: str
+        self, *args: object, **kwargs: object
     ) -> Iterable[_GitHubPullRequestLike]: ...
 
-    def get_milestones(self, *, state: str) -> Iterable[object]: ...
+    def get_milestones(self, *args: object, **kwargs: object) -> Iterable[object]: ...
 
 
 class ProjectItemChanges(TypedDict, total=False):
@@ -90,7 +90,7 @@ class GitHubWorkClient:
         # GraphQL client (api.github.com only for now).
         self.graphql = GitHubGraphQLClient(auth.token)
 
-    def get_repo(self, *, owner: str, repo: str) -> _GitHubRepositoryLike:
+    def get_repo(self, *, owner: str, repo: str) -> Any:
         return self.github.get_repo(f"{owner}/{repo}")
 
     def iter_issues(
@@ -357,7 +357,7 @@ class GitHubWorkClient:
 
                 # If there are more changes, fetch them
                 if changes_page_info.get("hasNextPage"):
-                    all_changes = []
+                    all_changes: list[dict[str, object]] = []
                     all_changes.extend(changes)
                     changes_cursor = changes_page_info.get("endCursor")
 

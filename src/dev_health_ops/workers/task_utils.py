@@ -111,6 +111,10 @@ def _resolve_env_credentials(provider: str) -> dict[str, str]:
     }
 
 
+_GIT_TARGETS = {"git", "prs"}
+_WORK_ITEM_TARGETS = {"work-items"}
+
+
 def _invalidate_metrics_cache(day: str, org_id: str) -> None:
     """Invalidate GraphQL caches after metrics update."""
     try:

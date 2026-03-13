@@ -23,6 +23,7 @@ from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
 from dev_health_ops.metrics.compute_work_items import compute_work_item_metrics_daily
+from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import compute_file_hotspots
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
@@ -41,6 +42,7 @@ from dev_health_ops.metrics.quality import (
 )
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import build_repo_pattern_resolver
 from dev_health_ops.storage import detect_db_type
@@ -68,8 +70,6 @@ def discover_repos(
     provider: str = "auto",
 ) -> list[Any]:
     """Discover repositories from the database."""
-    from dev_health_ops.metrics.work_items import DiscoveredRepo
-
     # If a specific repo is requested, return just that one
     if repo_id:
         return [
@@ -114,9 +114,8 @@ async def _get_loader(db_url: str, backend: str, org_id: str = "") -> DataLoader
             f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
             "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
         )
-    from dev_health_ops.api.queries.client import get_global_client
-
-    client = await get_global_client(db_url)
+    deps = get_metrics_dependencies()
+    client = await deps.get_global_client(db_url)
     return ClickHouseDataLoader(client, org_id=org_id)
 
 
@@ -456,28 +455,24 @@ async def run_daily_metrics_finalize(
 
     import dataclasses as _dc
 
-    from dev_health_ops.metrics.loaders.base import clickhouse_query_dicts
-    from dev_health_ops.metrics.schemas import (
-        UserMetricsDailyRecord,
-        WorkItemUserMetricsDailyRecord,
-    )
+    deps = get_metrics_dependencies()
 
     git_metrics: list[Any] = []
     wi_user_metrics: list[Any] = []
 
     if backend == "clickhouse":
-        from dev_health_ops.api.queries.client import get_global_client
-
-        ch_client = await get_global_client(db_url)
-        um_field_names = {f.name for f in _dc.fields(UserMetricsDailyRecord)}
-        wi_field_names = {f.name for f in _dc.fields(WorkItemUserMetricsDailyRecord)}
+        ch_client = await deps.get_global_client(db_url)
+        um_field_names = {f.name for f in _dc.fields(deps.user_metrics_daily_record)}
+        wi_field_names = {
+            f.name for f in _dc.fields(deps.work_item_user_metrics_daily_record)
+        }
 
         um_query = "SELECT * FROM user_metrics_daily WHERE day = {day:Date}"
         um_params: dict[str, Any] = {"day": day}
         if org_id:
             um_query += " AND org_id = {org_id:String}"
             um_params["org_id"] = org_id
-        um_rows = clickhouse_query_dicts(
+        um_rows = deps.clickhouse_query_dicts(
             ch_client,
             um_query,
             um_params,
@@ -485,7 +480,7 @@ async def run_daily_metrics_finalize(
         for row in um_rows:
             try:
                 git_metrics.append(
-                    UserMetricsDailyRecord(
+                    deps.user_metrics_daily_record(
                         **{k: v for k, v in row.items() if k in um_field_names}
                     )
                 )
@@ -497,7 +492,7 @@ async def run_daily_metrics_finalize(
         if org_id:
             wi_query += " AND org_id = {org_id:String}"
             wi_params["org_id"] = org_id
-        wi_rows = clickhouse_query_dicts(
+        wi_rows = deps.clickhouse_query_dicts(
             ch_client,
             wi_query,
             wi_params,
@@ -505,7 +500,7 @@ async def run_daily_metrics_finalize(
         for row in wi_rows:
             try:
                 wi_user_metrics.append(
-                    WorkItemUserMetricsDailyRecord(
+                    deps.work_item_user_metrics_daily_record(
                         **{k: v for k, v in row.items() if k in wi_field_names}
                     )
                 )

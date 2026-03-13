@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -51,7 +52,7 @@ def fetch_synthetic_work_items(
     """
     Generate synthetic work items for testing/demo purposes.
     """
-    from dev_health_ops.fixtures.generator import SyntheticDataGenerator
+    deps = get_metrics_dependencies()
 
     all_items: list[WorkItem] = []
     all_transitions: list[WorkItemStatusTransition] = []
@@ -63,8 +64,9 @@ def fetch_synthetic_work_items(
         seed = int(repo.repo_id.hex, 16) % (2**32)
         random.seed(seed)
 
-        generator = SyntheticDataGenerator(
-            repo_id=repo.repo_id, repo_name=repo.full_name
+        generator = deps.synthetic_generator_factory(
+            repo_id=repo.repo_id,
+            repo_name=repo.full_name,
         )
         items = generator.generate_work_items(days=days)
         transitions = generator.generate_work_item_transitions(items)
@@ -97,17 +99,7 @@ def fetch_jira_work_items_with_extras(
     - JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN
     - optional: JIRA_PROJECT_KEYS (comma-separated)
     """
-    try:
-        from dev_health_ops.providers.jira.client import JiraClient, build_jira_jql
-        from dev_health_ops.providers.jira.normalize import (
-            detect_reopen_events,
-            extract_jira_issue_dependencies,
-            jira_comment_to_interaction_event,
-            jira_issue_to_work_item,
-            jira_sprint_payload_to_model,
-        )
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError(f"Jira provider not available: {exc}") from exc
+    deps = get_metrics_dependencies()
 
     if project_keys is None:
         raw_keys = os.getenv("JIRA_PROJECT_KEYS") or ""
@@ -122,40 +114,25 @@ def fetch_jira_work_items_with_extras(
     }
 
     if _env_flag("JIRA_USE_PROVIDER", False):
-        from dev_health_ops.providers.base import IngestionContext, IngestionWindow
-        from dev_health_ops.providers.jira.provider import JiraProvider
-
-        ctx = IngestionContext(
-            window=IngestionWindow(updated_since=since, active_until=until)
-        )
         if project_keys:
-            if len(project_keys) == 1:
-                ctx = IngestionContext(
-                    window=ctx.window,
-                    project_key=project_keys[0],
-                )
-            else:
+            if len(project_keys) != 1:
                 logger.warning(
                     "JiraProvider supports a single project_key override; using env JIRA_PROJECT_KEYS instead"
                 )
-
-        provider = JiraProvider(
+        (
+            batch_work_items,
+            batch_status_transitions,
+            batch_dependencies,
+            batch_reopen_events,
+            batch_interactions,
+            batch_sprints,
+        ) = deps.jira_provider_ingest(
+            since=since,
+            until=until,
             status_mapping=status_mapping,
             identity=identity,
+            project_keys=project_keys,
         )
-        batch_work_items: list[WorkItem] = []
-        batch_status_transitions: list[WorkItemStatusTransition] = []
-        batch_dependencies: list[WorkItemDependency] = []
-        batch_reopen_events: list[WorkItemReopenEvent] = []
-        batch_interactions: list[WorkItemInteractionEvent] = []
-        batch_sprints: list[Sprint] = []
-        for batch in provider.iter_ingest(ctx):
-            batch_work_items.extend(batch.work_items)
-            batch_status_transitions.extend(batch.status_transitions)
-            batch_dependencies.extend(batch.dependencies)
-            batch_reopen_events.extend(batch.reopen_events)
-            batch_interactions.extend(batch.interactions)
-            batch_sprints.extend(batch.sprints)
         if batch_interactions == [] and _env_flag("JIRA_FETCH_COMMENTS", True):
             logger.info(
                 "JiraProvider does not fetch comments; set JIRA_USE_PROVIDER=0 to use legacy comment ingestion"
@@ -173,7 +150,7 @@ def fetch_jira_work_items_with_extras(
             batch_sprints,
         )
 
-    client = JiraClient.from_env()
+    client = deps.jira_client_factory()
     work_items: list[WorkItem] = []
     transitions: list[WorkItemStatusTransition] = []
     dependencies: list[WorkItemDependency] = []
@@ -198,19 +175,23 @@ def fetch_jira_work_items_with_extras(
         if project_keys:
             for key in project_keys:
                 jqls.append(
-                    build_jira_jql(
+                    deps.jira_build_jql(
                         project_key=key, updated_since=None, active_until=None
                     )
                 )
         else:
             jqls.append(
-                build_jira_jql(project_key=None, updated_since=None, active_until=None)
+                deps.jira_build_jql(
+                    project_key=None,
+                    updated_since=None,
+                    active_until=None,
+                )
             )
     else:
         if project_keys:
             for key in project_keys:
                 jqls.append(
-                    build_jira_jql(
+                    deps.jira_build_jql(
                         project_key=key,
                         updated_since=updated_since,
                         active_until=active_until,
@@ -218,7 +199,7 @@ def fetch_jira_work_items_with_extras(
                 )
         else:
             jqls.append(
-                build_jira_jql(
+                deps.jira_build_jql(
                     project_key=None,
                     updated_since=updated_since,
                     active_until=active_until,
@@ -229,7 +210,7 @@ def fetch_jira_work_items_with_extras(
         logger.debug("Jira: JQL=%s", jql)
         for issue in client.iter_issues(jql=jql, expand_changelog=True):
             issue_key = issue.get("key") if isinstance(issue, dict) else None
-            wi, wi_transitions = jira_issue_to_work_item(
+            wi, wi_transitions = deps.jira_issue_to_work_item(
                 issue=issue,
                 status_mapping=status_mapping,
                 identity=identity,
@@ -238,12 +219,12 @@ def fetch_jira_work_items_with_extras(
             work_items.append(wi)
             transitions.extend(wi_transitions)
             dependencies.extend(
-                extract_jira_issue_dependencies(
+                deps.jira_extract_dependencies(
                     issue=issue, work_item_id=wi.work_item_id
                 )
             )
             reopen_events.extend(
-                detect_reopen_events(
+                deps.jira_detect_reopen_events(
                     work_item_id=wi.work_item_id,
                     transitions=wi_transitions,
                 )
@@ -257,7 +238,7 @@ def fetch_jira_work_items_with_extras(
                     ):
                         if comments_limit > 0 and comment_count >= comments_limit:
                             break
-                        event = jira_comment_to_interaction_event(
+                        event = deps.jira_comment_to_interaction(
                             work_item_id=wi.work_item_id,
                             comment=comment,
                             identity=identity,
@@ -284,7 +265,7 @@ def fetch_jira_work_items_with_extras(
         except Exception as exc:
             logger.warning("Jira: failed to fetch sprint %s: %s", sprint_id, exc)
             continue
-        sprint = jira_sprint_payload_to_model(payload)
+        sprint = deps.jira_sprint_to_model(payload)
         if sprint:
             sprint_cache[sprint_id] = sprint
             sprints.append(sprint)
@@ -333,10 +314,9 @@ def fetch_github_work_items(
     if not token:
         raise ValueError("GitHub token required (set GITHUB_TOKEN)")
 
-    from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
-    from dev_health_ops.providers.github.normalize import github_issue_to_work_item
+    deps = get_metrics_dependencies()
 
-    client = GitHubWorkClient(auth=GitHubAuth(token=token))
+    client = deps.github_client_factory(token=token)
     work_items: dict[str, WorkItem] = {}
     transitions: list[WorkItemStatusTransition] = []
 
@@ -366,7 +346,7 @@ def fetch_github_work_items(
                     )
                 except Exception:
                     events = None
-            wi, _transitions = github_issue_to_work_item(
+            wi, _transitions = deps.github_issue_to_work_item(
                 issue=issue,
                 repo_full_name=repo.full_name,
                 repo_id=repo.repo_id,
@@ -401,12 +381,9 @@ def fetch_github_project_v2_items(
     if not token:
         raise ValueError("GitHub token required (set GITHUB_TOKEN)")
 
-    from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
-    from dev_health_ops.providers.github.normalize import (
-        github_project_v2_item_to_work_item,
-    )
+    deps = get_metrics_dependencies()
 
-    client = GitHubWorkClient(auth=GitHubAuth(token=token))
+    client = deps.github_client_factory(token=token)
     items: dict[str, WorkItem] = {}
     transitions: list[WorkItemStatusTransition] = []
     for org_login, project_number in projects:
@@ -415,7 +392,7 @@ def fetch_github_project_v2_items(
         for node in client.iter_project_v2_items(
             org_login=org_login, project_number=int(project_number), first=50
         ):
-            wi, wi_transitions = github_project_v2_item_to_work_item(
+            wi, wi_transitions = deps.github_project_item_to_work_item(
                 item_node=node,
                 project_scope_id=project_scope_id,
                 status_mapping=status_mapping,
@@ -459,10 +436,9 @@ def fetch_gitlab_work_items(
 
     Requires `GITLAB_TOKEN` and optional `GITLAB_URL`.
     """
-    from dev_health_ops.providers.gitlab.client import GitLabWorkClient
-    from dev_health_ops.providers.gitlab.normalize import gitlab_issue_to_work_item
+    deps = get_metrics_dependencies()
 
-    client = GitLabWorkClient.from_env()
+    client = deps.gitlab_client_factory()
     work_items: dict[str, WorkItem] = {}
     transitions: list[WorkItemStatusTransition] = []
 
@@ -492,7 +468,7 @@ def fetch_gitlab_work_items(
                 except Exception:
                     label_events = None
 
-            wi, _transitions = gitlab_issue_to_work_item(
+            wi, _transitions = deps.gitlab_issue_to_work_item(
                 issue=issue,
                 project_full_path=repo.full_name,
                 repo_id=repo.repo_id,

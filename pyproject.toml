@@ -41,7 +41,6 @@ dependencies = [
   "typing_extensions",
   "jira",
   "alembic",
-  "motor",
   "uvicorn",
   "radon",
   "openai",

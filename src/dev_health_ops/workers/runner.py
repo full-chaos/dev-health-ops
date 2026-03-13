@@ -1,8 +1,11 @@
 """CLI runner for background workers."""
 
 import argparse
+import logging
 import subprocess
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def _cmd_start_worker(ns: argparse.Namespace) -> int:
@@ -24,7 +27,7 @@ def _cmd_start_worker(ns: argparse.Namespace) -> int:
     if concurrency:
         cmd.extend(["--concurrency", str(concurrency)])
 
-    print(f"Starting Celery worker: {' '.join(cmd)}")
+    logger.info(f"Starting Celery worker: {' '.join(cmd)}")
     return subprocess.run(cmd).returncode
 
 
@@ -40,7 +43,7 @@ def _cmd_start_scheduler(ns: argparse.Namespace) -> int:
         "--loglevel=INFO",
     ]
 
-    print(f"Starting Celery beat: {' '.join(cmd)}")
+    logger.info(f"Starting Celery beat: {' '.join(cmd)}")
     return subprocess.run(cmd).returncode
 
 

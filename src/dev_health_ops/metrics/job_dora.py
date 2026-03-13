@@ -72,7 +72,7 @@ def run_dora_metrics_job(
     interval: str = "daily",
     gitlab_url: str | None = None,
     auth: str | None = None,
-    org_id: str,
+    org_id: str | None,
 ) -> None:
     if not db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
@@ -83,21 +83,16 @@ def run_dora_metrics_job(
     if sink == "auto":
         sink = backend
 
-    if backend not in {"clickhouse", "mongo", "sqlite", "postgres"}:
-        raise ValueError(f"Unsupported db backend for DORA metrics: {backend}")
-
-    if sink not in {"clickhouse", "mongo", "sqlite", "postgres", "both"}:
+    if backend != "clickhouse":
         raise ValueError(
-            "sink must be one of: auto, clickhouse, mongo, sqlite, postgres, both"
+            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
+            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
         )
-    if sink != "both" and sink != backend:
+    if sink not in {"clickhouse"}:
+        raise ValueError("sink must be one of: auto, clickhouse")
+    if sink != backend:
         raise ValueError(
-            f"sink='{sink}' requires db backend '{sink}', got '{backend}'. "
-            "For cross-backend writes use sink='both'."
-        )
-    if sink == "both" and backend not in {"clickhouse", "mongo"}:
-        raise ValueError(
-            "sink='both' is only supported when source backend is clickhouse or mongo"
+            f"sink='{sink}' requires db backend '{sink}', got '{backend}'."
         )
 
     token = (auth or os.getenv("GITLAB_TOKEN") or "").strip()
@@ -114,11 +109,6 @@ def run_dora_metrics_job(
 
     primary_sink: Any
 
-    if backend != "clickhouse":
-        raise ValueError(
-            f"Unsupported backend '{backend}'. Only ClickHouse is supported (CHAOS-641). "
-            "Set CLICKHOUSE_URI and use a clickhouse:// connection string."
-        )
     primary_sink = ClickHouseMetricsSink(db_url)
 
     sinks: list[Any] = [primary_sink]

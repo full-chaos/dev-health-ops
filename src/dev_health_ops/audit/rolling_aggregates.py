@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Iterable, Sequence
 from datetime import date, timedelta
 from typing import Any
-
-from sqlalchemy import text
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
@@ -55,18 +52,6 @@ def _query_dicts_clickhouse(
     return [dict(zip(col_names, row)) for row in rows]
 
 
-def _query_dicts_sqlite(
-    engine: Any, query: str, parameters: dict[str, Any]
-) -> list[dict[str, Any]]:
-    with engine.connect() as conn:
-        result = conn.execute(text(query), parameters)
-        rows = result.fetchall()
-        col_names = list(result.keys())
-    if not col_names or not rows:
-        return []
-    return [dict(zip(col_names, row)) for row in rows]
-
-
 def _fetch_table_presence_clickhouse(
     client: Any, tables: Iterable[str]
 ) -> dict[str, bool]:
@@ -87,26 +72,6 @@ def _fetch_table_presence_clickhouse(
     return {table: table in present for table in table_list}
 
 
-def _fetch_table_presence_sqlite(engine: Any, tables: Iterable[str]) -> dict[str, bool]:
-    table_list = list(tables)
-    if not table_list:
-        return {}
-    params = {f"t{idx}": name for idx, name in enumerate(table_list)}
-    placeholders = ", ".join(f":t{idx}" for idx in range(len(table_list)))
-    rows = _query_dicts_sqlite(
-        engine,
-        f"""
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name IN ({placeholders})
-        """,
-        params,
-    )
-    present = {row.get("name") for row in rows}
-    return {table: table in present for table in table_list}
-
-
 def _count_rows_clickhouse(
     client: Any, table: str, date_column: str, start: date, end: date
 ) -> int:
@@ -117,24 +82,6 @@ def _count_rows_clickhouse(
         FROM {table}
         WHERE {date_column} >= toDate(%(start)s)
           AND {date_column} <= toDate(%(end)s)
-        """,
-        {"start": start.isoformat(), "end": end.isoformat()},
-    )
-    if not rows:
-        return 0
-    return int(rows[0].get("count") or 0)
-
-
-def _count_rows_sqlite(
-    engine: Any, table: str, date_column: str, start: date, end: date
-) -> int:
-    rows = _query_dicts_sqlite(
-        engine,
-        f"""
-        SELECT count(*) AS count
-        FROM {table}
-        WHERE {date_column} >= :start
-          AND {date_column} <= :end
         """,
         {"start": start.isoformat(), "end": end.isoformat()},
     )
@@ -191,52 +138,6 @@ def _sum_monotonicity_clickhouse(
     }
 
 
-def _sum_monotonicity_sqlite(
-    engine: Any,
-    table: str,
-    date_column: str,
-    group_by: Sequence[str],
-    metric: str,
-    start_short: date,
-    start_long: date,
-    end: date,
-) -> dict[str, Any]:
-    group_cols = ", ".join(group_by)
-    rows = _query_dicts_sqlite(
-        engine,
-        f"""
-        SELECT
-          {group_cols},
-          SUM(CASE WHEN {date_column} >= :start_short AND {date_column} <= :end THEN {metric} ELSE 0 END) AS sum_short,
-          SUM(CASE WHEN {date_column} >= :start_long AND {date_column} <= :end THEN {metric} ELSE 0 END) AS sum_long
-        FROM {table}
-        WHERE {date_column} >= :start_long
-          AND {date_column} <= :end
-        GROUP BY {group_cols}
-        """,
-        {
-            "start_short": start_short.isoformat(),
-            "start_long": start_long.isoformat(),
-            "end": end.isoformat(),
-        },
-    )
-    group_count = 0
-    drift_count = 0
-    max_delta = 0.0
-    for row in rows:
-        group_count += 1
-        sum_short = float(row.get("sum_short") or 0.0)
-        sum_long = float(row.get("sum_long") or 0.0)
-        if sum_short > sum_long:
-            drift_count += 1
-            max_delta = max(max_delta, sum_short - sum_long)
-    return {
-        "group_count": group_count,
-        "drift_count": drift_count,
-        "max_delta": max_delta,
-    }
-
-
 def _avg_check_clickhouse(
     client: Any,
     table: str,
@@ -284,52 +185,6 @@ def _avg_check_clickhouse(
     }
 
 
-def _avg_check_sqlite(
-    engine: Any,
-    table: str,
-    date_column: str,
-    group_by: Sequence[str],
-    metric: str,
-    start_long: date,
-    end: date,
-) -> dict[str, Any]:
-    group_cols = ", ".join(group_by)
-    rows = _query_dicts_sqlite(
-        engine,
-        f"""
-        SELECT
-          {group_cols},
-          SUM(CASE WHEN {metric} IS NOT NULL THEN 1 ELSE 0 END) AS sample_count,
-          AVG({metric}) AS avg_val
-        FROM {table}
-        WHERE {date_column} >= :start_long
-          AND {date_column} <= :end
-        GROUP BY {group_cols}
-        """,
-        {"start_long": start_long.isoformat(), "end": end.isoformat()},
-    )
-    group_count = 0
-    no_samples = 0
-    non_finite = 0
-    for row in rows:
-        group_count += 1
-        sample_count = int(row.get("sample_count") or 0)
-        if sample_count == 0:
-            no_samples += 1
-            continue
-        avg_val = row.get("avg_val")
-        if avg_val is None:
-            non_finite += 1
-            continue
-        if not math.isfinite(float(avg_val)):
-            non_finite += 1
-    return {
-        "group_count": group_count,
-        "no_samples": no_samples,
-        "non_finite": non_finite,
-    }
-
-
 def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> dict[str, Any]:
     backend = detect_db_type(db_url)
     windows = sorted(set(int(w) for w in ROLLING_WINDOWS))
@@ -360,9 +215,7 @@ def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> dict[str, Any]:
                 report=report,
                 presence=presence,
                 spec=spec,
-                backend=backend,
                 client=client,
-                engine=None,
                 start_short=start_short,
                 start_long=start_long,
                 end=as_of,
@@ -381,9 +234,7 @@ def _populate_table_report(
     report: dict[str, Any],
     presence: dict[str, bool],
     spec: dict[str, Any],
-    backend: str,
     client: Any,
-    engine: Any,
     start_short: date,
     start_long: date,
     end: date,
@@ -409,10 +260,7 @@ def _populate_table_report(
         report["tables"][table] = entry
         return
 
-    if backend == "clickhouse":
-        row_count = _count_rows_clickhouse(client, table, date_column, start_long, end)
-    else:
-        row_count = _count_rows_sqlite(engine, table, date_column, start_long, end)
+    row_count = _count_rows_clickhouse(client, table, date_column, start_long, end)
 
     entry["rows"] = row_count
     if row_count == 0:
@@ -421,28 +269,16 @@ def _populate_table_report(
         return
 
     for metric in sum_metrics:
-        if backend == "clickhouse":
-            stats = _sum_monotonicity_clickhouse(
-                client,
-                table,
-                date_column,
-                group_by,
-                metric,
-                start_short,
-                start_long,
-                end,
-            )
-        else:
-            stats = _sum_monotonicity_sqlite(
-                engine,
-                table,
-                date_column,
-                group_by,
-                metric,
-                start_short,
-                start_long,
-                end,
-            )
+        stats = _sum_monotonicity_clickhouse(
+            client,
+            table,
+            date_column,
+            group_by,
+            metric,
+            start_short,
+            start_long,
+            end,
+        )
         entry["sum_metrics"][metric] = stats
         drift_count = stats.get("drift_count", 0)
         group_count = stats.get("group_count", 0)
@@ -450,52 +286,30 @@ def _populate_table_report(
             entry["issues"].append(f"sum:{metric} drift={drift_count}/{group_count}")
 
     for metric in avg_metrics:
-        if backend == "clickhouse":
-            stats = _avg_check_clickhouse(
-                client,
-                table,
-                date_column,
-                group_by,
-                metric,
-                "avg",
-                start_long,
-                end,
-            )
-        else:
-            stats = _avg_check_sqlite(
-                engine,
-                table,
-                date_column,
-                group_by,
-                metric,
-                start_long,
-                end,
-            )
+        stats = _avg_check_clickhouse(
+            client,
+            table,
+            date_column,
+            group_by,
+            metric,
+            "avg",
+            start_long,
+            end,
+        )
         entry["avg_metrics"][metric] = stats
         _append_avg_issues(entry, metric, stats, label="avg")
 
     for metric in p50_metrics:
-        if backend == "clickhouse":
-            stats = _avg_check_clickhouse(
-                client,
-                table,
-                date_column,
-                group_by,
-                metric,
-                "p50",
-                start_long,
-                end,
-            )
-        else:
-            stats = _avg_check_sqlite(
-                engine,
-                table,
-                date_column,
-                group_by,
-                metric,
-                start_long,
-                end,
-            )
+        stats = _avg_check_clickhouse(
+            client,
+            table,
+            date_column,
+            group_by,
+            metric,
+            "p50",
+            start_long,
+            end,
+        )
         entry["p50_metrics"][metric] = stats
         _append_avg_issues(entry, metric, stats, label="p50")
 

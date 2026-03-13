@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -30,6 +31,8 @@ from dev_health_ops.models.work_items import (
 )
 
 from .utils import _parse_date_value, _parse_datetime_value
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from dev_health_ops.models.atlassian_ops import (
@@ -132,7 +135,7 @@ class ClickHouseStore:
                                 continue
                             await asyncio.to_thread(self.client.command, stmt)
                     except Exception as e:
-                        print(f"CRITICAL: Migration failed: {path.name}\nError: {e}")
+                        logger.critical("Migration failed: %s\nError: %s", path.name, e)
                         raise
                 elif path.suffix == ".py":
                     # Dynamic import and execution for Python migrations

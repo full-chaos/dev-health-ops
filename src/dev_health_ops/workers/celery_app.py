@@ -37,8 +37,11 @@ def _task_finished(task_id: str, task, state: str = "SUCCESS", **kwargs) -> None
             state=state.lower(),
             duration_seconds=duration,
         )
-    except Exception:
-        pass  # Metrics recording is best-effort; never fail a task over it
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+        logging.getLogger(__name__).debug(
+            "Celery task metrics recording failed (non-fatal)",
+            exc_info=True,
+        )
 
 
 @worker_init.connect
@@ -58,7 +61,7 @@ def _run_migrations_on_startup(**kwargs) -> None:  # type: ignore[no-untyped-def
         cfg = _make_alembic_config()
         command.upgrade(cfg, "head")
         _logger.info("Alembic migrations applied (upgrade to head)")
-    except Exception:
+    except (ImportError, RuntimeError, OSError):
         _logger.exception("Auto-migration on worker startup failed (non-fatal)")
 
 

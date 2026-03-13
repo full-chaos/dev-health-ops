@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Optional, Union
 
 from .clickhouse import ClickHouseStore
-from .mongo import MongoStore
 from .sqlalchemy import SQLAlchemyStore
 from .utils import (
     _parse_date_value,
@@ -20,7 +18,7 @@ def detect_db_type(conn_string: str) -> str:
     Detect database type from connection string.
 
     :param conn_string: Database connection string.
-    :return: Database type ('postgres', 'sqlite', 'mongo', or 'clickhouse').
+    :return: Database type ('postgres', 'sqlite', or 'clickhouse').
     :raises ValueError: If database type cannot be determined.
     """
     if not conn_string:
@@ -38,10 +36,6 @@ def detect_db_type(conn_string: str) -> str:
     ):
         return "clickhouse"
 
-    # MongoDB connection strings
-    if conn_lower.startswith("mongodb://") or conn_lower.startswith("mongodb+srv://"):
-        return "mongo"
-
     # PostgreSQL connection strings
     if conn_lower.startswith("postgresql://") or conn_lower.startswith("postgres://"):
         return "postgres"
@@ -58,7 +52,7 @@ def detect_db_type(conn_string: str) -> str:
     scheme = conn_string.split("://", 1)[0] if "://" in conn_string else "unknown"
     raise ValueError(
         f"Could not detect database type from connection string. "
-        f"Supported: mongodb://, postgresql://, postgres://, sqlite://, "
+        f"Supported: postgresql://, postgres://, sqlite://, "
         f"clickhouse://, or variations with async drivers. Got scheme: '{scheme}', "
         f"connection string (first 100 chars): {conn_string[:100]}..."
     )
@@ -69,7 +63,7 @@ def create_store(
     db_type: str | None = None,
     db_name: str | None = None,
     echo: bool = False,
-) -> SQLAlchemyStore | MongoStore | ClickHouseStore:
+) -> SQLAlchemyStore | ClickHouseStore:
     """
     Create a storage backend based on the connection string.
 
@@ -77,11 +71,11 @@ def create_store(
     connection string and returns the appropriate store implementation.
 
     :param conn_string: Database connection string.
-    :param db_type: Optional explicit database type ('postgres', 'sqlite', 'mongo', 'clickhouse').
+    :param db_type: Optional explicit database type ('postgres', 'sqlite', 'clickhouse').
                    If not provided, it will be auto-detected from conn_string.
-    :param db_name: Optional database name (for MongoDB).
+    :param db_name: Deprecated; no longer used.
     :param echo: Whether to echo SQL statements (for SQLAlchemy).
-    :return: Appropriate store instance (SQLAlchemyStore, MongoStore, or ClickHouseStore).
+    :return: Appropriate store instance (SQLAlchemyStore or ClickHouseStore).
     """
     if db_type is None:
         db_type = detect_db_type(conn_string)
@@ -103,16 +97,14 @@ def create_store(
 
     db_type = db_type.lower()
 
-    if db_type == "mongo":
-        return MongoStore(conn_string, db_name=db_name)
-    elif db_type == "clickhouse":
+    if db_type == "clickhouse":
         return ClickHouseStore(conn_string)
     elif db_type in ("postgres", "postgresql", "sqlite"):
         return SQLAlchemyStore(conn_string, echo=echo)
     else:
         raise ValueError(
             f"Unsupported database type: {db_type}. "
-            f"Supported types: postgres, sqlite, mongo, clickhouse"
+            f"Supported types: postgres, sqlite, clickhouse"
         )
 
 
@@ -128,10 +120,8 @@ def resolve_db_type(db_url: str, db_type: str | None) -> str:
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
 
-    if resolved not in {"postgres", "mongo", "sqlite", "clickhouse"}:
-        raise SystemExit(
-            "DB_TYPE must be 'postgres', 'mongo', 'sqlite', or 'clickhouse'"
-        )
+    if resolved not in {"postgres", "sqlite", "clickhouse"}:
+        raise SystemExit("DB_TYPE must be 'postgres', 'sqlite', or 'clickhouse'")
     return resolved
 
 
@@ -154,7 +144,6 @@ async def run_with_store(
 
 __all__ = [
     "ClickHouseStore",
-    "MongoStore",
     "SQLAlchemyStore",
     "create_store",
     "detect_db_type",

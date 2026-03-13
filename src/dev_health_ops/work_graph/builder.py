@@ -1352,9 +1352,9 @@ Examples:
     try:
         stats = builder.build()
         total = sum(stats.values())
-        print(f"Work graph build complete. Total edges: {total}")
+        logger.info("Work graph build complete. Total edges: %d", total)
         for key, value in stats.items():
-            print(f"  {key}: {value}")
+            logger.info("  %s: %s", key, value)
         return 0
     except Exception as e:
         logger.exception("Work graph build failed: %s", e)

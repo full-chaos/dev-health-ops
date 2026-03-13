@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
+import socket
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import func, select
@@ -482,9 +485,36 @@ async def test_connection(
     return TestConnectionResponse(success=success, error=error, details=details or None)
 
 
-async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
-    from urllib.parse import urlparse
+def _validate_external_url(url: str) -> tuple[bool, str | None]:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, "Invalid URL scheme - only http and https are allowed"
 
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "No hostname in URL"
+
+    blocked_hostnames = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
+    if hostname.lower() in blocked_hostnames:
+        return False, "Connection to localhost is not allowed"
+
+    try:
+        addr_info = socket.getaddrinfo(
+            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+        for family, _, _, _, sockaddr in addr_info:
+            if family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return False, "Connection to private/internal networks is not allowed"
+    except socket.gaierror:
+        return False, f"Cannot resolve hostname: {hostname}"
+
+    return True, None
+
+
+async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
     import httpx
 
     token = creds.get("token")
@@ -492,9 +522,10 @@ async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
         return False, {"error": "No token provided"}
 
     base_url = creds.get("base_url", "https://api.github.com")
-    parsed = urlparse(base_url)
-    if parsed.scheme not in ("http", "https"):
-        return False, {"error": "Invalid URL scheme"}
+    is_valid, error = _validate_external_url(base_url)
+    if not is_valid:
+        return False, {"error": error}
+
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{base_url}/user",
@@ -511,8 +542,6 @@ async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
 
 
 async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
-    from urllib.parse import urlparse
-
     import httpx
 
     token = creds.get("token")
@@ -520,9 +549,10 @@ async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
         return False, {"error": "No token provided"}
 
     base_url = creds.get("url") or creds.get("base_url", "https://gitlab.com/api/v4")
-    parsed = urlparse(base_url)
-    if parsed.scheme not in ("http", "https"):
-        return False, {"error": "Invalid URL scheme"}
+    is_valid, error = _validate_external_url(base_url)
+    if not is_valid:
+        return False, {"error": error}
+
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{base_url}/user",
@@ -536,8 +566,6 @@ async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
 
 
 async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
-    from urllib.parse import urlparse
-
     import httpx
 
     email = creds.get("email")
@@ -549,9 +577,9 @@ async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
             "error": "Missing required credentials (email, api_token, base_url)"
         }
 
-    parsed = urlparse(base_url)
-    if parsed.scheme not in ("http", "https"):
-        return False, {"error": "Invalid URL scheme"}
+    is_valid, error = _validate_external_url(base_url)
+    if not is_valid:
+        return False, {"error": error}
 
     import base64
 

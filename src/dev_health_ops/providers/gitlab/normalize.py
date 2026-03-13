@@ -5,6 +5,7 @@ import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -29,7 +30,7 @@ from dev_health_ops.providers.status_mapping import StatusMapping
 logger = logging.getLogger(__name__)
 
 
-def _get(obj: Any, key: str) -> Any:
+def _get(obj: object, key: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
@@ -37,12 +38,12 @@ def _get(obj: Any, key: str) -> Any:
 
 def gitlab_issue_to_work_item(
     *,
-    issue: Any,
+    issue: object,
     project_full_path: str,
-    repo_id: Any | None,
+    repo_id: UUID | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    label_events: Sequence[Any] | None = None,
+    label_events: Sequence[object] | None = None,
 ) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     iid = int(_get(issue, "iid") or 0)
     work_item_id = f"gitlab:{project_full_path}#{iid}"
@@ -101,7 +102,7 @@ def gitlab_issue_to_work_item(
 
     if label_events:
 
-        def _ev_dt(ev: Any) -> datetime:
+        def _ev_dt(ev: object) -> datetime:
             return _to_utc(_parse_iso(_get(ev, "created_at"))) or datetime.min.replace(
                 tzinfo=timezone.utc
             )
@@ -189,12 +190,12 @@ def gitlab_issue_to_work_item(
 
 def gitlab_mr_to_work_item(
     *,
-    mr: Any,
+    mr: object,
     project_full_path: str,
-    repo_id: Any | None,
+    repo_id: UUID | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    state_events: Sequence[Any] | None = None,
+    state_events: Sequence[object] | None = None,
 ) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     """
     Convert a GitLab merge request to a normalized WorkItem.
@@ -344,7 +345,7 @@ def gitlab_mr_to_work_item(
 def detect_gitlab_reopen_events(
     *,
     work_item_id: str,
-    state_events: Sequence[Any],
+    state_events: Sequence[object],
     identity: IdentityResolver,
 ) -> list[WorkItemReopenEvent]:
     """
@@ -388,7 +389,7 @@ def detect_gitlab_reopen_events(
 
 def gitlab_note_to_interaction_event(
     *,
-    note: Any,
+    note: object,
     work_item_id: str,
     identity: IdentityResolver,
 ) -> WorkItemInteractionEvent | None:
@@ -437,9 +438,9 @@ _BLOCKING_KEYWORDS = {"blocks", "blocked by", "is blocked by", "blocking"}
 def extract_gitlab_dependencies(
     *,
     work_item_id: str,
-    issue: Any,
+    issue: object,
     project_full_path: str,
-    linked_issues: Sequence[Any] | None = None,
+    linked_issues: Sequence[object] | None = None,
 ) -> list[WorkItemDependency]:
     """
     Extract dependency edges from GitLab issue links and description.
@@ -527,7 +528,7 @@ def extract_gitlab_dependencies(
 
 def gitlab_milestone_to_sprint(
     *,
-    milestone: Any,
+    milestone: object,
     project_full_path: str,
 ) -> Sprint:
     """
@@ -607,11 +608,11 @@ def enrich_work_item_with_priority(
 
 def gitlab_epic_to_work_item(
     *,
-    epic: Any,
+    epic: object,
     group_full_path: str,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    state_events: Sequence[Any] | None = None,
+    state_events: Sequence[object] | None = None,
 ) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     """Convert a GitLab Epic to a normalized WorkItem. Epics are group-level."""
     iid = int(_get(epic, "iid") or 0)
@@ -737,7 +738,7 @@ def gitlab_epic_to_work_item(
 
 def build_epic_id_for_issue(
     *,
-    issue: Any,
+    issue: object,
     group_full_path: str,
 ) -> str | None:
     """Build epic_id for an issue that belongs to an epic."""

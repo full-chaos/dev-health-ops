@@ -4,7 +4,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol, TypedDict
 
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
 from dev_health_ops.connectors.utils.rate_limit_queue import (
@@ -13,6 +13,40 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _GitHubIssueLike(Protocol):
+    pull_request: object
+
+    def get_events(self) -> Iterable[object]: ...
+
+    def get_comments(self) -> Iterable[object]: ...
+
+
+class _GitHubPullRequestLike(_GitHubIssueLike, Protocol):
+    def get_review_comments(self) -> Iterable[object]: ...
+
+
+class _GitHubRepositoryLike(Protocol):
+    def get_issues(
+        self, *args: object, **kwargs: object
+    ) -> Iterable[_GitHubIssueLike]: ...
+
+    def get_pulls(
+        self, *args: object, **kwargs: object
+    ) -> Iterable[_GitHubPullRequestLike]: ...
+
+    def get_milestones(self, *args: object, **kwargs: object) -> Iterable[object]: ...
+
+
+class ProjectItemChanges(TypedDict, total=False):
+    nodes: list[dict[str, object]]
+    pageInfo: dict[str, object]
+
+
+class ProjectV2ItemNode(TypedDict, total=False):
+    id: str
+    changes: ProjectItemChanges
 
 
 @dataclass(frozen=True)
@@ -67,7 +101,7 @@ class GitHubWorkClient:
         state: str = "all",
         since: datetime | None = None,
         limit: int | None = None,
-    ) -> Iterable[Any]:
+    ) -> Iterable[_GitHubIssueLike]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
         issues = gh_repo.get_issues(state=state, since=since)
         count = 0
@@ -81,8 +115,8 @@ class GitHubWorkClient:
                 return
 
     def iter_issue_events(
-        self, issue: Any, *, limit: int | None = None
-    ) -> Iterable[Any]:
+        self, issue: _GitHubIssueLike, *, limit: int | None = None
+    ) -> Iterable[object]:
         """
         Iterate issue events (labeled/unlabeled/closed/reopened/assigned/...) via REST.
         """
@@ -103,7 +137,7 @@ class GitHubWorkClient:
         sort: str = "updated",
         direction: str = "desc",
         limit: int | None = None,
-    ) -> Iterable[Any]:
+    ) -> Iterable[_GitHubPullRequestLike]:
         """
         Iterate pull requests in a repository via REST.
         """
@@ -117,8 +151,8 @@ class GitHubWorkClient:
                 return
 
     def iter_issue_comments(
-        self, issue: Any, *, limit: int | None = None
-    ) -> Iterable[Any]:
+        self, issue: _GitHubIssueLike, *, limit: int | None = None
+    ) -> Iterable[object]:
         """
         Iterate comments on an issue via REST.
         """
@@ -130,7 +164,9 @@ class GitHubWorkClient:
             if limit is not None and count >= int(limit):
                 return
 
-    def iter_pr_comments(self, pr: Any, *, limit: int | None = None) -> Iterable[Any]:
+    def iter_pr_comments(
+        self, pr: _GitHubPullRequestLike, *, limit: int | None = None
+    ) -> Iterable[object]:
         """
         Iterate comments on a pull request (issue comments + review comments).
         """
@@ -138,8 +174,8 @@ class GitHubWorkClient:
         yield from self.iter_issue_comments(pr, limit=limit)
 
     def iter_pr_review_comments(
-        self, pr: Any, *, limit: int | None = None
-    ) -> Iterable[Any]:
+        self, pr: _GitHubPullRequestLike, *, limit: int | None = None
+    ) -> Iterable[object]:
         """
         Iterate review comments on a pull request.
         """
@@ -158,7 +194,7 @@ class GitHubWorkClient:
         repo: str,
         state: str = "all",
         limit: int | None = None,
-    ) -> Iterable[Any]:
+    ) -> Iterable[object]:
         """
         Iterate milestones in a repository via REST.
         """
@@ -178,7 +214,7 @@ class GitHubWorkClient:
         project_number: int,
         first: int = 50,
         max_items: int | None = None,
-    ) -> Iterable[dict[str, Any]]:
+    ) -> Iterable[ProjectV2ItemNode]:
         """
         Iterate GitHub Projects v2 items via GraphQL.
 
@@ -321,7 +357,7 @@ class GitHubWorkClient:
 
                 # If there are more changes, fetch them
                 if changes_page_info.get("hasNextPage"):
-                    all_changes = []
+                    all_changes: list[dict[str, object]] = []
                     all_changes.extend(changes)
                     changes_cursor = changes_page_info.get("endCursor")
 
@@ -361,7 +397,7 @@ class GitHubWorkClient:
         *,
         item_id: str,
         after: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> ProjectItemChanges | None:
         """
         Fetch additional changes for a specific ProjectV2Item.
 

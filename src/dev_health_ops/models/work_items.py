@@ -25,6 +25,8 @@ WorkItemType = Literal[
     "task",
     "bug",
     "epic",
+    "pr",
+    "merge_request",
     "issue",
     "incident",
     "chore",

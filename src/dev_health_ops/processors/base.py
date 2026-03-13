@@ -11,12 +11,18 @@ import abc
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
+P = TypeVar("P")
 
-_sentinel = object()
+
+class _Sentinel:
+    pass
+
+
+_sentinel = _Sentinel()
 
 
 class BaseProcessor(abc.ABC, Generic[T, R]):
@@ -46,7 +52,11 @@ class BaseProcessor(abc.ABC, Generic[T, R]):
     async def store_result(self, result: R) -> None:
         """Persist a single result. Subclasses must implement."""
 
-    async def run_sync_in_executor(self, func: Callable[..., Any], *args: Any) -> Any:
+    async def run_sync_in_executor(
+        self,
+        func: Callable[..., R],
+        *args: object,
+    ) -> R:
         """Run a synchronous function in the default executor."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, func, *args)
@@ -56,7 +66,7 @@ class BaseProcessor(abc.ABC, Generic[T, R]):
         if not items:
             return 0
 
-        results_queue: asyncio.Queue[Any] = asyncio.Queue(
+        results_queue: asyncio.Queue[R | _Sentinel] = asyncio.Queue(
             maxsize=max(1, self.max_concurrent * 2)
         )
         processed = 0
@@ -66,7 +76,7 @@ class BaseProcessor(abc.ABC, Generic[T, R]):
             while True:
                 result = await results_queue.get()
                 try:
-                    if result is _sentinel:
+                    if isinstance(result, _Sentinel):
                         return
                     await self.store_result(result)
                 finally:

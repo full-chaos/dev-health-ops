@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Protocol, TypedDict
+from uuid import UUID
 
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -27,7 +28,101 @@ from dev_health_ops.providers.normalize_common import (
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 
-def _labels_from_nodes(nodes: Any) -> list[str]:
+class _NamedObject(Protocol):
+    name: object
+
+
+class _GitHubIssueLike(Protocol):
+    number: object
+    title: object
+    body: object
+    state: object
+    created_at: object
+    updated_at: object
+    closed_at: object
+    labels: object
+    assignees: object
+    user: object
+    html_url: object
+    url: object
+
+
+class _GitHubPullRequestLike(_GitHubIssueLike, Protocol):
+    merged: object
+    merged_at: object
+    draft: object
+
+
+class _GitHubEventLike(Protocol):
+    created_at: object
+    event: object
+    label: object
+    actor: object
+
+
+class _GitHubCommentLike(Protocol):
+    id: object
+    created_at: object
+    user: object
+    body: object
+
+
+class _GitHubMilestoneLike(Protocol):
+    id: object
+    number: object
+    title: object
+    created_at: object
+    due_on: object
+    state: object
+
+
+class _NodeCollection(TypedDict, total=False):
+    nodes: list[dict[str, object]]
+
+
+class _ItemChanges(TypedDict, total=False):
+    nodes: list[dict[str, object]]
+
+
+class _ProjectItemNode(TypedDict, total=False):
+    id: str
+    content: dict[str, object]
+    fieldValues: _NodeCollection
+    changes: _ItemChanges
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
+
+
+def _as_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float, str)):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _as_node_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _labels_from_nodes(
+    nodes: Sequence[Mapping[str, object] | _NamedObject] | None,
+) -> list[str]:
     labels: list[str] = []
     for node in nodes or []:
         name = (
@@ -67,12 +162,12 @@ def _update_transitions_work_item_id(
 
 def github_issue_to_work_item(
     *,
-    issue: Any,
+    issue: _GitHubIssueLike,
     repo_full_name: str,
-    repo_id: Any | None,
+    repo_id: UUID | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    events: Sequence[Any] | None = None,
+    events: Sequence[_GitHubEventLike] | None = None,
     project_status_raw: str | None = None,
 ) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     number = int(getattr(issue, "number", 0) or 0)
@@ -133,7 +228,7 @@ def github_issue_to_work_item(
     completed_at = None
     if events:
         # Events are returned newest-first by PyGithub; sort by created_at.
-        def _ev_dt(ev: Any) -> datetime:
+        def _ev_dt(ev: _GitHubEventLike) -> datetime:
             return _to_utc(getattr(ev, "created_at", None)) or datetime.min.replace(
                 tzinfo=timezone.utc
             )
@@ -152,12 +247,12 @@ def github_issue_to_work_item(
                         occurred_at=occurred_at,
                         from_status_raw=None,
                         to_status_raw=event_type,
-                        from_status=prev_status,  # type: ignore[arg-type]
-                        to_status=to_status,  # type: ignore[arg-type]
+                        from_status=prev_status,
+                        to_status=to_status,
                         actor=None,
                     )
                 )
-                prev_status = to_status  # type: ignore[assignment]
+                prev_status = to_status
                 continue
 
             if event_type not in {"labeled", "unlabeled"}:
@@ -185,7 +280,7 @@ def github_issue_to_work_item(
                     occurred_at=occurred_at,
                     from_status_raw=None,
                     to_status_raw=label_name,
-                    from_status=prev_status,  # type: ignore[arg-type]
+                    from_status=prev_status,
                     to_status=mapped,
                     actor=None,
                 )
@@ -231,7 +326,7 @@ def github_issue_to_work_item(
 
 def github_project_v2_item_to_work_item(
     *,
-    item_node: dict[str, Any],
+    item_node: _ProjectItemNode,
     project_scope_id: str | None = None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
@@ -241,56 +336,60 @@ def github_project_v2_item_to_work_item(
 
     Parses field changes to reconstruct status/phase transition history.
     """
-    content = item_node.get("content") or {}
-    typename = content.get("__typename")
+    content = _as_dict(item_node.get("content"))
+    typename = _as_str(content.get("__typename"))
 
     # Extract a status, iteration, and estimate values from field values.
-    status_raw = None
-    iteration_title = None
-    iteration_id = None
-    estimate = None
+    status_raw: str | None = None
+    iteration_title: str | None = None
+    iteration_id: str | None = None
+    estimate: float | None = None
 
-    for fv in (item_node.get("fieldValues") or {}).get("nodes") or []:
-        fv_typename = (fv or {}).get("__typename")
-        field = (fv or {}).get("field") or {}
+    for fv in _as_node_list(_as_dict(item_node.get("fieldValues")).get("nodes")):
+        fv_dict = _as_dict(fv)
+        fv_typename = _as_str(fv_dict.get("__typename"))
+        field = _as_dict(fv_dict.get("field"))
         field_name = str(field.get("name") or "").strip().lower()
 
         if fv_typename == "ProjectV2ItemFieldSingleSelectValue":
             if field_name == "status":
-                status_raw = fv.get("name")
+                status_raw = _as_str(fv_dict.get("name"))
 
         elif fv_typename == "ProjectV2ItemFieldIterationValue":
             # GitHub Iterations
             if "iteration" in field_name or "sprint" in field_name:
-                iteration_title = fv.get("title")
-                iteration_id = fv.get("id")  # internal node id
+                iteration_title = _as_str(fv_dict.get("title"))
+                iteration_id = _as_str(fv_dict.get("id"))
 
         elif fv_typename == "ProjectV2ItemFieldNumberValue":
             # Estimates / Points
             if field_name in {"estimate", "points", "story points", "size"}:
                 try:
-                    estimate = float(fv.get("number") or 0)
+                    number_value = fv_dict.get("number")
+                    if isinstance(number_value, (int, float, str)):
+                        estimate = float(number_value)
                 except (ValueError, TypeError):
                     logging.getLogger(__name__).debug(
                         "Failed to parse numeric estimate from value %r",
-                        fv.get("number"),
+                        fv_dict.get("number"),
                     )
 
     # Parse field changes to create status transitions
     transitions: list[WorkItemStatusTransition] = []
 
     # Extract transitions from changes
-    for change in (item_node.get("changes") or {}).get("nodes") or []:
-        field = change.get("field") or {}
+    for change in _as_node_list(_as_dict(item_node.get("changes")).get("nodes")):
+        change_dict = _as_dict(change)
+        field = _as_dict(change_dict.get("field"))
         field_name = str(field.get("name") or "").strip().lower()
 
         # Only track status and phase field changes
         if field_name not in {"status", "phase"}:
             continue
 
-        prev_val = (change.get("previousValue") or {}).get("name")
-        new_val = (change.get("newValue") or {}).get("name")
-        occurred_at = _parse_iso(change.get("createdAt"))
+        prev_val = _as_str(_as_dict(change_dict.get("previousValue")).get("name"))
+        new_val = _as_str(_as_dict(change_dict.get("newValue")).get("name"))
+        occurred_at = _parse_iso(_as_str(change_dict.get("createdAt")))
 
         if not occurred_at or not new_val:
             continue
@@ -310,15 +409,16 @@ def github_project_v2_item_to_work_item(
         )
 
         # Get actor
-        actor_obj = change.get("actor") or {}
+        actor_obj = _as_dict(change_dict.get("actor"))
+        actor_login = _as_str(actor_obj.get("login"))
         actor = (
             identity.resolve(
                 provider="github",
                 email=None,
-                username=actor_obj.get("login"),
+                username=actor_login,
                 display_name=None,
             )
-            if actor_obj.get("login")
+            if actor_login
             else None
         )
 
@@ -337,37 +437,44 @@ def github_project_v2_item_to_work_item(
         )
 
     if typename == "Issue":
-        repo_full_name = ((content.get("repository") or {}).get("nameWithOwner")) or ""
-        number = int(content.get("number") or 0)
+        repo_full_name = (
+            _as_str(_as_dict(content.get("repository")).get("nameWithOwner")) or ""
+        )
+        number = _as_int(content.get("number")) or 0
         work_item_id = (
             f"gh:{repo_full_name}#{number}"
             if repo_full_name and number
             else f"ghproj:{item_node.get('id')}"
         )
-        labels = _labels_from_nodes(((content.get("labels") or {}).get("nodes")) or [])
+        labels = _labels_from_nodes(
+            _as_node_list(_as_dict(content.get("labels")).get("nodes"))
+        )
         assignees = []
-        for a in ((content.get("assignees") or {}).get("nodes")) or []:
+        for a in _as_node_list(_as_dict(content.get("assignees")).get("nodes")):
+            a_dict = _as_dict(a)
             assignees.append(
                 identity.resolve(
                     provider="github",
-                    email=a.get("email"),
-                    username=a.get("login"),
-                    display_name=a.get("name"),
+                    email=_as_str(a_dict.get("email")),
+                    username=_as_str(a_dict.get("login")),
+                    display_name=_as_str(a_dict.get("name")),
                 )
             )
-        author = content.get("author") or {}
+        author = _as_dict(content.get("author"))
         reporter = identity.resolve(
             provider="github",
-            email=author.get("email"),
-            username=author.get("login"),
-            display_name=author.get("name"),
+            email=_as_str(author.get("email")),
+            username=_as_str(author.get("login")),
+            display_name=_as_str(author.get("name")),
         )
-        created_at = _to_utc(_parse_iso(content.get("createdAt"))) or datetime.now(
-            timezone.utc
+        created_at = _to_utc(
+            _parse_iso(_as_str(content.get("createdAt")))
+        ) or datetime.now(timezone.utc)
+        updated_at = (
+            _to_utc(_parse_iso(_as_str(content.get("updatedAt")))) or created_at
         )
-        updated_at = _to_utc(_parse_iso(content.get("updatedAt"))) or created_at
-        closed_at = _to_utc(_parse_iso(content.get("closedAt")))
-        state = content.get("state")
+        closed_at = _to_utc(_parse_iso(_as_str(content.get("closedAt"))))
+        state = _as_str(content.get("state"))
 
         normalized_status = status_mapping.normalize_status(
             provider="github",
@@ -385,7 +492,7 @@ def github_project_v2_item_to_work_item(
         # Update work_item_id in transitions
         transitions = _update_transitions_work_item_id(transitions, work_item_id)
 
-        description = content.get("body")
+        description = _as_str(content.get("body"))
         return WorkItem(
             work_item_id=work_item_id,
             provider="github",
@@ -394,7 +501,7 @@ def github_project_v2_item_to_work_item(
             project_id=str(project_scope_id or repo_full_name)
             if (project_scope_id or repo_full_name)
             else None,
-            title=str(content.get("title") or ""),
+            title=_as_str(content.get("title")) or "",
             description=str(description) if description else None,
             type=normalized_type,
             status=normalized_status,
@@ -412,14 +519,16 @@ def github_project_v2_item_to_work_item(
             story_points=estimate,
             sprint_id=iteration_id,
             sprint_name=iteration_title,
-            url=content.get("url"),
+            url=_as_str(content.get("url")),
         ), transitions
 
     if typename == "DraftIssue":
-        created_at = _to_utc(_parse_iso(content.get("createdAt"))) or datetime.now(
-            timezone.utc
+        created_at = _to_utc(
+            _parse_iso(_as_str(content.get("createdAt")))
+        ) or datetime.now(timezone.utc)
+        updated_at = (
+            _to_utc(_parse_iso(_as_str(content.get("updatedAt")))) or created_at
         )
-        updated_at = _to_utc(_parse_iso(content.get("updatedAt"))) or created_at
         normalized_status = status_mapping.normalize_status(
             provider="github",
             status_raw=str(status_raw) if status_raw else None,
@@ -432,14 +541,14 @@ def github_project_v2_item_to_work_item(
         # Update work_item_id in transitions
         transitions = _update_transitions_work_item_id(transitions, work_item_id)
 
-        description = content.get("body")
+        description = _as_str(content.get("body"))
         return WorkItem(
             work_item_id=work_item_id,
             provider="github",
             repo_id=None,
             project_key=None,
             project_id=str(project_scope_id) if project_scope_id else None,
-            title=str(content.get("title") or ""),
+            title=_as_str(content.get("title")) or "",
             description=str(description) if description else None,
             type="issue",
             status=normalized_status,
@@ -463,12 +572,12 @@ def github_project_v2_item_to_work_item(
 
 def github_pr_to_work_item(
     *,
-    pr: Any,
+    pr: _GitHubPullRequestLike,
     repo_full_name: str,
-    repo_id: Any | None,
+    repo_id: UUID | None,
     status_mapping: StatusMapping,
     identity: IdentityResolver,
-    events: Sequence[Any] | None = None,
+    events: Sequence[_GitHubEventLike] | None = None,
 ) -> tuple[WorkItem, list[WorkItemStatusTransition]]:
     """
     Normalize a GitHub pull request to a WorkItem with status transitions.
@@ -556,7 +665,7 @@ def github_pr_to_work_item(
 
     if events:
 
-        def _ev_dt(ev: Any) -> datetime:
+        def _ev_dt(ev: _GitHubEventLike) -> datetime:
             return _to_utc(getattr(ev, "created_at", None)) or datetime.min.replace(
                 tzinfo=timezone.utc
             )
@@ -578,7 +687,7 @@ def github_pr_to_work_item(
                         occurred_at=occurred_at,
                         from_status_raw=None,
                         to_status_raw="merged",
-                        from_status=prev_status,  # type: ignore[arg-type]
+                        from_status=prev_status,
                         to_status="done",
                         actor=None,
                     )
@@ -594,12 +703,12 @@ def github_pr_to_work_item(
                         occurred_at=occurred_at,
                         from_status_raw=None,
                         to_status_raw=event_type,
-                        from_status=prev_status,  # type: ignore[arg-type]
-                        to_status=to_status,  # type: ignore[arg-type]
+                        from_status=prev_status,
+                        to_status=to_status,
                         actor=None,
                     )
                 )
-                prev_status = to_status  # type: ignore[assignment]
+                prev_status = to_status
             elif event_type == "reopened":
                 transitions.append(
                     WorkItemStatusTransition(
@@ -608,7 +717,7 @@ def github_pr_to_work_item(
                         occurred_at=occurred_at,
                         from_status_raw=None,
                         to_status_raw="reopened",
-                        from_status=prev_status,  # type: ignore[arg-type]
+                        from_status=prev_status,
                         to_status="in_progress",
                         actor=None,
                     )
@@ -648,7 +757,7 @@ def github_pr_to_work_item(
 
 def github_comment_to_interaction_event(
     *,
-    comment: Any,
+    comment: _GitHubCommentLike,
     work_item_id: str,
     identity: IdentityResolver,
 ) -> WorkItemInteractionEvent | None:
@@ -696,7 +805,7 @@ def github_comment_to_interaction_event(
 
 def github_milestone_to_sprint(
     *,
-    milestone: Any,
+    milestone: _GitHubMilestoneLike,
     repo_full_name: str,
 ) -> Sprint:
     """
@@ -734,7 +843,7 @@ def github_milestone_to_sprint(
 def detect_github_reopen_events(
     *,
     work_item_id: str,
-    events: Sequence[Any],
+    events: Sequence[_GitHubEventLike],
     identity: IdentityResolver,
 ) -> list[WorkItemReopenEvent]:
     """
@@ -796,7 +905,7 @@ _GITHUB_ISSUE_REF_PATTERN = re.compile(
 def extract_github_dependencies(
     *,
     work_item_id: str,
-    issue_or_pr: Any,
+    issue_or_pr: _GitHubIssueLike | _GitHubPullRequestLike,
     repo_full_name: str,
 ) -> list[WorkItemDependency]:
     """

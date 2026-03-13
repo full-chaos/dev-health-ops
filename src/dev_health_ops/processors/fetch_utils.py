@@ -11,14 +11,20 @@ import logging
 import time
 from collections.abc import Callable, Coroutine
 from datetime import datetime
-from typing import Any
+from typing import Generic, Literal, Protocol, TypeVar
 
 from dev_health_ops.utils import BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
 
-def safe_parse_datetime(value: Any) -> datetime | None:
+
+class _RetryDelayConnector(Protocol):
+    def _rate_limit_reset_delay_seconds(self) -> float | None: ...
+
+
+def safe_parse_datetime(value: object) -> datetime | None:
     """Parse a datetime from a string or datetime, handling "Z" suffix."""
     if isinstance(value, datetime):
         return value
@@ -33,7 +39,10 @@ def safe_parse_datetime(value: Any) -> datetime | None:
 coerce_datetime = safe_parse_datetime
 
 
-def extract_retry_after(exc: BaseException, connector: Any = None) -> float | None:
+def extract_retry_after(
+    exc: BaseException,
+    connector: _RetryDelayConnector | None = None,
+) -> float | None:
     """Extract retry delay seconds from connector helper or exception headers."""
     retry_after: float | None = None
 
@@ -68,7 +77,7 @@ def extract_retry_after(exc: BaseException, connector: Any = None) -> float | No
     return None
 
 
-class SyncBatchCollector:
+class SyncBatchCollector(Generic[T]):
     """Collects items and flushes to an async store when batch_size is reached.
 
     For use in sync contexts (run_in_executor) that store to an async store.
@@ -76,17 +85,17 @@ class SyncBatchCollector:
 
     def __init__(
         self,
-        flush_coro_fn: Callable[[list[Any]], Coroutine[Any, Any, Any]],
+        flush_coro_fn: Callable[[list[T]], Coroutine[object, object, object]],
         loop: asyncio.AbstractEventLoop,
         batch_size: int = BATCH_SIZE,
     ):
         self._flush_coro_fn = flush_coro_fn
         self._loop = loop
         self._batch_size = batch_size
-        self._batch: list[Any] = []
+        self._batch: list[T] = []
         self._total = 0
 
-    def add(self, item: Any) -> None:
+    def add(self, item: T) -> None:
         self._batch.append(item)
         self._total += 1
         if len(self._batch) >= self._batch_size:
@@ -107,12 +116,12 @@ class SyncBatchCollector:
     def __enter__(self) -> SyncBatchCollector:
         return self
 
-    def __exit__(self, *exc: object) -> bool:
+    def __exit__(self, *exc: object) -> Literal[False]:
         self.flush()
         return False
 
 
-class AsyncBatchCollector:
+class AsyncBatchCollector(Generic[T]):
     """Collects items and flushes to an async store when batch_size is reached.
 
     For use in async contexts.
@@ -120,15 +129,15 @@ class AsyncBatchCollector:
 
     def __init__(
         self,
-        flush_coro_fn: Callable[[list[Any]], Coroutine[Any, Any, Any]],
+        flush_coro_fn: Callable[[list[T]], Coroutine[object, object, object]],
         batch_size: int = BATCH_SIZE,
     ):
         self._flush_coro_fn = flush_coro_fn
         self._batch_size = batch_size
-        self._batch: list[Any] = []
+        self._batch: list[T] = []
         self._total = 0
 
-    def add(self, item: Any) -> None:
+    def add(self, item: T) -> None:
         self._batch.append(item)
         self._total += 1
 

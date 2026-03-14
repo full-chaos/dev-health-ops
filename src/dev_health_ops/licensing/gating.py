@@ -4,10 +4,12 @@ import functools
 import logging
 import os
 import uuid
-from collections.abc import Callable
-from typing import Any, ParamSpec, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, ParamSpec, TypeVar, cast
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.licensing.types import (
     DEFAULT_FEATURES,
@@ -285,6 +287,7 @@ class LicenseManager:
     def get_instance(cls) -> LicenseManager:
         if cls._instance is None:
             cls.initialize()
+        assert cls._instance is not None
         return cls._instance
 
     @property
@@ -334,6 +337,77 @@ def get_entitlements() -> dict:
         },
         "is_licensed": manager.is_licensed,
         "in_grace_period": manager.in_grace_period,
+    }
+
+
+async def get_org_entitlements_from_db(
+    org_id: uuid.UUID, session: AsyncSession
+) -> dict[str, Any]:
+    from dev_health_ops.models.licensing import OrgLicense
+    from dev_health_ops.models.subscriptions import Subscription
+    from dev_health_ops.models.users import Organization
+
+    org_license_result = await session.execute(
+        select(OrgLicense).filter_by(org_id=org_id)
+    )
+    org_license = org_license_result.scalar_one_or_none()
+
+    tier = LicenseTier.COMMUNITY
+    if org_license is not None:
+        try:
+            tier = LicenseTier(org_license.tier)
+        except ValueError:
+            logger.warning(
+                "Invalid OrgLicense tier=%s for org_id=%s; defaulting to community",
+                org_license.tier,
+                org_id,
+            )
+    else:
+        org_tier_result = await session.execute(
+            select(Organization.tier).filter_by(id=org_id)
+        )
+        org_tier = org_tier_result.scalar_one_or_none()
+        if org_tier is not None:
+            try:
+                tier = LicenseTier(org_tier)
+            except ValueError:
+                logger.warning(
+                    "Invalid Organization tier=%s for org_id=%s; defaulting to community",
+                    org_tier,
+                    org_id,
+                )
+
+    features = DEFAULT_FEATURES[tier]
+    limits = DEFAULT_LIMITS[tier]
+
+    subscription_result = await session.execute(
+        select(Subscription)
+        .filter_by(org_id=org_id)
+        .order_by(Subscription.updated_at.desc(), Subscription.created_at.desc())
+        .limit(1)
+    )
+    subscription = subscription_result.scalar_one_or_none()
+    is_trialing = bool(
+        subscription is not None and (subscription.status or "").lower() == "trialing"
+    )
+    trial_ends_at = (
+        subscription.trial_end.isoformat()
+        if subscription is not None and subscription.trial_end is not None
+        else None
+    )
+
+    return {
+        "tier": tier.value,
+        "features": features,
+        "limits": {
+            "users": limits.users,
+            "repos": limits.repos,
+            "api_rate": limits.api_rate,
+        },
+        "is_licensed": bool(org_license is not None and org_license.is_valid),
+        "in_grace_period": False,
+        "is_trialing": is_trialing,
+        "trial_ends_at": trial_ends_at,
     }
 
 
@@ -426,9 +500,7 @@ async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool
         from dev_health_ops.models.users import Organization
 
         org_uuid = uuid.UUID(org_id_str)
-        result = await session.execute(
-            sa_select(OrgLicense).where(OrgLicense.org_id == org_uuid)
-        )
+        result = await session.execute(sa_select(OrgLicense).filter_by(org_id=org_uuid))
         org_license = result.scalar_one_or_none()
         if org_license:
             org_tier = LicenseTier(org_license.tier)
@@ -442,7 +514,7 @@ async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool
 
         # No OrgLicense record — fall back to Organization.tier column
         org_result = await session.execute(
-            sa_select(Organization.tier).where(Organization.id == org_uuid)
+            sa_select(Organization.tier).filter_by(id=org_uuid)
         )
         org_tier_str = org_result.scalar_one_or_none()
         if org_tier_str:
@@ -486,7 +558,7 @@ def require_feature(
             if not has_feature(feature):
                 if not await _check_org_feature_async(feature, kwargs):
                     _deny()
-            return await func(*args, **kwargs)
+            return await cast(Awaitable[R], func(*args, **kwargs))
 
         import inspect
 
@@ -542,7 +614,7 @@ def require_limit(
                         },
                     )
                 raise LimitExceededError(limit_name, current, maximum)
-            return await func(*args, **kwargs)
+            return await cast(Awaitable[R], func(*args, **kwargs))
 
         import inspect
 

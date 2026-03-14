@@ -29,7 +29,6 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session, postgres_session_dependency
 from dev_health_ops.licensing import (
     LicenseTier,
-    get_entitlements,
     sign_license,
 )
 from dev_health_ops.models.billing_audit import BillingAuditLog
@@ -83,6 +82,8 @@ class EntitlementResponse(BaseModel):
     limits: dict[str, int]
     is_licensed: bool
     in_grace_period: bool
+    is_trialing: bool = False
+    trial_ends_at: str | None = None
 
 
 class BillingAuditLogResponse(BaseModel):
@@ -705,9 +706,12 @@ async def _get_customer_id(org_id: str) -> str | None:
 
 
 @router.get("/entitlements/{org_id}", response_model=EntitlementResponse)
-async def get_org_entitlements(org_id: str) -> EntitlementResponse:
-    """Return entitlements for the given org from the JWT-backed LicenseManager."""
-    entitlements = get_entitlements()
+async def get_org_entitlements(
+    org_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)],
+) -> EntitlementResponse:
+    gating = importlib.import_module("dev_health_ops.licensing.gating")
+    entitlements = await gating.get_org_entitlements_from_db(org_id=org_id, session=db)
     return EntitlementResponse(**entitlements)
 
 

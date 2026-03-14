@@ -341,11 +341,44 @@ async def test_portal_success(authed_client):
 
 
 @pytest.mark.asyncio
-async def test_entitlements_org_endpoint_removed(client):
-    resp = await client.get("/api/v1/billing/entitlements/org-abc")
+async def test_entitlements_org_endpoint_returns_per_org_state(client, app):
+    from dev_health_ops.db import postgres_session_dependency
+
+    async def _override_session():
+        yield AsyncMock()
+
+    app.dependency_overrides[postgres_session_dependency] = _override_session
+
+    mock_entitlements = {
+        "tier": "team",
+        "features": {"team_dashboard": True},
+        "limits": {"users": 25, "repos": 20, "api_rate": 300},
+        "is_licensed": True,
+        "in_grace_period": False,
+        "is_trialing": True,
+        "trial_ends_at": "2026-03-31T00:00:00+00:00",
+    }
+
+    mock_gating = SimpleNamespace(
+        get_org_entitlements_from_db=AsyncMock(return_value=mock_entitlements)
+    )
+
+    try:
+        with patch(
+            "dev_health_ops.api.billing.router.importlib.import_module",
+            return_value=mock_gating,
+        ):
+            resp = await client.get(
+                "/api/v1/billing/entitlements/00000000-0000-0000-0000-000000000001"
+            )
+    finally:
+        app.dependency_overrides.pop(postgres_session_dependency, None)
+
     assert resp.status_code == 200
     body = resp.json()
-    assert "tier" in body
+    assert body["tier"] == "team"
+    assert body["is_trialing"] is True
+    assert body["trial_ends_at"] == "2026-03-31T00:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------

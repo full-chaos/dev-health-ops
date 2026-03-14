@@ -34,7 +34,6 @@ from dev_health_ops.licensing import (
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.workers.system_tasks import send_billing_notification
 
-from . import stripe_client
 from .invoice_routes import router as invoice_router
 from .invoice_service import InvoiceService
 from .plans import router as plans_router
@@ -190,12 +189,7 @@ async def _maybe_strip_trial(
 
 
 def _resolve_trial_days(tier: LicenseTier) -> int | None:
-    trial_days_resolver = getattr(stripe_client, "get_trial_days", None)
-    if not callable(trial_days_resolver):
-        return None
-
-    trial_days = trial_days_resolver(tier)
-    return trial_days if isinstance(trial_days, int) else None
+    return get_trial_days(tier)
 
 
 # ---------------------------------------------------------------------------

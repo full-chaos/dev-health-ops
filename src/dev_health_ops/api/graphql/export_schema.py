@@ -4,6 +4,9 @@ Usage:
     python3 -m dev_health_ops.api.graphql.export_schema [--out <path>]
 
 If --out is provided, writes SDL to the given file path.
+Note: The --out path is primarily used by CI pipelines (e.g. live-e2e schema drift checks)
+to export the current SDL for comparison against stored schema files. In normal development,
+stdout is convenient for quick inspection.
 Otherwise, prints SDL to stdout.
 """
 

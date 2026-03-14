@@ -7,18 +7,6 @@ from typing import Any
 from sqlalchemy.inspection import inspect
 
 
-def _register_sqlite_datetime_adapters() -> None:
-    try:
-        import sqlite3
-    except Exception:
-        return
-    sqlite3.register_adapter(date, lambda value: value.isoformat())
-    sqlite3.register_adapter(datetime, lambda value: value.isoformat(" "))
-
-
-_register_sqlite_datetime_adapters()
-
-
 def _parse_date_value(value: Any) -> date | None:
     if value:
         if isinstance(value, date) and not isinstance(value, datetime):

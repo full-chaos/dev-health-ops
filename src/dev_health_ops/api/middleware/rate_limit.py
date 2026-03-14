@@ -5,9 +5,17 @@ import logging
 import os
 
 from fastapi import Request
-from limits.storage import RedisStorage
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+
+# No-op limiter for test/dev environments to avoid decorator signature issues.
+try:
+    from slowapi import Limiter  # type: ignore
+    from slowapi.util import get_remote_address  # noqa: F401
+except Exception:
+    Limiter = None  # type: ignore
+
+    def get_remote_address(request: Request) -> str:  # type: ignore[misc]
+        return "unknown"
+
 
 from dev_health_ops.api.services.auth import extract_token_from_header, get_auth_service
 
@@ -80,12 +88,26 @@ def get_admin_user_key(request: Request) -> str:
 
 
 _REDIS_URL = os.getenv("REDIS_URL")
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
-)
-if _REDIS_URL:
-    _ = RedisStorage
-    logging.getLogger(__name__).info(
-        "Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "..."
+
+
+class _NoOpLimiter:
+    """Pass-through limiter when slowapi is unavailable (tests, minimal installs)."""
+
+    def limit(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        def _decorator(func):  # type: ignore[no-untyped-def]
+            return func
+
+        return _decorator
+
+
+if Limiter is not None:
+    limiter = Limiter(
+        key_func=get_remote_address,
+        storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
     )
+    if _REDIS_URL:
+        logging.getLogger(__name__).info(
+            "Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "..."
+        )
+else:
+    limiter = _NoOpLimiter()  # type: ignore[assignment]

@@ -7,7 +7,6 @@ from .sqlalchemy import SQLAlchemyStore
 from .utils import (
     _parse_date_value,
     _parse_datetime_value,
-    _register_sqlite_datetime_adapters,
     _serialize_value,
     model_to_dict,
 )
@@ -152,6 +151,5 @@ __all__ = [
     "run_with_store",
     "_parse_date_value",
     "_parse_datetime_value",
-    "_register_sqlite_datetime_adapters",
     "_serialize_value",
 ]

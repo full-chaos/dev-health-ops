@@ -558,8 +558,11 @@ async def meta() -> MetaResponse | JSONResponse:
 
 
 @app.post("/api/v1/home", response_model=HomeResponse)
+@limiter.limit("60/minute")
 async def home_post(
-    payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+    request: Request,
+    payload: HomeRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> HomeResponse:
     try:
         return await build_home_response(
@@ -573,7 +576,9 @@ async def home_post(
 
 
 @app.get("/api/v1/home", response_model=HomeResponse)
+@limiter.limit("60/minute")
 async def home(
+    request: Request,
     response: Response,
     scope_type: str = "org",
     scope_id: str = "",
@@ -617,7 +622,9 @@ async def explain_post(
 
 
 @app.get("/api/v1/explain", response_model=ExplainResponse)
+@limiter.limit("20/minute")
 async def explain(
+    request: Request,
     response: Response,
     metric: str,
     scope_type: str = "org",
@@ -647,6 +654,7 @@ async def explain(
 
 
 @app.get("/api/v1/heatmap", response_model=HeatmapResponse)
+@limiter.limit("20/minute")
 async def heatmap(
     request: Request,
     type: str,
@@ -845,6 +853,7 @@ async def work_unit_explain_endpoint(
 
 
 @app.get("/api/v1/flame", response_model=FlameResponse)
+@limiter.limit("20/minute")
 async def flame(
     request: Request,
     entity_type: str,
@@ -866,6 +875,7 @@ async def flame(
 
 
 @app.get("/api/v1/flame/aggregated", response_model=AggregatedFlameResponse)
+@limiter.limit("20/minute")
 async def flame_aggregated(
     request: Request,
     mode: str,
@@ -936,6 +946,7 @@ async def flame_aggregated(
 
 
 @app.get("/api/v1/quadrant", response_model=QuadrantResponse)
+@limiter.limit("60/minute")
 async def quadrant(
     request: Request,
     type: str,
@@ -967,7 +978,9 @@ async def quadrant(
 
 
 @app.post("/api/v1/drilldown/prs", response_model=DrilldownResponse)
+@limiter.limit("60/minute")
 async def drilldown_prs_post(
+    request: Request,
     payload: DrilldownRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
@@ -995,7 +1008,9 @@ async def drilldown_prs_post(
 
 
 @app.get("/api/v1/drilldown/prs", response_model=DrilldownResponse)
+@limiter.limit("60/minute")
 async def drilldown_prs(
+    request: Request,
     response: Response,
     scope_type: str = "org",
     scope_id: str = "",
@@ -1032,7 +1047,9 @@ async def drilldown_prs(
 
 
 @app.post("/api/v1/drilldown/issues", response_model=DrilldownResponse)
+@limiter.limit("60/minute")
 async def drilldown_issues_post(
+    request: Request,
     payload: DrilldownRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DrilldownResponse:
@@ -1060,7 +1077,9 @@ async def drilldown_issues_post(
 
 
 @app.get("/api/v1/drilldown/issues", response_model=DrilldownResponse)
+@limiter.limit("60/minute")
 async def drilldown_issues(
+    request: Request,
     response: Response,
     scope_type: str = "org",
     scope_id: str = "",
@@ -1097,6 +1116,7 @@ async def drilldown_issues(
 
 
 @app.get("/api/v1/people", response_model=list[PersonSearchResult])
+@limiter.limit("60/minute")
 async def people_search(
     request: Request,
     q: str = "",
@@ -1116,6 +1136,7 @@ async def people_search(
 
 
 @app.get("/api/v1/people/{person_id}/summary", response_model=PersonSummaryResponse)
+@limiter.limit("60/minute")
 async def people_summary(
     person_id: str,
     request: Request,
@@ -1173,6 +1194,7 @@ async def people_metric(
     "/api/v1/people/{person_id}/drilldown/prs",
     response_model=PersonDrilldownResponse,
 )
+@limiter.limit("60/minute")
 async def people_drilldown_prs(
     person_id: str,
     request: Request,
@@ -1201,6 +1223,7 @@ async def people_drilldown_prs(
     "/api/v1/people/{person_id}/drilldown/issues",
     response_model=PersonDrilldownResponse,
 )
+@limiter.limit("60/minute")
 async def people_drilldown_issues(
     person_id: str,
     request: Request,
@@ -1226,7 +1249,9 @@ async def people_drilldown_issues(
 
 
 @app.get("/api/v1/opportunities", response_model=OpportunitiesResponse)
+@limiter.limit("60/minute")
 async def opportunities(
+    request: Request,
     response: Response,
     scope_type: str = "org",
     scope_id: str = "",
@@ -1254,8 +1279,11 @@ async def opportunities(
 
 
 @app.post("/api/v1/opportunities", response_model=OpportunitiesResponse)
+@limiter.limit("60/minute")
 async def opportunities_post(
-    payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+    request: Request,
+    payload: HomeRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> OpportunitiesResponse:
     try:
         return await build_opportunities_response(
@@ -1269,7 +1297,9 @@ async def opportunities_post(
 
 
 @app.get("/api/v1/investment", response_model=InvestmentResponse)
+@limiter.limit("60/minute")
 async def investment(
+    request: Request,
     response: Response,
     scope_type: str = "org",
     scope_id: str = "",
@@ -1293,8 +1323,11 @@ async def investment(
 
 
 @app.post("/api/v1/investment", response_model=InvestmentResponse)
+@limiter.limit("60/minute")
 async def investment_post(
-    payload: HomeRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+    request: Request,
+    payload: HomeRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> InvestmentResponse:
     try:
         return await build_investment_response(
@@ -1341,7 +1374,9 @@ async def investment_sunburst(
     "/api/v1/investment/explain",
     response_model=InvestmentMixExplanation,
 )
+@limiter.limit("20/minute")
 async def investment_explain(
+    request: Request,
     payload: InvestmentExplainRequest,
     llm_provider: str = "auto",
     force_refresh: bool = False,
@@ -1374,7 +1409,9 @@ async def investment_explain(
 
 
 @app.post("/api/v1/investment/flow", response_model=SankeyResponse)
+@limiter.limit("20/minute")
 async def investment_flow(
+    request: Request,
     payload: InvestmentFlowRequest,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SankeyResponse:
@@ -1413,7 +1450,9 @@ async def investment_flow_repo_team(
 
 
 @app.get("/api/v1/sankey", response_model=SankeyResponse)
+@limiter.limit("60/minute")
 async def sankey_get(
+    request: Request,
     response: Response,
     mode: str = "investment",
     scope_type: str = "org",
@@ -1446,8 +1485,11 @@ async def sankey_get(
 
 
 @app.post("/api/v1/sankey", response_model=SankeyResponse)
+@limiter.limit("60/minute")
 async def sankey_post(
-    payload: SankeyRequest, current_user: AuthenticatedUser = Depends(get_current_user)
+    request: Request,
+    payload: SankeyRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> SankeyResponse:
     try:
         return await build_sankey_response(
@@ -1467,7 +1509,9 @@ async def sankey_post(
 
 
 @app.get("/api/v1/filters/options", response_model=FilterOptionsResponse)
+@limiter.limit("60/minute")
 async def filter_options(
+    request: Request,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> FilterOptionsResponse:
     try:

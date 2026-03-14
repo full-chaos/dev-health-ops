@@ -34,6 +34,7 @@ from dev_health_ops.licensing import (
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.workers.system_tasks import send_billing_notification
 
+from . import stripe_client
 from .invoice_routes import router as invoice_router
 from .invoice_service import InvoiceService
 from .plans import router as plans_router
@@ -47,6 +48,7 @@ from .stripe_client import (
     get_trial_days,
     get_webhook_secret,
 )
+from .subscription_service import has_had_trial
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +139,63 @@ def _validate_checkout_url(url: str) -> str:
         status_code=400,
         detail="Invalid checkout URL: must be relative or start with an allowed prefix",
     )
+
+
+async def _maybe_strip_trial(
+    trial_days: int | None,
+    org_id: str,
+    actor_id: str | None,
+    session: AsyncSession,
+) -> int | None:
+    if trial_days is None:
+        return None
+
+    try:
+        org_uuid = uuid.UUID(org_id)
+    except ValueError:
+        logger.warning("Trial guard skipped: invalid org_id=%s", org_id)
+        return trial_days
+
+    try:
+        already_trialed = await has_had_trial(org_uuid, session)
+    except Exception:
+        logger.exception("Trial guard failed for org_id=%s", org_id)
+        return trial_days
+
+    if not already_trialed:
+        return trial_days
+
+    logger.info(
+        "Trial abuse prevented: org %s already had a trial; stripping trial_period_days",
+        org_id,
+    )
+
+    actor_uuid: uuid.UUID | None = None
+    if actor_id:
+        try:
+            actor_uuid = uuid.UUID(actor_id)
+        except ValueError:
+            logger.debug("Skipping actor_id on trial abuse audit: %s", actor_id)
+
+    await BillingAuditService(session).log(
+        org_id=org_uuid,
+        actor_id=actor_uuid,
+        action="trial_abuse_prevented",
+        resource_type="checkout",
+        resource_id=org_uuid,
+        description=("Org already had a trial, creating checkout without trial period"),
+        local_state={"requested_trial_days": trial_days},
+    )
+    return None
+
+
+def _resolve_trial_days(tier: LicenseTier) -> int | None:
+    trial_days_resolver = getattr(stripe_client, "get_trial_days", None)
+    if not callable(trial_days_resolver):
+        return None
+
+    trial_days = trial_days_resolver(tier)
+    return trial_days if isinstance(trial_days, int) else None
 
 
 # ---------------------------------------------------------------------------
@@ -657,6 +716,7 @@ async def _revoke_license(org_id: str) -> None:
 async def create_checkout_session(
     body: CheckoutRequest,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(postgres_session_dependency)],
 ) -> CheckoutResponse:
     """Create a Stripe Checkout session for the authenticated user's org."""
     try:
@@ -672,25 +732,29 @@ async def create_checkout_session(
 
     success_url = _validate_checkout_url(body.success_url)
     cancel_url = _validate_checkout_url(body.cancel_url)
+    trial_days = await _maybe_strip_trial(
+        trial_days=_resolve_trial_days(tier_enum),
+        org_id=user.org_id,
+        actor_id=user.user_id,
+        session=session,
+    )
+
+    params: dict[str, object] = {
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "mode": "subscription",
+        "metadata": {"org_id": user.org_id},
+        "client_reference_id": user.org_id,
+    }
+    if trial_days is not None:
+        params["subscription_data"] = {
+            "trial_period_days": trial_days,
+            "trial_settings": {"end_behavior": {"missing_payment_method": "cancel"}},
+        }
 
     try:
         client = get_stripe_client()
-        params: dict[str, object] = {
-            "success_url": success_url,
-            "cancel_url": cancel_url,
-            "line_items": [{"price": price_id, "quantity": 1}],
-            "mode": "subscription",
-            "metadata": {"org_id": user.org_id},
-            "client_reference_id": user.org_id,
-        }
-        trial_days = get_trial_days(tier_enum)
-        if trial_days is not None:
-            params["subscription_data"] = {
-                "trial_period_days": trial_days,
-                "trial_settings": {
-                    "end_behavior": {"missing_payment_method": "cancel"}
-                },
-            }
         checkout_session = client.checkout.sessions.create(params=params)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))

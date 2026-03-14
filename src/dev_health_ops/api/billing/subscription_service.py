@@ -14,6 +14,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 
+async def has_had_trial(org_id: str | uuid.UUID, session: AsyncSession) -> bool:
+    """Check if an org has ever had a trial subscription."""
+    org_uuid = org_id if isinstance(org_id, uuid.UUID) else uuid.UUID(str(org_id))
+
+    subscription_module = importlib.import_module("dev_health_ops.models.subscriptions")
+    subscription_cls = subscription_module.Subscription
+
+    result = await session.execute(
+        select(subscription_cls.id)
+        .where(subscription_cls.org_id == org_uuid)
+        .where(subscription_cls.trial_start.is_not(None))
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 class SubscriptionService:
     def __init__(self, db: AsyncSession):
         self.db = db

@@ -71,7 +71,7 @@ stripe login
 ```bash
 stripe listen \
   --forward-to http://127.0.0.1:8000/api/v1/billing/webhooks/stripe \
-  --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,invoice.created,invoice.updated,invoice.finalized,invoice.paid,invoice.payment_failed,invoice.voided,charge.refunded,charge.refund.updated
+  --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,customer.subscription.trial_will_end,invoice.created,invoice.updated,invoice.finalized,invoice.paid,invoice.payment_failed,invoice.voided,charge.refunded,charge.refund.updated
 ```
 
 Copy the emitted signing secret (`whsec_...`) and set it as `STRIPE_WEBHOOK_SECRET` in your shell where the API runs.
@@ -179,6 +179,105 @@ curl -X POST "https://<your-domain>/api/v1/billing/audit/<audit-id>/resolve" \
   -H "Content-Type: application/json" \
   -d '{"resolution":"manual correction applied after Stripe replay"}'
 ```
+
+## Free Trial Configuration
+
+The Team tier supports a self-serve free trial via Stripe Checkout. When a user clicks "Start free trial" on the pricing page, they go through signup → onboarding → Stripe Checkout with `subscription_data.trial_period_days` set.
+
+### Required Setup
+
+1. **Set `TRIAL_DAYS`** (defaults to 14 if unset):
+
+```bash
+export TRIAL_DAYS=14
+```
+
+2. **Set Stripe env vars** (required for any billing flow):
+
+```bash
+export STRIPE_SECRET_KEY="sk_test_..."
+export STRIPE_WEBHOOK_SECRET="whsec_..."
+export STRIPE_PRICE_ID_TEAM="price_..."
+export STRIPE_PRICE_ID_ENTERPRISE="price_..."
+```
+
+3. **Set `APP_BASE_URL`** to the **frontend** URL (used in trial emails):
+
+```bash
+export APP_BASE_URL="http://localhost:3000"
+```
+
+4. **Configure email delivery** (for trial notifications):
+
+```bash
+export EMAIL_PROVIDER="smtp"           # smtp for local Mailpit, resend for prod
+export SMTP_HOST="localhost"           # or mailpit in compose
+export SMTP_PORT="1025"
+export EMAIL_FROM_ADDRESS="noreply@yourdomain.com"
+```
+
+5. **Subscribe to the `customer.subscription.trial_will_end` webhook event** in Stripe (or via CLI):
+
+```bash
+stripe listen \
+  --forward-to http://127.0.0.1:8000/api/v1/billing/webhooks/stripe \
+  --events checkout.session.completed,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,customer.subscription.trial_will_end,invoice.created,invoice.updated,invoice.finalized,invoice.paid,invoice.payment_failed,invoice.voided,charge.refunded,charge.refund.updated
+```
+
+### Trial Flow (End-to-End)
+
+```
+Pricing page ("Start free trial")
+  → /auth/signup?plan=team&trial=true
+  → Registration + email verification
+  → /auth/signin?plan=team&trial=true
+  → /auth/onboard?plan=team&trial=true
+  → /auth/trial-checkout (creates Stripe Checkout with trial_period_days)
+  → Stripe Checkout (trial subscription created)
+  → Webhook: customer.subscription.created (status=trialing)
+  → Org tier updated to Team
+  → trial_started email sent
+  → [3 days before expiry] Webhook: customer.subscription.trial_will_end
+  → trial_expiring email sent
+  → [Trial ends] Stripe converts to paid or cancels
+  → Webhook: customer.subscription.updated (status=active or canceled)
+```
+
+### Trial Behavior by Tier
+
+| Tier | Trial? | Duration | Behavior |
+|------|--------|----------|----------|
+| Community | No | — | Free forever, no checkout |
+| Team | Yes | `TRIAL_DAYS` (default 14) | Self-serve via pricing page |
+| Enterprise | No | — | Sales-led, no self-serve trial |
+
+### Trial Abuse Prevention
+
+Orgs that previously had a trial are automatically detected. Subsequent checkout sessions are created **without** `trial_period_days` — the org is charged immediately instead of receiving another trial. This is logged in the billing audit.
+
+### Trial Emails
+
+| Trigger | Template | When |
+|---------|----------|------|
+| Subscription created with trial | `trial_started` | Immediately |
+| `customer.subscription.trial_will_end` | `trial_expiring` | 3 days before trial end |
+| Trial subscription canceled/expired | `trial_expired` | On expiry |
+
+### Compose Setup (Local Dev)
+
+The `compose.yml` worker already subscribes to the `webhooks` queue where `send_billing_notification` runs. Ensure the API and worker services have the Stripe env vars uncommented:
+
+```yaml
+# In compose.yml, uncomment these in both api and worker services:
+STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
+STRIPE_PRICE_ID_ENTERPRISE: ${STRIPE_PRICE_ID_ENTERPRISE:-}
+APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+TRIAL_DAYS: ${TRIAL_DAYS:-14}
+```
+
+Then set the values in `dev-health-ops/.env` (copy from `.env.example` and fill in your Stripe test keys).
 
 ## Email Notifications
 

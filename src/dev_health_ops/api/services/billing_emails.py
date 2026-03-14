@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from decimal import Decimal
 
@@ -152,5 +153,91 @@ async def send_subscription_cancelled(
                 "full_name": full_name,
                 "org_name": org_name,
                 "tier": tier,
+            },
+        )
+
+
+def _app_base_url() -> str:
+    return os.getenv("APP_BASE_URL", "https://example.com").rstrip("/")
+
+
+def _display_tier(tier: str) -> str:
+    return tier.strip() if tier and tier.strip() else "Team"
+
+
+async def send_trial_started(
+    org_id: uuid.UUID,
+    tier: str,
+    trial_end_date: str,
+) -> None:
+    async with get_postgres_session() as db:
+        owner = await get_org_owner_email(db, org_id)
+        if owner is None:
+            return
+        to_email, full_name, org_name = owner
+        tier_name = _display_tier(tier)
+        email_service = get_email_service()
+        await email_service.send_template_email(
+            to_address=to_email,
+            subject=f"Your {tier_name} trial has started",
+            template_name="trial_started",
+            context={
+                "full_name": full_name,
+                "org_name": org_name,
+                "tier": tier_name,
+                "trial_end_date": trial_end_date,
+                "dashboard_url": f"{_app_base_url()}/",
+            },
+        )
+
+
+async def send_trial_expiring(
+    org_id: uuid.UUID,
+    tier: str,
+    days_remaining: int,
+    trial_end_date: str,
+) -> None:
+    async with get_postgres_session() as db:
+        owner = await get_org_owner_email(db, org_id)
+        if owner is None:
+            return
+        to_email, full_name, org_name = owner
+        tier_name = _display_tier(tier)
+        email_service = get_email_service()
+        await email_service.send_template_email(
+            to_address=to_email,
+            subject=f"Your {tier_name} trial ends in {days_remaining} days",
+            template_name="trial_expiring",
+            context={
+                "full_name": full_name,
+                "org_name": org_name,
+                "tier": tier_name,
+                "days_remaining": str(days_remaining),
+                "trial_end_date": trial_end_date,
+                "upgrade_url": f"{_app_base_url()}/billing",
+            },
+        )
+
+
+async def send_trial_expired(
+    org_id: uuid.UUID,
+    tier: str,
+) -> None:
+    async with get_postgres_session() as db:
+        owner = await get_org_owner_email(db, org_id)
+        if owner is None:
+            return
+        to_email, full_name, org_name = owner
+        tier_name = _display_tier(tier)
+        email_service = get_email_service()
+        await email_service.send_template_email(
+            to_address=to_email,
+            subject=f"Your {tier_name} trial has ended",
+            template_name="trial_expired",
+            context={
+                "full_name": full_name,
+                "org_name": org_name,
+                "tier": tier_name,
+                "upgrade_url": f"{_app_base_url()}/billing",
             },
         )

@@ -148,6 +148,48 @@ async def test_webhook_subscription_deleted(client):
 
 
 @pytest.mark.asyncio
+async def test_webhook_subscription_trial_will_end_sends_expiring_email(client):
+    event = _make_stripe_event(
+        "customer.subscription.trial_will_end",
+        {
+            "metadata": {"org_id": "00000000-0000-0000-0000-000000000001"},
+            "customer": "cus_test",
+            "trial_end": 1_893_456_000,
+        },
+    )
+
+    with (
+        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
+        patch(
+            "dev_health_ops.api.billing.router.get_webhook_secret",
+            return_value="whsec_test",
+        ),
+        patch(
+            "dev_health_ops.api.billing.router.send_billing_notification",
+        ) as mock_task,
+    ):
+        mock_client = MagicMock()
+        mock_client.construct_event.return_value = event
+        mock_client_fn.return_value = mock_client
+
+        resp = await client.post(
+            "/api/v1/billing/webhooks/stripe",
+            content=b"{}",
+            headers={"stripe-signature": "valid"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+        mock_task.delay.assert_called_once()
+        args, kwargs = mock_task.delay.call_args
+        assert args[0] == "trial_expiring"
+        assert args[1] == "00000000-0000-0000-0000-000000000001"
+        assert kwargs["days_remaining"] >= 0
+        assert kwargs["trial_end_date"] == "2030-01-01"
+
+
+@pytest.mark.asyncio
 async def test_webhook_payment_failed(client):
     event = _make_stripe_event(
         "invoice.payment_failed",

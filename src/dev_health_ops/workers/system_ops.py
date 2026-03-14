@@ -44,6 +44,8 @@ def send_billing_notification(
     old_tier: str = "",
     new_tier: str = "",
     tier: str = "",
+    days_remaining: int = 0,
+    trial_end_date: str = "",
 ) -> dict:
     """Send billing email notification via worker queue.
 
@@ -65,28 +67,36 @@ def send_billing_notification(
         old_tier: Previous tier name (subscription_changed only)
         new_tier: New tier name (subscription_changed only)
         tier: Current tier name (subscription_cancelled only)
+        days_remaining: Trial days remaining (trial_expiring only)
+        trial_end_date: Trial end ISO date (trial_started/trial_expiring only)
 
     Returns:
         dict with send status
     """
-    from dev_health_ops.api.services.billing_emails import (
-        send_invoice_receipt,
-        send_payment_failed,
-        send_subscription_cancelled,
-        send_subscription_changed,
-    )
+    from dev_health_ops.api.services import billing_emails
 
     dispatch = {
-        "invoice_receipt": lambda oid: send_invoice_receipt(
+        "invoice_receipt": lambda oid: billing_emails.send_invoice_receipt(
             oid, amount_cents, currency, invoice_url
         ),
-        "payment_failed": lambda oid: send_payment_failed(
+        "payment_failed": lambda oid: billing_emails.send_payment_failed(
             oid, amount_cents, currency, attempt_count
         ),
-        "subscription_changed": lambda oid: send_subscription_changed(
+        "subscription_changed": lambda oid: billing_emails.send_subscription_changed(
             oid, old_tier, new_tier
         ),
-        "subscription_cancelled": lambda oid: send_subscription_cancelled(oid, tier),
+        "subscription_cancelled": lambda oid: (
+            billing_emails.send_subscription_cancelled(oid, tier)
+        ),
+        "trial_started": lambda oid: getattr(billing_emails, "send_trial_started")(
+            oid, tier, trial_end_date
+        ),
+        "trial_expiring": lambda oid: getattr(billing_emails, "send_trial_expiring")(
+            oid, tier, days_remaining, trial_end_date
+        ),
+        "trial_expired": lambda oid: getattr(billing_emails, "send_trial_expired")(
+            oid, tier
+        ),
     }
 
     fn = dispatch.get(email_type)
@@ -148,10 +158,11 @@ def phone_home_heartbeat(self) -> dict[str, Any]:
         org_license = session.execute(select(OrgLicense).limit(1)).scalar_one_or_none()
         if org_license is not None:
             tier = str(org_license.tier or "community")
-            if org_license.license_key:
-                license_hash = hashlib.sha256(
-                    org_license.license_key.encode("utf-8")
-                ).hexdigest()[:16]
+            license_key = getattr(org_license, "license_key", None)
+            if isinstance(license_key, str) and license_key:
+                license_hash = hashlib.sha256(license_key.encode("utf-8")).hexdigest()[
+                    :16
+                ]
 
         payload = {
             "instance_id": os.getenv("INSTANCE_ID", "unknown"),

@@ -9,6 +9,10 @@ from unittest.mock import AsyncMock, patch
 from dev_health_ops.api.services.email import ConsoleEmailProvider, EmailService
 from dev_health_ops.workers.system_ops import send_billing_notification
 
+# Test-only constants — not user-supplied values.
+_TEST_DASHBOARD_URL = "https://app.example.test/dashboard"  # noqa: S105
+_TEST_UPGRADE_URL = "https://app.example.test/billing"  # noqa: S105
+
 
 def _email_service() -> EmailService:
     return EmailService(
@@ -52,13 +56,13 @@ def test_trial_started_template_renders():
             "org_name": "Acme",
             "tier": "Team",
             "trial_end_date": "2030-01-01",
-            "dashboard_url": "https://example.com/",
+            "dashboard_url": _TEST_DASHBOARD_URL,
         },
     )
 
     assert "Your Team trial has started" in rendered
     assert "Welcome to your Team trial for Acme" in rendered
-    assert "https://example.com/" in rendered
+    assert _TEST_DASHBOARD_URL in rendered
 
 
 def test_trial_expiring_template_renders():
@@ -70,13 +74,13 @@ def test_trial_expiring_template_renders():
             "tier": "Team",
             "days_remaining": "3",
             "trial_end_date": "2030-01-01",
-            "upgrade_url": "https://example.com/billing",
+            "upgrade_url": _TEST_UPGRADE_URL,
         },
     )
 
     assert "trial ends in 3 days" in rendered
     assert "ends on 2030-01-01" in rendered
-    assert "https://example.com/billing" in rendered
+    assert _TEST_UPGRADE_URL in rendered
 
 
 def test_trial_expired_template_renders():
@@ -86,13 +90,13 @@ def test_trial_expired_template_renders():
             "full_name": "Alex",
             "org_name": "Acme",
             "tier": "Team",
-            "upgrade_url": "https://example.com/billing",
+            "upgrade_url": _TEST_UPGRADE_URL,
         },
     )
 
     assert "Your Team trial has ended" in rendered
     assert "moved back to the Community tier" in rendered
-    assert "https://example.com/billing" in rendered
+    assert _TEST_UPGRADE_URL in rendered
 
 
 def test_worker_dispatches_trial_expiring():

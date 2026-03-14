@@ -190,12 +190,7 @@ async def _maybe_strip_trial(
 
 
 def _resolve_trial_days(tier: LicenseTier) -> int | None:
-    trial_days_resolver = getattr(stripe_client, "get_trial_days", None)
-    if not callable(trial_days_resolver):
-        return None
-
-    trial_days = trial_days_resolver(tier)
-    return trial_days if isinstance(trial_days, int) else None
+    return get_trial_days(tier)
 
 
 # ---------------------------------------------------------------------------

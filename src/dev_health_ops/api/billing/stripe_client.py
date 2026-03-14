@@ -23,6 +23,8 @@ from dev_health_ops.licensing.types import LicenseTier
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TRIAL_DAYS = 14
+
 
 @lru_cache(maxsize=1)
 def get_stripe_client() -> StripeClient:
@@ -120,6 +122,22 @@ def get_tier_price_id(tier: LicenseTier) -> str | None:
         if mapped_tier == tier:
             return price_id
     return None
+
+
+def get_trial_days(tier: LicenseTier) -> int | None:
+    if tier in (LicenseTier.ENTERPRISE, LicenseTier.COMMUNITY):
+        return None
+
+    raw = os.getenv("TRIAL_DAYS", str(DEFAULT_TRIAL_DAYS)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid TRIAL_DAYS value %r; falling back to %d",
+            raw,
+            DEFAULT_TRIAL_DAYS,
+        )
+        return DEFAULT_TRIAL_DAYS
 
 
 def reset_price_tier_map() -> None:

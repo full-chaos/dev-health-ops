@@ -45,6 +45,7 @@ from .stripe_client import (
     get_stripe_client,
     get_tier_from_line_items,
     get_tier_price_id,
+    get_trial_days,
     get_webhook_secret,
 )
 
@@ -616,16 +617,23 @@ async def create_checkout_session(
 
     try:
         client = get_stripe_client()
-        checkout_session = client.checkout.sessions.create(
-            params={
-                "success_url": success_url,
-                "cancel_url": cancel_url,
-                "line_items": [{"price": price_id, "quantity": 1}],
-                "mode": "subscription",
-                "metadata": {"org_id": user.org_id},
-                "client_reference_id": user.org_id,
+        params: dict[str, object] = {
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "mode": "subscription",
+            "metadata": {"org_id": user.org_id},
+            "client_reference_id": user.org_id,
+        }
+        trial_days = get_trial_days(tier_enum)
+        if trial_days is not None:
+            params["subscription_data"] = {
+                "trial_period_days": trial_days,
+                "trial_settings": {
+                    "end_behavior": {"missing_payment_method": "cancel"}
+                },
             }
-        )
+        checkout_session = client.checkout.sessions.create(params=params)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception:

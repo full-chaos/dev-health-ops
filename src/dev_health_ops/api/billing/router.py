@@ -6,7 +6,7 @@ import importlib
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -180,6 +180,8 @@ async def stripe_webhook(request: Request) -> dict:
     elif event_type == "customer.subscription.deleted":
         await _process_subscription_event(event)
         await _handle_subscription_deleted(data_object)
+    elif event_type == "customer.subscription.trial_will_end":
+        await _handle_trial_will_end(data_object)
     elif event_type == "invoice.payment_failed":
         _handle_payment_failed(data_object)
     elif event_type in ("charge.refunded", "charge.refund.updated"):
@@ -459,6 +461,61 @@ async def _handle_subscription_deleted(subscription: object) -> None:
         logger.info(
             "subscription.deleted without org_id metadata, customer=%s", customer_id
         )
+
+
+async def _handle_trial_will_end(subscription: object) -> None:
+    metadata = getattr(subscription, "metadata", {})
+    org_id = metadata.get("org_id") if isinstance(metadata, dict) else None
+    customer_id = getattr(subscription, "customer", None)
+
+    if not org_id:
+        logger.info(
+            "subscription.trial_will_end without org_id metadata, customer=%s",
+            customer_id,
+        )
+        return
+
+    trial_end_raw = getattr(subscription, "trial_end", None)
+    if trial_end_raw is None:
+        logger.info(
+            "subscription.trial_will_end missing trial_end for org_id=%s", org_id
+        )
+        return
+
+    try:
+        trial_end_dt = datetime.fromtimestamp(int(trial_end_raw), tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        logger.warning(
+            "subscription.trial_will_end invalid trial_end=%s for org_id=%s",
+            trial_end_raw,
+            org_id,
+        )
+        return
+
+    seconds_remaining = max(
+        0, int((trial_end_dt - datetime.now(timezone.utc)).total_seconds())
+    )
+    days_remaining = (seconds_remaining + 86399) // 86400
+    trial_end_iso = trial_end_dt.date().isoformat()
+
+    try:
+        send_billing_notification.delay(
+            "trial_expiring",
+            org_id,
+            days_remaining=days_remaining,
+            trial_end_date=trial_end_iso,
+        )
+    except Exception:
+        logger.debug("Failed to enqueue trial expiring email for org_id=%s", org_id)
+        return
+
+    logger.info(
+        "Trial ending soon: org_id=%s customer=%s days_remaining=%d trial_end=%s",
+        org_id,
+        customer_id,
+        days_remaining,
+        trial_end_iso,
+    )
 
 
 def _handle_payment_failed(invoice: object) -> None:

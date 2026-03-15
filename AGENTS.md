@@ -323,33 +323,21 @@ If a `dev-health-ops` change affects `dev-health-web` rendering (e.g., API shape
 
 ---
 
-## 10. Task Tracking (bd + Linear)
+## 10. Task Tracking (Linear)
 
-> **Canonical Reference:** See [`/AGENTS.md`](../AGENTS.md#11-task-tracking-bd--linear) for full documentation.
+> **Canonical Reference:** See [`/AGENTS.md`](../AGENTS.md#11-task-tracking-github-or-linear) for full documentation.
 
-**External tracker:** Linear project/cycle views.
+**Tracker:** Linear (default team: **CHAOS**).
 
 ### Quick Reference
 
 ```bash
-# bd (local task tracking)
-bd create "Task title" --priority P2 --external-ref ENG-123
-bd list --status open
-bd status <id> in-progress
-bd status <id> done
-bd dep add <child-id> <parent-id> --type parent-child
-bd sync
-
-# Linear issue linkage (team issue key)
-# Example: ENG-123
+linear issues create "Task title" --team CHAOS --priority high
+linear issues list
+linear issues get CHAOS-123
+linear issues update CHAOS-123 --state "In Progress"
+linear issues update CHAOS-123 --state "Done"
 ```
-
-### Workflow
-
-1. Create bd issue with `--external-ref <TEAM>-NNN` to link to Linear
-2. Update bd status during work
-3. Run `bd sync` before `git push`
-4. Close/update the linked Linear issue when complete
 
 ---
 
@@ -365,7 +353,6 @@ bd sync
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```

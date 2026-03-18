@@ -58,7 +58,9 @@ async def list_sync_configs(
     return results
 
 
-@router.post("/sync-configs/batch", response_model=SyncConfigBatchResponse, status_code=201)
+@router.post(
+    "/sync-configs/batch", response_model=SyncConfigBatchResponse, status_code=201
+)
 async def batch_create_sync_configs(
     payload: SyncConfigBatchCreate,
     session: AsyncSession = Depends(get_session),
@@ -90,7 +92,9 @@ async def batch_create_sync_configs(
         name=payload.name,
         provider=payload.provider,
         org_id=org_id,
-        credential_id=uuid.UUID(payload.credential_id) if payload.credential_id else None,
+        credential_id=uuid.UUID(payload.credential_id)
+        if payload.credential_id
+        else None,
         sync_targets=payload.sync_targets,
         sync_options=parent_options,
         is_active=False,  # parent is a template, children are the active jobs
@@ -114,7 +118,9 @@ async def batch_create_sync_configs(
             name=f"{payload.name}/{repo_name}",
             provider=payload.provider,
             org_id=org_id,
-            credential_id=uuid.UUID(payload.credential_id) if payload.credential_id else None,
+            credential_id=uuid.UUID(payload.credential_id)
+            if payload.credential_id
+            else None,
             sync_targets=payload.sync_targets,
             sync_options=child_options,
             is_active=True,
@@ -233,7 +239,9 @@ async def create_sync_config(
     return _sync_config_to_response(config)
 
 
-def _sync_config_to_response(c, children_count: int | None = None) -> SyncConfigResponse:
+def _sync_config_to_response(
+    c, children_count: int | None = None
+) -> SyncConfigResponse:
     return SyncConfigResponse(
         id=str(c.id),
         name=c.name,
@@ -347,7 +355,8 @@ async def update_sync_config(
                 for key in ("schedule_cron", "timezone", "initial_sync_depth"):
                     if key in payload.sync_options:
                         child.sync_options = {
-                            **child.sync_options, key: payload.sync_options[key]
+                            **child.sync_options,
+                            key: payload.sync_options[key],
                         }
         if children:
             await session.flush()

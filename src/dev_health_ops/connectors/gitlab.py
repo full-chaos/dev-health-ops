@@ -216,6 +216,7 @@ class GitLabConnector(GitConnector):
         """
         try:
             projects = []
+
             def _sanitize(val: str | int | None) -> str | int | None:
                 if isinstance(val, str):
                     return val.replace("\r", "").replace("\n", "")[:200]

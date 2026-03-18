@@ -16,7 +16,6 @@ from jwt.exceptions import InvalidTokenError
 from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.licensing import (
     STANDARD_FEATURES,
-    TIER_LIMITS,
     TIER_LIMITS_DEFAULTS,
     FeatureFlag,
     OrgFeatureOverride,

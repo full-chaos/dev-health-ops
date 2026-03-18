@@ -232,7 +232,7 @@ class GitLabConnector(GitConnector):
                 _user,
                 _search,
                 _pattern,
-                max_projects,
+                int(max_projects) if max_projects is not None else None,
             )
 
             # Build common list parameters

@@ -4,9 +4,8 @@ env:
   GITLAB_TOKEN: ${{ secrets.GL_TOKEN }}
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
-
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -15,7 +14,7 @@ concurrency:
 jobs:
   integration:
     name: Integration Tests (conditional)
-    runs-on: ubuntu-latest-8-cores
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: read

@@ -216,12 +216,17 @@ class GitLabConnector(GitConnector):
         """
         try:
             projects = []
+            def _sanitize(val: str | int | None) -> str | int | None:
+                if isinstance(val, str):
+                    return val.replace("\r", "").replace("\n", "")[:200]
+                return val
+
             logger.info(
                 "Listing GitLab projects (group=%s user=%s search=%s pattern=%s max=%s)",
-                group_name or group_id,
-                user_name,
-                search,
-                pattern,
+                _sanitize(group_name or group_id),
+                _sanitize(user_name),
+                _sanitize(search),
+                _sanitize(pattern),
                 max_projects,
             )
 

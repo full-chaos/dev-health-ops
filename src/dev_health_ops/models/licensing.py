@@ -437,9 +437,7 @@ class TierLimit(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    __table_args__ = (
-        UniqueConstraint("tier", "limit_key", name="uq_tier_limit_key"),
-    )
+    __table_args__ = (UniqueConstraint("tier", "limit_key", name="uq_tier_limit_key"),)
 
     def __init__(
         self,

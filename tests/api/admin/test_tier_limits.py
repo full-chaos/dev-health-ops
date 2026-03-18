@@ -76,7 +76,9 @@ async def _seed_org(session_maker, tier: str) -> dict[str, str]:
     """Create an org + user + OrgLicense for a given tier."""
     org_id = uuid.uuid4()
     user_id = uuid.uuid4()
-    org = Organization(id=org_id, slug=f"{tier}-org", name=f"{tier.title()} Org", tier=tier)
+    org = Organization(
+        id=org_id, slug=f"{tier}-org", name=f"{tier.title()} Org", tier=tier
+    )
     user = User(id=user_id, email=f"{tier}@example.com", is_active=True)
     license_row = OrgLicense(org_id=org_id, tier=tier)
 
@@ -146,7 +148,10 @@ async def test_community_repo_limit_blocks_at_3(session_maker):
         # 4th should be rejected
         resp = await _create_config(ac, "repo-blocked")
         assert resp.status_code == 403
-        assert "limit" in resp.json()["detail"].lower() or "exceeded" in resp.json()["detail"].lower()
+        assert (
+            "limit" in resp.json()["detail"].lower()
+            or "exceeded" in resp.json()["detail"].lower()
+        )
 
 
 @pytest.mark.asyncio
@@ -220,27 +225,36 @@ async def test_community_cannot_set_schedule(session_maker):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await _create_config(
-            ac, "scheduled-sync",
+            ac,
+            "scheduled-sync",
             sync_options={"schedule_cron": "0 0 * * *"},
         )
         assert resp.status_code == 403
-        assert "scheduled_jobs" in resp.json()["detail"].lower() or "tier" in resp.json()["detail"].lower()
+        assert (
+            "scheduled_jobs" in resp.json()["detail"].lower()
+            or "tier" in resp.json()["detail"].lower()
+        )
 
 
 @pytest.mark.asyncio
 async def test_team_can_set_daily_schedule(session_maker):
     """Team tier: daily schedule (24h interval) should be allowed (min=6h)."""
     state = await _seed_org(session_maker, "team")
-    await _seed_tier_limits(session_maker, "team", {
-        "max_repos": "10",
-        "min_sync_interval_hours": "6",
-    })
+    await _seed_tier_limits(
+        session_maker,
+        "team",
+        {
+            "max_repos": "10",
+            "min_sync_interval_hours": "6",
+        },
+    )
 
     app = _make_client(session_maker, state)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await _create_config(
-            ac, "daily-sync",
+            ac,
+            "daily-sync",
             sync_options={"schedule_cron": "0 0 * * *"},
         )
         assert resp.status_code == 201, f"Expected 201: {resp.json()}"
@@ -250,16 +264,21 @@ async def test_team_can_set_daily_schedule(session_maker):
 async def test_team_cannot_set_hourly_schedule(session_maker):
     """Team tier: hourly schedule (1h) should be rejected (min=6h)."""
     state = await _seed_org(session_maker, "team")
-    await _seed_tier_limits(session_maker, "team", {
-        "max_repos": "10",
-        "min_sync_interval_hours": "6",
-    })
+    await _seed_tier_limits(
+        session_maker,
+        "team",
+        {
+            "max_repos": "10",
+            "min_sync_interval_hours": "6",
+        },
+    )
 
     app = _make_client(session_maker, state)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await _create_config(
-            ac, "hourly-sync",
+            ac,
+            "hourly-sync",
             sync_options={"schedule_cron": "0 * * * *"},
         )
         assert resp.status_code == 403
@@ -281,24 +300,31 @@ async def test_community_initial_sync_depth_blocked_at_90(session_maker):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await _create_config(
-            ac, "deep-sync",
+            ac,
+            "deep-sync",
             sync_options={"initial_sync_depth": 90},
         )
         assert resp.status_code == 403
-        assert "backfill" in resp.json()["detail"].lower() or "limit" in resp.json()["detail"].lower()
+        assert (
+            "backfill" in resp.json()["detail"].lower()
+            or "limit" in resp.json()["detail"].lower()
+        )
 
 
 @pytest.mark.asyncio
 async def test_community_initial_sync_depth_allowed_at_30(session_maker):
     """Community tier: 30-day depth should be allowed (max=30)."""
     state = await _seed_org(session_maker, "community")
-    await _seed_tier_limits(session_maker, "community", {"backfill_days": "30", "max_repos": "3"})
+    await _seed_tier_limits(
+        session_maker, "community", {"backfill_days": "30", "max_repos": "3"}
+    )
 
     app = _make_client(session_maker, state)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await _create_config(
-            ac, "shallow-sync",
+            ac,
+            "shallow-sync",
             sync_options={"initial_sync_depth": 30},
         )
         assert resp.status_code == 201

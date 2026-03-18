@@ -329,11 +329,7 @@ class TierLimitService:
     def _get_db_tier_limits(self, tier: str) -> dict[str, int | float | None]:
         """Read tier limits from the tier_limits table."""
         try:
-            rows = (
-                self.session.query(TierLimit)
-                .filter(TierLimit.tier == tier)
-                .all()
-            )
+            rows = self.session.query(TierLimit).filter(TierLimit.tier == tier).all()
             return {row.limit_key: row.typed_value for row in rows}
         except Exception:
             # Table may not exist yet (pre-migration). Fall through to defaults.
@@ -344,7 +340,9 @@ class TierLimitService:
     ) -> dict[str, int | float | None]:
         """Merge DB tier limits over hardcoded defaults for a tier."""
         defaults = dict(
-            TIER_LIMITS_DEFAULTS.get(org_tier, TIER_LIMITS_DEFAULTS[LicenseTier.COMMUNITY])
+            TIER_LIMITS_DEFAULTS.get(
+                org_tier, TIER_LIMITS_DEFAULTS[LicenseTier.COMMUNITY]
+            )
         )
         db_limits = self._get_db_tier_limits(org_tier.value)
         if db_limits:

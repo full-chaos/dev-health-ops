@@ -72,9 +72,12 @@ async def create_sync_config(
     # Fix 5 (LOW): Validate initial_sync_depth against tier limits.
     initial_sync_depth = payload.sync_options.get("initial_sync_depth")
     if initial_sync_depth is not None:
+
         def _check_backfill_depth(sync_session) -> tuple[bool, str | None]:
             tier_svc = TierLimitService(sync_session)
-            return tier_svc.check_backfill_limit(uuid.UUID(org_id), int(initial_sync_depth))
+            return tier_svc.check_backfill_limit(
+                uuid.UUID(org_id), int(initial_sync_depth)
+            )
 
         depth_allowed, depth_reason = await session.run_sync(_check_backfill_depth)
         if not depth_allowed:
@@ -96,7 +99,9 @@ async def create_sync_config(
             from dev_health_ops.licensing.gating import _check_org_feature_async
 
             feature = "scheduled_jobs"
-            if not await _check_org_feature_async(feature, {"session": session, "org_id": org_id}):
+            if not await _check_org_feature_async(
+                feature, {"session": session, "org_id": org_id}
+            ):
                 from dev_health_ops.licensing import has_feature
 
                 if not has_feature(feature, log_denial=False):
@@ -194,7 +199,9 @@ async def update_sync_config(
         from dev_health_ops.licensing.gating import _check_org_feature_async
 
         feature = "scheduled_jobs"
-        if not await _check_org_feature_async(feature, {"session": session, "org_id": org_id}):
+        if not await _check_org_feature_async(
+            feature, {"session": session, "org_id": org_id}
+        ):
             from dev_health_ops.licensing import has_feature
 
             if not has_feature(feature, log_denial=False):
@@ -266,6 +273,7 @@ async def trigger_sync_config(
 
     # Fix 6 (LOW-MEDIUM): Check work items count against tier limit before triggering.
     if "work-items" in (config.sync_targets or []):
+
         def _get_max_work_items(sync_session) -> int | None:
             tier_svc = TierLimitService(sync_session)
             val = tier_svc.get_limit(uuid.UUID(org_id), "max_work_items")
@@ -276,7 +284,10 @@ async def trigger_sync_config(
             try:
                 import os
 
-                from dev_health_ops.api.queries.client import get_global_client, query_dicts
+                from dev_health_ops.api.queries.client import (
+                    get_global_client,
+                    query_dicts,
+                )
 
                 ch_uri = os.getenv("CLICKHOUSE_URI", "")
                 if ch_uri:

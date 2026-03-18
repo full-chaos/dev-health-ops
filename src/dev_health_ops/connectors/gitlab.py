@@ -217,17 +217,21 @@ class GitLabConnector(GitConnector):
         try:
             projects = []
 
-            def _sanitize(val: str | int | None) -> str | int | None:
-                if isinstance(val, str):
-                    return val.replace("\r", "").replace("\n", "")[:200]
-                return val
-
+            # Sanitize user-supplied values to prevent log injection (CodeQL py/log-injection).
+            _group = (
+                str(group_name or group_id or "")
+                .replace("\r", "")
+                .replace("\n", "")[:200]
+            )
+            _user = str(user_name or "").replace("\r", "").replace("\n", "")[:200]
+            _search = str(search or "").replace("\r", "").replace("\n", "")[:200]
+            _pattern = str(pattern or "").replace("\r", "").replace("\n", "")[:200]
             logger.info(
                 "Listing GitLab projects (group=%s user=%s search=%s pattern=%s max=%s)",
-                _sanitize(group_name or group_id),
-                _sanitize(user_name),
-                _sanitize(search),
-                _sanitize(pattern),
+                _group,
+                _user,
+                _search,
+                _pattern,
                 max_projects,
             )
 

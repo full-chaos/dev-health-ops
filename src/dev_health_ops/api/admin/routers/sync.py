@@ -11,13 +11,15 @@ from dev_health_ops.api.admin.schemas import (
     JOB_RUN_STATUS_LABELS,
     BackfillRequest,
     JobRunResponse,
+    SyncConfigBatchCreate,
+    SyncConfigBatchResponse,
     SyncConfigCreate,
     SyncConfigResponse,
     SyncConfigUpdate,
 )
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.settings import SyncConfigurationService
-from dev_health_ops.models.settings import JobRun, ScheduledJob
+from dev_health_ops.models.settings import JobRun, ScheduledJob, SyncConfiguration
 
 from .common import get_session
 
@@ -41,12 +43,93 @@ async def get_provider_sync_targets() -> dict[str, list[str]]:
 @router.get("/sync-configs", response_model=list[SyncConfigResponse])
 async def list_sync_configs(
     active_only: bool = False,
+    parent_only: bool = False,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[SyncConfigResponse]:
     svc = SyncConfigurationService(session, org_id)
     configs = await svc.list_all(active_only=active_only)
-    return [_sync_config_to_response(c) for c in configs]
+    if parent_only:
+        configs = [c for c in configs if c.parent_id is None]
+    results = []
+    for c in configs:
+        cc = len(c.children) if hasattr(c, "children") and c.children else None
+        results.append(_sync_config_to_response(c, children_count=cc))
+    return results
+
+
+@router.post("/sync-configs/batch", response_model=SyncConfigBatchResponse, status_code=201)
+async def batch_create_sync_configs(
+    payload: SyncConfigBatchCreate,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> SyncConfigBatchResponse:
+    """Create a parent sync config + one child per repo."""
+    svc = SyncConfigurationService(session, org_id)
+
+    # Enforce repo limit (existing + new repos)
+    existing_configs = await svc.list_all(active_only=True)
+    current_count = len(existing_configs)
+    new_count = len(payload.repos)
+
+    def _check_limit(sync_session) -> tuple[bool, str | None]:
+        tier_svc = TierLimitService(sync_session)
+        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count + new_count)
+
+    allowed, reason = await session.run_sync(_check_limit)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=reason or f"Repo limit exceeded (adding {new_count} repos)",
+        )
+
+    # Create parent config (template — not synced directly)
+    parent_options = dict(payload.sync_options)
+    parent_options.pop("repo", None)  # parent has no single repo
+    parent = SyncConfiguration(
+        name=payload.name,
+        provider=payload.provider,
+        org_id=org_id,
+        credential_id=uuid.UUID(payload.credential_id) if payload.credential_id else None,
+        sync_targets=payload.sync_targets,
+        sync_options=parent_options,
+        is_active=False,  # parent is a template, children are the active jobs
+    )
+    session.add(parent)
+    await session.flush()  # need parent.id for children
+
+    # Create child configs (one per repo)
+    children = []
+    for repo_name in payload.repos:
+        child_options = dict(parent_options)
+        child_options["repo"] = repo_name
+        if payload.initial_sync_depth is not None:
+            child_options["initial_sync_depth"] = payload.initial_sync_depth
+        if payload.schedule_cron is not None:
+            child_options["schedule_cron"] = payload.schedule_cron
+        if payload.timezone is not None:
+            child_options["timezone"] = payload.timezone
+
+        child = SyncConfiguration(
+            name=f"{payload.name}/{repo_name}",
+            provider=payload.provider,
+            org_id=org_id,
+            credential_id=uuid.UUID(payload.credential_id) if payload.credential_id else None,
+            sync_targets=payload.sync_targets,
+            sync_options=child_options,
+            is_active=True,
+            parent_id=parent.id,
+        )
+        children.append(child)
+
+    session.add_all(children)
+    await session.flush()
+
+    return SyncConfigBatchResponse(
+        parent=_sync_config_to_response(parent, children_count=len(children)),
+        children=[_sync_config_to_response(c) for c in children],
+        total_created=len(children),
+    )
 
 
 @router.post("/sync-configs", response_model=SyncConfigResponse, status_code=201)
@@ -150,7 +233,7 @@ async def create_sync_config(
     return _sync_config_to_response(config)
 
 
-def _sync_config_to_response(c) -> SyncConfigResponse:
+def _sync_config_to_response(c, children_count: int | None = None) -> SyncConfigResponse:
     return SyncConfigResponse(
         id=str(c.id),
         name=c.name,
@@ -159,6 +242,8 @@ def _sync_config_to_response(c) -> SyncConfigResponse:
         sync_targets=c.sync_targets,
         sync_options=c.sync_options,
         is_active=c.is_active,
+        parent_id=str(c.parent_id) if c.parent_id else None,
+        children_count=children_count,
         last_sync_at=c.last_sync_at,
         last_sync_success=c.last_sync_success,
         last_sync_error=c.last_sync_error,
@@ -244,6 +329,29 @@ async def update_sync_config(
         sync_options=payload.sync_options,
         is_active=payload.is_active,
     )
+
+    # Cascade shared settings to children when updating a parent config
+    if updated.parent_id is None:
+        stmt = select(SyncConfiguration).where(
+            SyncConfiguration.parent_id == updated.id
+        )
+        result = await session.execute(stmt)
+        children = result.scalars().all()
+        for child in children:
+            if payload.sync_targets is not None:
+                child.sync_targets = payload.sync_targets
+            if payload.is_active is not None:
+                child.is_active = payload.is_active
+            # Propagate schedule/timezone/depth from sync_options if provided
+            if payload.sync_options:
+                for key in ("schedule_cron", "timezone", "initial_sync_depth"):
+                    if key in payload.sync_options:
+                        child.sync_options = {
+                            **child.sync_options, key: payload.sync_options[key]
+                        }
+        if children:
+            await session.flush()
+
     return _sync_config_to_response(updated)
 
 

@@ -389,7 +389,95 @@ class OrgLicense(Base):
         return f"<OrgLicense org={self.org_id} tier={self.tier}>"
 
 
-TIER_LIMITS = {
+class TierLimit(Base):
+    """Database-driven tier limit defaults.
+
+    Stores the default limits for each tier so they can be changed at runtime
+    without a code deploy.  ``TierLimitService`` reads from this table first
+    and falls back to ``TIER_LIMITS_DEFAULTS`` only when no row exists.
+
+    Each row represents one (tier, limit_key) pair — for example
+    ("community", "max_repos", 3).
+    """
+
+    __tablename__ = "tier_limits"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tier = Column(
+        Text,
+        nullable=False,
+        index=True,
+        comment="Tier this limit applies to (community, team, enterprise)",
+    )
+    limit_key = Column(
+        Text,
+        nullable=False,
+        comment="Limit identifier (e.g. max_repos, backfill_days)",
+    )
+    limit_value = Column(
+        Text,
+        nullable=True,
+        comment="Limit value as text (null = unlimited). Cast to int/float at read time.",
+    )
+    description = Column(
+        Text,
+        nullable=True,
+        comment="Human-readable explanation of this limit",
+    )
+
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tier", "limit_key", name="uq_tier_limit_key"),
+    )
+
+    def __init__(
+        self,
+        tier: str,
+        limit_key: str,
+        limit_value: str | None = None,
+        description: str | None = None,
+    ):
+        self.id = uuid.uuid4()
+        self.tier = tier
+        self.limit_key = limit_key
+        self.limit_value = limit_value
+        self.description = description
+        self.created_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
+
+    @property
+    def typed_value(self) -> int | float | None:
+        """Cast the text value to a numeric type."""
+        if self.limit_value is None:
+            return None
+        try:
+            # Try int first, then float
+            f = float(self.limit_value)
+            return int(f) if f == int(f) else f
+        except (ValueError, TypeError):
+            return None
+
+    def __repr__(self) -> str:
+        return f"<TierLimit {self.tier}/{self.limit_key}={self.limit_value}>"
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded fallback — used only when the tier_limits table is empty or
+# missing a key.  Once the migration seeds the DB rows, the service reads
+# from the database instead.
+# ---------------------------------------------------------------------------
+TIER_LIMITS_DEFAULTS = {
     LicenseTier.COMMUNITY: {
         "max_users": 5,
         "max_repos": 3,
@@ -418,6 +506,9 @@ TIER_LIMITS = {
         "min_sync_interval_hours": 0.25,
     },
 }
+
+# Backward-compat alias — existing code imports TIER_LIMITS
+TIER_LIMITS = TIER_LIMITS_DEFAULTS
 
 STANDARD_FEATURES = [
     (

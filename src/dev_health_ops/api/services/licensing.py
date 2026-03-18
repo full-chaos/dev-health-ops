@@ -17,9 +17,11 @@ from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.licensing import (
     STANDARD_FEATURES,
     TIER_LIMITS,
+    TIER_LIMITS_DEFAULTS,
     FeatureFlag,
     OrgFeatureOverride,
     OrgLicense,
+    TierLimit,
 )
 
 if TYPE_CHECKING:
@@ -308,7 +310,13 @@ class FeatureService:
 
 
 class TierLimitService:
-    """Tier limit checking and enforcement service."""
+    """Tier limit checking and enforcement service.
+
+    Resolution order for a given (org, limit_key):
+      1. ``OrgLicense.limits_override`` — per-org JSON overrides
+      2. ``tier_limits`` table — database-driven defaults per tier
+      3. ``TIER_LIMITS_DEFAULTS`` — hardcoded fallback (code deploy required)
+    """
 
     def __init__(self, session: Session):
         self.session = session
@@ -318,6 +326,31 @@ class TierLimitService:
             self.session.query(OrgLicense).filter(OrgLicense.org_id == org_id).first()
         )
 
+    def _get_db_tier_limits(self, tier: str) -> dict[str, int | float | None]:
+        """Read tier limits from the tier_limits table."""
+        try:
+            rows = (
+                self.session.query(TierLimit)
+                .filter(TierLimit.tier == tier)
+                .all()
+            )
+            return {row.limit_key: row.typed_value for row in rows}
+        except Exception:
+            # Table may not exist yet (pre-migration). Fall through to defaults.
+            return {}
+
+    def _resolve_tier_limits(
+        self, org_tier: LicenseTier
+    ) -> dict[str, int | float | None]:
+        """Merge DB tier limits over hardcoded defaults for a tier."""
+        defaults = dict(
+            TIER_LIMITS_DEFAULTS.get(org_tier, TIER_LIMITS_DEFAULTS[LicenseTier.COMMUNITY])
+        )
+        db_limits = self._get_db_tier_limits(org_tier.value)
+        if db_limits:
+            defaults.update(db_limits)
+        return defaults
+
     def get_limit(self, org_id: uuid.UUID, limit_key: str) -> int | float | None:
         """Get a specific limit for an organization."""
         org_license = self._get_org_license(org_id)
@@ -325,11 +358,13 @@ class TierLimitService:
             LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
         )
 
+        # 1. Per-org override (highest priority)
         if org_license and org_license.limits_override:
             if limit_key in org_license.limits_override:
                 return org_license.limits_override[limit_key]
 
-        tier_limits = TIER_LIMITS.get(org_tier, TIER_LIMITS[LicenseTier.COMMUNITY])
+        # 2. DB tier defaults → 3. Hardcoded fallback
+        tier_limits = self._resolve_tier_limits(org_tier)
         return tier_limits.get(limit_key)
 
     def get_all_limits(self, org_id: uuid.UUID) -> dict[str, int | float | None]:
@@ -339,8 +374,9 @@ class TierLimitService:
             LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
         )
 
-        limits = dict(TIER_LIMITS.get(org_tier, TIER_LIMITS[LicenseTier.COMMUNITY]))
+        limits = self._resolve_tier_limits(org_tier)
 
+        # Per-org overrides win
         if org_license and org_license.limits_override:
             limits.update(org_license.limits_override)
 

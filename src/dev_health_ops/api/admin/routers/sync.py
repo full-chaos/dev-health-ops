@@ -56,6 +56,90 @@ async def create_sync_config(
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
     svc = SyncConfigurationService(session, org_id)
+
+    # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
+    existing_configs = await svc.list_all(active_only=True)
+    current_count = len(existing_configs)
+
+    def _check_repo_limit(sync_session) -> tuple[bool, str | None]:
+        tier_svc = TierLimitService(sync_session)
+        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count)
+
+    allowed, reason = await session.run_sync(_check_repo_limit)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason or "Repo limit exceeded")
+
+    # Fix 5 (LOW): Validate initial_sync_depth against tier limits.
+    initial_sync_depth = payload.sync_options.get("initial_sync_depth")
+    if initial_sync_depth is not None:
+
+        def _check_backfill_depth(sync_session) -> tuple[bool, str | None]:
+            tier_svc = TierLimitService(sync_session)
+            return tier_svc.check_backfill_limit(
+                uuid.UUID(org_id), int(initial_sync_depth)
+            )
+
+        depth_allowed, depth_reason = await session.run_sync(_check_backfill_depth)
+        if not depth_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=depth_reason or "initial_sync_depth exceeds tier limit",
+            )
+
+    # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron interval and gate
+    # scheduled jobs behind the "scheduled_jobs" feature (Team+ only).
+    schedule_cron = payload.sync_options.get("schedule_cron")
+    if schedule_cron:
+        # Fix 4: Gate scheduled_jobs feature — Community tier cannot set schedules.
+        async def _check_scheduled_jobs_feature(
+            payload: SyncConfigCreate = payload,
+            session: AsyncSession = session,
+            org_id: str = org_id,
+        ) -> None:
+            from dev_health_ops.licensing.gating import _check_org_feature_async
+
+            feature = "scheduled_jobs"
+            if not await _check_org_feature_async(
+                feature, {"session": session, "org_id": org_id}
+            ):
+                from dev_health_ops.licensing import has_feature
+
+                if not has_feature(feature, log_denial=False):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="scheduled_jobs feature requires Team tier or higher",
+                    )
+
+        await _check_scheduled_jobs_feature()
+
+        # Fix 3: Validate the cron interval against the tier's min_sync_interval_hours.
+        try:
+            from croniter import croniter
+
+            itr = croniter(schedule_cron)
+            next1 = itr.get_next(float)
+            next2 = itr.get_next(float)
+            interval_hours = (next2 - next1) / 3600.0
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Invalid cron expression: {exc}"
+            )
+
+        def _get_min_interval(sync_session) -> float | None:
+            tier_svc = TierLimitService(sync_session)
+            val = tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
+            return float(val) if val is not None else None
+
+        min_interval = await session.run_sync(_get_min_interval)
+        if min_interval is not None and interval_hours < min_interval:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Sync interval {interval_hours:.2f}h is below the minimum "
+                    f"{min_interval}h allowed for your tier"
+                ),
+            )
+
     config = await svc.create(
         name=payload.name,
         provider=payload.provider,
@@ -108,6 +192,52 @@ async def update_sync_config(
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
 
+    # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron when updating sync_options.
+    schedule_cron = (payload.sync_options or {}).get("schedule_cron")
+    if schedule_cron:
+        # Fix 4: Gate scheduled_jobs feature — Community tier cannot set schedules.
+        from dev_health_ops.licensing.gating import _check_org_feature_async
+
+        feature = "scheduled_jobs"
+        if not await _check_org_feature_async(
+            feature, {"session": session, "org_id": org_id}
+        ):
+            from dev_health_ops.licensing import has_feature
+
+            if not has_feature(feature, log_denial=False):
+                raise HTTPException(
+                    status_code=403,
+                    detail="scheduled_jobs feature requires Team tier or higher",
+                )
+
+        # Fix 3: Validate the cron interval against the tier's min_sync_interval_hours.
+        try:
+            from croniter import croniter
+
+            itr = croniter(schedule_cron)
+            next1 = itr.get_next(float)
+            next2 = itr.get_next(float)
+            interval_hours = (next2 - next1) / 3600.0
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Invalid cron expression: {exc}"
+            )
+
+        def _get_min_interval(sync_session) -> float | None:
+            tier_svc = TierLimitService(sync_session)
+            val = tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
+            return float(val) if val is not None else None
+
+        min_interval = await session.run_sync(_get_min_interval)
+        if min_interval is not None and interval_hours < min_interval:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Sync interval {interval_hours:.2f}h is below the minimum "
+                    f"{min_interval}h allowed for your tier"
+                ),
+            )
+
     updated = await svc.update(
         name=config.name,
         sync_targets=payload.sync_targets,
@@ -140,6 +270,47 @@ async def trigger_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+
+    # Fix 6 (LOW-MEDIUM): Check work items count against tier limit before triggering.
+    if "work-items" in (config.sync_targets or []):
+
+        def _get_max_work_items(sync_session) -> int | None:
+            tier_svc = TierLimitService(sync_session)
+            val = tier_svc.get_limit(uuid.UUID(org_id), "max_work_items")
+            return int(val) if val is not None else None
+
+        max_work_items = await session.run_sync(_get_max_work_items)
+        if max_work_items is not None:
+            try:
+                import os
+
+                from dev_health_ops.api.queries.client import (
+                    get_global_client,
+                    query_dicts,
+                )
+
+                ch_uri = os.getenv("CLICKHOUSE_URI", "")
+                if ch_uri:
+                    client = await get_global_client(ch_uri)
+                    rows = await query_dicts(
+                        client,
+                        "SELECT count() AS cnt FROM work_items WHERE org_id = %(org_id)s",
+                        {"org_id": org_id},
+                    )
+                    current_count = int((rows[0].get("cnt") or 0) if rows else 0)
+                    if current_count >= max_work_items:
+                        raise HTTPException(
+                            status_code=403,
+                            detail=(
+                                f"Work items limit exceeded: {current_count}/{max_work_items}. "
+                                "Upgrade your tier to sync more work items."
+                            ),
+                        )
+            except HTTPException:
+                raise
+            except Exception:
+                # ClickHouse unavailable — allow the sync to proceed rather than block it.
+                pass
 
     try:
         from dev_health_ops.workers.sync_tasks import run_sync_config

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
@@ -28,6 +29,7 @@ auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 _TABLES = [
     User.__table__,
     Organization.__table__,
+    OrgLicense.__table__,
     IntegrationCredential.__table__,
     SyncConfiguration.__table__,
     ScheduledJob.__table__,

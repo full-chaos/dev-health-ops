@@ -43,6 +43,7 @@ DEFAULT_FEATURES: dict[LicenseTier, dict[str, bool]] = {
         "basic_analytics": True,
         "investment_view": True,
         "team_dashboard": False,
+        "scheduled_jobs": False,
         "sso": False,
         "audit_log": False,
         "ip_allowlist": False,
@@ -54,6 +55,7 @@ DEFAULT_FEATURES: dict[LicenseTier, dict[str, bool]] = {
         "basic_analytics": True,
         "investment_view": True,
         "team_dashboard": True,
+        "scheduled_jobs": True,
         "sso": False,
         "audit_log": False,
         "ip_allowlist": False,
@@ -65,6 +67,7 @@ DEFAULT_FEATURES: dict[LicenseTier, dict[str, bool]] = {
         "basic_analytics": True,
         "investment_view": True,
         "team_dashboard": True,
+        "scheduled_jobs": True,
         "sso": True,
         "audit_log": True,
         "ip_allowlist": True,
@@ -76,9 +79,9 @@ DEFAULT_FEATURES: dict[LicenseTier, dict[str, bool]] = {
 
 DEFAULT_LIMITS: dict[LicenseTier, LicenseLimits] = {
     LicenseTier.COMMUNITY: LicenseLimits(
-        users=5, repos=3, api_rate=60, backfill_days=30
+        users=5, repos=3, api_rate=100, backfill_days=30
     ),
-    LicenseTier.TEAM: LicenseLimits(users=25, repos=20, api_rate=300, backfill_days=90),
+    LicenseTier.TEAM: LicenseLimits(users=20, repos=10, api_rate=500, backfill_days=90),
     LicenseTier.ENTERPRISE: LicenseLimits(
         users=-1, repos=-1, api_rate=-1, backfill_days=None
     ),

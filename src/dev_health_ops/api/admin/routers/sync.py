@@ -52,9 +52,27 @@ async def list_sync_configs(
     configs = await svc.list_all(active_only=active_only)
     if parent_only:
         configs = [c for c in configs if c.parent_id is None]
+
+    # Build children count map without lazy-loading relationships
+    from sqlalchemy import func, select
+
+    children_counts: dict[str, int] = {}
+    parent_ids = [c.id for c in configs if c.parent_id is None]
+    if parent_ids:
+        stmt = (
+            select(
+                SyncConfiguration.parent_id,
+                func.count(SyncConfiguration.id),
+            )
+            .where(SyncConfiguration.parent_id.in_(parent_ids))
+            .group_by(SyncConfiguration.parent_id)
+        )
+        rows = (await session.execute(stmt)).all()
+        children_counts = {str(pid): cnt for pid, cnt in rows}
+
     results = []
     for c in configs:
-        cc = len(c.children) if hasattr(c, "children") and c.children else None
+        cc = children_counts.get(str(c.id))
         results.append(_sync_config_to_response(c, children_count=cc))
     return results
 
@@ -115,8 +133,13 @@ async def batch_create_sync_configs(
         if payload.timezone is not None:
             child_options["timezone"] = payload.timezone
 
+        owner = (
+            payload.sync_options.get("owner")
+            or payload.sync_options.get("group")
+            or payload.name
+        )
         child = SyncConfiguration(
-            name=f"{payload.name}/{repo_name}",
+            name=f"{owner}/{repo_name}",
             provider=payload.provider,
             org_id=org_id,
             credential_id=uuid.UUID(payload.credential_id)
@@ -153,7 +176,7 @@ async def create_sync_config(
 
     def _check_repo_limit(sync_session) -> tuple[bool, str | None]:
         tier_svc = TierLimitService(sync_session)
-        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count)
+        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count + 1)
 
     allowed, reason = await session.run_sync(_check_repo_limit)
     if not allowed:

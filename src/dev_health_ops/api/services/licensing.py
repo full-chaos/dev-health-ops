@@ -388,7 +388,7 @@ class TierLimitService:
         if limit is None:
             return True, None
 
-        if current_value >= limit:
+        if current_value > limit:
             return False, f"Limit exceeded: {limit_key} ({current_value}/{limit})"
 
         return True, None

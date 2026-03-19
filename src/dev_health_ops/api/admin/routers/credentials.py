@@ -80,6 +80,12 @@ async def list_credential_repos(
     provider = credential.provider
     config = credential.config or {}
 
+    from dev_health_ops.connectors.exceptions import (
+        AuthenticationException,
+        NotFoundException,
+        RateLimitException,
+    )
+
     if provider == "github":
         from dev_health_ops.connectors.github import GitHubConnector
 
@@ -91,9 +97,6 @@ async def list_credential_repos(
             )
         connector = GitHubConnector(token=token, base_url=base_url)
         effective_owner = owner or config.get("org")
-        repos = connector.list_repositories(
-            org_name=effective_owner, search=search, max_repos=max_repos
-        )
     elif provider == "gitlab":
         from dev_health_ops.connectors.gitlab import GitLabConnector
 
@@ -105,14 +108,26 @@ async def list_credential_repos(
             )
         connector = GitLabConnector(url=url, private_token=token)
         effective_owner = owner or config.get("group")
-        repos = connector.list_repositories(
-            org_name=effective_owner, search=search, max_repos=max_repos
-        )
     else:
         raise HTTPException(
             status_code=400,
             detail=f"Repo listing not supported for provider: {provider}",
         )
+
+    if not effective_owner:
+        return DiscoveredReposResponse(provider=provider, repos=[], total=0)
+
+    try:
+        repos = connector.list_repositories(
+            org_name=effective_owner, search=search, max_repos=max_repos
+        )
+    except NotFoundException:
+        # Owner/org doesn't exist (or token lacks access) — return empty
+        return DiscoveredReposResponse(provider=provider, repos=[], total=0)
+    except AuthenticationException as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    except RateLimitException as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
 
     discovered = [
         DiscoveredRepo(

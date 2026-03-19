@@ -264,12 +264,14 @@ class SyncConfiguration(Base):
         remote_side="SyncConfiguration.id",
         back_populates="children",
         foreign_keys=[parent_id],
+        lazy="raise",
     )
     children = relationship(
         "SyncConfiguration",
         back_populates="parent",
         cascade="all, delete-orphan",
         foreign_keys="SyncConfiguration.parent_id",
+        lazy="raise",
     )
 
     __table_args__ = (

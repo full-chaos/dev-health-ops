@@ -132,8 +132,9 @@ async def batch_create_sync_configs(
         if payload.timezone is not None:
             child_options["timezone"] = payload.timezone
 
+        owner = payload.sync_options.get("owner") or payload.sync_options.get("group") or payload.name
         child = SyncConfiguration(
-            name=f"{payload.name}/{repo_name}",
+            name=f"{owner}/{repo_name}",
             provider=payload.provider,
             org_id=org_id,
             credential_id=uuid.UUID(payload.credential_id)

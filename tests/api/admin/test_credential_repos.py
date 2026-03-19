@@ -246,8 +246,8 @@ async def test_rate_limit_returns_429(client):
         patch(_DECRYPT_PATCH, return_value=_mock_credential()) as _,
         patch(_GH_CONNECTOR) as MockConnector,
     ):
-        MockConnector.return_value.list_repositories.side_effect = (
-            RateLimitException("API rate limit exceeded")
+        MockConnector.return_value.list_repositories.side_effect = RateLimitException(
+            "API rate limit exceeded"
         )
 
         resp = await ac.get(

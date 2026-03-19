@@ -55,6 +55,7 @@ async def list_sync_configs(
 
     # Build children count map without lazy-loading relationships
     from sqlalchemy import func, select
+
     children_counts: dict[str, int] = {}
     parent_ids = [c.id for c in configs if c.parent_id is None]
     if parent_ids:
@@ -132,7 +133,11 @@ async def batch_create_sync_configs(
         if payload.timezone is not None:
             child_options["timezone"] = payload.timezone
 
-        owner = payload.sync_options.get("owner") or payload.sync_options.get("group") or payload.name
+        owner = (
+            payload.sync_options.get("owner")
+            or payload.sync_options.get("group")
+            or payload.name
+        )
         child = SyncConfiguration(
             name=f"{owner}/{repo_name}",
             provider=payload.provider,

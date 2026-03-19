@@ -81,7 +81,7 @@ async def seeded_state(session_maker):
 @pytest_asyncio.fixture
 async def client(monkeypatch: pytest.MonkeyPatch, session_maker, seeded_state):
     app = FastAPI()
-    app.include_router(admin_router_module.router)
+    app.include_router(admin_router_module.router, prefix="/api/v1/admin")
     app.include_router(auth_router_module.router)
 
     current_user = {

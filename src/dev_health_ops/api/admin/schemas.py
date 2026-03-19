@@ -97,6 +97,8 @@ class SyncConfigResponse(BaseModel):
     sync_targets: list[str]
     sync_options: dict[str, Any]
     is_active: bool
+    parent_id: str | None = None
+    children_count: int | None = None
     last_sync_at: datetime | None
     last_sync_success: bool | None
     last_sync_error: str | None
@@ -114,10 +116,43 @@ class SyncConfigCreate(BaseModel):
     sync_options: dict[str, Any] = Field(default_factory=dict)
 
 
+class SyncConfigBatchCreate(BaseModel):
+    """Create a parent config + N child configs (one per repo)."""
+
+    name: str = Field(..., min_length=1)
+    provider: str = Field(..., min_length=1)
+    credential_id: str | None = None
+    sync_targets: list[str] = Field(default_factory=list)
+    sync_options: dict[str, Any] = Field(default_factory=dict)
+    repos: list[str] = Field(..., min_length=1, description="Repo names to sync")
+    schedule_cron: str | None = None
+    timezone: str | None = None
+    initial_sync_depth: int | None = None
+
+
+class SyncConfigBatchResponse(BaseModel):
+    parent: SyncConfigResponse
+    children: list[SyncConfigResponse]
+    total_created: int
+
+
 class SyncConfigUpdate(BaseModel):
     sync_targets: list[str] | None = None
     sync_options: dict[str, Any] | None = None
     is_active: bool | None = None
+
+
+class DiscoveredRepo(BaseModel):
+    name: str
+    full_name: str
+    description: str | None = None
+    url: str | None = None
+
+
+class DiscoveredReposResponse(BaseModel):
+    provider: str
+    repos: list[DiscoveredRepo]
+    total: int
 
 
 class BackfillRequest(BaseModel):

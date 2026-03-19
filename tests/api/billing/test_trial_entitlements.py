@@ -96,7 +96,7 @@ async def test_trialing_org_gets_team_entitlements(session_maker):
 
     assert entitlements["tier"] == "team"
     assert entitlements["features"]["team_dashboard"] is True
-    assert entitlements["limits"]["users"] == 25
+    assert entitlements["limits"]["users"] == 20
 
 
 @pytest.mark.asyncio

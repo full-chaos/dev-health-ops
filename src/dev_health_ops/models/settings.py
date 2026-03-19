@@ -253,6 +253,25 @@ class SyncConfiguration(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    parent_id = Column(
+        GUID,
+        ForeignKey("sync_configurations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    parent = relationship(
+        "SyncConfiguration",
+        remote_side="SyncConfiguration.id",
+        back_populates="children",
+        foreign_keys=[parent_id],
+    )
+    children = relationship(
+        "SyncConfiguration",
+        back_populates="parent",
+        cascade="all, delete-orphan",
+        foreign_keys="SyncConfiguration.parent_id",
+    )
+
     __table_args__ = (
         UniqueConstraint("org_id", "name", name="uq_sync_config_org_name"),
         Index("ix_sync_config_org_provider", "org_id", "provider"),
@@ -267,6 +286,7 @@ class SyncConfiguration(Base):
         sync_targets: list | None = None,
         sync_options: dict | None = None,
         is_active: bool = True,
+        parent_id: uuid.UUID | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id
@@ -276,6 +296,7 @@ class SyncConfiguration(Base):
         self.sync_targets = sync_targets or []
         self.sync_options = sync_options or {}
         self.is_active = is_active
+        self.parent_id = parent_id
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
 

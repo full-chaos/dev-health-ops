@@ -216,13 +216,23 @@ class GitLabConnector(GitConnector):
         """
         try:
             projects = []
+
+            # Sanitize user-supplied values to prevent log injection (CodeQL py/log-injection).
+            _group = (
+                str(group_name or group_id or "")
+                .replace("\r", "")
+                .replace("\n", "")[:200]
+            )
+            _user = str(user_name or "").replace("\r", "").replace("\n", "")[:200]
+            _search = str(search or "").replace("\r", "").replace("\n", "")[:200]
+            _pattern = str(pattern or "").replace("\r", "").replace("\n", "")[:200]
             logger.info(
                 "Listing GitLab projects (group=%s user=%s search=%s pattern=%s max=%s)",
-                group_name or group_id,
-                user_name,
-                search,
-                pattern,
-                max_projects,
+                _group,
+                _user,
+                _search,
+                _pattern,
+                int(max_projects) if max_projects is not None else None,
             )
 
             # Build common list parameters

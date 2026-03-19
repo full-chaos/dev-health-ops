@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
+    DiscoveredRepo,
+    DiscoveredReposResponse,
     IntegrationCredentialCreate,
     IntegrationCredentialResponse,
     IntegrationCredentialUpdate,
@@ -52,6 +54,78 @@ async def list_credentials(
         )
         for c in creds
     ]
+
+
+@router.get(
+    "/credentials/{credential_id}/repos", response_model=DiscoveredReposResponse
+)
+async def list_credential_repos(
+    credential_id: str,
+    owner: str | None = None,
+    search: str | None = None,
+    max_repos: int = 100,
+    session: AsyncSession = Depends(get_session),
+    org_id: str = Depends(get_admin_org_id),
+) -> DiscoveredReposResponse:
+    """List repositories accessible via a stored credential.
+
+    Must be registered BEFORE ``/credentials/{provider}/{name}`` so FastAPI
+    matches the more specific ``/repos`` suffix first.
+    """
+    svc = IntegrationCredentialsService(session, org_id)
+    decrypted, credential = await svc.get_decrypted_credentials_by_id(credential_id)
+    if credential is None or decrypted is None:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    provider = credential.provider
+    config = credential.config or {}
+
+    if provider == "github":
+        from dev_health_ops.connectors.github import GitHubConnector
+
+        token = decrypted.get("token")
+        base_url = decrypted.get("base_url") or config.get("base_url")
+        if not token:
+            raise HTTPException(
+                status_code=400, detail="GitHub credential missing token"
+            )
+        connector = GitHubConnector(token=token, base_url=base_url)
+        effective_owner = owner or config.get("org")
+        repos = connector.list_repositories(
+            org_name=effective_owner, search=search, max_repos=max_repos
+        )
+    elif provider == "gitlab":
+        from dev_health_ops.connectors.gitlab import GitLabConnector
+
+        token = decrypted.get("token")
+        url = decrypted.get("url") or config.get("url", "https://gitlab.com")
+        if not token:
+            raise HTTPException(
+                status_code=400, detail="GitLab credential missing token"
+            )
+        connector = GitLabConnector(url=url, private_token=token)
+        effective_owner = owner or config.get("group")
+        repos = connector.list_repositories(
+            org_name=effective_owner, search=search, max_repos=max_repos
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Repo listing not supported for provider: {provider}",
+        )
+
+    discovered = [
+        DiscoveredRepo(
+            name=r.name,
+            full_name=r.full_name,
+            description=r.description,
+            url=r.url,
+        )
+        for r in repos
+    ]
+    return DiscoveredReposResponse(
+        provider=provider, repos=discovered, total=len(discovered)
+    )
 
 
 @router.get(

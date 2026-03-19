@@ -13,6 +13,13 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+
+def _close_coroutine(coro):
+    """Close a coroutine without awaiting it to suppress RuntimeWarning."""
+    coro.close()
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -116,7 +123,7 @@ class TestLinearTeamSync:
 
         ns = _make_ns()
         with patch("asyncio.run") as mock_run:
-            mock_run.return_value = None
+            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -157,7 +164,7 @@ class TestLinearTeamSync:
 
         ns = _make_ns()
         with patch("asyncio.run") as mock_run:
-            mock_run.return_value = None
+            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -186,7 +193,7 @@ class TestLinearTeamSync:
 
         ns = _make_ns()
         with patch("asyncio.run") as mock_run:
-            mock_run.return_value = None
+            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -229,7 +236,7 @@ class TestLinearTeamSync:
 
         ns = _make_ns()
         with patch("asyncio.run") as mock_run:
-            mock_run.return_value = None
+            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0
@@ -300,7 +307,7 @@ class TestLinearTeamSync:
 
         ns = _make_ns()
         with patch("asyncio.run") as mock_run:
-            mock_run.return_value = None
+            mock_run.side_effect = _close_coroutine
             result = sync_teams(ns)
 
         assert result == 0

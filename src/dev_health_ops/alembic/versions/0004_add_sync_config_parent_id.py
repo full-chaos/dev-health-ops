@@ -13,8 +13,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
-from dev_health_ops.models.types import GUID
+from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "0004"
 down_revision: str | None = "0003"
@@ -25,7 +24,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column(
         "sync_configurations",
-        sa.Column("parent_id", GUID(), nullable=True),
+        sa.Column("parent_id", UUID(as_uuid=True), nullable=True),
     )
     op.create_foreign_key(
         "fk_sync_config_parent",

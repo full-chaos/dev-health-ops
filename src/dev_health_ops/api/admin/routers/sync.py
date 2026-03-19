@@ -153,7 +153,7 @@ async def create_sync_config(
 
     def _check_repo_limit(sync_session) -> tuple[bool, str | None]:
         tier_svc = TierLimitService(sync_session)
-        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count)
+        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count + 1)
 
     allowed, reason = await session.run_sync(_check_repo_limit)
     if not allowed:

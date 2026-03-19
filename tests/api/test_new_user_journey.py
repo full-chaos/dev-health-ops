@@ -18,6 +18,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser, AuthService
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.email_verification_token import EmailVerificationToken
 from dev_health_ops.models.git import Base
+from dev_health_ops.models.licensing import OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
     IdentityMapping,
     IntegrationCredential,
@@ -46,6 +47,8 @@ _TABLES = [
     JobRun.__table__,
     IdentityMapping.__table__,
     TeamMapping.__table__,
+    OrgLicense.__table__,
+    TierLimit.__table__,
 ]
 
 

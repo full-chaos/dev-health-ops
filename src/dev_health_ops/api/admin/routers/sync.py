@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from croniter import croniter as Croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -203,9 +204,7 @@ async def create_sync_config(
 
         # Fix 3: Validate the cron interval against the tier's min_sync_interval_hours.
         try:
-            from croniter import croniter
-
-            itr = croniter(schedule_cron)
+            itr = Croniter(schedule_cron)
             next1 = itr.get_next(float)
             next2 = itr.get_next(float)
             interval_hours = (next2 - next1) / 3600.0
@@ -305,9 +304,7 @@ async def update_sync_config(
 
         # Fix 3: Validate the cron interval against the tier's min_sync_interval_hours.
         try:
-            from croniter import croniter
-
-            itr = croniter(schedule_cron)
+            itr = Croniter(schedule_cron)
             next1 = itr.get_next(float)
             next2 = itr.get_next(float)
             interval_hours = (next2 - next1) / 3600.0

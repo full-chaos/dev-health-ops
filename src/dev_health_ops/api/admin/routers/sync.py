@@ -52,9 +52,26 @@ async def list_sync_configs(
     configs = await svc.list_all(active_only=active_only)
     if parent_only:
         configs = [c for c in configs if c.parent_id is None]
+
+    # Build children count map without lazy-loading relationships
+    from sqlalchemy import func, select
+    children_counts: dict[str, int] = {}
+    parent_ids = [c.id for c in configs if c.parent_id is None]
+    if parent_ids:
+        stmt = (
+            select(
+                SyncConfiguration.parent_id,
+                func.count(SyncConfiguration.id),
+            )
+            .where(SyncConfiguration.parent_id.in_(parent_ids))
+            .group_by(SyncConfiguration.parent_id)
+        )
+        rows = (await session.execute(stmt)).all()
+        children_counts = {str(pid): cnt for pid, cnt in rows}
+
     results = []
     for c in configs:
-        cc = len(c.children) if hasattr(c, "children") and c.children else None
+        cc = children_counts.get(str(c.id))
         results.append(_sync_config_to_response(c, children_count=cc))
     return results
 

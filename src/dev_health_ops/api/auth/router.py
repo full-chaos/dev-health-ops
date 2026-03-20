@@ -1466,13 +1466,19 @@ async def social_login(
         provider = create_oauth_provider(provider_name, config)
         user_info = await provider.fetch_user_info(payload.provider_access_token)
     except OAuthUserInfoError as exc:
-        logger.warning("Social login user info fetch failed for %s: %s", provider_name, type(exc).__name__)
+        logger.warning(
+            "Social login user info fetch failed for %s: %s",
+            provider_name,
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=401,
             detail=error_detail("Invalid or expired provider token"),
         ) from exc
     except OAuthProviderError as exc:
-        logger.error("Social login provider error for %s: %s", provider_name, type(exc).__name__)
+        logger.error(
+            "Social login provider error for %s: %s", provider_name, type(exc).__name__
+        )
         raise HTTPException(
             status_code=502,
             detail=error_detail("Failed to verify with provider"),
@@ -1496,9 +1502,7 @@ async def social_login(
         if user is None:
             # 2. Try to find user by email
             result = await db.execute(
-                select(User).where(
-                    func.lower(User.email) == user_info.email.lower()
-                )
+                select(User).where(func.lower(User.email) == user_info.email.lower())
             )
             user = result.scalar_one_or_none()
 

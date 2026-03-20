@@ -1444,8 +1444,15 @@ async def social_login(
     The frontend (NextAuth) handles the OAuth redirect dance and passes us the
     provider's access token. We verify it server-side and issue our own tokens.
     """
-    provider_name = payload.provider.lower()
-    env_prefix = f"SOCIAL_{provider_name.upper()}"
+    # Allowlist mapping avoids taint propagation from user input into logs/env lookups
+    _SOCIAL_PROVIDERS = {"github": "GITHUB", "gitlab": "GITLAB", "google": "GOOGLE"}
+    provider_key = _SOCIAL_PROVIDERS.get(payload.provider.lower())
+    if not provider_key:
+        raise HTTPException(
+            status_code=400, detail=error_detail("Unsupported provider")
+        )
+    provider_name = provider_key.lower()  # safe, from static dict
+    env_prefix = f"SOCIAL_{provider_key}"
     client_id = os.environ.get(f"{env_prefix}_CLIENT_ID", "")
     client_secret = os.environ.get(f"{env_prefix}_CLIENT_SECRET", "")
 

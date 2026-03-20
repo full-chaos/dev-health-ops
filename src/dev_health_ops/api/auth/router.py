@@ -39,6 +39,13 @@ from dev_health_ops.api.services.login_attempts import (
     get_lockout_remaining_seconds,
     record_failed_attempt,
 )
+from dev_health_ops.api.services.oauth import (
+    OAuthConfig,
+    OAuthProviderError,
+    OAuthUserInfoError,
+    create_oauth_provider,
+    get_default_scopes,
+)
 from dev_health_ops.api.services.refresh_tokens import (
     create_refresh_token as create_refresh_token_record,
 )
@@ -47,13 +54,6 @@ from dev_health_ops.api.services.refresh_tokens import (
     revoke_family,
     revoke_token,
     rotate_token,
-)
-from dev_health_ops.api.services.oauth import (
-    OAuthConfig,
-    OAuthProviderError,
-    OAuthUserInfoError,
-    create_oauth_provider,
-    get_default_scopes,
 )
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.errors import error_detail

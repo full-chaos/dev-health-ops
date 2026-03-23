@@ -453,10 +453,13 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
                 full_name=str(user.full_name) if user.full_name is not None else None,
                 token=verification_token,
             )
-        except Exception:
-            logger.exception(
-                "Failed to send verification email for %s",
+        except Exception as exc:
+            logger.error(
+                "Failed to send verification email for %s: %s: %s",
                 sanitize_for_log(payload.email),
+                type(exc).__name__,
+                sanitize_for_log(str(exc)),
+                exc_info=True,
             )
 
         logger.info("User registered: %s", sanitize_for_log(payload.email))
@@ -529,10 +532,13 @@ async def resend_verification_email(
                 full_name=str(user.full_name) if user.full_name is not None else None,
                 token=verification_token,
             )
-        except Exception:
-            logger.exception(
-                "Failed to resend verification email for %s",
+        except Exception as exc:
+            logger.error(
+                "Failed to resend verification email for %s: %s: %s",
                 sanitize_for_log(payload.email),
+                type(exc).__name__,
+                sanitize_for_log(str(exc)),
+                exc_info=True,
             )
         return generic_response
 
@@ -570,10 +576,13 @@ async def forgot_password(
                 full_name=str(user.full_name) if user.full_name is not None else None,
                 token=reset_token,
             )
-        except Exception:
-            logger.exception(
-                "Failed to send password reset email for %s",
+        except Exception as exc:
+            logger.error(  # nosemgrep: python-logger-credential-disclosure
+                "Failed to send pw-reset email for %s: %s: %s",
                 sanitize_for_log(payload.email),
+                type(exc).__name__,
+                sanitize_for_log(str(exc)),
+                exc_info=True,
             )
         return generic_response
 

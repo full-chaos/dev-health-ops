@@ -124,7 +124,7 @@ async def send_verification_email(
     full_name: str | None,
     token: str,
 ) -> None:
-    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+    base_url = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
     verification_url = f"{base_url}/auth/verify?token={quote(token)}"
     email_service = importlib.import_module(
         "dev_health_ops.api.services.email"

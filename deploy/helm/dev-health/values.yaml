@@ -319,7 +319,7 @@ secrets:
     EMAIL_PROVIDER: "console"
     SMTP_HOST: ""
     SMTP_PORT: ""
-    RESEND_API_KEY: ""
+    EMAIL_API_KEY: ""
     SENTRY_DSN: ""
     LICENSE_PUBLIC_KEY: ""
     LICENSE_PRIVATE_KEY: ""

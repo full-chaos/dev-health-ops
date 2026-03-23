@@ -577,8 +577,8 @@ async def forgot_password(
                 token=reset_token,
             )
         except Exception as exc:
-            logger.error(
-                "Failed to send password reset email for %s: %s: %s",
+            logger.error(  # nosemgrep: python-logger-credential-disclosure
+                "Failed to send pw-reset email for %s: %s: %s",
                 sanitize_for_log(payload.email),
                 type(exc).__name__,
                 sanitize_for_log(str(exc)),

@@ -10,6 +10,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from dev_health_ops.api.utils.logging import sanitize_for_log
+
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates" / "email"
@@ -154,25 +156,25 @@ class ResendEmailProvider(EmailProvider):
         response = resend.Emails.send(payload)
         # Resend returns {"id": "..."} on success.  Some SDK versions
         # return an error dict instead of raising, so check explicitly.
+        safe_to = sanitize_for_log(to_address)
         if isinstance(response, Mapping):
             if "error" in response:
                 raise RuntimeError(
-                    f"Resend API error: {response['error']} "
-                    f"(from={from_address}, to={to_address})"
+                    f"Resend API error: {sanitize_for_log(response['error'])} "
+                    f"(to={safe_to})"
                 )
             email_id = response.get("id")
             logger.info(
                 "Resend email sent: id=%s to=%s subject=%s",
                 email_id,
-                to_address,
-                subject,
+                safe_to,
+                sanitize_for_log(subject),
             )
         else:
             logger.warning(
-                "Unexpected Resend response type %s: %r (to=%s)",
+                "Unexpected Resend response type %s (to=%s)",
                 type(response).__name__,
-                response,
-                to_address,
+                safe_to,
             )
 
 

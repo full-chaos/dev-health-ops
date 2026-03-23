@@ -458,7 +458,7 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
                 "Failed to send verification email for %s: %s: %s",
                 sanitize_for_log(payload.email),
                 type(exc).__name__,
-                exc,
+                sanitize_for_log(str(exc)),
                 exc_info=True,
             )
 
@@ -537,7 +537,7 @@ async def resend_verification_email(
                 "Failed to resend verification email for %s: %s: %s",
                 sanitize_for_log(payload.email),
                 type(exc).__name__,
-                exc,
+                sanitize_for_log(str(exc)),
                 exc_info=True,
             )
         return generic_response
@@ -581,7 +581,7 @@ async def forgot_password(
                 "Failed to send password reset email for %s: %s: %s",
                 sanitize_for_log(payload.email),
                 type(exc).__name__,
-                exc,
+                sanitize_for_log(str(exc)),
                 exc_info=True,
             )
         return generic_response

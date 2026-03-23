@@ -151,7 +151,29 @@ class ResendEmailProvider(EmailProvider):
         }
         if text_content is not None:
             payload["text"] = text_content
-        resend.Emails.send(payload)
+        response = resend.Emails.send(payload)
+        # Resend returns {"id": "..."} on success.  Some SDK versions
+        # return an error dict instead of raising, so check explicitly.
+        if isinstance(response, Mapping):
+            if "error" in response:
+                raise RuntimeError(
+                    f"Resend API error: {response['error']} "
+                    f"(from={from_address}, to={to_address})"
+                )
+            email_id = response.get("id")
+            logger.info(
+                "Resend email sent: id=%s to=%s subject=%s",
+                email_id,
+                to_address,
+                subject,
+            )
+        else:
+            logger.warning(
+                "Unexpected Resend response type %s: %r (to=%s)",
+                type(response).__name__,
+                response,
+                to_address,
+            )
 
 
 class EmailService:
@@ -210,9 +232,14 @@ def get_email_service() -> EmailService:
     from_address = os.getenv("EMAIL_FROM_ADDRESS", "dev-health@example.com").strip()
 
     if provider_name == "resend":
-        api_key = os.getenv("EMAIL_API_KEY", "").strip()
+        api_key = (
+            os.getenv("EMAIL_API_KEY", "").strip()
+            or os.getenv("RESEND_API_KEY", "").strip()
+        )
         if not api_key:
-            raise RuntimeError("EMAIL_API_KEY is required when EMAIL_PROVIDER=resend")
+            raise RuntimeError(
+                "EMAIL_API_KEY (or RESEND_API_KEY) is required when EMAIL_PROVIDER=resend"
+            )
         provider: EmailProvider = ResendEmailProvider(api_key=api_key)
     elif provider_name == "smtp":
         provider = SmtpEmailProvider(

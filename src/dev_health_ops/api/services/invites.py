@@ -167,7 +167,7 @@ async def send_invite_email(
     inviter_name: str,
     token: str,
 ) -> None:
-    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
+    base_url = os.getenv("APP_BASE_URL", "http://localhost:3000").rstrip("/")
     accept_url = f"{base_url}/accept-invite?token={quote(token)}"
     email_service = get_email_service()
     await email_service.send_template_email(

@@ -10,6 +10,8 @@ Environment variables:
     OTEL_SERVICE_NAME         — service name tag (default: dev-health-ops)
     OTEL_ENVIRONMENT          — deployment environment tag (default: production)
     OTEL_SAMPLE_RATE          — head-based sample rate 0.0–1.0 (default: 0.1)
+    OTEL_METRIC_EXPORT_INTERVAL — metric export interval in milliseconds
+                                   (default: 60000)
 
 Usage:
     from dev_health_ops.tracing import init_tracing, instrument_fastapi_app
@@ -76,6 +78,45 @@ def init_tracing() -> bool:
         provider = TracerProvider(resource=resource, sampler=sampler)
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
+
+        # ----- Metrics (OTLP push) -----
+        try:
+            from opentelemetry import metrics as otel_metrics
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter,
+            )
+            from opentelemetry.sdk.metrics import MeterProvider
+            from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+            metric_export_interval = int(
+                os.getenv("OTEL_METRIC_EXPORT_INTERVAL", "60000")
+            )
+
+            metric_exporter = OTLPMetricExporter(endpoint=otlp_endpoint)
+            metric_reader = PeriodicExportingMetricReader(
+                metric_exporter,
+                export_interval_millis=metric_export_interval,
+            )
+            meter_provider = MeterProvider(
+                resource=resource,
+                metric_readers=[metric_reader],
+            )
+            otel_metrics.set_meter_provider(meter_provider)
+
+            logger.info(
+                "OpenTelemetry metrics initialised",
+                extra={
+                    "otlp_endpoint": otlp_endpoint,
+                    "export_interval_ms": metric_export_interval,
+                },
+            )
+        except ImportError as exc:
+            logger.warning(
+                "opentelemetry metrics packages not installed — metrics push disabled: %s",
+                exc,
+            )
+        except Exception as exc:
+            logger.warning("OpenTelemetry metrics initialisation failed: %s", exc)
 
         _initialized = True
         logger.info(

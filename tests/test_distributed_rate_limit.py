@@ -300,7 +300,7 @@ class TestFactory:
         mock_redis.ping.return_value = True
 
         with patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
-            with patch("redis.from_url", return_value=mock_redis):
+            with patch("valkey.from_url", return_value=mock_redis):
                 gate = create_rate_limit_gate("github", "token123")
 
         assert isinstance(gate, DistributedRateLimitGate)
@@ -313,14 +313,14 @@ class TestFactory:
 
     def test_returns_local_when_redis_connection_fails(self):
         with patch.dict("os.environ", {"REDIS_URL": "redis://bad:6379"}):
-            with patch("redis.from_url", side_effect=ConnectionError("refused")):
+            with patch("valkey.from_url", side_effect=ConnectionError("refused")):
                 gate = create_rate_limit_gate("github")
 
         assert type(gate) is RateLimitGate
 
     def test_caches_redis_unavailable_for_60s(self):
         with patch.dict("os.environ", {"REDIS_URL": "redis://bad:6379"}):
-            with patch("redis.from_url", side_effect=ConnectionError("refused")):
+            with patch("valkey.from_url", side_effect=ConnectionError("refused")):
                 create_rate_limit_gate("github")
 
         assert rate_limit_queue_mod._redis_unavailable_until > time.time()
@@ -330,7 +330,7 @@ class TestFactory:
         rate_limit_queue_mod._redis_unavailable_until = time.time() + 30.0
 
         with patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
-            with patch("redis.from_url") as mock_from_url:
+            with patch("valkey.from_url") as mock_from_url:
                 gate = create_rate_limit_gate("github")
 
         mock_from_url.assert_not_called()
@@ -353,7 +353,7 @@ class TestFactory:
                 {"CELERY_BROKER_URL": "redis://localhost:6379"},
                 clear=True,
             ),
-            patch("redis.from_url", return_value=mock_redis),
+            patch("valkey.from_url", return_value=mock_redis),
         ):
             gate = create_rate_limit_gate("github")
 

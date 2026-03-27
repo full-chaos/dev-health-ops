@@ -100,11 +100,11 @@ ConfigMap name
 {{- end }}
 
 {{/*
-Redis URL — auto-computed when redis.enabled, otherwise from secrets
+Redis URL — auto-computed when valkey.enabled, otherwise from secrets
 */}}
 {{- define "dev-health.redisURL" -}}
-{{- if .Values.redis.enabled }}
-{{- printf "redis://%s-redis:6379/0" (include "dev-health.fullname" .) }}
+{{- if .Values.valkey.enabled }}
+{{- printf "redis://%s-valkey:6379/0" (include "dev-health.fullname" .) }}
 {{- else }}
 {{- .Values.config.CELERY_BROKER_URL | default "" }}
 {{- end }}

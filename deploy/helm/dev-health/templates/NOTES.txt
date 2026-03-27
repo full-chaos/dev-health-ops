@@ -45,7 +45,7 @@ Components deployed:
   {{- if .Values.worker.enabled }}  ✅ Worker{{ end }}
   {{- if .Values.beat.enabled }}  ✅ Beat{{ end }}
   {{- if .Values.billingEdge.enabled }}  ✅ Billing Edge{{ end }}
-  {{- if .Values.redis.enabled }}  ✅ Redis (in-cluster){{ end }}
+  {{- if .Values.valkey.enabled }}  ✅ Valkey (in-cluster){{ end }}
   {{- if .Values.clickhouse.enabled }}  ✅ ClickHouse (in-cluster){{ end }}
   {{- if .Values.postgresql.enabled }}  ✅ PostgreSQL (in-cluster){{ end }}
 

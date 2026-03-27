@@ -5,6 +5,7 @@ import json
 import pytest
 
 fakeredis = pytest.importorskip("fakeredis")
+from fakeredis import FakeValkey  # noqa: E402
 
 from dev_health_ops.api.ingest.consumer import (
     CONSUMER_GROUP,
@@ -22,7 +23,7 @@ from dev_health_ops.api.ingest.streams import (
 
 @pytest.fixture
 def fake_redis():
-    return fakeredis.FakeRedis(decode_responses=True)
+    return FakeValkey(decode_responses=True)
 
 
 class TestGetRedisClient:

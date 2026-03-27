@@ -134,7 +134,7 @@ async def check_idempotency(
         return x_idempotency_key
 
     try:
-        import redis
+        import valkey as redis
 
         rc = redis.from_url(redis_url, decode_responses=True)
         was_set = rc.set(f"idem:{x_idempotency_key}", "1", nx=True, ex=86400)

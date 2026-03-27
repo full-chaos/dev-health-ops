@@ -133,7 +133,7 @@ async def test_idempotency_first_request(client, monkeypatch):
     mock_redis_mod = MagicMock()
     mock_redis_mod.from_url.return_value = mock_rc
 
-    with patch.dict(sys.modules, {"redis": mock_redis_mod}):
+    with patch.dict(sys.modules, {"valkey": mock_redis_mod}):
         resp = await client.post(
             ENDPOINT,
             json=VALID_PAYLOAD,
@@ -155,7 +155,7 @@ async def test_idempotency_duplicate_request(client, monkeypatch):
     mock_redis_mod = MagicMock()
     mock_redis_mod.from_url.return_value = mock_rc
 
-    with patch.dict(sys.modules, {"redis": mock_redis_mod}):
+    with patch.dict(sys.modules, {"valkey": mock_redis_mod}):
         resp = await client.post(
             ENDPOINT,
             json=VALID_PAYLOAD,
@@ -175,7 +175,7 @@ async def test_idempotency_redis_unavailable(client, monkeypatch):
     mock_redis_mod = MagicMock()
     mock_redis_mod.from_url.side_effect = ConnectionError("Redis down")
 
-    with patch.dict(sys.modules, {"redis": mock_redis_mod}):
+    with patch.dict(sys.modules, {"valkey": mock_redis_mod}):
         resp = await client.post(
             ENDPOINT,
             json=VALID_PAYLOAD,

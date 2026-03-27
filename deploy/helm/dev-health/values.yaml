@@ -281,7 +281,7 @@ config:
   GRAPHQL_QUERY_TIMEOUT: "30"
   BATCH_SIZE: "100"
   MAX_WORKERS: "4"
-  # -- Celery (auto-set if redis.enabled, override for external broker)
+  # -- Celery (auto-set if valkey.enabled, override for external broker)
   CELERY_BROKER_URL: ""
   CELERY_RESULT_BACKEND: ""
   # -- Integration defaults
@@ -325,13 +325,13 @@ secrets:
     LICENSE_PRIVATE_KEY: ""
 
 # =============================================================================
-# In-cluster Redis (optional — disable for managed Redis)
+# In-cluster Valkey (optional — disable for managed Valkey/Redis)
 # =============================================================================
-redis:
+valkey:
   enabled: true
   image:
-    repository: redis
-    tag: "7-alpine"
+    repository: valkey/valkey
+    tag: "8-alpine"
   resources:
     requests:
       memory: "64Mi"

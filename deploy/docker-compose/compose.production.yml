@@ -26,21 +26,21 @@ services:
     networks:
       - dev-health
 
-  redis:
-    image: redis:7-alpine
-    container_name: dev-health-redis
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: dev-health-valkey
     restart: unless-stopped
     command: >
-      redis-server
+      valkey-server
       --appendonly yes
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redis_data:/data
+      - valkey_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -59,9 +59,9 @@ services:
       - "8000"
     environment:
       DATABASE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
-      REDIS_URL: redis://redis:6379/1
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      REDIS_URL: redis://valkey:6379/1
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
       GRAPHQL_QUERY_TIMEOUT: ${GRAPHQL_QUERY_TIMEOUT:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
@@ -75,7 +75,7 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -149,8 +149,8 @@ services:
       - --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       DATABASE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
@@ -161,7 +161,7 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
     networks:
       - dev-health
@@ -177,7 +177,7 @@ services:
 volumes:
   clickhouse_data:
     driver: local
-  redis_data:
+  valkey_data:
     driver: local
 
 networks:

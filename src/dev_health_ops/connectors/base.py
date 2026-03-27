@@ -17,7 +17,7 @@ from queue import Empty as QueueEmpty
 from queue import Queue
 from typing import Any
 
-import redis
+import valkey as redis
 
 from dev_health_ops.connectors.models import (
     Author,

@@ -19,7 +19,7 @@ clickhouse:
     password: ch
     database: default
 
-redis:
+valkey:
   enabled: true
 
 # Pre-filled secrets with generated defaults

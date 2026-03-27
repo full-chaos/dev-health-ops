@@ -98,7 +98,7 @@ class TokenPool:
             self._warn_once("No REDIS_URL configured — token pool disabled")
             return
         try:
-            import redis as _redis_mod
+            import valkey as _redis_mod
 
             client = _redis_mod.from_url(url, decode_responses=True)
             client.ping()

@@ -53,14 +53,14 @@ services:
       retries: 3
       start_period: 30s
 
-  redis:
-    image: redis:alpine
-    container_name: redis
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: valkey
     restart: unless-stopped
     ports:
       - "6379:6379"
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: [ "CMD", "valkey-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -82,7 +82,7 @@ services:
       GRAPHQL_QUERY_TIMEOUT: "30"
       DATABASE_URI: "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
       CLICKHOUSE_URI: "clickhouse://ch:ch@clickhouse:8123/default"
-      REDIS_URL: "redis://redis:6379/1"
+      REDIS_URL: "redis://valkey:6379/1"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
@@ -106,7 +106,7 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -168,14 +168,14 @@ services:
     command: celery -A workers.celery_app worker --loglevel=info -Q default,metrics,sync,webhooks,backfill
     environment:
       <<: *env
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
       # Email (Resend) — worker sends billing emails via Celery task
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
       EMAIL_API_KEY: ${EMAIL_API_KEY:-}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
     depends_on:
-      redis:
+      valkey:
         condition: service_healthy
       clickhouse:
         condition: service_healthy

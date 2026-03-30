@@ -19,8 +19,8 @@ data:
   API_PORT: "8000"
   
   # Celery configuration
-  CELERY_BROKER_URL: "redis://redis:6379/0"
-  CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+  CELERY_BROKER_URL: "redis://valkey:6379/0"
+  CELERY_RESULT_BACKEND: "redis://valkey:6379/0"
   
   # GitLab configuration (for self-hosted)
   GITLAB_URL: "https://gitlab.com"

@@ -54,7 +54,7 @@ class RedisPubSub:
             return False
 
         try:
-            import redis.asyncio as aioredis
+            import valkey.asyncio as aioredis
 
             self._client = aioredis.from_url(self._redis_url, decode_responses=True)
             await self._client.ping()

@@ -168,7 +168,7 @@ class DistributedRateLimitGate(RateLimitGate):
             self._warn_once("No REDIS_URL or CELERY_BROKER_URL configured")
             return
         try:
-            import redis as _redis_mod
+            import valkey as _redis_mod
 
             client = _redis_mod.from_url(redis_url, decode_responses=True)
             client.ping()

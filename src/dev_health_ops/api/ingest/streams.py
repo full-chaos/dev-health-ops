@@ -22,7 +22,7 @@ def get_redis_client():
     if not redis_url:
         return None
     try:
-        import redis
+        import valkey as redis
 
         return redis.from_url(redis_url, decode_responses=True)
     except Exception:

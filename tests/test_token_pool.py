@@ -29,8 +29,8 @@ def _fakeredis_supports_lua() -> bool:
     if fakeredis is None:
         return False
     try:
-        client = fakeredis.FakeRedis(decode_responses=True)
-        # Redis EVAL command for Lua scripting (not Python eval)
+        client = fakeredis.FakeValkey(decode_responses=True)
+        # Valkey EVAL command for Lua scripting (not Python eval)
         client.eval("return 1", 0)  # noqa: S307
         return True
     except Exception:
@@ -45,7 +45,7 @@ requires_lua = pytest.mark.skipif(
 
 @pytest.fixture()
 def redis_client() -> Any:
-    return fakeredis.FakeRedis(decode_responses=True)
+    return fakeredis.FakeValkey(decode_responses=True)
 
 
 @pytest.fixture()
@@ -267,7 +267,7 @@ class TestFactory:
         mock_redis.script_load.return_value = "sha"
 
         with patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
-            with patch("redis.from_url", return_value=mock_redis):
+            with patch("valkey.from_url", return_value=mock_redis):
                 pool = create_token_pool("github", "my-org")
 
         assert isinstance(pool, TokenPool)

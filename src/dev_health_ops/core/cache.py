@@ -66,7 +66,7 @@ class RedisBackend(CacheBackend):
 
     def __init__(self, redis_url: str) -> None:
         try:
-            import redis
+            import valkey as redis
 
             self._client = redis.from_url(redis_url, decode_responses=True)
             self._client.ping()  # Test connection

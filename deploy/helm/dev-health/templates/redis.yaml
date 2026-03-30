@@ -1,90 +1,90 @@
-{{- if .Values.redis.enabled }}
+{{- if .Values.valkey.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "dev-health.fullname" . }}-redis
+  name: {{ include "dev-health.fullname" . }}-valkey
   namespace: {{ include "dev-health.namespace" . }}
   labels:
-    {{- include "dev-health.componentLabels" (dict "component" "redis" "context" $) | nindent 4 }}
+    {{- include "dev-health.componentLabels" (dict "component" "valkey" "context" $) | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "dev-health.componentSelectorLabels" (dict "component" "redis" "context" $) | nindent 6 }}
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "valkey" "context" $) | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "dev-health.componentSelectorLabels" (dict "component" "redis" "context" $) | nindent 8 }}
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "valkey" "context" $) | nindent 8 }}
     spec:
       containers:
-        - name: redis
-          image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
+        - name: valkey
+          image: {{ .Values.valkey.image.repository }}:{{ .Values.valkey.image.tag }}
           args:
             - --appendonly
             - "yes"
             - --maxmemory
-            - {{ .Values.redis.maxmemory | quote }}
+            - {{ .Values.valkey.maxmemory | quote }}
             - --maxmemory-policy
             - allkeys-lru
           ports:
-            - name: redis
+            - name: valkey
               containerPort: 6379
           resources:
-            {{- toYaml .Values.redis.resources | nindent 12 }}
+            {{- toYaml .Values.valkey.resources | nindent 12 }}
           livenessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command: ["valkey-cli", "ping"]
             initialDelaySeconds: 10
             periodSeconds: 5
           readinessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command: ["valkey-cli", "ping"]
             initialDelaySeconds: 5
             periodSeconds: 3
-          {{- if .Values.redis.persistence.enabled }}
+          {{- if .Values.valkey.persistence.enabled }}
           volumeMounts:
-            - name: redis-data
+            - name: valkey-data
               mountPath: /data
           {{- end }}
-      {{- if .Values.redis.persistence.enabled }}
+      {{- if .Values.valkey.persistence.enabled }}
       volumes:
-        - name: redis-data
+        - name: valkey-data
           persistentVolumeClaim:
-            claimName: {{ include "dev-health.fullname" . }}-redis
+            claimName: {{ include "dev-health.fullname" . }}-valkey
       {{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "dev-health.fullname" . }}-redis
+  name: {{ include "dev-health.fullname" . }}-valkey
   namespace: {{ include "dev-health.namespace" . }}
   labels:
-    {{- include "dev-health.componentLabels" (dict "component" "redis" "context" $) | nindent 4 }}
+    {{- include "dev-health.componentLabels" (dict "component" "valkey" "context" $) | nindent 4 }}
 spec:
   type: ClusterIP
   selector:
-    {{- include "dev-health.componentSelectorLabels" (dict "component" "redis" "context" $) | nindent 4 }}
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "valkey" "context" $) | nindent 4 }}
   ports:
-    - name: redis
+    - name: valkey
       port: 6379
-      targetPort: redis
-{{- if .Values.redis.persistence.enabled }}
+      targetPort: valkey
+{{- if .Values.valkey.persistence.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "dev-health.fullname" . }}-redis
+  name: {{ include "dev-health.fullname" . }}-valkey
   namespace: {{ include "dev-health.namespace" . }}
   labels:
-    {{- include "dev-health.componentLabels" (dict "component" "redis" "context" $) | nindent 4 }}
+    {{- include "dev-health.componentLabels" (dict "component" "valkey" "context" $) | nindent 4 }}
 spec:
   accessModes:
     - ReadWriteOnce
-  {{- if .Values.redis.persistence.storageClass }}
-  storageClassName: {{ .Values.redis.persistence.storageClass | quote }}
+  {{- if .Values.valkey.persistence.storageClass }}
+  storageClassName: {{ .Values.valkey.persistence.storageClass | quote }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.redis.persistence.size }}
+      storage: {{ .Values.valkey.persistence.size }}
 {{- end }}
 {{- end }}

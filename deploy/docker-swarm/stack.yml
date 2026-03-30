@@ -41,15 +41,20 @@ services:
     networks:
       - dev-health-internal
 
-  redis:
-    image: redis:7-alpine
+  valkey:
+    image: valkey/valkey:8-alpine
     command: >
-      redis-server
+      valkey-server
       --appendonly yes
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     volumes:
-      - redis_data:/data
+      - valkey_data:/data
+    tmpfs:
+      - /tmp
     deploy:
       mode: replicated
       replicas: 1
@@ -64,7 +69,7 @@ services:
         condition: on-failure
         delay: 5s
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -80,9 +85,9 @@ services:
       - "8000"
     environment:
       DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
-      REDIS_URL: redis://redis:6379/1
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      REDIS_URL: redis://valkey:6379/1
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
       GRAPHQL_QUERY_TIMEOUT: "30"
       LOG_LEVEL: INFO
     secrets:
@@ -140,8 +145,8 @@ services:
       - --concurrency=4
     environment:
       DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://valkey:6379/0
+      CELERY_RESULT_BACKEND: redis://valkey:6379/0
       LOG_LEVEL: INFO
     secrets:
       - github_token
@@ -171,7 +176,7 @@ services:
 volumes:
   clickhouse_data:
     driver: local
-  redis_data:
+  valkey_data:
     driver: local
 
 networks:

@@ -45,7 +45,7 @@ spec:
               {{- end }}
             - name: NODE_ENV
               value: {{ .Values.web.env.NODE_ENV | quote }}
-            {{- if .Values.redis.enabled }}
+            {{- if .Values.valkey.enabled }}
             - name: REDIS_URL
               value: {{ include "dev-health.redisURL" . | quote }}
             {{- end }}

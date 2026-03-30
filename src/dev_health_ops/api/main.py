@@ -227,7 +227,7 @@ async def _check_redis_health() -> tuple[str, str]:
     if not redis_url:
         return "redis", "not_configured"
     try:
-        import redis.asyncio as aioredis
+        import valkey.asyncio as aioredis
 
         client = aioredis.from_url(redis_url, socket_connect_timeout=2)
         try:

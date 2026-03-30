@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "dev-health.labels" . | nindent 4 }}
 data:
-  {{- $redisAuto := and $.Values.redis.enabled (not $.Values.config.CELERY_BROKER_URL) }}
+  {{- $redisAuto := and $.Values.valkey.enabled (not $.Values.config.CELERY_BROKER_URL) }}
   {{- $redisKeys := list "CELERY_BROKER_URL" "CELERY_RESULT_BACKEND" "REDIS_URL" }}
   {{- range $key, $value := .Values.config }}
   {{- if or $value (not (and $redisAuto (has $key $redisKeys))) }}

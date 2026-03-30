@@ -4,7 +4,7 @@ import os
 
 from celery.schedules import crontab
 
-# Broker and backend (Redis)
+# Broker and backend (Valkey, using redis:// wire protocol)
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 

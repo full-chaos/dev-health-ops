@@ -29,6 +29,8 @@ spec:
               containerPort: {{ .Values.web.port }}
               protocol: TCP
           env:
+            - name: HOSTNAME
+              value: "::"
             - name: BACKEND_URL
               value: {{ default (printf "http://%s-api:%d" (include "dev-health.fullname" .) (.Values.api.port | int)) .Values.web.env.BACKEND_URL | quote }}
             - name: AUTH_SECRET

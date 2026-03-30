@@ -48,8 +48,13 @@ services:
       --appendonly yes
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     volumes:
       - valkey_data:/data
+    tmpfs:
+      - /tmp
     deploy:
       mode: replicated
       replicas: 1

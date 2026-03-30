@@ -22,6 +22,11 @@ spec:
       containers:
         - name: valkey
           image: valkey/valkey:8-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
           ports:
             - containerPort: 6379
               name: valkey
@@ -46,6 +51,17 @@ spec:
                 - ping
             initialDelaySeconds: 5
             periodSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            medium: Memory
 ---
 apiVersion: v1
 kind: Service

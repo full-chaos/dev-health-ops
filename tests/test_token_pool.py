@@ -8,9 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 try:
-    from fakeredis import FakeValkey as _FakeValkey
-
     import fakeredis
+    from fakeredis import FakeValkey as _FakeValkey
 except (ImportError, TypeError):
     fakeredis = None  # type: ignore[assignment]
 

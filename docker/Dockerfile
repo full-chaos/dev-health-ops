@@ -22,9 +22,17 @@ ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
 
 COPY . .
 
-# Build and install into a prefix that we can copy into the runtime image
+# Build and install into a prefix that we can copy into the runtime image.
+# Strip pip and setuptools (not needed at runtime).
 RUN pip install --upgrade pip && \
-  pip install --no-cache-dir --prefix=/install .
+  pip install --no-cache-dir --prefix=/install . && \
+  rm -rf /install/lib/python3.14/site-packages/pip \
+         /install/lib/python3.14/site-packages/pip-* \
+         /install/lib/python3.14/site-packages/setuptools \
+         /install/lib/python3.14/site-packages/setuptools-* \
+  && find /install/lib/python3.14/site-packages/ -name '*.dist-info' -exec sh -c \
+       'for d; do rm -f "$d/RECORD" "$d/SOURCES.txt" "$d/direct_url.json"; done' _ {} + \
+  && find /install/ -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null; true
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
@@ -38,7 +46,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends git wget \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages from builder (no build tools follow)
+# Copy installed packages from builder (no build tools, pip, or setuptools).
 COPY --from=builder /install /usr/local
 
 RUN useradd --create-home --shell /bin/bash appuser
@@ -55,7 +63,7 @@ EXPOSE 8000
 
 # Readiness probe — fast check, no external dependency validation
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')" || exit 1
+  CMD wget -qO- http://localhost:8000/ready || exit 1
 
 ENTRYPOINT ["dev-hops", "api"]
 CMD ["--host", "0.0.0.0", "--port", "8000"]

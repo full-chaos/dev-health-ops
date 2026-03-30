@@ -9,7 +9,6 @@ import pytest
 
 try:
     import fakeredis
-    from fakeredis import FakeValkey as _FakeValkey
 except (ImportError, TypeError):
     fakeredis = None  # type: ignore[assignment]
 

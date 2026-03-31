@@ -18,7 +18,12 @@ from contextlib import asynccontextmanager, contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import Session, sessionmaker
 
 _postgres_engine: AsyncEngine | None = None
@@ -85,7 +90,7 @@ def get_clickhouse_engine() -> AsyncEngine:
 async def get_postgres_session() -> AsyncGenerator[AsyncSession, None]:
     """Async context manager for PostgreSQL sessions."""
     engine = get_postgres_engine()
-    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         try:
             yield session
@@ -99,8 +104,8 @@ async def get_postgres_session() -> AsyncGenerator[AsyncSession, None]:
 async def get_clickhouse_session() -> AsyncGenerator[AsyncSession, None]:
     """Async context manager for ClickHouse sessions."""
     engine = get_clickhouse_engine()
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
         try:
             yield session
             await session.commit()
@@ -119,6 +124,20 @@ async def clickhouse_session_dependency() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency for ClickHouse sessions."""
     async with get_clickhouse_session() as session:
         yield session
+
+
+def reset_async_engines() -> None:
+    """Dispose global async engines so they are recreated on the next event loop.
+
+    Call before ``asyncio.run()`` in Celery workers to avoid
+    'Future attached to a different loop' errors.
+    """
+    global _postgres_engine, _clickhouse_engine
+    for engine in (_postgres_engine, _clickhouse_engine):
+        if engine is not None:
+            engine.sync_engine.dispose()
+    _postgres_engine = None
+    _clickhouse_engine = None
 
 
 async def close_engines() -> None:

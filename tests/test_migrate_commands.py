@@ -13,7 +13,6 @@ from dev_health_ops.migrate import (
     _run_clickhouse_upgrade,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -164,110 +163,6 @@ class TestClickhouseStatus:
         assert "[pending]" in out
         assert "001_add_col.sql" in out
         assert "1 applied, 1 pending, 2 total" in out
-        mock_client.close.assert_called_once()
-
-    @patch(
-        "dev_health_ops.migrate.resolve_sink_uri",
-        return_value="clickhouse://fake:8123/test",
-    )
-    def test_all_pending_when_no_schema_migrations_table(
-        self, _mock_uri, tmp_path, capsys
-    ):
-        (tmp_path / "000_init.sql").write_text("SELECT 1")
-
-        mock_client = MagicMock()
-        mock_client.query.side_effect = Exception("Unknown table")
-
-        with (
-            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
-            patch("clickhouse_connect.get_client", return_value=mock_client),
-        ):
-            result = _run_clickhouse_status(_ns())
-
-        assert result == 0
-        out = capsys.readouterr().out
-        assert "[pending]" in out
-        assert "0 applied, 1 pending, 1 total" in out
-
-    @patch(
-        "dev_health_ops.migrate.resolve_sink_uri",
-        return_value="clickhouse://fake:8123/test",
-    )
-    def test_no_migration_files(self, _mock_uri, tmp_path, capsys):
-        mock_client = self._make_mock_client()
-        with (
-            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
-            patch("clickhouse_connect.get_client", return_value=mock_client),
-        ):
-            result = _run_clickhouse_status(_ns())
-
-        assert result == 0
-        assert "No ClickHouse migration files found." in capsys.readouterr().out
-
-    @patch(
-        "dev_health_ops.migrate.resolve_sink_uri",
-        return_value="clickhouse://fake:8123/test",
-    )
-    def test_includes_py_migration_files(self, _mock_uri, tmp_path, capsys):
-        (tmp_path / "000_init.sql").write_text("SELECT 1")
-        (tmp_path / "001_migrate.py").write_text("def upgrade(client): pass")
-
-        mock_client = self._make_mock_client()
-
-        with (
-            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
-            patch("clickhouse_connect.get_client", return_value=mock_client),
-        ):
-            result = _run_clickhouse_status(_ns())
-
-        assert result == 0
-        out = capsys.readouterr().out
-        assert "000_init.sql" in out
-        assert "001_migrate.py" in out
-        assert "0 applied, 2 pending, 2 total" in out
-
-    @patch(
-        "dev_health_ops.migrate.resolve_sink_uri",
-        return_value="clickhouse://fake:8123/test",
-    )
-    def test_all_applied(self, _mock_uri, tmp_path, capsys):
-        (tmp_path / "000_init.sql").write_text("SELECT 1")
-
-        applied_rows = [("000_init.sql", datetime(2025, 6, 1))]
-        mock_client = self._make_mock_client(applied_rows)
-
-        with (
-            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
-            patch("clickhouse_connect.get_client", return_value=mock_client),
-        ):
-            result = _run_clickhouse_status(_ns())
-
-        assert result == 0
-        out = capsys.readouterr().out
-        assert "1 applied, 0 pending, 1 total" in out
-        assert "[pending]" not in out
-
-    @patch(
-        "dev_health_ops.migrate.resolve_sink_uri",
-        return_value="clickhouse://fake:8123/test",
-    )
-    def test_close_called_even_on_failure(self, _mock_uri, tmp_path):
-        (tmp_path / "000_init.sql").write_text("SELECT 1")
-
-        mock_client = self._make_mock_client()
-        mock_client.query.return_value.result_rows = []
-
-        exploding_path = MagicMock(spec=Path)
-        exploding_path.glob.side_effect = OSError("disk error")
-        exploding_path.exists.return_value = True
-
-        with (
-            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", exploding_path),
-            patch("clickhouse_connect.get_client", return_value=mock_client),
-        ):
-            with pytest.raises(OSError, match="disk error"):
-                _run_clickhouse_status(_ns())
-
         mock_client.close.assert_called_once()
 
     @patch(

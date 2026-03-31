@@ -219,7 +219,12 @@ Explanation format:
 
 ## 6) Developer workflow (CLI)
 
-### 6.1 Sync data
+### 6.1 Run migrations (required for fresh environments)
+
+* `dev-hops migrate postgres` — PostgreSQL schema (Alembic)
+* `dev-hops migrate clickhouse` — ClickHouse analytics tables
+
+### 6.2 Sync data
 
 * Git data (local):
 
@@ -233,11 +238,11 @@ Explanation format:
 
   * `POSTGRES_URI=postgresql+asyncpg://... dev-hops sync teams --provider <config|jira|jira-ops|synthetic|ms-teams|github|gitlab>`
 
-### 6.2 Generate synthetic data
+### 6.3 Generate synthetic data
 
 * `CLICKHOUSE_URI=clickhouse://... dev-hops fixtures generate --sink "$CLICKHOUSE_URI" --days 30`
 
-### 6.3 Compute metrics
+### 6.4 Compute metrics
 
 * Daily rollups:
 

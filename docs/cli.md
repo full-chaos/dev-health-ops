@@ -40,6 +40,23 @@ CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops metrics complexity
 CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops fixtures generate --days 30
 ```
 
+### Migrations
+
+```bash
+# PostgreSQL (Alembic) — users, orgs, settings
+dev-hops migrate postgres
+dev-hops migrate postgres upgrade          # same as above
+dev-hops migrate postgres current          # show current revision
+dev-hops migrate postgres history          # show migration history
+
+# ClickHouse — analytics tables (commits, PRs, metrics, etc.)
+dev-hops migrate clickhouse
+dev-hops migrate clickhouse upgrade        # same as above
+dev-hops migrate clickhouse status         # show applied/pending migrations
+```
+
+> Run both migration commands after setting up a fresh environment, before any sync or metrics commands.
+
 ## Flags and overrides
 
 CLI flags override environment variables. Set `CLICKHOUSE_URI` for analytics and `POSTGRES_URI` for semantic data. Subcommands accept `--sink` for analytics and `--since`/`--before`/`--backfill` for date ranges.

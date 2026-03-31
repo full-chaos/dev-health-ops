@@ -64,8 +64,9 @@ docker compose up -d postgres clickhouse redis
 export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
 export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
 
-# Run PostgreSQL migrations (for user management, from repo root)
-alembic upgrade head
+# Run migrations (both databases)
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 ```
 
 See [Database Architecture](architecture/database-architecture.md) for details.

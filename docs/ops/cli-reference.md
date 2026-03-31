@@ -520,6 +520,56 @@ For GitHub/GitLab batch operations:
 
 ---
 
+## Migrate Commands
+
+Database schema migrations for PostgreSQL (Alembic) and ClickHouse.
+
+### `migrate postgres`
+
+Run PostgreSQL (Alembic) schema migrations. Uses `POSTGRES_URI`.
+
+```bash
+# Apply all pending migrations (upgrade to head)
+dev-hops migrate postgres
+dev-hops migrate postgres upgrade
+
+# Upgrade to a specific revision
+dev-hops migrate postgres upgrade abc123
+
+# Revert one migration
+dev-hops migrate postgres downgrade -1
+
+# Show current applied revision
+dev-hops migrate postgres current
+
+# Show migration history
+dev-hops migrate postgres history
+
+# Show available heads
+dev-hops migrate postgres heads
+```
+
+**Backward-compatible aliases:** `dev-hops migrate upgrade`, `dev-hops migrate downgrade`, etc. still work and target PostgreSQL.
+
+### `migrate clickhouse`
+
+Run ClickHouse schema migrations. Uses `CLICKHOUSE_URI`.
+
+ClickHouse migrations are numbered `.sql` and `.py` files in `migrations/clickhouse/`, tracked via a `schema_migrations` table in ClickHouse.
+
+```bash
+# Apply all pending migrations
+dev-hops migrate clickhouse
+dev-hops migrate clickhouse upgrade
+
+# Show applied and pending migrations
+dev-hops migrate clickhouse status
+```
+
+> **Important:** Run `dev-hops migrate clickhouse` after setting up a fresh environment, before running any sync or metrics commands. ClickHouse tables are **not** auto-created — they require migrations to be applied first.
+
+---
+
 ## Workflow Examples
 
 ### Full Sync Pipeline
@@ -529,18 +579,22 @@ For GitHub/GitLab batch operations:
 export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
 export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
 
-# 1. Sync git data
+# 1. Run migrations
+dev-hops migrate postgres
+dev-hops migrate clickhouse
+
+# 2. Sync git data
 dev-hops sync git --provider github \
   --auth "$GITHUB_TOKEN" \
   --owner myorg \
   --repo myrepo
 
-# 2. Sync work items
+# 3. Sync work items
 dev-hops sync work-items --provider jira \
   --before 2025-02-02 \
   --backfill 30
 
-# 3. Compute metrics
+# 4. Compute metrics
 dev-hops metrics daily \
   --backfill 30
 ```
@@ -548,8 +602,12 @@ dev-hops metrics daily \
 ### Local Development
 
 ```bash
-# Start local ClickHouse
-docker compose up -d clickhouse
+# Start databases
+docker compose up -d clickhouse postgres
+
+# Run migrations
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 
 # Generate synthetic data
 dev-hops fixtures generate --days 30

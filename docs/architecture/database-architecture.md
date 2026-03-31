@@ -98,7 +98,7 @@ Stores time-series and event data optimized for:
 - **High-volume inserts** (commits, PRs, work items)
 - **Analytical queries** (aggregations, time-series)
 - **Column-oriented storage** (efficient for metrics)
-- **No schema migrations** (append-only, evolving schemas)
+- **Custom schema migrations** (numbered SQL/Python scripts in `migrations/clickhouse/`)
 
 **Tables:**
 
@@ -124,6 +124,8 @@ Commands automatically use the appropriate database:
 | `admin create-org` | PostgreSQL | Organization management |
 | `admin list-users` | PostgreSQL | |
 | `admin list-orgs` | PostgreSQL | |
+| `migrate postgres` | PostgreSQL | Schema migrations (Alembic) |
+| `migrate clickhouse` | ClickHouse | Schema migrations (custom runner) |
 | `sync git` | ClickHouse | Git data ingestion |
 | `sync prs` | ClickHouse | PR data ingestion |
 | `sync work-items` | ClickHouse | Work item ingestion |
@@ -176,22 +178,23 @@ docker compose up -d postgres clickhouse redis
 export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
 export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
 
-# Run PostgreSQL migrations
-cd src/dev_health_ops && alembic upgrade head
+# Run migrations (both databases)
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 
 # Create initial admin user
-python -m dev_health_ops.cli admin create-user \
+dev-hops admin users create \
   --email admin@example.com \
   --password secretpass \
   --superuser
 
 # Create organization
-python -m dev_health_ops.cli admin create-org \
+dev-hops admin orgs create \
   --name "My Org" \
   --owner-email admin@example.com
 
 # Sync analytics data
-python -m dev_health_ops.cli sync git --provider local --repo-path /path/to/repo
+dev-hops sync git --provider local --repo-path /path/to/repo
 ```
 
 ## Migration Strategy
@@ -206,15 +209,21 @@ If migrating from a single-database setup:
    - Re-create users/orgs via CLI or API
    - Update environment variables
 
-### Alembic (PostgreSQL Only)
+### Running Migrations
 
-Alembic migrations only apply to PostgreSQL:
+Both databases have their own migration systems, managed via the CLI:
 
 ```bash
-export DATABASE_URI="postgresql+asyncpg://..."  # Alembic reads this
-cd src/dev_health_ops
-alembic upgrade head
+# PostgreSQL (Alembic)
+dev-hops migrate postgres              # Apply all pending migrations
+dev-hops migrate postgres current      # Show current revision
+
+# ClickHouse (custom runner)
+dev-hops migrate clickhouse            # Apply all pending migrations
+dev-hops migrate clickhouse status     # Show applied/pending migrations
 ```
+
+> **Important:** Always run `dev-hops migrate clickhouse` after setting up a fresh ClickHouse instance. Unlike PostgreSQL, ClickHouse tables are not auto-created — queries will fail with `Unknown table` errors until migrations are applied.
 
 ## Security Considerations
 

@@ -70,9 +70,12 @@ This starts:
 ### Step 3: Run database migrations
 
 ```bash
-# Set up the database schema
-export DATABASE_URI="postgresql+asyncpg://postgres:postgres@localhost:5432/devhealth"
-alembic upgrade head
+export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5432/devhealth"
+export CLICKHOUSE_URI="clickhouse://default:@clickhouse:8123/default"
+
+# Apply schema migrations to both databases
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 ```
 
 ### Step 4: Start the API
@@ -202,10 +205,11 @@ export AUTH_SECRET="$(openssl rand -base64 32)"
 ### Step 3: Initialize databases
 
 ```bash
-# ClickHouse tables are auto-created
-# PostgreSQL requires migrations
 cd dev-health-ops
-alembic upgrade head
+
+# Apply schema migrations to both databases
+dev-hops migrate postgres
+dev-hops migrate clickhouse
 ```
 
 ### Step 4: Start services
@@ -346,7 +350,8 @@ helm upgrade dev-health fullchaos/dev-health-platform -n dev-health
 
 ```bash
 pip install --upgrade dev-health-ops
-alembic upgrade head  # Run migrations
+dev-hops migrate postgres    # Run PostgreSQL migrations
+dev-hops migrate clickhouse  # Run ClickHouse migrations
 ```
 
 ---

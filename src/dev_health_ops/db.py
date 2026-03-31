@@ -126,20 +126,6 @@ async def clickhouse_session_dependency() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-def reset_async_engines() -> None:
-    """Dispose global async engines so they are recreated on the next event loop.
-
-    Call before ``asyncio.run()`` in Celery workers to avoid
-    'Future attached to a different loop' errors.
-    """
-    global _postgres_engine, _clickhouse_engine
-    for engine in (_postgres_engine, _clickhouse_engine):
-        if engine is not None:
-            engine.sync_engine.dispose()
-    _postgres_engine = None
-    _clickhouse_engine = None
-
-
 async def close_engines() -> None:
     """Close all database engines. Call on application shutdown."""
     global _postgres_engine, _clickhouse_engine

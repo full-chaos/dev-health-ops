@@ -31,8 +31,6 @@ import asyncio
 from collections.abc import Coroutine
 from typing import Any, TypeVar
 
-from .. import db
-
 T = TypeVar("T")
 
 
@@ -42,6 +40,10 @@ def run_async(coro: Coroutine[Any, Any, T]) -> T:
     Creates a fresh event loop for each call, matching the semantics of
     ``asyncio.run()``.  Safe to call from Celery worker threads that have
     no pre-existing event loop.
+
+    Wraps the coroutine so that global async database engines are disposed
+    **on the running loop** before the loop closes, preventing
+    'Future attached to a different loop' errors on the next invocation.
 
     Args:
         coro: An awaitable coroutine to execute.
@@ -64,5 +66,12 @@ def run_async(coro: Coroutine[Any, Any, T]) -> T:
             "Use 'await' directly instead of run_async() inside async functions."
         )
 
-    db.reset_async_engines()
-    return asyncio.run(coro)
+    async def _with_engine_cleanup() -> T:
+        from dev_health_ops.db import close_engines
+
+        try:
+            return await coro
+        finally:
+            await close_engines()
+
+    return asyncio.run(_with_engine_cleanup())

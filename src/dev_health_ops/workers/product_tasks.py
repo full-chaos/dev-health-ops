@@ -35,6 +35,7 @@ def sync_teams_to_analytics(self, org_id: str | None = None) -> dict:
 )
 def run_capacity_forecast_job(
     self,
+    org_id: str,
     db_url: str | None = None,
     team_id: str | None = None,
     work_scope_id: str | None = None,
@@ -48,6 +49,7 @@ def run_capacity_forecast_job(
     Run capacity forecasting job asynchronously.
 
     Args:
+        org_id: Organization ID (required for data association)
         db_url: Database connection string (defaults to DATABASE_URI env)
         team_id: Optional team UUID to forecast
         work_scope_id: Optional work scope UUID to forecast
@@ -76,6 +78,7 @@ def run_capacity_forecast_job(
         results = run_async(
             run_capacity_forecast(
                 db_url=db_url,
+                org_id=org_id,
                 team_id=team_id,
                 work_scope_id=work_scope_id,
                 target_items=target_items,

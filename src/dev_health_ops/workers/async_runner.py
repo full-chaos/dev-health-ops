@@ -31,6 +31,8 @@ import asyncio
 from collections.abc import Coroutine
 from typing import Any, TypeVar
 
+from .. import db
+
 T = TypeVar("T")
 
 
@@ -62,4 +64,5 @@ def run_async(coro: Coroutine[Any, Any, T]) -> T:
             "Use 'await' directly instead of run_async() inside async functions."
         )
 
+    db.reset_async_engines()
     return asyncio.run(coro)

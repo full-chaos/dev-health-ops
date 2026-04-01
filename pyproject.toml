@@ -23,7 +23,7 @@ keywords = ["metrics", "git", "analytics", "developer-experience"]
 requires-python = ">=3.11"
 dependencies = [
   "tqdm",
-  "sqlalchemy",
+  "sqlalchemy[asyncio]",
   "clickhouse-connect",
   "numpy",
   "fastapi",

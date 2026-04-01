@@ -193,7 +193,7 @@ async def pull_from_stripe(
     for product in products:
         product_id = product.id
         name = product.name or ""
-        metadata = dict(product.metadata) if product.metadata else {}
+        metadata = product.metadata.to_dict() if product.metadata else {}
 
         try:
             prices = _fetch_prices_for_product(client, product_id)

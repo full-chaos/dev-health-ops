@@ -9,6 +9,24 @@ TestOps extends Dev Health Metrics beyond source control and workflow analytics 
 
 The goal is not just to show pipeline numbers. The goal is to connect delivery performance to test quality, defect risk, and developer health.
 
+## Current State (Existing Infrastructure)
+The platform already has partial CI/CD and delivery analytics that TestOps will extend:
+
+| Capability | Status | Key Files |
+|---|---|---|
+| Pipeline run ingestion (status, duration, queue time) | **Exists** | `connectors/github.py`, `connectors/gitlab.py`, `storage/mixins/cicd.py` |
+| ClickHouse tables: `ci_pipeline_runs`, `deployments`, `incidents` | **Exists** | `migrations/clickhouse/000_raw_tables.sql` |
+| Pipeline metrics: success_rate, avg/p90 duration, queue minutes | **Exists** | `metrics/compute_cicd.py` |
+| DORA metrics: deploy frequency, lead time, MTTR, change failure rate | **Exists** | `metrics/job_dora.py`, `migrations/clickhouse/023b_dora_metrics.sql` |
+| Well-being metrics: after-hours ratio, weekend ratio | **Exists** | `metrics/compute_wellbeing.py` |
+| Schemas: `PipelineRunRow`, `DeploymentRow`, `IncidentRow`, `DORAMetricsRecord` | **Exists** | `metrics/schemas.py` |
+| Test execution models (suite, case, flakiness) | **Does not exist** | — |
+| Code coverage ingestion and storage | **Does not exist** | — |
+| Test-to-code ownership mapping | **Does not exist** | — |
+| Flakiness detection and tracking | **Does not exist** | — |
+
+TestOps extends this foundation. Epics should build on existing schemas and connectors, not replace them.
+
 ## Problem
 The current model covers delivery flow, code risk, collaboration, and cognitive load well, but it underweights the execution layer where engineering quality is either validated or exposed. Without TestOps:
 
@@ -54,13 +72,16 @@ The current model covers delivery flow, code risk, collaboration, and cognitive 
 - **Quality Drag**: time lost to failed pipelines, reruns, flaky tests, and blocked deploys
 
 ## Data Sources
-- GitHub Actions
-- GitLab CI
-- CircleCI
-- Jenkins
-- Buildkite
-- Azure DevOps pipelines
-- Test frameworks and artifacts:
+
+### CI/CD Systems
+- GitHub Actions (v1)
+- GitLab CI (v1)
+- Jenkins (v1 — abstraction layer shared with Buildkite)
+- Buildkite (v1 — abstraction layer shared with Jenkins)
+- CircleCI (v2 — deferred from initial milestone)
+- Azure DevOps pipelines (v2 — deferred from initial milestone)
+
+### Test Frameworks and Artifacts
   - JUnit/XML
   - pytest
   - Jest
@@ -174,26 +195,30 @@ Surface insights such as:
   - historical impact area risk
 
 ## Scoring Model Integration
-TestOps should feed the main framework as follows:
+TestOps signals feed into the platform's analytical dimensions. These dimensions are currently implemented as:
+- **Backend-computed metrics** in dedicated modules (`compute_cicd.py`, `compute_wellbeing.py`, `quality.py`, `compute_ic.py`)
+- **Frontend visualization zones** in `quadrantZones.ts` that classify team operating state from raw metric inputs
 
-- **Delivery**
-  - queue time
-  - pipeline duration
-  - deploy frequency
-  - failed deployment recovery
-- **Durability**
-  - coverage quality
-  - defect escape
-  - test reliability
-  - release confidence
-- **Developer Well-being**
-  - rerun burden
-  - failed build interruption rate
-  - after-hours recovery/retry behavior
-- **Dynamics**
-  - team ownership of failures
-  - quality burden concentration
-  - cross-team dependency failures
+TestOps adds new metric inputs to these existing computation and visualization layers:
+
+- **Delivery** (backend: `compute_cicd.py`, `job_dora.py` — already partially computed)
+  - queue time (exists — extend with TestOps granularity)
+  - pipeline duration (exists — extend with per-stage breakdown)
+  - deploy frequency (exists via DORA)
+  - failed deployment recovery (exists via DORA MTTR)
+- **Durability** (backend: `quality.py` — new TestOps signals needed)
+  - coverage quality (new)
+  - defect escape (new — correlation model)
+  - test reliability (new)
+  - release confidence (new — deterministic composite score)
+- **Developer Well-being** (backend: `compute_wellbeing.py` — extend with TestOps burden signals)
+  - rerun burden (new)
+  - failed build interruption rate (new)
+  - after-hours recovery/retry behavior (extend existing after-hours ratio)
+- **Dynamics** (frontend: quadrant zone classification — new TestOps zone inputs)
+  - team ownership of failures (new)
+  - quality burden concentration (new)
+  - cross-team dependency failures (new)
 
 ## API Requirements
 ### Example Objects
@@ -228,12 +253,20 @@ TestOps should feed the main framework as follows:
 - Teams may game test quantity rather than test quality
 - Attribution to team ownership can break in shared repos/services
 
-## Open Questions
-- Which CI/CD systems are highest priority for v1?
-- Is changed-code coverage mandatory for v1 or v2?
-- How should we model monorepo ownership cleanly?
-- Should release confidence be deterministic, heuristic, or ML-assisted in v1?
-- Do we expose cost metrics such as runner spend and wasted compute in v1?
+## Decisions (Resolved Open Questions)
+
+| Question | Decision | Rationale |
+|---|---|---|
+| Which CI/CD systems are highest priority for v1? | GitHub Actions + GitLab CI + Jenkins/Buildkite. CircleCI and Azure DevOps deferred to v2. | GitHub and GitLab cover the majority of users. Jenkins/Buildkite share an abstraction layer. |
+| Is changed-code coverage mandatory for v1 or v2? | v2. Global and per-file coverage in v1; changed-code coverage computation deferred to Phase 2. | Changed-code coverage requires diff-aware analysis that adds scope risk to the initial milestone. |
+| How should we model monorepo ownership cleanly? | Use existing CODEOWNERS / team-to-path mappings from the entity resolution contract (Epic 1). Service boundaries inferred from path prefixes when CODEOWNERS is unavailable. | Avoids new ownership primitives; leverages existing team/repo/service entity mapping. |
+| Should release confidence be deterministic, heuristic, or ML-assisted in v1? | Deterministic with documented weights. Heuristic or ML-assisted scoring deferred to Phase 3. | Deterministic models are explainable, auditable, and testable. Prerequisite for future ML. |
+| Do we expose cost metrics (runner spend, wasted compute) in v1? | No. Deferred to Phase 3 (cost-of-quality analytics). | Requires CI vendor billing API integration not yet scoped. |
+
+## Open Questions (Remaining)
+- How should flake detection handle environment-dependent failures vs true code flakes?
+- Should test ownership attribution prefer CODEOWNERS, directory convention, or historical authorship?
+- What is the minimum artifact retention policy for raw test results before rollup-only retention?
 
 ## Phased Delivery
 ### Phase 1

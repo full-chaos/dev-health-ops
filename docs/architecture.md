@@ -38,3 +38,5 @@ Investment categorization is computed at job time and persisted as distributions
 - Concepts: `product/concepts.md`
 - Categorization contract: `llm/categorization-contract.md`
 - Investment View: `user-guide/investment-view.md`
+- TestOps Architecture: `architecture/testops-architecture.md`
+- AI Reports Architecture: `architecture/ai-reports-architecture.md`

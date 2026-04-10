@@ -28,6 +28,11 @@ from .licensing import (
 from .org_invite import OrgInvite
 from .refresh_token import RefreshToken
 from .refunds import Refund, RefundStatus
+from .reports import (
+    ReportRun,
+    ReportRunStatus,
+    SavedReport,
+)
 from .retention import (
     OrgRetentionPolicy,
     RetentionResourceType,
@@ -112,10 +117,13 @@ __all__ = [
     "Refund",
     "RefundStatus",
     "RefreshToken",
+    "ReportRun",
+    "ReportRunStatus",
     "Repo",
     "RetentionResourceType",
     "Subscription",
     "SubscriptionEvent",
+    "SavedReport",
     "ScheduledJob",
     "Setting",
     "SettingCategory",

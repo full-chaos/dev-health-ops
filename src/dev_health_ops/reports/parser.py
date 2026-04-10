@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
+from dev_health_ops.utils.datetime import utc_today
+
 MONTH_LOOKUP = {
     month.lower(): index for index, month in enumerate(calendar.month_name) if month
 }
@@ -267,7 +269,7 @@ def _parse_relative_range(prompt: str, today: date) -> tuple[date | None, date |
 
 
 def parse_prompt(prompt: str, *, today: date | None = None) -> ParsedPrompt:
-    today = today or date.today()
+    today = today or utc_today()
     invalid_reasons: list[str] = []
 
     start, end, errors = _parse_explicit_range(prompt)

@@ -45,6 +45,9 @@ from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.testops_schemas import (
     CoverageMetricsDailyRecord,
     PipelineMetricsDailyRecord,
+    PipelineStabilityRecord,
+    QualityDragRecord,
+    ReleaseConfidenceRecord,
     TestMetricsDailyRecord,
 )
 from dev_health_ops.models.work_items import (
@@ -823,6 +826,72 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "coverage_delta_pct",
                 "uncovered_files_count",
                 "coverage_regression_count",
+                "team_id",
+                "service_id",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_release_confidence(self, rows: Sequence[ReleaseConfidenceRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_release_confidence",
+            [
+                "repo_id",
+                "day",
+                "confidence_score",
+                "pipeline_success_factor",
+                "test_pass_factor",
+                "coverage_factor",
+                "flake_penalty",
+                "regression_penalty",
+                "factors_json",
+                "team_id",
+                "service_id",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_quality_drag(self, rows: Sequence[QualityDragRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_quality_drag",
+            [
+                "repo_id",
+                "day",
+                "drag_hours",
+                "failure_rework_hours",
+                "flake_investigation_hours",
+                "queue_wait_hours",
+                "retry_overhead_hours",
+                "factors_json",
+                "team_id",
+                "service_id",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_pipeline_stability(self, rows: Sequence[PipelineStabilityRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_pipeline_stability",
+            [
+                "repo_id",
+                "day",
+                "stability_index",
+                "success_rate_7d",
+                "success_rate_trend",
+                "failure_clustering_score",
+                "median_recovery_time_seconds",
                 "team_id",
                 "service_id",
                 "org_id",

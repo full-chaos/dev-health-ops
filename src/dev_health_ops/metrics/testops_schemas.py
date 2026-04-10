@@ -353,3 +353,62 @@ class CoverageMetricsDailyRecord:
     team_id: str | None = None
     service_id: str | None = None
     org_id: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Risk Model Records (CHAOS-1079)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReleaseConfidenceRecord:
+    """Composite release confidence score combining pipeline, test, and coverage signals."""
+
+    repo_id: uuid.UUID
+    day: date
+    confidence_score: float  # 0.0-1.0
+    pipeline_success_factor: float
+    test_pass_factor: float
+    coverage_factor: float
+    flake_penalty: float
+    regression_penalty: float
+    factors_json: str  # JSON explainability payload
+    computed_at: datetime
+    team_id: str | None = None
+    service_id: str | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class QualityDragRecord:
+    """Estimated hours wasted due to CI/test quality issues."""
+
+    repo_id: uuid.UUID
+    day: date
+    drag_hours: float
+    failure_rework_hours: float
+    flake_investigation_hours: float
+    queue_wait_hours: float
+    retry_overhead_hours: float
+    factors_json: str
+    computed_at: datetime
+    team_id: str | None = None
+    service_id: str | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class PipelineStabilityRecord:
+    """Rolling pipeline stability index with trend analysis."""
+
+    repo_id: uuid.UUID
+    day: date
+    stability_index: float  # 0.0-1.0 (1.0 = perfectly stable)
+    success_rate_7d: float
+    success_rate_trend: float  # positive = improving
+    failure_clustering_score: float  # 0=random, 1=clustered
+    median_recovery_time_seconds: float | None
+    computed_at: datetime
+    team_id: str | None = None
+    service_id: str | None = None
+    org_id: str = ""

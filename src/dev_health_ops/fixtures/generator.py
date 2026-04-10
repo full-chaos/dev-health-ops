@@ -2132,6 +2132,7 @@ class SyntheticDataGenerator:
 
             licenses.append(
                 OrgLicense(
+                    id=uuid.uuid5(admin_org.id, "org-license"),
                     org_id=admin_org.id,
                     tier=LicenseTier.ENTERPRISE.value,
                     license_type="saas",

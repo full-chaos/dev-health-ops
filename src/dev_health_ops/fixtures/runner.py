@@ -369,6 +369,39 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 store.insert_incidents, incidents, allow_parallel=allow_parallel_inserts
             )
 
+            # 6b. TestOps raw data (ci_job_runs, test results, coverage)
+            if hasattr(store, "insert_ci_job_runs"):
+                job_runs = generator.generate_ci_job_runs(pipeline_runs)
+                await _insert_batches(
+                    store.insert_ci_job_runs,
+                    job_runs,
+                    allow_parallel=allow_parallel_inserts,
+                )
+
+                test_data = generator.generate_test_executions(job_runs, days=ns.days)
+                if hasattr(store, "insert_test_suite_results"):
+                    await _insert_batches(
+                        store.insert_test_suite_results,
+                        test_data["suite_results"],
+                        allow_parallel=allow_parallel_inserts,
+                    )
+                if hasattr(store, "insert_test_case_results"):
+                    await _insert_batches(
+                        store.insert_test_case_results,
+                        test_data["case_results"],
+                        allow_parallel=allow_parallel_inserts,
+                    )
+
+                coverage_snapshots = generator.generate_coverage_snapshots(
+                    pipeline_runs, days=ns.days
+                )
+                if hasattr(store, "insert_coverage_snapshots"):
+                    await _insert_batches(
+                        store.insert_coverage_snapshots,
+                        coverage_snapshots,
+                        allow_parallel=allow_parallel_inserts,
+                    )
+
             # 7. Blame
             blame_data = generator.generate_blame(commits)
             await _insert_batches(

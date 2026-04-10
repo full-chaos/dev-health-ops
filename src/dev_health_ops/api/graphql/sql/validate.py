@@ -52,6 +52,18 @@ class Measure(str, Enum):
     CHURN_LOC = "churn_loc"
     CYCLE_TIME_HOURS = "cycle_time_hours"
     THROUGHPUT = "throughput"
+    PIPELINE_SUCCESS_RATE = "pipeline_success_rate"
+    PIPELINE_FAILURE_RATE = "pipeline_failure_rate"
+    PIPELINE_DURATION_P95 = "pipeline_duration_p95"
+    PIPELINE_QUEUE_TIME = "pipeline_queue_time"
+    PIPELINE_RERUN_RATE = "pipeline_rerun_rate"
+    TEST_PASS_RATE = "test_pass_rate"
+    TEST_FAILURE_RATE = "test_failure_rate"
+    TEST_FLAKE_RATE = "test_flake_rate"
+    TEST_SUITE_DURATION_P95 = "test_suite_duration_p95"
+    COVERAGE_LINE_PCT = "coverage_line_pct"
+    COVERAGE_BRANCH_PCT = "coverage_branch_pct"
+    COVERAGE_DELTA_PCT = "coverage_delta_pct"
 
     @classmethod
     def values(cls) -> list[str]:
@@ -59,9 +71,8 @@ class Measure(str, Enum):
 
     @classmethod
     def db_expression(cls, measure: Measure, use_investment: bool = False) -> str:
-        """Map measure to SQL expression."""
         if use_investment:
-            mapping = {
+            mapping: dict[Measure, str] = {
                 cls.COUNT: "SUM(subcategory_kv.2 * effort_value)",
                 cls.CHURN_LOC: "SUM(churn_loc)",
                 cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
@@ -74,7 +85,40 @@ class Measure(str, Enum):
                 cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
                 cls.THROUGHPUT: "SUM(work_items_completed)",
             }
+        testops_mapping: dict[Measure, str] = {
+            cls.PIPELINE_SUCCESS_RATE: "AVG(success_rate)",
+            cls.PIPELINE_FAILURE_RATE: "AVG(failure_rate)",
+            cls.PIPELINE_DURATION_P95: "AVG(p95_duration_seconds)",
+            cls.PIPELINE_QUEUE_TIME: "AVG(avg_queue_seconds)",
+            cls.PIPELINE_RERUN_RATE: "AVG(rerun_rate)",
+            cls.TEST_PASS_RATE: "AVG(pass_rate)",
+            cls.TEST_FAILURE_RATE: "AVG(failure_rate)",
+            cls.TEST_FLAKE_RATE: "AVG(flake_rate)",
+            cls.TEST_SUITE_DURATION_P95: "AVG(suite_duration_p95_seconds)",
+            cls.COVERAGE_LINE_PCT: "AVG(line_coverage_pct)",
+            cls.COVERAGE_BRANCH_PCT: "AVG(branch_coverage_pct)",
+            cls.COVERAGE_DELTA_PCT: "AVG(coverage_delta_pct)",
+        }
+        mapping.update(testops_mapping)
         return mapping[measure]
+
+    @classmethod
+    def source_table(cls, measure: Measure) -> str | None:
+        testops_tables: dict[Measure, str] = {
+            cls.PIPELINE_SUCCESS_RATE: "testops_pipeline_metrics_daily",
+            cls.PIPELINE_FAILURE_RATE: "testops_pipeline_metrics_daily",
+            cls.PIPELINE_DURATION_P95: "testops_pipeline_metrics_daily",
+            cls.PIPELINE_QUEUE_TIME: "testops_pipeline_metrics_daily",
+            cls.PIPELINE_RERUN_RATE: "testops_pipeline_metrics_daily",
+            cls.TEST_PASS_RATE: "testops_test_metrics_daily",
+            cls.TEST_FAILURE_RATE: "testops_test_metrics_daily",
+            cls.TEST_FLAKE_RATE: "testops_test_metrics_daily",
+            cls.TEST_SUITE_DURATION_P95: "testops_test_metrics_daily",
+            cls.COVERAGE_LINE_PCT: "testops_coverage_metrics_daily",
+            cls.COVERAGE_BRANCH_PCT: "testops_coverage_metrics_daily",
+            cls.COVERAGE_DELTA_PCT: "testops_coverage_metrics_daily",
+        }
+        return testops_tables.get(measure)
 
 
 class BucketInterval(str, Enum):

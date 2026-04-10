@@ -61,6 +61,12 @@ Note: Jira Ops/Service Desk incidents are planned once project-to-repo or deploy
 
 - `team_metrics_daily`
 
+### TestOps (v2)
+
+- `testops_pipeline_metrics_daily` (pipeline health and performance)
+- `testops_test_metrics_daily` (test reliability and flakiness)
+- `testops_coverage_metrics_daily` (code coverage trends)
+
 ## Metric Definitions
 
 ### Commit size bucketing
@@ -360,6 +366,17 @@ Categorizes engineering effort into investment areas (e.g., "New Value", "Securi
   - `delivery_units`: Story points or count of work items completed.
   - `churn_loc`: Sum of additions + deletions associated with the area.
 - **Configuration**: `config/investment_areas.yaml` defines the matching rules and priorities.
+
+## TestOps Metrics
+
+TestOps metrics provide visibility into CI/CD health, test reliability, and coverage.
+
+- **Pipeline Health**: `success_rate`, `failure_rate`, `rerun_rate`.
+- **Pipeline Performance**: `median_duration_seconds`, `avg_queue_seconds`.
+- **Test Reliability**: `pass_rate`, `flake_rate`, `retry_dependency_rate`.
+- **Coverage**: `line_coverage_pct`, `branch_coverage_pct`, `coverage_delta_pct`.
+
+For detailed definitions and computation logic, see `architecture/testops-architecture.md`.
 
 ## Views and interpretations
 

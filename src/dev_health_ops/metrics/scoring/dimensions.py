@@ -14,20 +14,18 @@ from typing import Protocol
 from dev_health_ops.metrics.scoring.schemas import DimensionScore, SignalValue
 
 
+class QueryResult(Protocol):
+    """Minimal result protocol returned by ClickHouseClient.query."""
+
+    result_rows: list[tuple]
+    column_names: list[str]
+
+
 class ClickHouseClient(Protocol):
     """Minimal subset of the ``clickhouse_connect`` client used by scorers."""
 
-    def query(self, query: str, parameters: dict | None = None) -> QueryResult: ...  # noqa: E704
-
-
-class QueryResult(Protocol):
-    """Minimal result protocol returned by :meth:`ClickHouseClient.query`."""
-
-    @property
-    def result_rows(self) -> list[tuple]: ...  # noqa: E704
-
-    @property
-    def column_names(self) -> list[str]: ...  # noqa: E704
+    def query(self, query: str, parameters: dict | None = None) -> QueryResult:
+        """Execute a ClickHouse query and return the result."""
 
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:

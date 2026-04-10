@@ -1,5 +1,3 @@
-import uuid
-
 import pytest
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator

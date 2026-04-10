@@ -733,7 +733,6 @@ class SyntheticDataGenerator:
         branch_target = branch_coverage
 
         sorted_days = sorted(runs_by_day.keys())
-        prev_line_coverage = line_coverage
 
         for day in sorted_days:
             day_runs = runs_by_day[day]
@@ -748,9 +747,6 @@ class SyntheticDataGenerator:
             branch_coverage = max(30.0, min(95.0, branch_coverage + branch_delta))
 
             branch_coverage = min(branch_coverage, line_coverage - 2.0)
-
-            coverage_delta_pct = line_coverage - prev_line_coverage
-            prev_line_coverage = line_coverage
 
             lines_covered = int(lines_total * line_coverage / 100.0)
             branches_total = int(lines_total * 0.3)

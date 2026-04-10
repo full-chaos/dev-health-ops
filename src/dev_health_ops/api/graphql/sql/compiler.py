@@ -20,6 +20,7 @@ from .templates import (
 )
 from .validate import (
     Dimension,
+    Measure,
     validate_bucket_interval,
     validate_dimension,
     validate_measure,
@@ -187,6 +188,11 @@ def compile_timeseries(
         filters, use_investment=ctx.get("use_investment", False)
     )
 
+    testops_table = Measure.source_table(measure)
+    if testops_table:
+        ctx["source_table"] = testops_table
+        ctx["date_filter"] = "day >= %(start_date)s AND day <= %(end_date)s"
+
     sql = timeseries_template(
         dimension, measure, interval, filter_clause=filter_clause, **ctx
     )
@@ -224,6 +230,11 @@ def compile_breakdown(
     filter_clause, filter_params = translate_filters(
         filters, use_investment=ctx.get("use_investment", False)
     )
+
+    testops_table = Measure.source_table(measure)
+    if testops_table:
+        ctx["source_table"] = testops_table
+        ctx["date_filter"] = "day >= %(start_date)s AND day <= %(end_date)s"
 
     sql = breakdown_template(dimension, measure, filter_clause=filter_clause, **ctx)
 

@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
+# Alembic reads these module-level variables at runtime for migration ordering.
 revision: str = "0005"
 down_revision: str | None = "0004"
 branch_labels: str | Sequence[str] | None = None

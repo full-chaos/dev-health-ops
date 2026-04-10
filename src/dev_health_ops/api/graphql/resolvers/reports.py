@@ -407,6 +407,8 @@ async def resolve_trigger_report(
             queue="reports",
         )
     except (ImportError, AttributeError):
+        # Celery may not be available in test/dev environments;
+        # the report run record is still created for manual pickup.
         pass
 
     return _to_report_run_type(run)

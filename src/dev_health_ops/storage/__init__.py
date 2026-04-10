@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .clickhouse import ClickHouseStore
+from .mixins.testops_cicd import (
+    clickhouse_insert_testops_job_runs,
+    clickhouse_insert_testops_pipeline_runs,
+)
 from .sqlalchemy import SQLAlchemyStore
 from .utils import (
     _parse_date_value,
@@ -10,6 +14,9 @@ from .utils import (
     _serialize_value,
     model_to_dict,
 )
+
+ClickHouseStore.insert_testops_pipeline_runs = clickhouse_insert_testops_pipeline_runs
+ClickHouseStore.insert_testops_job_runs = clickhouse_insert_testops_job_runs
 
 
 def detect_db_type(conn_string: str) -> str:

@@ -35,6 +35,12 @@ from .teams import (
     TeamsTeam,
     TeamsUser,
 )
+from .testops import (
+    BasePipelineAdapter,
+    GitHubActionsAdapter,
+    GitLabCIAdapter,
+    PipelineSyncBatch,
+)
 
 __all__ = [
     # Base class
@@ -44,6 +50,10 @@ __all__ = [
     "GitLabConnector",
     "TeamsConnector",
     "MicrosoftGraphClient",
+    "BasePipelineAdapter",
+    "PipelineSyncBatch",
+    "GitHubActionsAdapter",
+    "GitLabCIAdapter",
     # Batch processing
     "BatchResult",
     "match_repo_pattern",

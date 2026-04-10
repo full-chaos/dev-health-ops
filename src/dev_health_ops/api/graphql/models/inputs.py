@@ -28,6 +28,18 @@ class MeasureInput(Enum):
     CHURN_LOC = "churn_loc"
     CYCLE_TIME_HOURS = "cycle_time_hours"
     THROUGHPUT = "throughput"
+    PIPELINE_SUCCESS_RATE = "pipeline_success_rate"
+    PIPELINE_FAILURE_RATE = "pipeline_failure_rate"
+    PIPELINE_DURATION_P95 = "pipeline_duration_p95"
+    PIPELINE_QUEUE_TIME = "pipeline_queue_time"
+    PIPELINE_RERUN_RATE = "pipeline_rerun_rate"
+    TEST_PASS_RATE = "test_pass_rate"
+    TEST_FAILURE_RATE = "test_failure_rate"
+    TEST_FLAKE_RATE = "test_flake_rate"
+    TEST_SUITE_DURATION_P95 = "test_suite_duration_p95"
+    COVERAGE_LINE_PCT = "coverage_line_pct"
+    COVERAGE_BRANCH_PCT = "coverage_branch_pct"
+    COVERAGE_DELTA_PCT = "coverage_delta_pct"
 
 
 @strawberry.enum

@@ -11,6 +11,8 @@ from dev_health_ops.workers.product_tasks import (
     run_capacity_forecast_job,
     sync_teams_to_analytics,
 )
+from dev_health_ops.workers.report_scheduler import dispatch_scheduled_reports
+from dev_health_ops.workers.report_task import execute_saved_report
 from dev_health_ops.workers.sync_batch import (
     _batch_sync_callback,
     _get_batch_size,
@@ -60,7 +62,9 @@ __all__ = [
     "dispatch_batch_sync",
     "dispatch_daily_metrics_partitioned",
     "dispatch_scheduled_metrics",
+    "dispatch_scheduled_reports",
     "dispatch_scheduled_syncs",
+    "execute_saved_report",
     "health_check",
     "phone_home_heartbeat",
     "process_webhook_event",

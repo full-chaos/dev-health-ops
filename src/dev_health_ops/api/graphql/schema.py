@@ -27,6 +27,23 @@ from .models.outputs import (
 )
 from .resolvers.analytics import resolve_analytics
 from .resolvers.catalog import resolve_catalog
+from .resolvers.reports import (
+    CloneSavedReportInput,
+    CreateSavedReportInput,
+    ReportRunConnection,
+    ReportRunType,
+    SavedReportConnection,
+    SavedReportType,
+    UpdateSavedReportInput,
+    resolve_clone_saved_report,
+    resolve_create_saved_report,
+    resolve_delete_saved_report,
+    resolve_report_runs,
+    resolve_saved_report,
+    resolve_saved_reports,
+    resolve_trigger_report,
+    resolve_update_saved_report,
+)
 from .subscriptions import Subscription
 
 logger = logging.getLogger(__name__)
@@ -141,6 +158,35 @@ class Query:
         context = get_context(info)
         return await resolve_work_graph_edges(context, filters)
 
+    @strawberry.field(description="List saved reports for an organization")
+    async def saved_reports(
+        self,
+        info: Info,
+        org_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> SavedReportConnection:
+        return await resolve_saved_reports(org_id, limit, offset)
+
+    @strawberry.field(description="Get a saved report by ID")
+    async def saved_report(
+        self,
+        info: Info,
+        org_id: str,
+        report_id: str,
+    ) -> SavedReportType | None:
+        return await resolve_saved_report(org_id, report_id)
+
+    @strawberry.field(description="List report runs for a saved report")
+    async def report_runs(
+        self,
+        info: Info,
+        org_id: str,
+        report_id: str,
+        limit: int = 50,
+    ) -> ReportRunConnection:
+        return await resolve_report_runs(org_id, report_id, limit)
+
     @strawberry.field(description="Compute capacity forecast on-demand")
     async def capacity_forecast(
         self,
@@ -166,10 +212,58 @@ class Query:
         return await resolve_capacity_forecasts(context, filters)
 
 
-# Create the Strawberry schema with OrgIdAuthExtension to enforce org scoping
-# centrally rather than repeating the guard in every resolver.
+@strawberry.type
+class Mutation:
+    @strawberry.mutation(description="Create a new saved report")
+    async def create_saved_report(
+        self,
+        info: Info,
+        org_id: str,
+        input: CreateSavedReportInput,
+    ) -> SavedReportType:
+        return await resolve_create_saved_report(org_id, input)
+
+    @strawberry.mutation(description="Update an existing saved report")
+    async def update_saved_report(
+        self,
+        info: Info,
+        org_id: str,
+        report_id: str,
+        input: UpdateSavedReportInput,
+    ) -> SavedReportType | None:
+        return await resolve_update_saved_report(org_id, report_id, input)
+
+    @strawberry.mutation(description="Delete a saved report")
+    async def delete_saved_report(
+        self,
+        info: Info,
+        org_id: str,
+        report_id: str,
+    ) -> bool:
+        return await resolve_delete_saved_report(org_id, report_id)
+
+    @strawberry.mutation(description="Clone a saved report with optional overrides")
+    async def clone_saved_report(
+        self,
+        info: Info,
+        org_id: str,
+        input: CloneSavedReportInput,
+    ) -> SavedReportType | None:
+        return await resolve_clone_saved_report(org_id, input)
+
+    @strawberry.mutation(description="Trigger a manual report execution")
+    async def trigger_report(
+        self,
+        info: Info,
+        org_id: str,
+        report_id: str,
+    ) -> ReportRunType | None:
+        return await resolve_trigger_report(org_id, report_id)
+
+
 schema = strawberry.Schema(
     query=Query,
+    mutation=Mutation,
     subscription=Subscription,
     extensions=[OrgIdAuthExtension],
 )

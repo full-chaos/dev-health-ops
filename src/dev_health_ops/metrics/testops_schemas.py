@@ -412,3 +412,124 @@ class PipelineStabilityRecord:
     team_id: str | None = None
     service_id: str | None = None
     org_id: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Benchmarking + insight pipeline records (CHAOS-1170)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PeriodComparisonRecord:
+    """Period-over-period comparison for a single metric and scope."""
+
+    metric_name: str
+    scope_type: str  # repo | team | global
+    scope_key: str
+    current_period_start: date
+    current_period_end: date
+    comparison_period_start: date
+    comparison_period_end: date
+    current_value: float
+    comparison_value: float
+    absolute_delta: float
+    percentage_change: float | None
+    trend_direction: str  # improving | regressing | stable
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class BenchmarkBaselineRecord:
+    """Internal rolling baseline and percentile snapshot for a metric and scope."""
+
+    metric_name: str
+    scope_type: str  # repo | team | global
+    scope_key: str
+    period_start: date
+    period_end: date
+    rolling_window_days: int
+    current_value: float
+    baseline_value: float
+    percentile_rank: float
+    p25_value: float
+    p50_value: float
+    p75_value: float
+    p90_value: float
+    sample_size: int
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class MaturityBandRecord:
+    """Maturity band classification derived from percentile ranking."""
+
+    metric_name: str
+    scope_type: str  # repo | team | global
+    scope_key: str
+    period_start: date
+    period_end: date
+    value: float
+    percentile_rank: float
+    maturity_band: str  # emerging | developing | established | leading
+    confidence: float
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class BenchmarkAnomalyRecord:
+    """Anomaly/regression/improvement snapshot for a metric and scope."""
+
+    metric_name: str
+    scope_type: str  # repo | team | global
+    scope_key: str
+    day: date
+    value: float
+    baseline_value: float
+    z_score: float
+    anomaly_type: str  # regression | improvement | volatility
+    direction: str  # up | down | volatile
+    severity: str  # info | warning | critical
+    volatility_score: float
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class MetricCorrelationRecord:
+    """Correlation result between two benchmarked metrics."""
+
+    metric_name: str
+    paired_metric_name: str
+    scope_type: str  # repo | team | global
+    scope_key: str
+    period_start: date
+    period_end: date
+    coefficient: float
+    p_value: float
+    sample_size: int
+    is_significant: bool
+    interpretation: str
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class BenchmarkInsightRecord:
+    """Persisted benchmark insight with grounded evidence payload."""
+
+    insight_id: str
+    insight_type: str  # comparison | anomaly | correlation
+    scope_type: str  # repo | team | global
+    scope_key: str
+    metric_name: str
+    paired_metric_name: str | None
+    period_start: date | None
+    period_end: date | None
+    severity: str  # info | warning | critical
+    summary: str
+    evidence_json: str
+    computed_at: datetime
+    org_id: str = ""

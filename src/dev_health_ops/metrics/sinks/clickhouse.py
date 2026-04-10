@@ -43,7 +43,13 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.metrics.testops_schemas import (
+    BenchmarkAnomalyRecord,
+    BenchmarkBaselineRecord,
+    BenchmarkInsightRecord,
     CoverageMetricsDailyRecord,
+    MaturityBandRecord,
+    MetricCorrelationRecord,
+    PeriodComparisonRecord,
     PipelineMetricsDailyRecord,
     PipelineStabilityRecord,
     QualityDragRecord,
@@ -894,6 +900,150 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "median_recovery_time_seconds",
                 "team_id",
                 "service_id",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_period_comparisons(self, rows: Sequence[PeriodComparisonRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_period_comparisons",
+            [
+                "metric_name",
+                "scope_type",
+                "scope_key",
+                "current_period_start",
+                "current_period_end",
+                "comparison_period_start",
+                "comparison_period_end",
+                "current_value",
+                "comparison_value",
+                "absolute_delta",
+                "percentage_change",
+                "trend_direction",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_benchmark_baselines(
+        self, rows: Sequence[BenchmarkBaselineRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_metric_baselines",
+            [
+                "metric_name",
+                "scope_type",
+                "scope_key",
+                "period_start",
+                "period_end",
+                "rolling_window_days",
+                "current_value",
+                "baseline_value",
+                "percentile_rank",
+                "p25_value",
+                "p50_value",
+                "p75_value",
+                "p90_value",
+                "sample_size",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_maturity_bands(self, rows: Sequence[MaturityBandRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_maturity_bands",
+            [
+                "metric_name",
+                "scope_type",
+                "scope_key",
+                "period_start",
+                "period_end",
+                "value",
+                "percentile_rank",
+                "maturity_band",
+                "confidence",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_benchmark_anomalies(self, rows: Sequence[BenchmarkAnomalyRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_metric_anomalies",
+            [
+                "metric_name",
+                "scope_type",
+                "scope_key",
+                "day",
+                "value",
+                "baseline_value",
+                "z_score",
+                "anomaly_type",
+                "direction",
+                "severity",
+                "volatility_score",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_metric_correlations(
+        self, rows: Sequence[MetricCorrelationRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_metric_correlations",
+            [
+                "metric_name",
+                "paired_metric_name",
+                "scope_type",
+                "scope_key",
+                "period_start",
+                "period_end",
+                "coefficient",
+                "p_value",
+                "sample_size",
+                "is_significant",
+                "interpretation",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_benchmark_insights(self, rows: Sequence[BenchmarkInsightRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_benchmark_insights",
+            [
+                "insight_id",
+                "insight_type",
+                "scope_type",
+                "scope_key",
+                "metric_name",
+                "paired_metric_name",
+                "period_start",
+                "period_end",
+                "severity",
+                "summary",
+                "evidence_json",
                 "org_id",
                 "computed_at",
             ],

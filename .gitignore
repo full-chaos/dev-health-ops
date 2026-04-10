@@ -11,6 +11,8 @@ test-results/
 *coverage.xml
 *.db
 benchmark**
+!src/**/benchmarking/
+!src/**/benchmarking/**
 demo-data**
 .flake8
 # **/.terraform*

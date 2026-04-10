@@ -42,7 +42,13 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
 )
 from dev_health_ops.metrics.testops_schemas import (
+    BenchmarkAnomalyRecord,
+    BenchmarkBaselineRecord,
+    BenchmarkInsightRecord,
     CoverageMetricsDailyRecord,
+    MaturityBandRecord,
+    MetricCorrelationRecord,
+    PeriodComparisonRecord,
     PipelineMetricsDailyRecord,
     PipelineStabilityRecord,
     QualityDragRecord,
@@ -238,6 +244,28 @@ class BaseMetricsSink(ABC):
         pass
 
     def write_pipeline_stability(self, rows: Sequence[PipelineStabilityRecord]) -> None:
+        pass
+
+    def write_period_comparisons(self, rows: Sequence[PeriodComparisonRecord]) -> None:
+        pass
+
+    def write_benchmark_baselines(
+        self, rows: Sequence[BenchmarkBaselineRecord]
+    ) -> None:
+        pass
+
+    def write_maturity_bands(self, rows: Sequence[MaturityBandRecord]) -> None:
+        pass
+
+    def write_benchmark_anomalies(self, rows: Sequence[BenchmarkAnomalyRecord]) -> None:
+        pass
+
+    def write_metric_correlations(
+        self, rows: Sequence[MetricCorrelationRecord]
+    ) -> None:
+        pass
+
+    def write_benchmark_insights(self, rows: Sequence[BenchmarkInsightRecord]) -> None:
         pass
 
     # -------------------------------------------------------------------------

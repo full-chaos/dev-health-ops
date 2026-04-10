@@ -37,8 +37,14 @@ async def get_global_sink(dsn: str) -> BaseMetricsSink:
 
 
 async def get_global_client(dsn: str) -> Any:
-    sink = await get_global_sink(dsn)
-    return getattr(sink, "client", sink)
+    """Return the shared sink (not the raw driver client).
+
+    The sink carries ``.dsn`` which ``query_dicts`` uses to create
+    per-thread ClickHouse clients, avoiding the "concurrent queries
+    within the same session" error when ``asyncio.gather`` dispatches
+    multiple queries in parallel.
+    """
+    return await get_global_sink(dsn)
 
 
 @asynccontextmanager

@@ -19,6 +19,11 @@ from dev_health_ops.metrics.compute_ic import (
     compute_ic_metrics_daily,
 )
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
+from dev_health_ops.metrics.compute_testops import (
+    compute_coverage_metrics_daily,
+    compute_pipeline_metrics_daily,
+    compute_test_metrics_daily,
+)
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
@@ -239,14 +244,35 @@ async def run_daily_metrics_job(
         )
         daily_commit_cache[d] = commit_rows
 
+        testops_loader: Any = loader
         pipeline_rows, deployment_rows = await loader.load_cicd_data(
             start, end, repo_id=repo_id, repo_name=repo_name
+        )
+        h_start_date = d - timedelta(days=29)
+        (
+            testops_pipeline_rows,
+            testops_job_rows,
+        ) = await testops_loader.load_testops_pipeline_data(start, end, repo_id=repo_id)
+        (
+            testops_suite_rows,
+            testops_case_rows,
+        ) = await testops_loader.load_testops_test_data(
+            datetime.combine(h_start_date, time.min, tzinfo=timezone.utc),
+            end,
+            repo_id=repo_id,
+        )
+        coverage_rows = await testops_loader.load_testops_coverage_data(
+            start, end, repo_id=repo_id
+        )
+        prior_coverage_rows = await testops_loader.load_testops_coverage_data(
+            datetime.combine(d - timedelta(days=30), time.min, tzinfo=timezone.utc),
+            start,
+            repo_id=repo_id,
         )
         incident_rows = await loader.load_incidents(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
 
-        h_start_date = d - timedelta(days=29)
         h_commit_rows = await _get_cached_commits_for_window(h_start_date, d)
 
         work_items: list[Any] = []
@@ -357,6 +383,24 @@ async def run_daily_metrics_job(
         cicd_metrics = compute_cicd_metrics_daily(
             day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
         )
+        testops_pipeline_metrics = compute_pipeline_metrics_daily(
+            day=d,
+            pipeline_runs=testops_pipeline_rows,
+            job_runs=testops_job_rows,
+            computed_at=computed_at,
+        )
+        testops_test_metrics = compute_test_metrics_daily(
+            day=d,
+            suite_results=testops_suite_rows,
+            case_results=testops_case_rows,
+            computed_at=computed_at,
+        )
+        testops_coverage_metrics = compute_coverage_metrics_daily(
+            day=d,
+            snapshots=coverage_rows,
+            prior_snapshots=prior_coverage_rows,
+            computed_at=computed_at,
+        )
         deploy_metrics = compute_deploy_metrics_daily(
             day=d, deployments=deployment_rows, computed_at=computed_at
         )
@@ -378,6 +422,9 @@ async def run_daily_metrics_job(
                 s.write_work_item_cycle_times(wi_cycle_times)
             s.write_review_edges(review_edges)
             s.write_cicd_metrics(cicd_metrics)
+            s.write_testops_pipeline_metrics(testops_pipeline_metrics)
+            s.write_testops_test_metrics(testops_test_metrics)
+            s.write_testops_coverage_metrics(testops_coverage_metrics)
             s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
             if all_file_metrics:
@@ -575,7 +622,7 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             include_commit_metrics=ns.commit_metrics,
             sink=ns.sink,
             provider=ns.provider,
-            org_id=getattr(ns, "org", None),
+            org_id=getattr(ns, "org", None) or "",
         )
         return 0
     except Exception as e:
@@ -588,7 +635,7 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
         validate_sink(ns)
         end_day, backfill_days = resolve_date_range(ns)
         db_url = resolve_sink_uri(ns)
-        org_id = getattr(ns, "org", None)
+        org_id = getattr(ns, "org", None) or ""
         repo_ids: list[uuid.UUID] = ns.repo_ids or []
         days = _date_range(end_day, backfill_days)
 

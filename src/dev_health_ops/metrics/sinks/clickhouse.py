@@ -42,6 +42,11 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentRecord,
 )
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
+from dev_health_ops.metrics.testops_schemas import (
+    CoverageMetricsDailyRecord,
+    PipelineMetricsDailyRecord,
+    TestMetricsDailyRecord,
+)
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItemDependency,
@@ -736,6 +741,92 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "value",
                 "computed_at",
                 "org_id",
+            ],
+            rows,
+        )
+
+    def write_testops_pipeline_metrics(
+        self, rows: Sequence[PipelineMetricsDailyRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_pipeline_metrics_daily",
+            [
+                "repo_id",
+                "day",
+                "pipelines_count",
+                "success_count",
+                "failure_count",
+                "cancelled_count",
+                "success_rate",
+                "failure_rate",
+                "cancel_rate",
+                "rerun_rate",
+                "median_duration_seconds",
+                "p95_duration_seconds",
+                "avg_queue_seconds",
+                "p95_queue_seconds",
+                "team_id",
+                "service_id",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_testops_test_metrics(
+        self, rows: Sequence[TestMetricsDailyRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_test_metrics_daily",
+            [
+                "repo_id",
+                "day",
+                "total_cases",
+                "passed_count",
+                "failed_count",
+                "skipped_count",
+                "quarantined_count",
+                "pass_rate",
+                "failure_rate",
+                "flake_rate",
+                "retry_dependency_rate",
+                "total_suites",
+                "suite_duration_p50_seconds",
+                "suite_duration_p95_seconds",
+                "failure_recurrence_score",
+                "team_id",
+                "service_id",
+                "org_id",
+                "computed_at",
+            ],
+            rows,
+        )
+
+    def write_testops_coverage_metrics(
+        self, rows: Sequence[CoverageMetricsDailyRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "testops_coverage_metrics_daily",
+            [
+                "repo_id",
+                "day",
+                "line_coverage_pct",
+                "branch_coverage_pct",
+                "lines_total",
+                "lines_covered",
+                "coverage_delta_pct",
+                "uncovered_files_count",
+                "coverage_regression_count",
+                "team_id",
+                "service_id",
+                "org_id",
+                "computed_at",
             ],
             rows,
         )

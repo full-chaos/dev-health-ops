@@ -41,6 +41,11 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
+from dev_health_ops.metrics.testops_schemas import (
+    CoverageMetricsDailyRecord,
+    PipelineMetricsDailyRecord,
+    TestMetricsDailyRecord,
+)
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -204,6 +209,24 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         """Write pre-computed DORA metrics from providers."""
+
+    @abstractmethod
+    def write_testops_pipeline_metrics(
+        self, rows: Sequence[PipelineMetricsDailyRecord]
+    ) -> None:
+        """Write daily TestOps pipeline health metrics."""
+
+    @abstractmethod
+    def write_testops_test_metrics(
+        self, rows: Sequence[TestMetricsDailyRecord]
+    ) -> None:
+        """Write daily TestOps test reliability metrics."""
+
+    @abstractmethod
+    def write_testops_coverage_metrics(
+        self, rows: Sequence[CoverageMetricsDailyRecord]
+    ) -> None:
+        """Write daily TestOps coverage metrics."""
 
     # -------------------------------------------------------------------------
     # Complexity / hotspot metrics

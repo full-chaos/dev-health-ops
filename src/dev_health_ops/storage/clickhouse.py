@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportGeneralTypeIssues=false, reportPossiblyUnboundVariable=false
 import asyncio
 import json
 import logging
@@ -11,6 +12,11 @@ from typing import TYPE_CHECKING, Any, cast
 from dev_health_ops.metrics.schemas import (
     FileComplexitySnapshot,
     WorkItemUserMetricsDailyRecord,
+)
+from dev_health_ops.metrics.testops_schemas import (
+    CoverageSnapshotRow,
+    TestCaseResultRow,
+    TestSuiteResultRow,
 )
 from dev_health_ops.models.git import (
     CiPipelineRun,
@@ -958,6 +964,257 @@ class ClickHouseStore:
                 "status",
                 "started_at",
                 "resolved_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_test_suite_results(
+        self,
+        suites: list[TestSuiteResultRow] | list[dict[str, Any]],
+    ) -> None:
+        if not suites:
+            return
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: list[dict[str, Any]] = []
+        for item in suites:
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "run_id": str(item.get("run_id") or ""),
+                        "suite_id": str(item.get("suite_id") or ""),
+                        "suite_name": str(item.get("suite_name") or ""),
+                        "framework": item.get("framework"),
+                        "environment": item.get("environment"),
+                        "total_count": int(item.get("total_count") or 0),
+                        "passed_count": int(item.get("passed_count") or 0),
+                        "failed_count": int(item.get("failed_count") or 0),
+                        "skipped_count": int(item.get("skipped_count") or 0),
+                        "error_count": int(item.get("error_count") or 0),
+                        "quarantined_count": int(item.get("quarantined_count") or 0),
+                        "retried_count": int(item.get("retried_count") or 0),
+                        "duration_seconds": item.get("duration_seconds"),
+                        "started_at": self._normalize_datetime(item.get("started_at")),
+                        "finished_at": self._normalize_datetime(
+                            item.get("finished_at")
+                        ),
+                        "team_id": item.get("team_id"),
+                        "service_id": item.get("service_id"),
+                        "org_id": str(item.get("org_id") or ""),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item["repo_id"]),
+                        "run_id": str(item["run_id"]),
+                        "suite_id": str(item["suite_id"]),
+                        "suite_name": str(item["suite_name"]),
+                        "framework": item.get("framework"),
+                        "environment": item.get("environment"),
+                        "total_count": int(item["total_count"]),
+                        "passed_count": int(item["passed_count"]),
+                        "failed_count": int(item["failed_count"]),
+                        "skipped_count": int(item["skipped_count"]),
+                        "error_count": int(item.get("error_count") or 0),
+                        "quarantined_count": int(item.get("quarantined_count") or 0),
+                        "retried_count": int(item.get("retried_count") or 0),
+                        "duration_seconds": item["duration_seconds"],
+                        "started_at": self._normalize_datetime(item["started_at"]),
+                        "finished_at": self._normalize_datetime(item["finished_at"]),
+                        "team_id": item.get("team_id"),
+                        "service_id": item.get("service_id"),
+                        "org_id": str(item.get("org_id") or ""),
+                        "last_synced": synced_at_default,
+                    }
+                )
+
+        await self._insert_rows(
+            "test_suite_results",
+            [
+                "repo_id",
+                "run_id",
+                "suite_id",
+                "suite_name",
+                "framework",
+                "environment",
+                "total_count",
+                "passed_count",
+                "failed_count",
+                "skipped_count",
+                "error_count",
+                "quarantined_count",
+                "retried_count",
+                "duration_seconds",
+                "started_at",
+                "finished_at",
+                "team_id",
+                "service_id",
+                "org_id",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_test_case_results(
+        self,
+        cases: list[TestCaseResultRow] | list[dict[str, Any]],
+    ) -> None:
+        if not cases:
+            return
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: list[dict[str, Any]] = []
+        for item in cases:
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "run_id": str(item.get("run_id") or ""),
+                        "suite_id": str(item.get("suite_id") or ""),
+                        "case_id": str(item.get("case_id") or ""),
+                        "case_name": str(item.get("case_name") or ""),
+                        "class_name": item.get("class_name"),
+                        "status": str(item.get("status") or "passed"),
+                        "duration_seconds": item.get("duration_seconds"),
+                        "retry_attempt": int(item.get("retry_attempt") or 0),
+                        "failure_message": item.get("failure_message"),
+                        "failure_type": item.get("failure_type"),
+                        "stack_trace": item.get("stack_trace"),
+                        "is_quarantined": 1 if item.get("is_quarantined") else 0,
+                        "org_id": str(item.get("org_id") or ""),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item["repo_id"]),
+                        "run_id": str(item["run_id"]),
+                        "suite_id": str(item["suite_id"]),
+                        "case_id": str(item["case_id"]),
+                        "case_name": str(item["case_name"]),
+                        "class_name": item.get("class_name"),
+                        "status": str(item["status"]),
+                        "duration_seconds": item["duration_seconds"],
+                        "retry_attempt": int(item.get("retry_attempt") or 0),
+                        "failure_message": item.get("failure_message"),
+                        "failure_type": item.get("failure_type"),
+                        "stack_trace": item.get("stack_trace"),
+                        "is_quarantined": 1 if item.get("is_quarantined") else 0,
+                        "org_id": str(item.get("org_id") or ""),
+                        "last_synced": synced_at_default,
+                    }
+                )
+
+        await self._insert_rows(
+            "test_case_results",
+            [
+                "repo_id",
+                "run_id",
+                "suite_id",
+                "case_id",
+                "case_name",
+                "class_name",
+                "status",
+                "duration_seconds",
+                "retry_attempt",
+                "failure_message",
+                "failure_type",
+                "stack_trace",
+                "is_quarantined",
+                "org_id",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    async def insert_coverage_snapshots(
+        self,
+        snapshots: list[CoverageSnapshotRow] | list[dict[str, Any]],
+    ) -> None:
+        if not snapshots:
+            return
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: list[dict[str, Any]] = []
+        for item in snapshots:
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "run_id": str(item.get("run_id") or ""),
+                        "snapshot_id": str(item.get("snapshot_id") or ""),
+                        "report_format": item.get("report_format"),
+                        "lines_total": item.get("lines_total"),
+                        "lines_covered": item.get("lines_covered"),
+                        "line_coverage_pct": item.get("line_coverage_pct"),
+                        "branches_total": item.get("branches_total"),
+                        "branches_covered": item.get("branches_covered"),
+                        "branch_coverage_pct": item.get("branch_coverage_pct"),
+                        "functions_total": item.get("functions_total"),
+                        "functions_covered": item.get("functions_covered"),
+                        "commit_hash": item.get("commit_hash"),
+                        "branch": item.get("branch"),
+                        "pr_number": item.get("pr_number"),
+                        "team_id": item.get("team_id"),
+                        "service_id": item.get("service_id"),
+                        "org_id": str(item.get("org_id") or ""),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item["repo_id"]),
+                        "run_id": str(item["run_id"]),
+                        "snapshot_id": str(item["snapshot_id"]),
+                        "report_format": item.get("report_format"),
+                        "lines_total": item["lines_total"],
+                        "lines_covered": item["lines_covered"],
+                        "line_coverage_pct": item["line_coverage_pct"],
+                        "branches_total": item.get("branches_total"),
+                        "branches_covered": item.get("branches_covered"),
+                        "branch_coverage_pct": item.get("branch_coverage_pct"),
+                        "functions_total": item.get("functions_total"),
+                        "functions_covered": item.get("functions_covered"),
+                        "commit_hash": item.get("commit_hash"),
+                        "branch": item.get("branch"),
+                        "pr_number": item.get("pr_number"),
+                        "team_id": item.get("team_id"),
+                        "service_id": item.get("service_id"),
+                        "org_id": str(item.get("org_id") or ""),
+                        "last_synced": synced_at_default,
+                    }
+                )
+
+        await self._insert_rows(
+            "coverage_snapshots",
+            [
+                "repo_id",
+                "run_id",
+                "snapshot_id",
+                "report_format",
+                "lines_total",
+                "lines_covered",
+                "line_coverage_pct",
+                "branches_total",
+                "branches_covered",
+                "branch_coverage_pct",
+                "functions_total",
+                "functions_covered",
+                "commit_hash",
+                "branch",
+                "pr_number",
+                "team_id",
+                "service_id",
+                "org_id",
                 "last_synced",
             ],
             rows,

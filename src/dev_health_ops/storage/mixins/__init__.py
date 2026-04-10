@@ -12,6 +12,7 @@ from .testops_cicd import (
     clickhouse_insert_testops_job_runs,
     clickhouse_insert_testops_pipeline_runs,
 )
+from .testops_tests import TestOpsTestsMixin
 from .work_item import WorkItemMixin
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "TestOpsCICDMixin",
     "clickhouse_insert_testops_pipeline_runs",
     "clickhouse_insert_testops_job_runs",
+    "TestOpsTestsMixin",
 ]

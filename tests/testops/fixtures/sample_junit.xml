@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="services.api.tests.test_api" tests="4" failures="1" skipped="2" errors="0" time="1.5" timestamp="2026-04-10T10:00:00+00:00" file="services/api/tests/test_api.py">
+    <system-out>suite stdout</system-out>
+    <system-err>suite stderr</system-err>
+    <testcase classname="services.api.tests.test_api::TestAPI" name="test_healthcheck" time="0.25" file="services/api/tests/test_api.py" />
+    <testcase classname="services.api.tests.test_api::TestAPI" name="test_failure" time="0.50" file="services/api/tests/test_api.py">
+      <failure message="assertion failed" type="AssertionError">Expected 200 but got 500</failure>
+    </testcase>
+    <testcase classname="services.api.tests.test_api::TestAPI" name="test_skipped" time="0.00" file="services/api/tests/test_api.py">
+      <skipped message="feature gated">skipped in ci</skipped>
+    </testcase>
+    <testcase classname="services.api.tests.test_api::TestAPI" name="test_quarantined" time="0.75" file="services/api/tests/test_api.py">
+      <skipped message="quarantined on ci" type="quarantined">quarantine marker</skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="packages.web.src.app.spec" tests="1" failures="0" skipped="0" errors="1" time="0.3" timestamp="2026-04-10T10:05:00+00:00" file="packages/web/src/app.spec.ts">
+    <testcase classname="packages.web.src.app.spec" name="renders home" time="0.3" file="packages/web/src/app.spec.ts">
+      <error message="unexpected error" type="TypeError">TypeError: boom</error>
+      <system-err>boom stderr</system-err>
+    </testcase>
+  </testsuite>
+</testsuites>

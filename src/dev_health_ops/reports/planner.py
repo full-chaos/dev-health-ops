@@ -17,6 +17,7 @@ from dev_health_ops.reports.resolver import (
 )
 from dev_health_ops.reports.templates import default_time_range, get_template
 from dev_health_ops.reports.validation import ValidationResult, validate_plan_request
+from dev_health_ops.utils.datetime import utc_today
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ def build_report_plan(
     entity_catalog: EntityCatalog,
     today: date | None = None,
 ) -> PlanningResult:
-    today = today or date.today()
+    today = today or utc_today()
     parsed_prompt = parse_prompt(prompt, today=today)
     metric_resolution = resolve_metrics(parsed_prompt.metric_terms)
     entity_resolution = resolve_entities(parsed_prompt, entity_catalog)

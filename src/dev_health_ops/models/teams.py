@@ -33,6 +33,7 @@ class Team(Base):
         members: list[str] | None = None,
         updated_at: datetime | None = None,
         team_uuid: uuid.UUID | None = None,
+        org_id: str = "",
     ):
         self.id = id
         self.team_uuid = team_uuid or uuid.uuid4()
@@ -40,6 +41,7 @@ class Team(Base):
         self.description = description
         self.members = members or []
         self.updated_at = updated_at or datetime.now(timezone.utc)
+        self.org_id = org_id
 
 
 class JiraProjectOpsTeamLink(Base):

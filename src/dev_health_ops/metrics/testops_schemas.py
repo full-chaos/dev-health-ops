@@ -24,7 +24,6 @@ from typing import TypedDict
 
 from typing_extensions import NotRequired
 
-
 # ---------------------------------------------------------------------------
 # 1. CI/CD Pipeline and Job Event Schemas (CHAOS-1106)
 # ---------------------------------------------------------------------------

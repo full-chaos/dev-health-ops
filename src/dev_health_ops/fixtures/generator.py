@@ -2130,18 +2130,17 @@ class SyntheticDataGenerator:
                 )
             )
 
-            licenses.append(
-                OrgLicense(
-                    id=uuid.uuid5(admin_org.id, "org-license"),
-                    org_id=admin_org.id,
-                    tier=LicenseTier.ENTERPRISE.value,
-                    license_type="saas",
-                    licensed_users=None,
-                    licensed_repos=None,
-                    issued_at=datetime.now(timezone.utc),
-                    expires_at=datetime.now(timezone.utc) + timedelta(days=365),
-                )
+            admin_license = OrgLicense(
+                org_id=admin_org.id,
+                tier=LicenseTier.ENTERPRISE.value,
+                license_type="saas",
+                licensed_users=None,
+                licensed_repos=None,
+                issued_at=datetime.now(timezone.utc),
+                expires_at=datetime.now(timezone.utc) + timedelta(days=365),
             )
+            admin_license.id = uuid.uuid5(admin_org.id, "org-license")
+            licenses.append(admin_license)
 
         default_org_id = None
         if orgs:

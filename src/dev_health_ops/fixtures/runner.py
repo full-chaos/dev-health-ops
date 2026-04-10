@@ -101,6 +101,7 @@ async def _seed_auth_data(session, user_data: dict) -> None:
     await session.commit()
     for org_license in user_data.get("licenses", []):
         from sqlalchemy import delete
+
         from dev_health_ops.models.licensing import OrgLicense
 
         await session.execute(

@@ -44,6 +44,9 @@ from dev_health_ops.metrics.schemas import (
 from dev_health_ops.metrics.testops_schemas import (
     CoverageMetricsDailyRecord,
     PipelineMetricsDailyRecord,
+    PipelineStabilityRecord,
+    QualityDragRecord,
+    ReleaseConfidenceRecord,
     TestMetricsDailyRecord,
 )
 from dev_health_ops.models.work_items import (
@@ -227,6 +230,15 @@ class BaseMetricsSink(ABC):
         self, rows: Sequence[CoverageMetricsDailyRecord]
     ) -> None:
         """Write daily TestOps coverage metrics."""
+
+    def write_release_confidence(self, rows: Sequence[ReleaseConfidenceRecord]) -> None:
+        pass
+
+    def write_quality_drag(self, rows: Sequence[QualityDragRecord]) -> None:
+        pass
+
+    def write_pipeline_stability(self, rows: Sequence[PipelineStabilityRecord]) -> None:
+        pass
 
     # -------------------------------------------------------------------------
     # Complexity / hotspot metrics

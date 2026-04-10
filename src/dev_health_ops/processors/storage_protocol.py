@@ -96,6 +96,18 @@ class GitSyncStore(Protocol):
         """Insert a batch of incident records."""
         ...
 
+    async def insert_test_suite_results(self, suites: list[object]) -> None:
+        """Insert a batch of normalized test suite records."""
+        ...
+
+    async def insert_test_case_results(self, cases: list[object]) -> None:
+        """Insert a batch of normalized test case records."""
+        ...
+
+    async def insert_coverage_snapshots(self, snapshots: list[object]) -> None:
+        """Insert a batch of normalized coverage snapshots."""
+        ...
+
     async def has_any_git_files(self, repo_id: object) -> bool:
         """Return True if any git file records exist for the given repo."""
         ...

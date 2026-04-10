@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -26,6 +27,7 @@ from .mixins import (
     PullRequestMixin,
     TeamMixin,
     TestOpsCICDMixin,
+    TestOpsTestsMixin,
     WorkItemMixin,
 )
 
@@ -42,6 +44,7 @@ class SQLAlchemyStore(
     TeamMixin,
     AtlassianOpsMixin,
     MetricsMixin,
+    TestOpsTestsMixin,
 ):
     """Async storage implementation backed by SQLAlchemy."""
 
@@ -182,6 +185,72 @@ class SQLAlchemyStore(
             Column("retry_attempt", Integer, nullable=False, server_default="0"),
             Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True), nullable=False),
+        )
+        self._test_suite_results_table = Table(
+            "test_suite_results",
+            self._work_item_metadata,
+            Column("repo_id", String, primary_key=True),
+            Column("run_id", String, primary_key=True),
+            Column("suite_id", String, primary_key=True),
+            Column("suite_name", String),
+            Column("framework", String),
+            Column("environment", String),
+            Column("total_count", Integer),
+            Column("passed_count", Integer),
+            Column("failed_count", Integer),
+            Column("skipped_count", Integer),
+            Column("error_count", Integer),
+            Column("quarantined_count", Integer),
+            Column("retried_count", Integer),
+            Column("duration_seconds", Float),
+            Column("started_at", DateTime(timezone=True)),
+            Column("finished_at", DateTime(timezone=True)),
+            Column("team_id", String),
+            Column("service_id", String),
+            Column("org_id", String, nullable=False, server_default=""),
+            Column("last_synced", DateTime(timezone=True)),
+        )
+        self._test_case_results_table = Table(
+            "test_case_results",
+            self._work_item_metadata,
+            Column("repo_id", String, primary_key=True),
+            Column("run_id", String, primary_key=True),
+            Column("suite_id", String, primary_key=True),
+            Column("case_id", String, primary_key=True),
+            Column("case_name", String),
+            Column("class_name", String),
+            Column("status", String),
+            Column("duration_seconds", Float),
+            Column("retry_attempt", Integer),
+            Column("failure_message", String),
+            Column("failure_type", String),
+            Column("stack_trace", String),
+            Column("is_quarantined", Boolean),
+            Column("org_id", String, nullable=False, server_default=""),
+            Column("last_synced", DateTime(timezone=True)),
+        )
+        self._coverage_snapshots_table = Table(
+            "coverage_snapshots",
+            self._work_item_metadata,
+            Column("repo_id", String, primary_key=True),
+            Column("run_id", String, primary_key=True),
+            Column("snapshot_id", String, primary_key=True),
+            Column("report_format", String),
+            Column("lines_total", Integer),
+            Column("lines_covered", Integer),
+            Column("line_coverage_pct", Float),
+            Column("branches_total", Integer),
+            Column("branches_covered", Integer),
+            Column("branch_coverage_pct", Float),
+            Column("functions_total", Integer),
+            Column("functions_covered", Integer),
+            Column("commit_hash", String),
+            Column("branch", String),
+            Column("pr_number", Integer),
+            Column("team_id", String),
+            Column("service_id", String),
+            Column("org_id", String, nullable=False, server_default=""),
+            Column("last_synced", DateTime(timezone=True)),
         )
 
     def _insert_for_dialect(self, model: Any):

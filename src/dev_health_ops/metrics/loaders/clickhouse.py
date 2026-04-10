@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from dev_health_ops.metrics.loaders.base import (
     DataLoader,
@@ -19,6 +19,13 @@ from dev_health_ops.metrics.schemas import (
     PipelineRunRow,
     PullRequestReviewRow,
     PullRequestRow,
+)
+from dev_health_ops.metrics.testops_schemas import (
+    CoverageSnapshotRow,
+    JobRunRow,
+    PipelineRunExtendedRow,
+    TestCaseResultRow,
+    TestSuiteResultRow,
 )
 from dev_health_ops.models.atlassian_ops import (
     AtlassianOpsAlert,
@@ -310,6 +317,197 @@ class ClickHouseDataLoader(DataLoader):
         """
         dicts = await _clickhouse_query_dicts(self.client, query, params)
         return [dict(d) for d in dicts]  # type: ignore
+
+    async def load_testops_pipeline_data(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: uuid.UUID | None,
+    ) -> tuple[list[PipelineRunExtendedRow], list[JobRunRow]]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        repo_filter = ""
+        if repo_id is not None:
+            params["repo_id"] = str(repo_id)
+            repo_filter = " AND repo_id = {repo_id:UUID}"
+
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        pipeline_query = f"""
+        SELECT
+          repo_id,
+          run_id,
+          pipeline_name,
+          provider,
+          status,
+          queued_at,
+          started_at,
+          finished_at,
+          duration_seconds,
+          queue_seconds,
+          retry_count,
+          cancel_reason,
+          trigger_source,
+          commit_hash,
+          branch,
+          pr_number,
+          team_id,
+          service_id,
+          org_id
+        FROM ci_pipeline_runs
+        WHERE started_at >= {{start:DateTime}} AND started_at < {{end:DateTime}}
+        {repo_filter}
+        {org_filter}
+        """
+        job_query = f"""
+        SELECT
+          j.repo_id,
+          j.run_id,
+          j.job_id,
+          j.job_name,
+          j.stage,
+          j.status,
+          j.started_at,
+          j.finished_at,
+          j.duration_seconds,
+          j.runner_type,
+          j.retry_attempt,
+          j.org_id
+        FROM ci_job_runs AS j
+        INNER JOIN ci_pipeline_runs AS p
+          ON (p.repo_id = j.repo_id) AND (p.run_id = j.run_id)
+        WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
+        {repo_filter.replace("repo_id", "p.repo_id") if repo_id is not None else ""}
+        {self._org_filter(alias="p")}
+        """
+
+        pipeline_dicts = await _clickhouse_query_dicts(
+            self.client, pipeline_query, params
+        )
+        job_dicts = await _clickhouse_query_dicts(self.client, job_query, params)
+        return (
+            [cast(PipelineRunExtendedRow, dict(row)) for row in pipeline_dicts],
+            [cast(JobRunRow, dict(row)) for row in job_dicts],
+        )
+
+    async def load_testops_test_data(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: uuid.UUID | None,
+    ) -> tuple[list[TestSuiteResultRow], list[TestCaseResultRow]]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        repo_filter = ""
+        if repo_id is not None:
+            params["repo_id"] = str(repo_id)
+            repo_filter = " AND repo_id = {repo_id:UUID}"
+
+        org_filter = self._org_filter()
+        params = self._inject_org_id(params)
+
+        suite_query = f"""
+        SELECT
+          repo_id,
+          run_id,
+          suite_id,
+          suite_name,
+          framework,
+          environment,
+          total_count,
+          passed_count,
+          failed_count,
+          skipped_count,
+          error_count,
+          quarantined_count,
+          retried_count,
+          duration_seconds,
+          started_at,
+          finished_at,
+          team_id,
+          service_id,
+          org_id
+        FROM test_suite_results
+        WHERE coalesce(started_at, finished_at) >= {{start:DateTime}}
+          AND coalesce(started_at, finished_at) < {{end:DateTime}}
+        {repo_filter}
+        {org_filter}
+        """
+        case_query = f"""
+        SELECT
+          c.repo_id,
+          c.run_id,
+          c.suite_id,
+          c.case_id,
+          c.case_name,
+          c.class_name,
+          c.status,
+          c.duration_seconds,
+          c.retry_attempt,
+          c.failure_message,
+          c.failure_type,
+          c.stack_trace,
+          c.is_quarantined,
+          c.org_id
+        FROM test_case_results AS c
+        INNER JOIN test_suite_results AS s
+          ON (s.repo_id = c.repo_id)
+         AND (s.run_id = c.run_id)
+         AND (s.suite_id = c.suite_id)
+        WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
+          AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
+        {repo_filter.replace("repo_id", "s.repo_id") if repo_id is not None else ""}
+        {self._org_filter(alias="s")}
+        """
+
+        suite_dicts = await _clickhouse_query_dicts(self.client, suite_query, params)
+        case_dicts = await _clickhouse_query_dicts(self.client, case_query, params)
+        return (
+            [cast(TestSuiteResultRow, dict(row)) for row in suite_dicts],
+            [cast(TestCaseResultRow, dict(row)) for row in case_dicts],
+        )
+
+    async def load_testops_coverage_data(
+        self,
+        start: datetime,
+        end: datetime,
+        repo_id: uuid.UUID | None,
+    ) -> list[CoverageSnapshotRow]:
+        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
+        repo_filter = ""
+        if repo_id is not None:
+            params["repo_id"] = str(repo_id)
+            repo_filter = " AND p.repo_id = {repo_id:UUID}"
+
+        params = self._inject_org_id(params)
+        query = f"""
+        SELECT
+          c.repo_id,
+          c.run_id,
+          c.snapshot_id,
+          c.report_format,
+          c.lines_total,
+          c.lines_covered,
+          c.line_coverage_pct,
+          c.branches_total,
+          c.branches_covered,
+          c.branch_coverage_pct,
+          c.functions_total,
+          c.functions_covered,
+          c.commit_hash,
+          c.branch,
+          c.pr_number,
+          c.team_id,
+          c.service_id,
+          c.org_id
+        FROM coverage_snapshots AS c
+        INNER JOIN ci_pipeline_runs AS p
+          ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id)
+        WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
+        {repo_filter}
+        {self._org_filter(alias="p")}
+        """
+        dicts = await _clickhouse_query_dicts(self.client, query, params)
+        return [cast(CoverageSnapshotRow, dict(row)) for row in dicts]
 
     async def load_blame_concentration(
         self,

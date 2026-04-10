@@ -100,7 +100,13 @@ async def _seed_auth_data(session, user_data: dict) -> None:
         await session.merge(membership)
     await session.commit()
     for org_license in user_data.get("licenses", []):
-        await session.merge(org_license)
+        from sqlalchemy import delete
+        from dev_health_ops.models.licensing import OrgLicense
+
+        await session.execute(
+            delete(OrgLicense).where(OrgLicense.org_id == org_license.org_id)
+        )
+        session.add(org_license)
     await session.commit()
 
 

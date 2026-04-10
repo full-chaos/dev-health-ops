@@ -847,6 +847,52 @@ class ClickHouseStore:
             rows,
         )
 
+    async def insert_ci_job_runs(self, jobs: list[dict[str, Any]]) -> None:
+        if not jobs:
+            return
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: list[dict[str, Any]] = []
+        for item in jobs:
+            rows.append(
+                {
+                    "repo_id": self._normalize_uuid(item.get("repo_id")),
+                    "run_id": str(item.get("run_id") or ""),
+                    "job_id": str(item.get("job_id") or ""),
+                    "job_name": str(item.get("job_name") or ""),
+                    "stage": item.get("stage"),
+                    "status": item.get("status"),
+                    "started_at": self._normalize_datetime(item.get("started_at")),
+                    "finished_at": self._normalize_datetime(item.get("finished_at")),
+                    "duration_seconds": item.get("duration_seconds"),
+                    "runner_type": item.get("runner_type"),
+                    "retry_attempt": int(item.get("retry_attempt") or 0),
+                    "org_id": str(item.get("org_id") or ""),
+                    "last_synced": self._normalize_datetime(
+                        item.get("last_synced") or synced_at_default
+                    ),
+                }
+            )
+
+        await self._insert_rows(
+            "ci_job_runs",
+            [
+                "repo_id",
+                "run_id",
+                "job_id",
+                "job_name",
+                "stage",
+                "status",
+                "started_at",
+                "finished_at",
+                "duration_seconds",
+                "runner_type",
+                "retry_attempt",
+                "org_id",
+                "last_synced",
+            ],
+            rows,
+        )
+
     async def insert_deployments(self, deployments: list[Deployment]) -> None:
         if not deployments:
             return

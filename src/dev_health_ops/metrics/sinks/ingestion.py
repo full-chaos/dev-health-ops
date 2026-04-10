@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -47,6 +48,14 @@ class IngestionSink:
 
     async def insert_ci_pipeline_runs(self, runs: list[CiPipelineRun]) -> None:
         await self._store.insert_ci_pipeline_runs(runs)
+
+    async def insert_testops_pipeline_runs(
+        self, runs: list[PipelineRunExtendedRow]
+    ) -> None:
+        await self._store.insert_testops_pipeline_runs(runs)
+
+    async def insert_testops_job_runs(self, jobs: list[JobRunRow]) -> None:
+        await self._store.insert_testops_job_runs(jobs)
 
     async def insert_deployments(self, deployments: list[Deployment]) -> None:
         await self._store.insert_deployments(deployments)

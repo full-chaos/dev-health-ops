@@ -25,6 +25,7 @@ from .mixins import (
     MetricsMixin,
     PullRequestMixin,
     TeamMixin,
+    TestOpsCICDMixin,
     WorkItemMixin,
 )
 
@@ -36,6 +37,7 @@ class SQLAlchemyStore(
     GitDataMixin,
     PullRequestMixin,
     CicdMixin,
+    TestOpsCICDMixin,
     WorkItemMixin,
     TeamMixin,
     AtlassianOpsMixin,
@@ -144,6 +146,43 @@ class SQLAlchemyStore(
             Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )
+        self._ci_pipeline_runs_table = Base.metadata.tables["ci_pipeline_runs"]
+        for column in (
+            Column("pipeline_name", String),
+            Column("provider", String, nullable=False, server_default=""),
+            Column("duration_seconds", Float),
+            Column("queue_seconds", Float),
+            Column("retry_count", Integer, nullable=False, server_default="0"),
+            Column("cancel_reason", String),
+            Column("trigger_source", String),
+            Column("commit_hash", String),
+            Column("branch", String),
+            Column("pr_number", Integer),
+            Column("team_id", String),
+            Column("service_id", String),
+            Column("org_id", String, nullable=False, server_default=""),
+        ):
+            if column.name not in self._ci_pipeline_runs_table.c:
+                self._ci_pipeline_runs_table.append_column(column)
+
+        self._testops_metadata = MetaData()
+        self._ci_job_runs_table = Table(
+            "ci_job_runs",
+            self._testops_metadata,
+            Column("repo_id", String, primary_key=True),
+            Column("run_id", String, primary_key=True),
+            Column("job_id", String, primary_key=True),
+            Column("job_name", String, nullable=False),
+            Column("stage", String),
+            Column("status", String),
+            Column("started_at", DateTime(timezone=True)),
+            Column("finished_at", DateTime(timezone=True)),
+            Column("duration_seconds", Float),
+            Column("runner_type", String),
+            Column("retry_attempt", Integer, nullable=False, server_default="0"),
+            Column("org_id", String, nullable=False, server_default=""),
+            Column("last_synced", DateTime(timezone=True), nullable=False),
+        )
 
     def _insert_for_dialect(self, model: Any):
         dialect = self.engine.dialect.name
@@ -184,6 +223,7 @@ class SQLAlchemyStore(
             async with self.engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
                 await conn.run_sync(self._work_item_metadata.create_all)
+                await conn.run_sync(self._testops_metadata.create_all)
 
         return self
 
@@ -197,6 +237,7 @@ class SQLAlchemyStore(
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(self._work_item_metadata.create_all)
+            await conn.run_sync(self._testops_metadata.create_all)
 
     async def insert_repo(self, repo: Repo) -> None:
         assert self.session is not None

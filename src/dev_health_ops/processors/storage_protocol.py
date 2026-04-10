@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -75,6 +76,16 @@ class GitSyncStore(Protocol):
 
     async def insert_ci_pipeline_runs(self, runs: list[CiPipelineRun]) -> None:
         """Insert a batch of CI pipeline run records."""
+        ...
+
+    async def insert_testops_pipeline_runs(
+        self, runs: list[PipelineRunExtendedRow]
+    ) -> None:
+        """Insert a batch of extended TestOps pipeline run records."""
+        ...
+
+    async def insert_testops_job_runs(self, jobs: list[JobRunRow]) -> None:
+        """Insert a batch of TestOps job run records."""
         ...
 
     async def insert_deployments(self, deployments: list[Deployment]) -> None:

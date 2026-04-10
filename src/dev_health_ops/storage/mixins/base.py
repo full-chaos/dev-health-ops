@@ -10,6 +10,8 @@ class SQLAlchemyStoreMixinProtocol(Protocol):
     """Protocol for SQLAlchemy store mixins."""
 
     session: AsyncSession | None
+    _ci_pipeline_runs_table: object
+    _ci_job_runs_table: object
 
     def _insert_for_dialect(self, model: Any) -> Any:
         """Return dialect-specific insert statement."""

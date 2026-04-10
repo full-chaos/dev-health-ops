@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 import strawberry
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
@@ -176,9 +176,11 @@ async def resolve_saved_reports(
 
     async with get_postgres_session() as session:
         count_result = await session.execute(
-            select(SavedReport).where(SavedReport.org_id == org_id)
+            select(func.count())
+            .select_from(SavedReport)
+            .where(SavedReport.org_id == org_id)
         )
-        total = len(count_result.scalars().all())
+        total = count_result.scalar() or 0
 
         result = await session.execute(
             select(SavedReport)
@@ -234,9 +236,11 @@ async def resolve_report_runs(
             return ReportRunConnection(items=[], total=0)
 
         count_result = await session.execute(
-            select(ReportRun).where(ReportRun.report_id == report.id)
+            select(func.count())
+            .select_from(ReportRun)
+            .where(ReportRun.report_id == report.id)
         )
-        total = len(count_result.scalars().all())
+        total = count_result.scalar() or 0
 
         result = await session.execute(
             select(ReportRun)

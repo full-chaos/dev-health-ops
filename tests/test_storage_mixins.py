@@ -2,16 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
 from dev_health_ops.storage.mixins.cicd import CicdMixin
 from dev_health_ops.storage.mixins.git import GitDataMixin
+from dev_health_ops.storage.mixins.testops_tests import (  # type: ignore[reportMissingImports]
+    TestOpsTestsMixin,
+)
 from dev_health_ops.storage.mixins.work_item import WorkItemMixin
 
 
-class _DummyStore(GitDataMixin, CicdMixin, WorkItemMixin):
+class _DummyStore(GitDataMixin, CicdMixin, TestOpsTestsMixin, WorkItemMixin):
     def __init__(self):
         self.calls = []
         self._work_items_table = "work_items"
@@ -19,6 +23,9 @@ class _DummyStore(GitDataMixin, CicdMixin, WorkItemMixin):
         self._work_graph_issue_pr_table = "work_graph_issue_pr"
         self._work_graph_pr_commit_table = "work_graph_pr_commit"
         self._work_item_transitions_table = "work_item_transitions"
+        self._test_suite_results_table = "test_suite_results"
+        self._test_case_results_table = "test_case_results"
+        self._coverage_snapshots_table = "coverage_snapshots"
 
     async def _upsert_many(self, model, rows, conflict_columns, update_columns):
         self.calls.append(
@@ -36,17 +43,20 @@ async def test_git_commit_stats_defaults_file_modes_for_dict_rows():
     store = _DummyStore()
 
     await store.insert_git_commit_stats(
-        [
-            {
-                "repo_id": uuid4(),
-                "commit_hash": "abc",
-                "file_path": "x.py",
-                "additions": 1,
-                "deletions": 2,
-                "old_file_mode": None,
-                "new_file_mode": None,
-            }
-        ]
+        cast(
+            Any,
+            [
+                {
+                    "repo_id": uuid4(),
+                    "commit_hash": "abc",
+                    "file_path": "x.py",
+                    "additions": 1,
+                    "deletions": 2,
+                    "old_file_mode": None,
+                    "new_file_mode": None,
+                }
+            ],
+        )
     )
 
     row = store.calls[0]["rows"][0]
@@ -146,9 +156,65 @@ async def test_cicd_mixin_accepts_object_inputs():
         last_synced=None,
     )
 
-    await store.insert_ci_pipeline_runs([run])
+    await store.insert_ci_pipeline_runs(cast(Any, [run]))
 
     payload = store.calls[0]
     assert payload["rows"][0]["repo_id"] == repo_id
     assert payload["rows"][0]["run_id"] == "run-1"
     assert isinstance(payload["rows"][0]["last_synced"], datetime)
+
+
+@pytest.mark.asyncio
+async def test_testops_mixin_normalizes_rows_and_defaults() -> None:
+    store = _DummyStore()
+    repo_id = uuid4()
+
+    await store.insert_test_suite_results(
+        [
+            {
+                "repo_id": repo_id,
+                "run_id": "run-1",
+                "suite_id": "suite-1",
+                "suite_name": "suite",
+                "total_count": 2,
+                "passed_count": 1,
+                "failed_count": 1,
+                "skipped_count": 0,
+            }
+        ]
+    )
+    await store.insert_test_case_results(
+        [
+            {
+                "repo_id": repo_id,
+                "run_id": "run-1",
+                "suite_id": "suite-1",
+                "case_id": "case-1",
+                "case_name": "test_case",
+                "status": "failed",
+                "is_quarantined": False,
+            }
+        ]
+    )
+    await store.insert_coverage_snapshots(
+        [
+            {
+                "repo_id": repo_id,
+                "run_id": "run-1",
+                "snapshot_id": "snap-1",
+                "report_format": "lcov",
+                "lines_total": 10,
+                "lines_covered": 7,
+                "line_coverage_pct": 70.0,
+            }
+        ]
+    )
+
+    suite_payload = store.calls[0]
+    case_payload = store.calls[1]
+    coverage_payload = store.calls[2]
+    assert suite_payload["rows"][0]["repo_id"] == str(repo_id)
+    assert suite_payload["rows"][0]["error_count"] == 0
+    assert case_payload["rows"][0]["status"] == "failed"
+    assert coverage_payload["rows"][0]["report_format"] == "lcov"
+    assert isinstance(coverage_payload["rows"][0]["last_synced"], datetime)

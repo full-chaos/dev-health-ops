@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<coverage lines-valid="8" lines-covered="6" branches-valid="4" branches-covered="3" line-rate="0.75" branch-rate="0.75" version="1.9" timestamp="1712743200">
+  <packages>
+    <package name="services.api" line-rate="0.75" branch-rate="0.5">
+      <classes>
+        <class name="app" filename="services/api/src/app.py" line-rate="0.75" branch-rate="0.5">
+          <lines>
+            <line number="1" hits="1" />
+            <line number="2" hits="1" branch="true" condition-coverage="50% (1/2)" />
+            <line number="3" hits="0" />
+            <line number="4" hits="1" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+    <package name="packages.web" line-rate="0.75" branch-rate="1.0">
+      <classes>
+        <class name="index" filename="packages/web/src/index.ts" line-rate="0.75" branch-rate="1.0">
+          <lines>
+            <line number="1" hits="1" />
+            <line number="2" hits="1" branch="true" condition-coverage="100% (2/2)" />
+            <line number="3" hits="0" />
+            <line number="4" hits="1" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

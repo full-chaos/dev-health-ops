@@ -5,10 +5,12 @@ import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.licensing.gating import LicenseManager
 from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
+from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
@@ -475,6 +477,12 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 # Write DORA metrics, investment classifications, investment metrics,
                 # and file hotspot daily records for each repo.
                 _repo_count = max(1, ns.repo_count)
+                fixture_run_id = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"fixtures:{ns.seed if ns.seed is not None else 'default'}:{org_id}:{ns.repo_name}:{ns.days}",
+                    )
+                )
                 for i in range(_repo_count):
                     r_name = (
                         ns.repo_name if _repo_count == 1 else f"{ns.repo_name}-{i + 1}"
@@ -497,6 +505,26 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     inv_metrics = metric_gen.generate_investment_metrics(days=ns.days)
                     if hasattr(sink, "write_investment_metrics") and inv_metrics:
                         sink.write_investment_metrics(inv_metrics)
+
+                    generate_work_unit_investments = getattr(
+                        metric_gen, "generate_work_unit_investments", None
+                    )
+                    work_unit_investments: list[WorkUnitInvestmentRecord] = []
+                    if callable(generate_work_unit_investments):
+                        work_unit_investments = cast(
+                            list[WorkUnitInvestmentRecord],
+                            generate_work_unit_investments(
+                                fixture_data["work_items"],
+                                days=ns.days,
+                                org_id=org_id,
+                                categorization_run_id=fixture_run_id,
+                            ),
+                        )
+                    if (
+                        hasattr(sink, "write_work_unit_investments")
+                        and work_unit_investments
+                    ):
+                        sink.write_work_unit_investments(work_unit_investments)
 
                     hotspot_records = metric_gen.generate_file_hotspot_daily(
                         days=ns.days

@@ -1108,12 +1108,20 @@ class SyntheticDataGenerator:
         return records
 
     def generate_work_item_cycle_times(
-        self, count: int = 50
+        self,
+        work_items: list[WorkItem] | None = None,
+        count: int = 50,
     ) -> list[WorkItemCycleTimeRecord]:
-        records = []
-        end_date = datetime.now(timezone.utc)
+        """Generate cycle time records.
 
-        teams_to_use = []
+        When *work_items* is provided the records use the real work-item IDs
+        so that team-linkage queries (which join via structural_evidence_json
+        → work_item_cycle_times) resolve correctly.
+        """
+        records = []
+        computed_at = datetime.now(timezone.utc)
+
+        teams_to_use: list[tuple[str, str]] = []
         if self.assigned_teams is None:
             teams_to_use = [("alpha", "Alpha Team")]
         elif self.assigned_teams:
@@ -1121,29 +1129,88 @@ class SyntheticDataGenerator:
         else:
             teams_to_use = [("unassigned", "Unassigned")]
 
-        for i in range(count):
-            created_at = end_date - timedelta(days=random.randint(0, 60))
-            started_at = created_at + timedelta(hours=random.randint(4, 48))
-            completed_at = started_at + timedelta(hours=random.randint(24, 168))
+        # Build a member→team lookup for assignee-based resolution
+        member_map = self._get_member_map()
+
+        items_to_process: list[
+            tuple[str, str, str, str | None, datetime, datetime | None, datetime | None]
+        ] = []
+
+        if work_items:
+            for item in work_items:
+                if item.type == "epic":
+                    continue
+                assignee = item.assignees[0] if item.assignees else None
+                items_to_process.append(
+                    (
+                        item.work_item_id,
+                        item.provider,
+                        item.type or "task",
+                        assignee,
+                        item.created_at,
+                        item.started_at,
+                        item.completed_at,
+                    )
+                )
+        else:
+            # Fallback: generate synthetic items
+            end_date = datetime.now(timezone.utc)
+            for i in range(count):
+                created_at = end_date - timedelta(days=random.randint(0, 60))
+                started_at = created_at + timedelta(hours=random.randint(4, 48))
+                completed_at = started_at + timedelta(hours=random.randint(24, 168))
+                author_name, _ = random.choice(self.repo_authors)
+                items_to_process.append(
+                    (
+                        f"synth:{self.repo_name}#{i}",
+                        self.provider,
+                        random.choice(["story", "bug", "task"]),
+                        author_name,
+                        created_at,
+                        started_at,
+                        completed_at,
+                    )
+                )
+
+        for (
+            work_item_id,
+            provider,
+            item_type,
+            assignee,
+            created_at,
+            started_at,
+            completed_at,
+        ) in items_to_process:
+            if started_at is None or completed_at is None:
+                continue
 
             cycle_time = (completed_at - started_at).total_seconds() / 3600
-            team_id, team_name = random.choice(teams_to_use)
+            if cycle_time <= 0:
+                continue
 
-            # Simulate flow efficiency (typically 10-40%)
+            # Resolve team from assignee
+            team_id, team_name = None, None
+            if assignee and member_map:
+                entry = member_map.get(str(assignee).strip().lower())
+                if entry:
+                    team_id, team_name = entry
+            if team_id is None:
+                team_id, team_name = random.choice(teams_to_use)
+
             efficiency = random.uniform(0.1, 0.6)
             active_hours = cycle_time * efficiency
             wait_hours = cycle_time * (1.0 - efficiency)
 
             records.append(
                 WorkItemCycleTimeRecord(
-                    work_item_id=f"synth:{self.repo_name}#{i}",
-                    provider=self.provider,
+                    work_item_id=work_item_id,
+                    provider=provider,
                     day=completed_at.date(),
                     work_scope_id=self.repo_name,
                     team_id=team_id,
                     team_name=team_name,
-                    assignee=random.choice(self.repo_authors)[0],
-                    type=random.choice(["story", "bug", "task"]),
+                    assignee=assignee,
+                    type=item_type,
                     status="done",
                     created_at=created_at,
                     started_at=started_at,
@@ -1153,7 +1220,7 @@ class SyntheticDataGenerator:
                     active_time_hours=active_hours,
                     wait_time_hours=wait_hours,
                     flow_efficiency=efficiency,
-                    computed_at=datetime.now(timezone.utc),
+                    computed_at=computed_at,
                 )
             )
         return records
@@ -1173,6 +1240,16 @@ class SyntheticDataGenerator:
             if entry:
                 return entry[0], entry[1]
         return None, None
+
+    def _get_member_map(self) -> dict[str, tuple[str, str]]:
+        """Return the member→(team_id, team_name) map from team assignments."""
+        if self.assigned_teams:
+            member_map: dict[str, tuple[str, str]] = {}
+            for team in self.assigned_teams:
+                for member in team.members:
+                    member_map[str(member).strip().lower()] = (team.id, team.name)
+            return member_map
+        return self.get_team_assignment().get("member_map", {})
 
     def generate_user_metrics_daily(
         self,

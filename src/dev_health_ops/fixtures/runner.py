@@ -341,7 +341,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 allow_parallel=allow_parallel_inserts,
             )
 
-            pr_commit_links = generator.generate_pr_commits(prs, commits)
+            pr_commit_links = generator.generate_pr_commits(
+                prs, commits, org_id=org_id
+            )
             if hasattr(store, "insert_work_graph_pr_commit"):
                 await _insert_batches(
                     store.insert_work_graph_pr_commit,
@@ -350,7 +352,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 )
 
             issue_pr_links = generator.generate_issue_pr_links(
-                work_items, prs, min_coverage=0.7
+                work_items, prs, min_coverage=0.7, org_id=org_id
             )
             if hasattr(store, "insert_work_graph_issue_pr"):
                 await _insert_batches(
@@ -565,6 +567,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             dsn=ns.sink,
             from_date=(now - timedelta(days=ns.days)),
             to_date=now,
+            org_id=org_id,
         )
         builder = WorkGraphBuilder(config)
         try:

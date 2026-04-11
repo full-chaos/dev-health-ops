@@ -1741,6 +1741,8 @@ class SyntheticDataGenerator:
         self,
         prs: list[GitPullRequest],
         commits: list[GitCommit],
+        *,
+        org_id: str = "",
     ) -> list[dict[str, Any]]:
         """
         Link PRs to commits.
@@ -1807,6 +1809,7 @@ class SyntheticDataGenerator:
                         "provenance": "synthetic",
                         "evidence": "generated_fixture",
                         "last_synced": synced_at,
+                        "org_id": org_id,
                     }
                 )
 
@@ -1819,6 +1822,7 @@ class SyntheticDataGenerator:
         *,
         min_coverage: float = 0.7,
         cluster_size: int = 5,
+        org_id: str = "",
     ) -> list[dict[str, Any]]:
         """Generate work_graph_issue_pr rows with isolated clusters for multiple components."""
         if not work_items or not prs:
@@ -1868,6 +1872,7 @@ class SyntheticDataGenerator:
                         "provenance": "synthetic",
                         "evidence": "generated_fixture",
                         "last_synced": synced_at,
+                        "org_id": org_id,
                     }
                 )
                 if len(cluster_prs) > 1 and random.random() < 0.2:
@@ -1880,6 +1885,7 @@ class SyntheticDataGenerator:
                             "provenance": "synthetic",
                             "evidence": "generated_fixture",
                             "last_synced": synced_at,
+                            "org_id": org_id,
                         }
                     )
 

@@ -10,11 +10,11 @@ from typing import cast
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.licensing.gating import LicenseManager
 from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
-from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
 from dev_health_ops.metrics.job_daily import run_daily_metrics_job
+from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
 from dev_health_ops.providers.teams import load_team_resolver
 from dev_health_ops.storage import SQLAlchemyStore, resolve_db_type, run_with_store
 from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS

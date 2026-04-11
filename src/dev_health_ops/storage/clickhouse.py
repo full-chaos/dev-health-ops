@@ -1724,6 +1724,7 @@ class ClickHouseStore:
             "provenance",
             "evidence",
             "last_synced",
+            "org_id",
         ]
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
         rows: list[dict[str, Any]] = []
@@ -1739,6 +1740,7 @@ class ClickHouseStore:
                     "last_synced": self._normalize_datetime(
                         item.get("last_synced") or synced_at_default
                     ),
+                    "org_id": str(item.get("org_id") or ""),
                 }
             )
 
@@ -1756,6 +1758,7 @@ class ClickHouseStore:
             "provenance",
             "evidence",
             "last_synced",
+            "org_id",
         ]
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
         rows: list[dict[str, Any]] = []
@@ -1771,6 +1774,7 @@ class ClickHouseStore:
                     "last_synced": self._normalize_datetime(
                         item.get("last_synced") or synced_at_default
                     ),
+                    "org_id": str(item.get("org_id") or ""),
                 }
             )
 

@@ -128,6 +128,7 @@ class WorkGraphBuilder:
             last_synced=edge.last_synced or self._now,
             event_ts=edge.event_ts or self._now,
             day=edge.day or (edge.event_ts or self._now).date(),
+            org_id=self.config.org_id,
         )
 
     def _issue_pr_to_record(self, link: WorkGraphIssuePR) -> WorkGraphIssuePRRecord:
@@ -140,6 +141,7 @@ class WorkGraphBuilder:
             provenance=link.provenance.value,
             evidence=link.evidence,
             last_synced=link.last_synced or self._now,
+            org_id=self.config.org_id,
         )
 
     def _write_edges(self, edges: list[WorkGraphEdge]) -> int:

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import random
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -1974,6 +1976,178 @@ class SyntheticDataGenerator:
                     computed_at=computed_at,
                 )
             )
+        return records
+
+    def generate_work_unit_investments(
+        self,
+        work_items: list[WorkItem],
+        days: int = 30,
+        *,
+        org_id: str = "",
+        categorization_run_id: str | None = None,
+    ) -> list[Any]:
+        """Generate synthetic work unit investment records from work items."""
+        from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
+
+        def _normalize_distribution(
+            distribution: dict[str, float],
+        ) -> dict[str, float]:
+            total = sum(distribution.values())
+            if total <= 0:
+                return distribution
+            normalized = {key: value / total for key, value in distribution.items()}
+            keys = list(normalized.keys())
+            if keys:
+                normalized[keys[-1]] += 1.0 - sum(normalized.values())
+            return normalized
+
+        def _theme_distribution_for_item(item: WorkItem) -> dict[str, float]:
+            item_type = (item.type or "").lower()
+            labels = {label.lower() for label in item.labels}
+
+            if item_type == "bug" or "bug" in labels:
+                return _normalize_distribution(
+                    {
+                        "feature_delivery": random.uniform(0.02, 0.08),
+                        "operational_support": random.uniform(0.04, 0.12),
+                        "maintenance_tech_debt": random.uniform(0.08, 0.18),
+                        "quality_reliability": random.uniform(0.68, 0.82),
+                        "risk_security": random.uniform(0.02, 0.08),
+                    }
+                )
+
+            if item_type == "story":
+                return _normalize_distribution(
+                    {
+                        "feature_delivery": random.uniform(0.68, 0.84),
+                        "operational_support": random.uniform(0.02, 0.07),
+                        "maintenance_tech_debt": random.uniform(0.06, 0.14),
+                        "quality_reliability": random.uniform(0.05, 0.14),
+                        "risk_security": random.uniform(0.01, 0.05),
+                    }
+                )
+
+            theme_distribution = {
+                "feature_delivery": random.uniform(0.20, 0.38),
+                "operational_support": random.uniform(0.06, 0.15),
+                "maintenance_tech_debt": random.uniform(0.24, 0.42),
+                "quality_reliability": random.uniform(0.12, 0.26),
+                "risk_security": random.uniform(0.02, 0.10),
+            }
+            if "security" in labels:
+                theme_distribution["risk_security"] += 0.10
+                theme_distribution["feature_delivery"] = max(
+                    0.05, theme_distribution["feature_delivery"] - 0.05
+                )
+            return _normalize_distribution(theme_distribution)
+
+        def _subcategory_distribution_for_item(
+            item: WorkItem, theme_distribution: dict[str, float]
+        ) -> dict[str, float]:
+            item_type = (item.type or "").lower()
+            labels = {label.lower() for label in item.labels}
+
+            feature_value = theme_distribution["feature_delivery"]
+            if item_type == "story":
+                feature_split = (0.72, 0.28)
+            elif item_type == "task":
+                feature_split = (0.35, 0.65)
+            else:
+                feature_split = (0.45, 0.55)
+
+            maintenance_value = theme_distribution["maintenance_tech_debt"]
+            maintenance_split = (0.65, 0.35)
+            if "infra" in labels or "dependencies" in labels:
+                maintenance_split = (0.40, 0.60)
+
+            quality_value = theme_distribution["quality_reliability"]
+            quality_split = (0.85, 0.15) if item_type == "bug" else (0.35, 0.65)
+
+            return {
+                "feature_delivery.new_feature": feature_value * feature_split[0],
+                "feature_delivery.enhancement": feature_value * feature_split[1],
+                "maintenance_tech_debt.refactoring": maintenance_value
+                * maintenance_split[0],
+                "maintenance_tech_debt.dependency_update": maintenance_value
+                * maintenance_split[1],
+                "quality_reliability.bug_fix": quality_value * quality_split[0],
+                "quality_reliability.test_improvement": quality_value
+                * quality_split[1],
+                "operational_support.incident_response": theme_distribution[
+                    "operational_support"
+                ],
+                "risk_security.vulnerability_fix": theme_distribution["risk_security"],
+            }
+
+        records = []
+        computed_at = datetime.now(timezone.utc)
+        max_duration_days = max(1, min(days, 14))
+        run_id = categorization_run_id or str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"fixture-work-unit-investments:{self.repo_id}:{days}:{org_id}",
+            )
+        )
+
+        for item in work_items:
+            if item.type == "epic":
+                continue
+
+            from_ts = item.created_at
+            if item.completed_at is not None:
+                to_ts = item.completed_at
+            else:
+                to_ts = from_ts + timedelta(days=random.randint(1, max_duration_days))
+
+            if to_ts < from_ts:
+                to_ts = from_ts
+
+            theme_distribution = _theme_distribution_for_item(item)
+            subcategory_distribution = _subcategory_distribution_for_item(
+                item, theme_distribution
+            )
+
+            quality = round(random.uniform(0.5, 1.0), 3)
+            input_hash = hashlib.md5(
+                "|".join(
+                    [
+                        item.work_item_id,
+                        item.type or "",
+                        item.title or "",
+                        item.status or "",
+                        item.provider or "",
+                        from_ts.isoformat(),
+                        to_ts.isoformat(),
+                    ]
+                ).encode("utf-8")
+            ).hexdigest()
+
+            records.append(
+                WorkUnitInvestmentRecord(
+                    work_unit_id=item.work_item_id,
+                    work_unit_type=item.type,
+                    work_unit_name=item.title,
+                    from_ts=from_ts,
+                    to_ts=to_ts,
+                    repo_id=self.repo_id,
+                    provider=item.provider,
+                    effort_metric="loc",
+                    effort_value=float(random.randint(80, 3200)),
+                    theme_distribution_json=theme_distribution,
+                    subcategory_distribution_json=subcategory_distribution,
+                    structural_evidence_json=json.dumps({}),
+                    evidence_quality=quality,
+                    evidence_quality_band="high" if quality >= 0.75 else "medium",
+                    categorization_status="completed",
+                    categorization_errors_json=json.dumps({}),
+                    categorization_model_version="synthetic-v1",
+                    categorization_input_hash=input_hash,
+                    categorization_run_id=run_id,
+                    computed_at=computed_at,
+                    org_id=org_id,
+                )
+            )
+
         return records
 
     def generate_investment_metrics(self, days: int = 30) -> list[Any]:

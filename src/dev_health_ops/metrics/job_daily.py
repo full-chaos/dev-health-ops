@@ -24,6 +24,11 @@ from dev_health_ops.metrics.compute_testops import (
     compute_pipeline_metrics_daily,
     compute_test_metrics_daily,
 )
+from dev_health_ops.metrics.compute_testops_risk import (
+    compute_pipeline_stability,
+    compute_quality_drag,
+    compute_release_confidence,
+)
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
 )
@@ -235,6 +240,9 @@ async def run_daily_metrics_job(
             current += timedelta(days=1)
         return result
 
+    # Rolling buffer for pipeline stability (7-day window)
+    pipeline_metrics_buffer: list[Any] = []
+
     for d in days:
         logger.info("Computing metrics for day=%s", d.isoformat())
         start, end = _utc_day_window(d)
@@ -429,6 +437,39 @@ async def run_daily_metrics_job(
             s.write_incident_metrics(incident_metrics)
             if all_file_metrics:
                 s.write_file_metrics(all_file_metrics)
+
+        # TestOps risk metrics (release confidence, quality drag, pipeline stability)
+        release_conf = compute_release_confidence(
+            day=d,
+            pipeline_metrics=testops_pipeline_metrics,
+            test_metrics=testops_test_metrics,
+            coverage_metrics=testops_coverage_metrics,
+            computed_at=computed_at,
+        )
+        quality_drag = compute_quality_drag(
+            day=d,
+            pipeline_metrics=testops_pipeline_metrics,
+            test_metrics=testops_test_metrics,
+            computed_at=computed_at,
+        )
+        pipeline_metrics_buffer.extend(testops_pipeline_metrics)
+        # Keep only the last 7 days of pipeline metrics
+        cutoff = d - timedelta(days=6)
+        pipeline_metrics_buffer = [
+            m for m in pipeline_metrics_buffer if m.day >= cutoff
+        ]
+        pipeline_stab = compute_pipeline_stability(
+            day=d,
+            pipeline_metrics_7d=pipeline_metrics_buffer,
+            computed_at=computed_at,
+        )
+        for s in sinks:
+            if release_conf:
+                s.write_release_confidence(release_conf)
+            if quality_drag:
+                s.write_quality_drag(quality_drag)
+            if pipeline_stab:
+                s.write_pipeline_stability(pipeline_stab)
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(

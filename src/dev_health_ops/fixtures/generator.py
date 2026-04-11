@@ -2141,7 +2141,9 @@ class SyntheticDataGenerator:
                     effort_value=float(random.randint(80, 3200)),
                     theme_distribution_json=theme_distribution,
                     subcategory_distribution_json=subcategory_distribution,
-                    structural_evidence_json=json.dumps({}),
+                    structural_evidence_json=json.dumps(
+                        {"issues": [item.work_item_id]}
+                    ),
                     evidence_quality=quality,
                     evidence_quality_band="high" if quality >= 0.75 else "medium",
                     categorization_status="completed",

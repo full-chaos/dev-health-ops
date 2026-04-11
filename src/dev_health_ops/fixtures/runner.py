@@ -139,6 +139,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             all_teams, repo_count, ns.seed
         )
         if hasattr(store, "insert_teams") and all_teams:
+            for team in all_teams:
+                team.org_id = org_id
             await store.insert_teams(all_teams)
             logging.info("Inserted %d synthetic teams.", len(all_teams))
 

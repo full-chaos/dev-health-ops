@@ -2137,7 +2137,7 @@ class SyntheticDataGenerator:
                     to_ts=to_ts,
                     repo_id=self.repo_id,
                     provider=item.provider,
-                    effort_metric="loc",
+                    effort_metric="churn_loc",
                     effort_value=float(random.randint(80, 3200)),
                     theme_distribution_json=theme_distribution,
                     subcategory_distribution_json=subcategory_distribution,

@@ -85,15 +85,18 @@ class Measure(str, Enum):
                 cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
                 cls.THROUGHPUT: "SUM(work_items_completed)",
             }
+        # Rate columns are stored as 0.0-1.0 fractions; multiply by 100 so
+        # frontends receive percentages (0-100) consistently with the
+        # coverage_*_pct columns that already store percentages.
         testops_mapping: dict[Measure, str] = {
-            cls.PIPELINE_SUCCESS_RATE: "AVG(success_rate)",
-            cls.PIPELINE_FAILURE_RATE: "AVG(failure_rate)",
+            cls.PIPELINE_SUCCESS_RATE: "AVG(success_rate) * 100",
+            cls.PIPELINE_FAILURE_RATE: "AVG(failure_rate) * 100",
             cls.PIPELINE_DURATION_P95: "AVG(p95_duration_seconds)",
             cls.PIPELINE_QUEUE_TIME: "AVG(avg_queue_seconds)",
-            cls.PIPELINE_RERUN_RATE: "AVG(rerun_rate)",
-            cls.TEST_PASS_RATE: "AVG(pass_rate)",
-            cls.TEST_FAILURE_RATE: "AVG(failure_rate)",
-            cls.TEST_FLAKE_RATE: "AVG(flake_rate)",
+            cls.PIPELINE_RERUN_RATE: "AVG(rerun_rate) * 100",
+            cls.TEST_PASS_RATE: "AVG(pass_rate) * 100",
+            cls.TEST_FAILURE_RATE: "AVG(failure_rate) * 100",
+            cls.TEST_FLAKE_RATE: "AVG(flake_rate) * 100",
             cls.TEST_SUITE_DURATION_P95: "AVG(suite_duration_p95_seconds)",
             cls.COVERAGE_LINE_PCT: "AVG(line_coverage_pct)",
             cls.COVERAGE_BRANCH_PCT: "AVG(branch_coverage_pct)",

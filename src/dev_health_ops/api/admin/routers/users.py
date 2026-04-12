@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,12 +39,24 @@ async def list_users(
     offset: int = 0,
     active_only: bool = True,
     q: str | None = Query(default=None, min_length=1, max_length=200),
+    x_org_id: Annotated[str | None, Header(alias="X-Org-Id")] = None,
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(require_admin),
 ) -> list[UserResponse]:
     svc = UserService(session)
     search = q.strip() if q and q.strip() else None
-    if current_user.is_superuser:
+    # X-Org-Id header present → org-scoped view (admin page).
+    # Absent + superuser → global view (superadmin page or impersonation).
+    # Absent + non-superuser → scoped to JWT org_id.
+    if x_org_id:
+        users = await svc.list_by_org(
+            x_org_id,
+            limit=limit,
+            offset=offset,
+            active_only=active_only,
+            search=search,
+        )
+    elif current_user.is_superuser:
         users = await svc.list_all(
             limit=limit,
             offset=offset,

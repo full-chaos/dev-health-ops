@@ -178,3 +178,44 @@ async def test_users_search_honors_scope_for_superadmin_and_org_admin(
     org_response = await async_client.get("/api/v1/admin/users?q=bob")
     assert org_response.status_code == 200
     assert org_response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_superadmin_with_org_header_is_org_scoped(client, seeded_state):
+    async_client, current_user = client
+    current_user["value"] = AuthenticatedUser(
+        user_id="super-user",
+        email="super@example.com",
+        org_id=seeded_state["org_a"],
+        role="owner",
+        is_superuser=True,
+    )
+
+    response = await async_client.get(
+        "/api/v1/admin/users",
+        headers={"X-Org-Id": seeded_state["org_a"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    emails = {row["email"] for row in body}
+    assert emails == {"alice@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_superadmin_without_org_header_is_global(client, seeded_state):
+    async_client, current_user = client
+    current_user["value"] = AuthenticatedUser(
+        user_id="super-user",
+        email="super@example.com",
+        org_id=seeded_state["org_a"],
+        role="owner",
+        is_superuser=True,
+    )
+
+    response = await async_client.get("/api/v1/admin/users")
+
+    assert response.status_code == 200
+    body = response.json()
+    emails = {row["email"] for row in body}
+    assert emails == {"alice@example.com", "bob@example.com"}

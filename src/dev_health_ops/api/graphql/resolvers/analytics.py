@@ -87,9 +87,9 @@ async def _execute_timeseries_query(
 
     return [
         TimeseriesResult(
-            dimension=ts_req.dimension.value,
+            dimension=ts_req.dimension.name,
             dimension_value=dim_val,
-            measure=ts_req.measure.value,
+            measure=ts_req.measure.name,
             buckets=buckets,
         )
         for dim_val, buckets in grouped.items()
@@ -131,8 +131,8 @@ async def _execute_breakdown_query(
     ]
 
     return BreakdownResult(
-        dimension=bd_req.dimension.value,
-        measure=bd_req.measure.value,
+        dimension=bd_req.dimension.name,
+        measure=bd_req.measure.name,
         items=items,
     )
 

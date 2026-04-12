@@ -383,9 +383,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             # 6b. TestOps raw data (ci_job_runs, test results, coverage)
             if hasattr(store, "insert_ci_job_runs"):
-                job_runs = generator.generate_ci_job_runs(
-                    pipeline_runs, org_id=org_id
-                )
+                job_runs = generator.generate_ci_job_runs(pipeline_runs, org_id=org_id)
                 await _insert_batches(
                     store.insert_ci_job_runs,
                     job_runs,

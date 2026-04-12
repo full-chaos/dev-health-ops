@@ -13,6 +13,37 @@ layers. Changes must be coordinated across all downstream consumers.
 Existing infrastructure this extends:
 - metrics/schemas.py: PipelineRunRow, CICDMetricsDailyRecord, DORAMetricsRecord
 - migrations/clickhouse/000_raw_tables.sql: ci_pipeline_runs, deployments, incidents
+
+Scale convention (CHAOS-1192)
+-----------------------------
+Two numeric scales coexist in these schemas. Follow the suffix rule below when
+adding new columns or fields; the GraphQL boundary in
+``api/graphql/sql/validate.py`` multiplies 0.0-1.0 values by 100 so the API
+always emits 0-100. Direct SQL callers (Grafana, ad-hoc analysis) must know
+the scale of the column they are reading.
+
+Stored as 0.0-1.0 fractions (suffixes ``_rate``, ``_score``, ``_factor``,
+``_penalty``, ``_index``):
+
+- ``testops_pipeline_metrics_daily``: ``success_rate``, ``failure_rate``,
+  ``cancel_rate``, ``rerun_rate``
+- ``testops_test_metrics_daily``: ``pass_rate``, ``failure_rate``,
+  ``flake_rate``, ``retry_dependency_rate``, ``failure_recurrence_score``
+- ``ReleaseConfidenceRecord``: ``confidence_score``, all ``*_factor`` and
+  ``*_penalty`` fields
+- ``PipelineStabilityRecord``: ``stability_index``, ``success_rate_7d``,
+  ``failure_clustering_score``
+
+Stored as 0-100 percentages (suffix ``_pct``):
+
+- ``testops_coverage_metrics_daily``: ``line_coverage_pct``,
+  ``branch_coverage_pct``, ``coverage_delta_pct``
+- ``CoverageSnapshotRow``: ``line_coverage_pct``, ``branch_coverage_pct``
+
+Naming rule: ``_rate`` / ``_score`` / ``_factor`` / ``_penalty`` / ``_index``
+store 0.0-1.0; ``_pct`` stores 0-100. A full migration to a single scale is
+tracked as option 1 of CHAOS-1192; until then, document-and-normalize-at-the-
+boundary is the accepted convention.
 """
 
 from __future__ import annotations

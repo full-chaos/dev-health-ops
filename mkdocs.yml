@@ -80,6 +80,7 @@ nav:
           - Capacity Planning: user-guide/views/capacity-planning.md
           - Work Graph View: user-guide/views/work-graph.md
       - Work Graph: user-guide/work-graph.md
+      - Reports: user-guide/reports.md
   - API:
       - GraphQL Overview: api/graphql-overview.md
       - Persisted Queries: api/persisted-queries.md

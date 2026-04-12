@@ -35,6 +35,7 @@ task_queues = {
     "backfill": {},
     "webhooks": {},
     "ingest": {},
+    "reports": {},
 }
 
 # Beat schedule (periodic tasks)
@@ -79,6 +80,11 @@ beat_schedule = {
     "phone-home-heartbeat": {
         "task": "dev_health_ops.workers.tasks.phone_home_heartbeat",
         "schedule": crontab(hour=0, minute=0),
+        "options": {"queue": "default"},
+    },
+    "dispatch-scheduled-reports": {
+        "task": "dev_health_ops.workers.tasks.dispatch_scheduled_reports",
+        "schedule": 300.0,
         "options": {"queue": "default"},
     },
 }

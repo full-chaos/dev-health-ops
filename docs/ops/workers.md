@@ -50,6 +50,7 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `webhooks` | Webhook event processing, billing notifications |
 | `ingest` | Stream ingestion consumer |
 | `backfill` | Historical data backfill operations |
+| `reports` | AI report execution (SavedReport → ReportRun) |
 
 ---
 
@@ -88,6 +89,13 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `health_check` | default | Worker health check |
 | `phone_home_heartbeat` | default | Daily heartbeat for deployment telemetry |
 
+### Report Tasks
+
+| Task | Queue | Description |
+|------|-------|-------------|
+| `execute_saved_report` | reports | Execute a SavedReport plan and persist the rendered markdown result |
+| `dispatch_scheduled_reports` | default | Fan out scheduled report executions based on cron expressions |
+
 ### Backfill Tasks
 
 | Task | Queue | Description |
@@ -108,6 +116,7 @@ celery -A dev_health_ops.workers.celery_app beat --loglevel=INFO
 | `run-capacity-forecast` | Weekly capacity forecast | Mondays at 04:00 UTC |
 | `process-ingest-streams` | Consume ingest queue | Every 30 seconds |
 | `phone-home-heartbeat` | Deployment heartbeat | Daily at 00:00 UTC |
+| `dispatch-scheduled-reports` | Fan out scheduled report runs | Every 5 minutes |
 
 ---
 

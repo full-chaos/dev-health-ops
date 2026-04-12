@@ -383,14 +383,18 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             # 6b. TestOps raw data (ci_job_runs, test results, coverage)
             if hasattr(store, "insert_ci_job_runs"):
-                job_runs = generator.generate_ci_job_runs(pipeline_runs)
+                job_runs = generator.generate_ci_job_runs(
+                    pipeline_runs, org_id=org_id
+                )
                 await _insert_batches(
                     store.insert_ci_job_runs,
                     job_runs,
                     allow_parallel=allow_parallel_inserts,
                 )
 
-                test_data = generator.generate_test_executions(job_runs, days=ns.days)
+                test_data = generator.generate_test_executions(
+                    job_runs, days=ns.days, org_id=org_id
+                )
                 if hasattr(store, "insert_test_suite_results"):
                     await _insert_batches(
                         store.insert_test_suite_results,
@@ -405,7 +409,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     )
 
                 coverage_snapshots = generator.generate_coverage_snapshots(
-                    pipeline_runs, days=ns.days
+                    pipeline_runs, days=ns.days, org_id=org_id
                 )
                 if hasattr(store, "insert_coverage_snapshots"):
                     await _insert_batches(

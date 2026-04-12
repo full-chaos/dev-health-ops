@@ -442,7 +442,7 @@ class SyntheticDataGenerator:
         return runs
 
     def generate_ci_job_runs(
-        self, pipeline_runs: list[CiPipelineRun]
+        self, pipeline_runs: list[CiPipelineRun], *, org_id: str = ""
     ) -> list[dict[str, Any]]:
         """Generate CI job runs for each pipeline run.
 
@@ -514,7 +514,7 @@ class SyntheticDataGenerator:
                         "duration_seconds": float(duration_seconds),
                         "runner_type": "hosted",
                         "retry_attempt": 0,
-                        "org_id": "",
+                        "org_id": org_id,
                     }
                 )
 
@@ -524,6 +524,8 @@ class SyntheticDataGenerator:
         self,
         job_runs: list[dict[str, Any]],
         days: int = 30,
+        *,
+        org_id: str = "",
     ) -> dict[str, list[dict[str, Any]]]:
         """Generate test suite and case results for test/integration-test jobs.
 
@@ -628,7 +630,7 @@ class SyntheticDataGenerator:
                     "finished_at": job_finished,
                     "team_id": None,
                     "service_id": None,
-                    "org_id": "",
+                    "org_id": org_id,
                 }
             )
 
@@ -697,7 +699,7 @@ class SyntheticDataGenerator:
                         "failure_type": failure_type,
                         "stack_trace": None,
                         "is_quarantined": False,
-                        "org_id": "",
+                        "org_id": org_id,
                     }
                 )
 
@@ -707,6 +709,8 @@ class SyntheticDataGenerator:
         self,
         pipeline_runs: list[CiPipelineRun],
         days: int = 30,
+        *,
+        org_id: str = "",
     ) -> list[dict[str, Any]]:
         """Generate daily coverage snapshots tied to pipeline runs.
 
@@ -775,7 +779,7 @@ class SyntheticDataGenerator:
                     "pr_number": None,
                     "team_id": None,
                     "service_id": None,
-                    "org_id": "",
+                    "org_id": org_id,
                 }
             )
 

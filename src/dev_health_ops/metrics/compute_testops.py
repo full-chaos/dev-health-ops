@@ -17,7 +17,23 @@ from dev_health_ops.metrics.testops_schemas import (
     TestMetricsDailyRecord,
     TestSuiteResultRow,
 )
+from dev_health_ops.providers.teams import RepoPatternTeamResolver
 from dev_health_ops.utils.datetime import to_utc
+
+
+def _resolve_repo_team(
+    repo_id: uuid.UUID,
+    row_team_id: str | None,
+    repo_team_resolver: RepoPatternTeamResolver | None,
+    repo_names_by_id: dict[uuid.UUID, str] | None,
+) -> str | None:
+    if row_team_id:
+        return row_team_id
+    if repo_team_resolver is None:
+        return None
+    repo_name = (repo_names_by_id or {}).get(repo_id)
+    team_id, _ = repo_team_resolver.resolve(repo_name)
+    return team_id
 
 
 def _normalize_pipeline_status(status: str | None) -> str:
@@ -92,6 +108,8 @@ def compute_pipeline_metrics_daily(
     pipeline_runs: Sequence[PipelineRunExtendedRow],
     job_runs: Sequence[JobRunRow],
     computed_at: datetime,
+    repo_team_resolver: RepoPatternTeamResolver | None = None,
+    repo_names_by_id: dict[uuid.UUID, str] | None = None,
 ) -> list[PipelineMetricsDailyRecord]:
     del job_runs
 
@@ -105,7 +123,9 @@ def compute_pipeline_metrics_daily(
             continue
 
         repo_id = row["repo_id"]
-        team_id = row.get("team_id")
+        team_id = _resolve_repo_team(
+            repo_id, row.get("team_id"), repo_team_resolver, repo_names_by_id
+        )
         service_id = row.get("service_id")
         key = (repo_id, team_id, service_id)
         bucket = by_group.get(key)
@@ -190,6 +210,8 @@ def compute_test_metrics_daily(
     suite_results: Sequence[TestSuiteResultRow],
     case_results: Sequence[TestCaseResultRow],
     computed_at: datetime,
+    repo_team_resolver: RepoPatternTeamResolver | None = None,
+    repo_names_by_id: dict[uuid.UUID, str] | None = None,
 ) -> list[TestMetricsDailyRecord]:
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
@@ -308,7 +330,12 @@ def compute_test_metrics_daily(
                 if current_failed_names
                 else 0.0,
                 computed_at=computed_at_utc,
-                team_id=first_suite.get("team_id") if first_suite else None,
+                team_id=_resolve_repo_team(
+                    repo_id,
+                    first_suite.get("team_id") if first_suite else None,
+                    repo_team_resolver,
+                    repo_names_by_id,
+                ),
                 service_id=first_suite.get("service_id") if first_suite else None,
                 org_id=str(first_suite.get("org_id", "") if first_suite else ""),
             )
@@ -323,6 +350,8 @@ def compute_coverage_metrics_daily(
     snapshots: Sequence[CoverageSnapshotRow],
     prior_snapshots: Sequence[CoverageSnapshotRow] | None,
     computed_at: datetime,
+    repo_team_resolver: RepoPatternTeamResolver | None = None,
+    repo_names_by_id: dict[uuid.UUID, str] | None = None,
 ) -> list[CoverageMetricsDailyRecord]:
     computed_at_utc = to_utc(computed_at)
 
@@ -382,7 +411,12 @@ def compute_coverage_metrics_daily(
                 uncovered_files_count=0,
                 coverage_regression_count=0,
                 computed_at=computed_at_utc,
-                team_id=snapshot.get("team_id"),
+                team_id=_resolve_repo_team(
+                    repo_id,
+                    snapshot.get("team_id"),
+                    repo_team_resolver,
+                    repo_names_by_id,
+                ),
                 service_id=snapshot.get("service_id"),
                 org_id=str(snapshot.get("org_id", "")),
             )

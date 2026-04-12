@@ -464,6 +464,58 @@ Backfill depth is limited by organization tier:
 
 > **Important:** Backfill never updates SyncWatermarks. Incremental sync state is preserved.
 
+## Reports
+
+AI-generated reports are managed through the GraphQL API and executed as Celery tasks. Reports are not triggered via CLI — they are created, triggered, and scheduled through the Report Center UI or GraphQL mutations.
+
+### How Reports Work
+
+1. **Create** a SavedReport via the Report Center UI or `createSavedReport` mutation
+2. **Trigger** execution manually ("Run Now") or via a cron schedule
+3. The `execute_saved_report` Celery task runs on the `reports` queue
+4. The engine fetches metrics from ClickHouse, generates insights, and renders markdown
+5. Results are persisted as a `ReportRun` with rendered content and provenance records
+
+### Report Plan
+
+Each report requires a `ReportPlan` that defines scope, time range, sections, and metrics. If no explicit plan is provided, a default plan is generated from the report's `parameters` at execution time:
+
+- `scope` → team/repo/org scoping
+- `dateRange` → time window (`last_7_days`, `last_30_days`, `last_90_days`)
+- `metrics` → requested metric names
+
+### Scheduling
+
+Reports can be scheduled with a cron expression (via `scheduleCron` in the create/update mutation). The `dispatch_scheduled_reports` beat task runs every 5 minutes and dispatches any due reports.
+
+### Worker Configuration
+
+Reports require the `reports` queue to be active:
+
+```bash
+dev-hops workers start-worker --queues default metrics sync reports
+```
+
+### GraphQL Mutations
+
+| Mutation | Description |
+|----------|-------------|
+| `createSavedReport` | Create a new report definition |
+| `updateSavedReport` | Update name, description, parameters, schedule |
+| `cloneSavedReport` | Clone a report with optional overrides |
+| `deleteSavedReport` | Delete a report and its schedule |
+| `triggerReport` | Manually trigger a report execution |
+
+### GraphQL Queries
+
+| Query | Description |
+|-------|-------------|
+| `savedReports` | List saved reports for an org |
+| `savedReport` | Get a single report by ID |
+| `reportRuns` | List execution history for a report |
+
+---
+
 ## Batch Processing Options
 
 For GitHub/GitLab batch operations:

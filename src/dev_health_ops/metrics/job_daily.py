@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
@@ -470,6 +471,19 @@ async def run_daily_metrics_job(
                 s.write_quality_drag(quality_drag)
             if pipeline_stab:
                 s.write_pipeline_stability(pipeline_stab)
+
+        # Benchmarking (baselines, maturity, anomalies, period comparisons,
+        # correlations, insights). Reads from ClickHouse via the sink.
+        for s in sinks:
+            try:
+                run_benchmarking_for_day(
+                    s,
+                    as_of_day=d,
+                    computed_at=computed_at,
+                    org_id=org_id,
+                )
+            except Exception as exc:
+                logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(

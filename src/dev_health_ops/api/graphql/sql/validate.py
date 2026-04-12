@@ -85,9 +85,12 @@ class Measure(str, Enum):
                 cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
                 cls.THROUGHPUT: "SUM(work_items_completed)",
             }
-        # Rate columns are stored as 0.0-1.0 fractions; multiply by 100 so
-        # frontends receive percentages (0-100) consistently with the
-        # coverage_*_pct columns that already store percentages.
+        # Scale normalization boundary (CHAOS-1192): ClickHouse stores `_rate`
+        # columns as 0.0-1.0 fractions while `_pct` columns already hold
+        # 0-100. Multiply rates by 100 here so the GraphQL API emits a single
+        # 0-100 scale to all frontends. See the scale convention docstring in
+        # metrics/testops_schemas.py; remove the * 100 once option 1 of
+        # CHAOS-1192 (column rename + backfill) lands.
         testops_mapping: dict[Measure, str] = {
             cls.PIPELINE_SUCCESS_RATE: "AVG(success_rate) * 100",
             cls.PIPELINE_FAILURE_RATE: "AVG(failure_rate) * 100",

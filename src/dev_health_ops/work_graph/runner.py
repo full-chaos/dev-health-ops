@@ -218,7 +218,7 @@ async def materialize_fixture_investments(
         to_ts=to_ts,
         repo_ids=repo_ids,
         llm_provider="mock",
-        persist_evidence_snippets=False,
+        persist_evidence_snippets=True,
         llm_model=None,
         team_ids=team_ids,
         force=True,

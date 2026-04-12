@@ -442,7 +442,7 @@ class SyntheticDataGenerator:
         return runs
 
     def generate_ci_job_runs(
-        self, pipeline_runs: list[CiPipelineRun]
+        self, pipeline_runs: list[CiPipelineRun], *, org_id: str = ""
     ) -> list[dict[str, Any]]:
         """Generate CI job runs for each pipeline run.
 
@@ -514,7 +514,7 @@ class SyntheticDataGenerator:
                         "duration_seconds": float(duration_seconds),
                         "runner_type": "hosted",
                         "retry_attempt": 0,
-                        "org_id": "",
+                        "org_id": org_id,
                     }
                 )
 
@@ -524,6 +524,8 @@ class SyntheticDataGenerator:
         self,
         job_runs: list[dict[str, Any]],
         days: int = 30,
+        *,
+        org_id: str = "",
     ) -> dict[str, list[dict[str, Any]]]:
         """Generate test suite and case results for test/integration-test jobs.
 
@@ -628,7 +630,7 @@ class SyntheticDataGenerator:
                     "finished_at": job_finished,
                     "team_id": None,
                     "service_id": None,
-                    "org_id": "",
+                    "org_id": org_id,
                 }
             )
 
@@ -697,7 +699,7 @@ class SyntheticDataGenerator:
                         "failure_type": failure_type,
                         "stack_trace": None,
                         "is_quarantined": False,
-                        "org_id": "",
+                        "org_id": org_id,
                     }
                 )
 
@@ -707,6 +709,8 @@ class SyntheticDataGenerator:
         self,
         pipeline_runs: list[CiPipelineRun],
         days: int = 30,
+        *,
+        org_id: str = "",
     ) -> list[dict[str, Any]]:
         """Generate daily coverage snapshots tied to pipeline runs.
 
@@ -775,7 +779,7 @@ class SyntheticDataGenerator:
                     "pr_number": None,
                     "team_id": None,
                     "service_id": None,
-                    "org_id": "",
+                    "org_id": org_id,
                 }
             )
 
@@ -1108,12 +1112,20 @@ class SyntheticDataGenerator:
         return records
 
     def generate_work_item_cycle_times(
-        self, count: int = 50
+        self,
+        work_items: list[WorkItem] | None = None,
+        count: int = 50,
     ) -> list[WorkItemCycleTimeRecord]:
-        records = []
-        end_date = datetime.now(timezone.utc)
+        """Generate cycle time records.
 
-        teams_to_use = []
+        When *work_items* is provided the records use the real work-item IDs
+        so that team-linkage queries (which join via structural_evidence_json
+        → work_item_cycle_times) resolve correctly.
+        """
+        records = []
+        computed_at = datetime.now(timezone.utc)
+
+        teams_to_use: list[tuple[str, str]] = []
         if self.assigned_teams is None:
             teams_to_use = [("alpha", "Alpha Team")]
         elif self.assigned_teams:
@@ -1121,29 +1133,88 @@ class SyntheticDataGenerator:
         else:
             teams_to_use = [("unassigned", "Unassigned")]
 
-        for i in range(count):
-            created_at = end_date - timedelta(days=random.randint(0, 60))
-            started_at = created_at + timedelta(hours=random.randint(4, 48))
-            completed_at = started_at + timedelta(hours=random.randint(24, 168))
+        # Build a member→team lookup for assignee-based resolution
+        member_map = self._get_member_map()
+
+        items_to_process: list[
+            tuple[str, str, str, str | None, datetime, datetime | None, datetime | None]
+        ] = []
+
+        if work_items:
+            for item in work_items:
+                if item.type == "epic":
+                    continue
+                assignee = item.assignees[0] if item.assignees else None
+                items_to_process.append(
+                    (
+                        item.work_item_id,
+                        item.provider,
+                        item.type or "task",
+                        assignee,
+                        item.created_at,
+                        item.started_at,
+                        item.completed_at,
+                    )
+                )
+        else:
+            # Fallback: generate synthetic items
+            end_date = datetime.now(timezone.utc)
+            for i in range(count):
+                created_at = end_date - timedelta(days=random.randint(0, 60))
+                started_at = created_at + timedelta(hours=random.randint(4, 48))
+                completed_at = started_at + timedelta(hours=random.randint(24, 168))
+                author_name, _ = random.choice(self.repo_authors)
+                items_to_process.append(
+                    (
+                        f"synth:{self.repo_name}#{i}",
+                        self.provider,
+                        random.choice(["story", "bug", "task"]),
+                        author_name,
+                        created_at,
+                        started_at,
+                        completed_at,
+                    )
+                )
+
+        for (
+            work_item_id,
+            provider,
+            item_type,
+            assignee,
+            created_at,
+            started_at,
+            completed_at,
+        ) in items_to_process:
+            if started_at is None or completed_at is None:
+                continue
 
             cycle_time = (completed_at - started_at).total_seconds() / 3600
-            team_id, team_name = random.choice(teams_to_use)
+            if cycle_time <= 0:
+                continue
 
-            # Simulate flow efficiency (typically 10-40%)
+            # Resolve team from assignee
+            team_id, team_name = None, None
+            if assignee and member_map:
+                entry = member_map.get(str(assignee).strip().lower())
+                if entry:
+                    team_id, team_name = entry
+            if team_id is None:
+                team_id, team_name = random.choice(teams_to_use)
+
             efficiency = random.uniform(0.1, 0.6)
             active_hours = cycle_time * efficiency
             wait_hours = cycle_time * (1.0 - efficiency)
 
             records.append(
                 WorkItemCycleTimeRecord(
-                    work_item_id=f"synth:{self.repo_name}#{i}",
-                    provider=self.provider,
+                    work_item_id=work_item_id,
+                    provider=provider,
                     day=completed_at.date(),
                     work_scope_id=self.repo_name,
                     team_id=team_id,
                     team_name=team_name,
-                    assignee=random.choice(self.repo_authors)[0],
-                    type=random.choice(["story", "bug", "task"]),
+                    assignee=assignee,
+                    type=item_type,
                     status="done",
                     created_at=created_at,
                     started_at=started_at,
@@ -1153,7 +1224,7 @@ class SyntheticDataGenerator:
                     active_time_hours=active_hours,
                     wait_time_hours=wait_hours,
                     flow_efficiency=efficiency,
-                    computed_at=datetime.now(timezone.utc),
+                    computed_at=computed_at,
                 )
             )
         return records
@@ -1173,6 +1244,16 @@ class SyntheticDataGenerator:
             if entry:
                 return entry[0], entry[1]
         return None, None
+
+    def _get_member_map(self) -> dict[str, tuple[str, str]]:
+        """Return the member→(team_id, team_name) map from team assignments."""
+        if self.assigned_teams:
+            member_map: dict[str, tuple[str, str]] = {}
+            for team in self.assigned_teams:
+                for member in team.members:
+                    member_map[str(member).strip().lower()] = (team.id, team.name)
+            return member_map
+        return self.get_team_assignment().get("member_map", {})
 
     def generate_user_metrics_daily(
         self,
@@ -1806,7 +1887,7 @@ class SyntheticDataGenerator:
                         "pr_number": pr.number,
                         "commit_hash": c.hash,
                         "confidence": 1.0,
-                        "provenance": "synthetic",
+                        "provenance": "native",
                         "evidence": "generated_fixture",
                         "last_synced": synced_at,
                         "org_id": org_id,
@@ -1869,7 +1950,7 @@ class SyntheticDataGenerator:
                         "work_item_id": str(wi.work_item_id),
                         "pr_number": cluster_prs[0],
                         "confidence": 1.0,
-                        "provenance": "synthetic",
+                        "provenance": "native",
                         "evidence": "generated_fixture",
                         "last_synced": synced_at,
                         "org_id": org_id,
@@ -1882,7 +1963,7 @@ class SyntheticDataGenerator:
                             "work_item_id": str(wi.work_item_id),
                             "pr_number": cluster_prs[1],
                             "confidence": 1.0,
-                            "provenance": "synthetic",
+                            "provenance": "native",
                             "evidence": "generated_fixture",
                             "last_synced": synced_at,
                             "org_id": org_id,
@@ -1992,8 +2073,23 @@ class SyntheticDataGenerator:
         org_id: str = "",
         categorization_run_id: str | None = None,
     ) -> list[Any]:
-        """Generate synthetic work unit investment records from work items."""
+        """Generate synthetic work unit investment records from work items.
+
+        Theme and subcategory keys are imported from investment_taxonomy to
+        stay in sync with the canonical taxonomy used by the LLM categorizer
+        and API query layer.
+        """
+        from dev_health_ops.investment_taxonomy import (
+            SUBCATEGORY_TO_THEME,
+            THEMES,
+        )
         from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
+        from dev_health_ops.utils.normalization import evidence_quality_band
+
+        # Build theme → [subcategory, ...] lookup from canonical taxonomy
+        _theme_subcats: dict[str, list[str]] = {t: [] for t in sorted(THEMES)}
+        for subcat, theme in sorted(SUBCATEGORY_TO_THEME.items()):
+            _theme_subcats.setdefault(theme, []).append(subcat)
 
         def _normalize_distribution(
             distribution: dict[str, float],
@@ -2015,10 +2111,10 @@ class SyntheticDataGenerator:
                 return _normalize_distribution(
                     {
                         "feature_delivery": random.uniform(0.02, 0.08),
-                        "operational_support": random.uniform(0.04, 0.12),
-                        "maintenance_tech_debt": random.uniform(0.08, 0.18),
-                        "quality_reliability": random.uniform(0.68, 0.82),
-                        "risk_security": random.uniform(0.02, 0.08),
+                        "operational": random.uniform(0.04, 0.12),
+                        "maintenance": random.uniform(0.08, 0.18),
+                        "quality": random.uniform(0.68, 0.82),
+                        "risk": random.uniform(0.02, 0.08),
                     }
                 )
 
@@ -2026,22 +2122,34 @@ class SyntheticDataGenerator:
                 return _normalize_distribution(
                     {
                         "feature_delivery": random.uniform(0.68, 0.84),
-                        "operational_support": random.uniform(0.02, 0.07),
-                        "maintenance_tech_debt": random.uniform(0.06, 0.14),
-                        "quality_reliability": random.uniform(0.05, 0.14),
-                        "risk_security": random.uniform(0.01, 0.05),
+                        "operational": random.uniform(0.02, 0.07),
+                        "maintenance": random.uniform(0.06, 0.14),
+                        "quality": random.uniform(0.05, 0.14),
+                        "risk": random.uniform(0.01, 0.05),
                     }
                 )
 
+            if item_type == "incident":
+                return _normalize_distribution(
+                    {
+                        "feature_delivery": random.uniform(0.01, 0.05),
+                        "operational": random.uniform(0.70, 0.85),
+                        "maintenance": random.uniform(0.05, 0.12),
+                        "quality": random.uniform(0.03, 0.08),
+                        "risk": random.uniform(0.02, 0.06),
+                    }
+                )
+
+            # Default (task, etc.)
             theme_distribution = {
                 "feature_delivery": random.uniform(0.20, 0.38),
-                "operational_support": random.uniform(0.06, 0.15),
-                "maintenance_tech_debt": random.uniform(0.24, 0.42),
-                "quality_reliability": random.uniform(0.12, 0.26),
-                "risk_security": random.uniform(0.02, 0.10),
+                "operational": random.uniform(0.06, 0.15),
+                "maintenance": random.uniform(0.24, 0.42),
+                "quality": random.uniform(0.12, 0.26),
+                "risk": random.uniform(0.02, 0.10),
             }
             if "security" in labels:
-                theme_distribution["risk_security"] += 0.10
+                theme_distribution["risk"] += 0.10
                 theme_distribution["feature_delivery"] = max(
                     0.05, theme_distribution["feature_delivery"] - 0.05
                 )
@@ -2050,40 +2158,60 @@ class SyntheticDataGenerator:
         def _subcategory_distribution_for_item(
             item: WorkItem, theme_distribution: dict[str, float]
         ) -> dict[str, float]:
+            """Split each theme's weight across its canonical subcategories."""
             item_type = (item.type or "").lower()
             labels = {label.lower() for label in item.labels}
 
-            feature_value = theme_distribution["feature_delivery"]
+            # Per-theme split ratios keyed by subcategory suffix.
+            # Each tuple maps to the subcategories in canonical order.
+            # feature_delivery: customer, roadmap, enablement
             if item_type == "story":
-                feature_split = (0.72, 0.28)
+                fd_split = (0.50, 0.35, 0.15)
             elif item_type == "task":
-                feature_split = (0.35, 0.65)
+                fd_split = (0.20, 0.30, 0.50)
             else:
-                feature_split = (0.45, 0.55)
+                fd_split = (0.35, 0.40, 0.25)
 
-            maintenance_value = theme_distribution["maintenance_tech_debt"]
-            maintenance_split = (0.65, 0.35)
+            # operational: incident_response, on_call, support
+            if item_type == "incident":
+                op_split = (0.70, 0.20, 0.10)
+            else:
+                op_split = (0.40, 0.30, 0.30)
+
+            # maintenance: refactor, upgrade, debt
             if "infra" in labels or "dependencies" in labels:
-                maintenance_split = (0.40, 0.60)
+                mt_split = (0.25, 0.50, 0.25)
+            else:
+                mt_split = (0.50, 0.20, 0.30)
 
-            quality_value = theme_distribution["quality_reliability"]
-            quality_split = (0.85, 0.15) if item_type == "bug" else (0.35, 0.65)
+            # quality: testing, bugfix, reliability
+            if item_type == "bug":
+                qa_split = (0.10, 0.75, 0.15)
+            else:
+                qa_split = (0.40, 0.25, 0.35)
 
-            return {
-                "feature_delivery.new_feature": feature_value * feature_split[0],
-                "feature_delivery.enhancement": feature_value * feature_split[1],
-                "maintenance_tech_debt.refactoring": maintenance_value
-                * maintenance_split[0],
-                "maintenance_tech_debt.dependency_update": maintenance_value
-                * maintenance_split[1],
-                "quality_reliability.bug_fix": quality_value * quality_split[0],
-                "quality_reliability.test_improvement": quality_value
-                * quality_split[1],
-                "operational_support.incident_response": theme_distribution[
-                    "operational_support"
-                ],
-                "risk_security.vulnerability_fix": theme_distribution["risk_security"],
+            # risk: security, compliance, vulnerability
+            if "security" in labels:
+                rk_split = (0.50, 0.15, 0.35)
+            else:
+                rk_split = (0.35, 0.30, 0.35)
+
+            split_map: dict[str, tuple[float, ...]] = {
+                "feature_delivery": fd_split,
+                "operational": op_split,
+                "maintenance": mt_split,
+                "quality": qa_split,
+                "risk": rk_split,
             }
+
+            result: dict[str, float] = {}
+            for theme, subcats in _theme_subcats.items():
+                theme_value = theme_distribution.get(theme, 0.0)
+                splits = split_map.get(theme, ())
+                for i, subcat in enumerate(subcats):
+                    weight = splits[i] if i < len(splits) else 1.0 / len(subcats)
+                    result[subcat] = theme_value * weight
+            return result
 
         records = []
         computed_at = datetime.now(timezone.utc)
@@ -2137,14 +2265,16 @@ class SyntheticDataGenerator:
                     to_ts=to_ts,
                     repo_id=self.repo_id,
                     provider=item.provider,
-                    effort_metric="loc",
+                    effort_metric="churn_loc",
                     effort_value=float(random.randint(80, 3200)),
                     theme_distribution_json=theme_distribution,
                     subcategory_distribution_json=subcategory_distribution,
-                    structural_evidence_json=json.dumps({}),
+                    structural_evidence_json=json.dumps(
+                        {"issues": [item.work_item_id]}
+                    ),
                     evidence_quality=quality,
-                    evidence_quality_band="high" if quality >= 0.75 else "medium",
-                    categorization_status="completed",
+                    evidence_quality_band=evidence_quality_band(quality),
+                    categorization_status="ok",
                     categorization_errors_json=json.dumps({}),
                     categorization_model_version="synthetic-v1",
                     categorization_input_hash=input_hash,
@@ -2158,13 +2288,14 @@ class SyntheticDataGenerator:
 
     def generate_investment_metrics(self, days: int = 30) -> list[Any]:
         """Generate investment metrics daily rollup records."""
+        from dev_health_ops.investment_taxonomy import THEMES
         from dev_health_ops.metrics.schemas import InvestmentMetricsRecord
 
         records = []
         end_date = datetime.now(timezone.utc).date()
         computed_at = datetime.now(timezone.utc)
 
-        investment_areas = ["product", "security", "infra", "quality", "docs", "data"]
+        investment_areas = sorted(THEMES)
 
         teams_to_use = []
         if self.assigned_teams is None:

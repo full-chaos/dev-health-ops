@@ -116,7 +116,7 @@ async def _seed_auth_data(session, user_data: dict) -> None:
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.sink, ns.db_type)
-    fixture_data = {"work_items": [], "transitions": []}
+    fixture_data: dict[str, list] = {"work_items": [], "transitions": [], "teams": []}
 
     # Default to the fixture org UUID so demo data is queryable out of the box.
     _default_org = str(
@@ -145,6 +145,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 team.org_id = org_id
             await store.insert_teams(all_teams)
             logging.info("Inserted %d synthetic teams.", len(all_teams))
+        fixture_data["teams"] = all_teams
 
         # Seed users/orgs/memberships/licenses into PostgreSQL (auth layer).
         # This must happen regardless of which analytics sink is used.
@@ -382,14 +383,16 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             # 6b. TestOps raw data (ci_job_runs, test results, coverage)
             if hasattr(store, "insert_ci_job_runs"):
-                job_runs = generator.generate_ci_job_runs(pipeline_runs)
+                job_runs = generator.generate_ci_job_runs(pipeline_runs, org_id=org_id)
                 await _insert_batches(
                     store.insert_ci_job_runs,
                     job_runs,
                     allow_parallel=allow_parallel_inserts,
                 )
 
-                test_data = generator.generate_test_executions(job_runs, days=ns.days)
+                test_data = generator.generate_test_executions(
+                    job_runs, days=ns.days, org_id=org_id
+                )
                 if hasattr(store, "insert_test_suite_results"):
                     await _insert_batches(
                         store.insert_test_suite_results,
@@ -404,7 +407,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     )
 
                 coverage_snapshots = generator.generate_coverage_snapshots(
-                    pipeline_runs, days=ns.days
+                    pipeline_runs, days=ns.days, org_id=org_id
                 )
                 if hasattr(store, "insert_coverage_snapshots"):
                     await _insert_batches(
@@ -473,6 +476,21 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 if hasattr(sink, "write_sprints") and sprints:
                     sink.write_sprints(sprints)
                     logging.info("Wrote %d sprints.", len(sprints))
+
+                # Generate cycle times from actual work items so that
+                # team-linkage queries (structural_evidence_json → work_item_cycle_times)
+                # find matching records with team_id/team_name set.
+                ct_gen = SyntheticDataGenerator(
+                    repo_name=ns.repo_name,
+                    seed=ns.seed,
+                    assigned_teams=fixture_data["teams"] or None,
+                )
+                cycle_times = ct_gen.generate_work_item_cycle_times(
+                    work_items=fixture_data["work_items"]
+                )
+                if hasattr(sink, "write_work_item_cycle_times") and cycle_times:
+                    sink.write_work_item_cycle_times(cycle_times)
+                    logging.info("Wrote %d work_item_cycle_times.", len(cycle_times))
 
                 # Write DORA metrics, investment classifications, investment metrics,
                 # and file hotspot daily records for each repo.

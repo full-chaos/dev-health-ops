@@ -37,7 +37,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND org_id = %(org_id)s
+  AND {source_table}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC
@@ -65,7 +65,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND org_id = %(org_id)s
+  AND {source_table}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY dimension_value
 ORDER BY value DESC
@@ -97,7 +97,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND org_id = %(org_id)s
+  AND {source_table}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY node_id
 ORDER BY value DESC
@@ -137,7 +137,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND org_id = %(org_id)s
+  AND {source_table}.org_id = %(org_id)s
 {filter_clause}
   AND {source_col} IS NOT NULL
   AND {target_col} IS NOT NULL
@@ -166,7 +166,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {dim_col} IS NOT NULL
-  AND org_id = %(org_id)s
+  AND {source_table}.org_id = %(org_id)s
   AND toString({dim_col}) != ''
 {filter_clause}
 GROUP BY value

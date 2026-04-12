@@ -362,6 +362,84 @@ def test_compute_coverage_metrics_daily_uses_latest_snapshot_and_delta():
     assert rec_b.branch_coverage_pct is None
 
 
+def test_compute_testops_metrics_resolve_team_via_repo_resolver_when_row_team_id_missing():
+    """CHAOS-1191: resolver fallback populates team_id when raw rows lack it."""
+    from dev_health_ops.providers.teams import build_repo_pattern_resolver
+
+    day = date(2026, 2, 18)
+    repo_a = uuid4()
+    repo_team_resolver = build_repo_pattern_resolver(
+        [{"id": "team-x", "name": "Team X", "repo_patterns": ["acme/api"]}]
+    )
+    repo_names_by_id = {repo_a: "acme/api"}
+    computed_at = datetime(2026, 2, 18, 13, 0, tzinfo=timezone.utc)
+
+    pipeline_records = compute_pipeline_metrics_daily(
+        day=day,
+        pipeline_runs=[
+            {
+                "repo_id": repo_a,
+                "run_id": "001",
+                "provider": "github_actions",
+                "status": "success",
+                "queued_at": datetime(2026, 2, 18, 9, 58, tzinfo=timezone.utc),
+                "started_at": datetime(2026, 2, 18, 10, 0, tzinfo=timezone.utc),
+                "finished_at": datetime(2026, 2, 18, 10, 5, tzinfo=timezone.utc),
+                "retry_count": 0,
+            }
+        ],
+        job_runs=[],
+        computed_at=computed_at,
+        repo_team_resolver=repo_team_resolver,
+        repo_names_by_id=repo_names_by_id,
+    )
+    assert pipeline_records[0].team_id == "team-x"
+
+    test_records = compute_test_metrics_daily(
+        day=day,
+        suite_results=[
+            {
+                "repo_id": repo_a,
+                "run_id": "r1",
+                "started_at": datetime(2026, 2, 18, 10, 0, tzinfo=timezone.utc),
+                "finished_at": datetime(2026, 2, 18, 10, 1, tzinfo=timezone.utc),
+                "total_count": 1,
+                "passed_count": 1,
+                "failed_count": 0,
+                "error_count": 0,
+                "skipped_count": 0,
+                "quarantined_count": 0,
+                "duration_seconds": 60,
+            }
+        ],
+        case_results=[],
+        computed_at=computed_at,
+        repo_team_resolver=repo_team_resolver,
+        repo_names_by_id=repo_names_by_id,
+    )
+    assert test_records[0].team_id == "team-x"
+
+    coverage_records = compute_coverage_metrics_daily(
+        day=day,
+        snapshots=[
+            {
+                "repo_id": repo_a,
+                "run_id": "r1",
+                "snapshot_id": "s1",
+                "line_coverage_pct": 80.0,
+                "branch_coverage_pct": 70.0,
+                "lines_total": 100,
+                "lines_covered": 80,
+            }
+        ],
+        prior_snapshots=None,
+        computed_at=computed_at,
+        repo_team_resolver=repo_team_resolver,
+        repo_names_by_id=repo_names_by_id,
+    )
+    assert coverage_records[0].team_id == "team-x"
+
+
 def test_compute_coverage_metrics_daily_returns_empty_for_no_snapshots():
     records = compute_coverage_metrics_daily(
         day=date(2026, 2, 18),

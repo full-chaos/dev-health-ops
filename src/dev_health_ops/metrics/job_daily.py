@@ -397,18 +397,24 @@ async def run_daily_metrics_job(
             pipeline_runs=testops_pipeline_rows,
             job_runs=testops_job_rows,
             computed_at=computed_at,
+            repo_team_resolver=repo_team_resolver,
+            repo_names_by_id=repo_names_by_id,
         )
         testops_test_metrics = compute_test_metrics_daily(
             day=d,
             suite_results=testops_suite_rows,
             case_results=testops_case_rows,
             computed_at=computed_at,
+            repo_team_resolver=repo_team_resolver,
+            repo_names_by_id=repo_names_by_id,
         )
         testops_coverage_metrics = compute_coverage_metrics_daily(
             day=d,
             snapshots=coverage_rows,
             prior_snapshots=prior_coverage_rows,
             computed_at=computed_at,
+            repo_team_resolver=repo_team_resolver,
+            repo_names_by_id=repo_names_by_id,
         )
         deploy_metrics = compute_deploy_metrics_daily(
             day=d, deployments=deployment_rows, computed_at=computed_at

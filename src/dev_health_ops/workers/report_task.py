@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import traceback
-import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -27,8 +26,10 @@ def _build_default_plan(
     org_id: str,
     parameters: dict,
 ) -> dict:
+    from dev_health_ops.utils.datetime import utc_today
+
     days = DATE_RANGE_DAYS.get(parameters.get("dateRange", "last_7_days"), 7)
-    end = date.today()
+    end = utc_today()
     start = end - timedelta(days=days)
 
     scope = parameters.get("scope", "org")

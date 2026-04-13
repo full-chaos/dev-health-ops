@@ -13,6 +13,7 @@ test-results/
 benchmark**
 !src/**/benchmarking/
 !src/**/benchmarking/**
+src/**/bench**/__pycache__/**
 demo-data**
 .flake8
 # **/.terraform*

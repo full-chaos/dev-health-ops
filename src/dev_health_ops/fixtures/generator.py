@@ -128,6 +128,29 @@ class SyntheticDataGenerator:
             ".github/workflows/release.yml",
         ]
 
+    def _pick_assigned_team_id(self, key: str | None = None) -> str | None:
+        if not self.assigned_teams:
+            return None
+        if key is None:
+            return str(random.choice(self.assigned_teams).id)
+        team_index = int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16) % len(
+            self.assigned_teams
+        )
+        return str(self.assigned_teams[team_index].id)
+
+    def _get_service_id(self) -> str:
+        service_ids = [
+            "api-gateway",
+            "auth-service",
+            "data-pipeline",
+            "web-frontend",
+            "worker-queue",
+        ]
+        service_index = int(
+            hashlib.sha256(self.repo_name.encode("utf-8")).hexdigest(), 16
+        ) % len(service_ids)
+        return service_ids[service_index]
+
     def _resolve_repo_authors(self) -> list[tuple[str, str]]:
         if self.assigned_teams is None:
             return list(self.authors)
@@ -460,6 +483,7 @@ class SyntheticDataGenerator:
             "integration-test": (300, 1200),
         }
         job_runs: list[dict[str, Any]] = []
+        service_id = self._get_service_id()
 
         for pipeline in pipeline_runs:
             num_jobs = random.randint(2, 5)
@@ -500,6 +524,7 @@ class SyntheticDataGenerator:
                     )[0]
 
                 job_id = f"{pipeline.run_id}-job-{job_idx}"
+                team_id = self._pick_assigned_team_id(job_id)
 
                 job_runs.append(
                     {
@@ -512,8 +537,12 @@ class SyntheticDataGenerator:
                         "started_at": job_started_at,
                         "finished_at": job_finished_at,
                         "duration_seconds": float(duration_seconds),
-                        "runner_type": "hosted",
+                        "runner_type": random.choice(
+                            ["hosted", "hosted", "hosted", "self-hosted"]
+                        ),
                         "retry_attempt": 0,
+                        "team_id": team_id,
+                        "service_id": service_id,
                         "org_id": org_id,
                     }
                 )
@@ -534,6 +563,7 @@ class SyntheticDataGenerator:
         """
         suite_results: list[dict[str, Any]] = []
         case_results: list[dict[str, Any]] = []
+        service_id = self._get_service_id()
 
         flaky_test_names = [
             "test_api_timeout",
@@ -545,6 +575,16 @@ class SyntheticDataGenerator:
             "test_retry_backoff_timing",
             "test_session_expiry_edge",
         ]
+        persistent_failures = [
+            "test_legacy_auth_compat",
+            "test_timezone_edge_case",
+            "test_unicode_normalization",
+            "test_migration_rollback_safety",
+        ]
+        frameworks = {
+            "test": ["pytest", "jest", "junit", "go test"],
+            "integration-test": ["playwright", "cypress", "selenium"],
+        }
 
         test_name_pools = {
             "test": [
@@ -584,23 +624,33 @@ class SyntheticDataGenerator:
             repo_id = job["repo_id"]
             run_id = job["run_id"]
             job_id = job["job_id"]
+            team_id = job.get("team_id") or self._pick_assigned_team_id(
+                f"{run_id}:{job_id}"
+            )
+            suite_service_id = job.get("service_id") or service_id
 
             total_tests = random.randint(50, 500)
 
-            is_bad_run = random.random() < 0.08
+            is_bad_run = random.random() < 0.15
             if is_bad_run:
-                pass_rate = random.uniform(0.65, 0.75)
+                pass_rate = random.uniform(0.10, 0.60)
             else:
                 pass_rate = random.uniform(0.85, 0.98)
 
             passed = int(total_tests * pass_rate)
-            flake_rate = random.uniform(0.02, 0.08)
+            flake_rate = random.uniform(0.02, 0.15)
             flaky_count = max(0, int(total_tests * flake_rate))
             skipped = random.randint(0, max(1, total_tests // 20))
-            failed = total_tests - passed - skipped
+            error_count = max(0, int(total_tests * random.uniform(0.02, 0.05)))
+            quarantined_count = max(0, int(total_tests * random.uniform(0.01, 0.03)))
+            failed = total_tests - passed - skipped - error_count
+            failed = max(failed, len(persistent_failures))
             if failed < 0:
+                overflow = -failed
                 failed = 0
-                passed = total_tests - skipped
+                passed = max(0, passed - overflow)
+            if passed + skipped + failed + error_count > total_tests:
+                passed = max(0, total_tests - skipped - failed - error_count)
 
             suite_duration = random.uniform(30.0, 600.0)
 
@@ -616,26 +666,28 @@ class SyntheticDataGenerator:
                     "run_id": run_id,
                     "suite_id": suite_id,
                     "suite_name": suite_name,
-                    "framework": "pytest" if job_name == "test" else "playwright",
+                    "framework": random.choice(frameworks[job_name]),
                     "environment": "linux-x64",
                     "total_count": total_tests,
                     "passed_count": passed,
                     "failed_count": failed,
                     "skipped_count": skipped,
-                    "error_count": 0,
-                    "quarantined_count": 0,
+                    "error_count": error_count,
+                    "quarantined_count": quarantined_count,
                     "retried_count": flaky_count,
                     "duration_seconds": suite_duration,
                     "started_at": job_started,
                     "finished_at": job_finished,
-                    "team_id": None,
-                    "service_id": None,
+                    "team_id": team_id,
+                    "service_id": suite_service_id,
                     "org_id": org_id,
                 }
             )
 
             name_pool = test_name_pools.get(job_name, test_name_pools["test"])
-            all_names = list(name_pool) + list(flaky_test_names)
+            all_names = (
+                list(name_pool) + list(flaky_test_names) + list(persistent_failures)
+            )
 
             case_names: list[str] = []
             for i in range(total_tests):
@@ -650,9 +702,16 @@ class SyntheticDataGenerator:
             passed_so_far = 0
             failed_so_far = 0
             skipped_so_far = 0
+            quarantined_indices = set(
+                random.sample(range(total_tests), k=min(quarantined_count, total_tests))
+            )
 
             for case_idx, case_name in enumerate(case_names):
-                if case_idx in flaky_indices:
+                if case_name in persistent_failures:
+                    case_status = "failed"
+                    retry_attempt = 0
+                    failed_so_far += 1
+                elif case_idx in flaky_indices:
                     case_status = "passed"
                     retry_attempt = 1
                     passed_so_far += 1
@@ -683,6 +742,7 @@ class SyntheticDataGenerator:
                         ["assertion", "timeout", "error", "infrastructure"]
                     )
                     failure_message = f"Expected condition not met in {case_name}"
+                is_quarantined = case_idx in quarantined_indices
 
                 case_results.append(
                     {
@@ -698,7 +758,9 @@ class SyntheticDataGenerator:
                         "failure_message": failure_message,
                         "failure_type": failure_type,
                         "stack_trace": None,
-                        "is_quarantined": False,
+                        "is_quarantined": is_quarantined,
+                        "team_id": team_id,
+                        "service_id": suite_service_id,
                         "org_id": org_id,
                     }
                 )
@@ -722,6 +784,7 @@ class SyntheticDataGenerator:
             return []
 
         snapshots: list[dict[str, Any]] = []
+        service_id = self._get_service_id()
 
         runs_by_day: dict[date, list[CiPipelineRun]] = {}
         for run in pipeline_runs:
@@ -759,6 +822,7 @@ class SyntheticDataGenerator:
             branches_covered = int(branches_total * branch_coverage / 100.0)
 
             snapshot_id = f"cov-{chosen_run.run_id}-{day.isoformat()}"
+            team_id = self._pick_assigned_team_id(snapshot_id)
 
             snapshots.append(
                 {
@@ -777,8 +841,8 @@ class SyntheticDataGenerator:
                     "commit_hash": None,
                     "branch": "main",
                     "pr_number": None,
-                    "team_id": None,
-                    "service_id": None,
+                    "team_id": team_id,
+                    "service_id": service_id,
                     "org_id": org_id,
                 }
             )

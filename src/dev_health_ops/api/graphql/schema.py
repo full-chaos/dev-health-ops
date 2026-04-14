@@ -15,6 +15,8 @@ from .models.inputs import (
     CapacityForecastInput,
     DimensionInput,
     FilterInput,
+    SecurityAlertFilterInput,
+    SecurityPaginationInput,
     WorkGraphEdgeFilterInput,
 )
 from .models.outputs import (
@@ -23,6 +25,8 @@ from .models.outputs import (
     CapacityForecastConnection,
     CatalogResult,
     HomeResult,
+    SecurityAlertConnection,
+    SecurityOverview,
     WorkGraphEdgesResult,
 )
 from .resolvers.analytics import resolve_analytics
@@ -157,6 +161,31 @@ class Query:
 
         context = get_context(info)
         return await resolve_work_graph_edges(context, filters)
+
+    @strawberry.field(description="Paginated list of security alerts")
+    async def security_alerts(
+        self,
+        info: Info,
+        org_id: str,
+        filters: SecurityAlertFilterInput | None = None,
+        pagination: SecurityPaginationInput | None = None,
+    ) -> SecurityAlertConnection:
+        from .resolvers.security import resolve_security_alerts
+
+        context = get_context(info)
+        return await resolve_security_alerts(context, org_id, filters, pagination)
+
+    @strawberry.field(description="Aggregated security posture for the dashboard")
+    async def security_overview(
+        self,
+        info: Info,
+        org_id: str,
+        filters: SecurityAlertFilterInput | None = None,
+    ) -> SecurityOverview:
+        from .resolvers.security import resolve_security_overview
+
+        context = get_context(info)
+        return await resolve_security_overview(context, org_id, filters)
 
     @strawberry.field(description="List saved reports for an organization")
     async def saved_reports(

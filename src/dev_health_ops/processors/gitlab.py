@@ -2,9 +2,10 @@ import asyncio
 import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
+from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -220,7 +221,7 @@ def _sync_gitlab_mrs_to_store(
     loop: asyncio.AbstractEventLoop,
     batch_size: int,
     state: str = "all",
-    gate: RateLimitGate | None = None,
+    gate: Any = None,
     since: datetime | None = None,
 ) -> int:
     """Fetch all MRs for a project and insert them in batches.
@@ -236,6 +237,7 @@ def _sync_gitlab_mrs_to_store(
     page = 1
 
     gate = BaseGitProcessor.ensure_gate(gate)
+    assert gate is not None
 
     while True:
         try:
@@ -498,6 +500,44 @@ def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, sin
     return incidents
 
 
+def _fetch_gitlab_security_alerts_sync(
+    connector, project_id, repo_id, max_alerts, since
+):
+    """Sync helper to fetch GitLab security alerts (vulnerability findings, dependency scanning)."""
+    security_alert_cls = getattr(git_models, "SecurityAlert")
+    alerts = []
+    try:
+        raw_alerts = connector.get_security_alerts(
+            project_id=project_id, max_alerts=max_alerts
+        )
+        for item in raw_alerts:
+            created_at = item.created_at
+            if not created_at:
+                continue
+            if since is not None and created_at.astimezone(timezone.utc) < since:
+                continue
+            alerts.append(
+                security_alert_cls(
+                    repo_id=repo_id,
+                    alert_id=item.alert_id,
+                    source=item.source,
+                    severity=item.severity,
+                    state=item.state,
+                    package_name=item.package_name,
+                    cve_id=item.cve_id,
+                    url=item.url,
+                    title=item.title,
+                    description=item.description,
+                    created_at=created_at,
+                    fixed_at=item.fixed_at,
+                    dismissed_at=item.dismissed_at,
+                )
+            )
+    except Exception as exc:
+        logging.debug("Failed to fetch GitLab security alerts: %s", exc)
+    return alerts
+
+
 def _iter_gitlab_repo_tree(
     gl_project,
     *,
@@ -603,7 +643,7 @@ def _fetch_gitlab_blame_sync(gl_project, connector, project_id, repo_id, limit=5
 async def _backfill_gitlab_missing_data(
     store: Any,
     ingestion_sink: IngestionSink,
-    connector: GitLabConnector,
+    connector: Any,
     db_repo: Repo,
     project_full_name: str,
     default_branch: str,
@@ -741,6 +781,7 @@ async def process_gitlab_project(
     sync_cicd: bool = True,
     sync_deployments: bool = True,
     sync_incidents: bool = True,
+    sync_security: bool = True,
     since: datetime | None = None,
 ) -> None:
     """
@@ -755,7 +796,8 @@ async def process_gitlab_project(
     loop = asyncio.get_running_loop()
     ingestion_sink = IngestionSink(store)
 
-    connector = GitLabConnector(url=gitlab_url, private_token=token)
+    connector_cls = cast(Any, GitLabConnector)
+    connector = connector_cls(url=gitlab_url, private_token=token)
     try:
         # 1. Fetch Project Info
         logging.info("Fetching project information...")
@@ -903,6 +945,26 @@ async def process_gitlab_project(
                 await ingestion_sink.insert_incidents(incidents)
                 logging.info(f"Stored {len(incidents)} incidents from GitLab")
 
+        if sync_security:
+            logging.info("Fetching security alerts from GitLab...")
+            security_alerts = await loop.run_in_executor(
+                None,
+                _fetch_gitlab_security_alerts_sync,
+                connector,
+                project_id,
+                db_repo.id,
+                BATCH_SIZE,
+                since,
+            )
+            if security_alerts:
+                insert_security_alerts = getattr(
+                    ingestion_sink, "insert_security_alerts"
+                )
+                await insert_security_alerts(security_alerts)
+                logging.info(
+                    "Stored %d security alerts from GitLab", len(security_alerts)
+                )
+
         # 5. Fetch Blame (Optional)
         if fetch_blame:
             logging.info("Fetching blame data from GitLab (this may take a while)...")
@@ -936,19 +998,20 @@ async def process_gitlab_projects_batch(
     store: Any,
     token: str,
     gitlab_url: str = "https://gitlab.com",
-    group_name: str = None,
-    pattern: str = None,
+    group_name: str | None = None,
+    pattern: str | None = None,
     batch_size: int = 10,
     max_concurrent: int = 4,
     rate_limit_delay: float = 1.0,
-    max_commits_per_project: int = None,
-    max_projects: int = None,
+    max_commits_per_project: int | None = None,
+    max_projects: int | None = None,
     use_async: bool = False,
     sync_git: bool = True,
     sync_prs: bool = True,
     sync_cicd: bool = True,
     sync_deployments: bool = True,
     sync_incidents: bool = True,
+    sync_security: bool = True,
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
@@ -962,25 +1025,28 @@ async def process_gitlab_projects_batch(
         )
 
     logging.info("=== GitLab Batch Project Processing ===")
-    connector = GitLabConnector(url=gitlab_url, private_token=token)
+    connector_cls = cast(Any, GitLabConnector)
+    connector = connector_cls(url=gitlab_url, private_token=token)
     loop = asyncio.get_running_loop()
     ingestion_sink = IngestionSink(store)
 
     mr_gate = None
     mr_semaphore = None
     if sync_prs:
-        mr_gate = RateLimitGate(
-            RateLimitConfig(initial_backoff_seconds=max(1.0, rate_limit_delay))
+        rate_limit_gate_cls = cast(Any, RateLimitGate)
+        rate_limit_config_cls = cast(Any, RateLimitConfig)
+        mr_gate = rate_limit_gate_cls(
+            rate_limit_config_cls(initial_backoff_seconds=max(1.0, rate_limit_delay))
         )
         mr_semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
-    all_results: list[BatchResult] = []
+    all_results: list[Any] = []
     stored_count = 0
 
     results_queue: asyncio.Queue | None = None
     _queue_sentinel = object()
 
-    async def store_result(result: BatchResult) -> None:
+    async def store_result(result: Any) -> None:
         """Store a single result in the database (upsert)."""
         nonlocal stored_count
         if not result.success:
@@ -1068,6 +1134,7 @@ async def process_gitlab_projects_batch(
         if sync_prs:
             # Fetch ALL merge requests for batch-processed projects, storing in batches.
             try:
+                assert mr_semaphore is not None
                 async with mr_semaphore:
                     await loop.run_in_executor(
                         None,
@@ -1152,6 +1219,29 @@ async def process_gitlab_projects_batch(
                     e,
                 )
 
+        if sync_security:
+            try:
+                security_alerts = await loop.run_in_executor(
+                    None,
+                    _fetch_gitlab_security_alerts_sync,
+                    connector,
+                    project_info.id,
+                    db_repo.id,
+                    BATCH_SIZE,
+                    since,
+                )
+                if security_alerts:
+                    insert_security_alerts = getattr(
+                        ingestion_sink, "insert_security_alerts"
+                    )
+                    await insert_security_alerts(security_alerts)
+            except Exception as e:
+                logging.warning(
+                    "Failed to fetch security alerts for GitLab project %s: %s",
+                    project_info.full_name,
+                    e,
+                )
+
         if result.stats and sync_git:
             stat = GitCommitStat(
                 repo_id=db_repo.id,
@@ -1182,7 +1272,7 @@ async def process_gitlab_projects_batch(
                     e,
                 )
 
-    def on_project_complete(result: BatchResult) -> None:
+    def on_project_complete(result: Any) -> None:
         all_results.append(result)
         if result.success:
             stats_info = ""
@@ -1280,7 +1370,8 @@ async def process_gitlab_projects_batch(
 
             async def _process_project(project_info) -> None:
                 async with semaphore:
-                    result = BatchResult(
+                    batch_result_cls = cast(Any, BatchResult)
+                    result = batch_result_cls(
                         repository=project_info,
                         stats=None,
                         success=True,
@@ -1288,7 +1379,7 @@ async def process_gitlab_projects_batch(
                     try:
                         await store_result(result)
                     except Exception as e:
-                        result = BatchResult(
+                        result = batch_result_cls(
                             repository=project_info,
                             stats=None,
                             error=str(e),

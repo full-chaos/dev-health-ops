@@ -276,3 +276,68 @@ class CapacityForecastFilterInput:
     from_date: date | None = None
     to_date: date | None = None
     limit: int = 10
+
+
+# =============================================================================
+# Security alert types
+# =============================================================================
+
+
+@strawberry.enum
+class SecuritySeverityInput(Enum):
+    """Severity levels for security alerts."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+    UNKNOWN = "unknown"
+
+
+@strawberry.enum
+class SecuritySourceInput(Enum):
+    """Source system for security alerts."""
+
+    DEPENDABOT = "dependabot"
+    CODE_SCANNING = "code_scanning"
+    ADVISORY = "advisory"
+    GITLAB_VULNERABILITY = "gitlab_vulnerability"
+    GITLAB_DEPENDENCY = "gitlab_dependency"
+
+
+@strawberry.enum
+class SecurityStateInput(Enum):
+    """Lifecycle state of a security alert."""
+
+    OPEN = "open"
+    FIXED = "fixed"
+    DISMISSED = "dismissed"
+    DETECTED = "detected"
+    CONFIRMED = "confirmed"
+    RESOLVED = "resolved"
+
+
+@strawberry.input
+class SecurityAlertFilterInput:
+    """Filter options for security alert queries."""
+
+    repo_ids: list[str] | None = None
+    severities: list[SecuritySeverityInput] | None = None
+    sources: list[SecuritySourceInput] | None = None
+    states: list[SecurityStateInput] | None = None
+    since: date | None = None  # created_at >= since
+    until: date | None = None  # created_at <= until
+    open_only: bool = (
+        False  # shorthand for states=OPEN,DETECTED,CONFIRMED; overrides states
+    )
+    search: str | None = None  # ILIKE on title + package_name + cve_id
+
+
+@strawberry.input
+class SecurityPaginationInput:
+    """Cursor-based pagination for security alert queries."""
+
+    first: int = 50
+    after: str | None = (
+        None  # cursor; offset integer encoded as string, matching work_graph_edges convention
+    )

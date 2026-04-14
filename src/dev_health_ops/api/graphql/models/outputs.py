@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 
 import strawberry
@@ -413,3 +413,94 @@ class CapacityForecastConnection:
     edges: list[CapacityForecastEdge]
     page_info: PageInfo
     total_count: int
+
+
+# =============================================================================
+# Security alert output types
+# =============================================================================
+
+
+@strawberry.type
+class SecurityAlertNode:
+    """A single security alert with repo context."""
+
+    alert_id: str
+    repo_id: str
+    repo_name: str  # joined from repos.repo in ClickHouse
+    repo_url: str | None
+    source: str  # lowercase string matching SecuritySourceInput enum values
+    severity: str
+    state: str
+    package_name: str | None
+    cve_id: str | None
+    url: str | None  # upstream link (GitHub/GitLab alert page)
+    title: str | None
+    description: str | None
+    created_at: datetime
+    fixed_at: datetime | None
+    dismissed_at: datetime | None
+
+
+@strawberry.type
+class SecurityAlertEdge:
+    """Edge wrapping a security alert node for cursor-based pagination."""
+
+    node: SecurityAlertNode
+    cursor: str
+
+
+@strawberry.type
+class SecurityAlertConnection:
+    """Paginated connection for security alert results."""
+
+    edges: list[SecurityAlertEdge]
+    total_count: int
+    page_info: PageInfo
+
+
+@strawberry.type
+class SecurityKpis:
+    """Key performance indicators for the security posture dashboard."""
+
+    open_total: int
+    critical: int
+    high: int
+    mean_days_to_fix_30d: float | None  # null if no alerts fixed in the window
+    open_delta_30d: int  # net change in open count over last 30 days
+
+
+@strawberry.type
+class SeverityBucket:
+    """Alert count aggregated by severity level."""
+
+    severity: str  # one of low/medium/high/critical/unknown
+    count: int
+
+
+@strawberry.type
+class RepoAlertCount:
+    """Open alert count for a single repository."""
+
+    repo_id: str
+    repo_name: str
+    repo_url: str | None
+    count: int
+
+
+@strawberry.type
+class TrendPoint:
+    """Daily opened/fixed counts for trend charting."""
+
+    day: date
+    opened: int
+    fixed: int
+
+
+@strawberry.type
+class SecurityOverview:
+    """Aggregated security posture for the dashboard."""
+
+    kpis: SecurityKpis
+    severity_breakdown: list[SeverityBucket]
+    top_repos: list[RepoAlertCount]  # LIMIT 10, count DESC
+    trend: list[TrendPoint]  # last 30 days, one point per day

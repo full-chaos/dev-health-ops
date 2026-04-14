@@ -253,6 +253,11 @@ class Repo(Base, GitRepo):
         back_populates="repo",
         cascade="all, delete-orphan",
     )
+    security_alerts = relationship(
+        "SecurityAlert",
+        back_populates="repo",
+        cascade="all, delete-orphan",
+    )
 
 
 class GitRef(Base):
@@ -690,3 +695,42 @@ class Incident(Base):
     )
 
     repo = relationship("Repo", back_populates="incidents")
+
+
+class SecurityAlert(Base):
+    """Security and dependency vulnerability alerts from GitHub/GitLab.
+
+    Covers: GitHub Dependabot alerts, code scanning alerts, security advisories,
+    GitLab vulnerability findings, and dependency scanning results.
+    """
+
+    __tablename__ = "security_alerts"
+    repo_id = Column(
+        GUID,
+        ForeignKey("repos.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    alert_id = Column(Text, primary_key=True)
+    source = Column(
+        Text,
+        nullable=False,
+        doc="Alert source: dependabot, code_scanning, advisory, "
+        "gitlab_vulnerability, gitlab_dependency",
+    )
+    severity = Column(Text, doc="low, medium, high, critical, unknown")
+    state = Column(Text, doc="open, fixed, dismissed, detected, confirmed, resolved")
+    package_name = Column(Text, doc="Affected package name (if applicable)")
+    cve_id = Column(Text, doc="CVE identifier (if available)")
+    url = Column(Text, doc="URL to the alert detail page")
+    title = Column(Text, doc="Alert title or summary")
+    description = Column(Text, doc="Alert description or rule description")
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    fixed_at = Column(DateTime(timezone=True))
+    dismissed_at = Column(DateTime(timezone=True))
+    last_synced = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    repo = relationship("Repo", back_populates="security_alerts")

@@ -129,6 +129,24 @@ class PullRequestCommit:
 
 
 @dataclass
+class SecurityAlertData:
+    """Normalized security/dependency alert from GitHub or GitLab."""
+
+    alert_id: str
+    source: str  # dependabot, code_scanning, advisory, gitlab_vulnerability, gitlab_dependency
+    severity: str | None = None
+    state: str | None = None
+    package_name: str | None = None
+    cve_id: str | None = None
+    url: str | None = None
+    title: str | None = None
+    description: str | None = None
+    created_at: datetime | None = None
+    fixed_at: datetime | None = None
+    dismissed_at: datetime | None = None
+
+
+@dataclass
 class DORAMetric:
     """Represents a single DORA metric data point."""
 

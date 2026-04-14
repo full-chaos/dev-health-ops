@@ -1015,6 +1015,82 @@ class ClickHouseStore:
             rows,
         )
 
+    async def insert_security_alerts(self, alerts: list) -> None:
+        if not alerts:
+            return
+        synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
+        rows: list[dict[str, Any]] = []
+        for item in alerts:
+            if isinstance(item, dict):
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.get("repo_id")),
+                        "alert_id": str(item.get("alert_id")),
+                        "source": item.get("source"),
+                        "severity": item.get("severity"),
+                        "state": item.get("state"),
+                        "package_name": item.get("package_name"),
+                        "cve_id": item.get("cve_id"),
+                        "url": item.get("url"),
+                        "title": item.get("title"),
+                        "description": item.get("description"),
+                        "created_at": self._normalize_datetime(item.get("created_at")),
+                        "fixed_at": self._normalize_datetime(item.get("fixed_at")),
+                        "dismissed_at": self._normalize_datetime(
+                            item.get("dismissed_at")
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            item.get("last_synced") or synced_at_default
+                        ),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "repo_id": self._normalize_uuid(item.repo_id),
+                        "alert_id": str(item.alert_id),
+                        "source": item.source,
+                        "severity": getattr(item, "severity", None),
+                        "state": getattr(item, "state", None),
+                        "package_name": getattr(item, "package_name", None),
+                        "cve_id": getattr(item, "cve_id", None),
+                        "url": getattr(item, "url", None),
+                        "title": getattr(item, "title", None),
+                        "description": getattr(item, "description", None),
+                        "created_at": self._normalize_datetime(item.created_at),
+                        "fixed_at": self._normalize_datetime(
+                            getattr(item, "fixed_at", None)
+                        ),
+                        "dismissed_at": self._normalize_datetime(
+                            getattr(item, "dismissed_at", None)
+                        ),
+                        "last_synced": self._normalize_datetime(
+                            getattr(item, "last_synced", None) or synced_at_default
+                        ),
+                    }
+                )
+
+        await self._insert_rows(
+            "security_alerts",
+            [
+                "repo_id",
+                "alert_id",
+                "source",
+                "severity",
+                "state",
+                "package_name",
+                "cve_id",
+                "url",
+                "title",
+                "description",
+                "created_at",
+                "fixed_at",
+                "dismissed_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
     async def insert_test_suite_results(
         self,
         suites: list[TestSuiteResultRow] | list[dict[str, Any]],

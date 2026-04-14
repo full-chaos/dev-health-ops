@@ -33,6 +33,7 @@ from dev_health_ops.models.git import (
     GitPullRequestReview,
     Incident,
     Repo,
+    SecurityAlert,
 )
 
 
@@ -95,6 +96,10 @@ class GitSyncStore(Protocol):
     async def insert_incidents(self, incidents: list[Incident]) -> None:
         """Insert a batch of incident records."""
         ...
+
+    async def insert_security_alerts(self, alerts: list[SecurityAlert]) -> None:
+        """Insert a batch of security alert records."""
+        raise NotImplementedError
 
     async def insert_test_suite_results(self, suites: list[object]) -> None:
         """Insert a batch of normalized test suite records."""

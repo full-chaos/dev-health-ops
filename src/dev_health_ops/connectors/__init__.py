@@ -25,6 +25,7 @@ from .models import (
     PullRequest,
     Repository,
     RepoStats,
+    SecurityAlertData,
 )
 from .teams import (
     MicrosoftGraphClient,
@@ -73,6 +74,8 @@ __all__ = [
     "TeamsMessage",
     "TeamsUser",
     "TeamsMeeting",
+    # Security
+    "SecurityAlertData",
     # Exceptions
     "ConnectorException",
     "RateLimitException",

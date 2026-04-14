@@ -1002,12 +1002,16 @@ class SyntheticDataGenerator:
                 sources = github_sources + gitlab_sources
                 src_weights = github_weights + gitlab_weights
 
-            repo_slug = getattr(repo, "repo", None) or getattr(repo, "name", str(repo.id))
+            repo_slug = getattr(repo, "repo", None) or getattr(
+                repo, "name", str(repo.id)
+            )
 
             for i in range(count_per_repo):
                 alert_id = f"alert-{repo.id}-{i:04d}"
 
-                severity = random.choices(severity_choices, weights=severity_weights, k=1)[0]
+                severity = random.choices(
+                    severity_choices, weights=severity_weights, k=1
+                )[0]
                 source = random.choices(sources, weights=src_weights, k=1)[0]
                 state = random.choices(state_choices, weights=state_weights, k=1)[0]
 
@@ -1021,11 +1025,15 @@ class SyntheticDataGenerator:
                 if state in {"fixed", "resolved"}:
                     span = int((now - created_at).total_seconds())
                     if span > 0:
-                        fixed_at = created_at + timedelta(seconds=random.randint(0, span))
+                        fixed_at = created_at + timedelta(
+                            seconds=random.randint(0, span)
+                        )
                 elif state == "dismissed":
                     span = int((now - created_at).total_seconds())
                     if span > 0:
-                        dismissed_at = created_at + timedelta(seconds=random.randint(0, span))
+                        dismissed_at = created_at + timedelta(
+                            seconds=random.randint(0, span)
+                        )
 
                 # package_name
                 package_name: str | None = None
@@ -1042,7 +1050,9 @@ class SyntheticDataGenerator:
                 # URL
                 numeric_index = i + 1
                 if source == "dependabot":
-                    url = f"https://github.com/{repo_slug}/security/dependabot/{alert_id}"
+                    url = (
+                        f"https://github.com/{repo_slug}/security/dependabot/{alert_id}"
+                    )
                 elif source == "code_scanning":
                     url = f"https://github.com/{repo_slug}/security/code-scanning/{numeric_index}"
                 elif source == "advisory":
@@ -1052,9 +1062,7 @@ class SyntheticDataGenerator:
                         f"GHSA-{seg()}-{seg()}-{seg()}"
                     )
                 elif source == "gitlab_vulnerability":
-                    url = (
-                        f"https://gitlab.com/{repo_slug}/-/security/vulnerabilities/{numeric_index}"
-                    )
+                    url = f"https://gitlab.com/{repo_slug}/-/security/vulnerabilities/{numeric_index}"
                 else:  # gitlab_dependency
                     url = f"https://gitlab.com/{repo_slug}/-/dependencies"
 

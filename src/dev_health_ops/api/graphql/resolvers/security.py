@@ -111,16 +111,31 @@ def _build_filter_clauses(
     if filters.since is not None:
         clauses.append("sa.created_at >= %(since)s")
         params["since"] = (
-            datetime(filters.since.year, filters.since.month, filters.since.day, tzinfo=timezone.utc)
-            if isinstance(filters.since, date) and not isinstance(filters.since, datetime)
+            datetime(
+                filters.since.year,
+                filters.since.month,
+                filters.since.day,
+                tzinfo=timezone.utc,
+            )
+            if isinstance(filters.since, date)
+            and not isinstance(filters.since, datetime)
             else filters.since
         )
 
     if filters.until is not None:
         clauses.append("sa.created_at <= %(until)s")
         params["until"] = (
-            datetime(filters.until.year, filters.until.month, filters.until.day, 23, 59, 59, tzinfo=timezone.utc)
-            if isinstance(filters.until, date) and not isinstance(filters.until, datetime)
+            datetime(
+                filters.until.year,
+                filters.until.month,
+                filters.until.day,
+                23,
+                59,
+                59,
+                tzinfo=timezone.utc,
+            )
+            if isinstance(filters.until, date)
+            and not isinstance(filters.until, datetime)
             else filters.until
         )
 

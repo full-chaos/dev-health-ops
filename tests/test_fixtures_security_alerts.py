@@ -34,10 +34,16 @@ def _make_repo(name: str, provider: str = "github") -> Repo:
 class TestGenerateSecurityAlerts:
     def test_produces_realistic_distribution(self):
         """Core distribution test: count, valid fields, and terminal-state invariants."""
-        repos = [_make_repo("acme/alpha"), _make_repo("acme/beta"), _make_repo("acme/gamma")]
+        repos = [
+            _make_repo("acme/alpha"),
+            _make_repo("acme/beta"),
+            _make_repo("acme/gamma"),
+        ]
         gen = SyntheticDataGenerator(repo_name="acme/alpha", seed=42)
         count_per_repo = 100
-        alerts = gen.generate_security_alerts(repos, count_per_repo=count_per_repo, days=90)
+        alerts = gen.generate_security_alerts(
+            repos, count_per_repo=count_per_repo, days=90
+        )
 
         # Correct total count
         assert len(alerts) == len(repos) * count_per_repo
@@ -47,7 +53,9 @@ class TestGenerateSecurityAlerts:
 
             # Valid enumerations
             assert alert.source in VALID_SOURCES, f"Invalid source: {alert.source}"
-            assert alert.severity in VALID_SEVERITIES, f"Invalid severity: {alert.severity}"
+            assert alert.severity in VALID_SEVERITIES, (
+                f"Invalid severity: {alert.severity}"
+            )
             assert alert.state in VALID_STATES, f"Invalid state: {alert.state}"
 
             # fixed_at only when state is fixed or resolved
@@ -99,7 +107,9 @@ class TestGenerateSecurityAlerts:
         alerts = gen.generate_security_alerts(repos, count_per_repo=200, days=90)
 
         gitlab_count = sum(
-            1 for a in alerts if a.source in {"gitlab_vulnerability", "gitlab_dependency"}
+            1
+            for a in alerts
+            if a.source in {"gitlab_vulnerability", "gitlab_dependency"}
         )
         # Expect at least 20% GitLab sources with the GitLab bias applied
         assert gitlab_count / len(alerts) >= 0.20, (
@@ -167,4 +177,6 @@ class TestRunnerCallsInsertSecurityAlerts:
             result = await run_fixtures_generation(ns)
 
         assert result == 0
-        assert len(called_with) > 0, "insert_security_alerts was never called with alerts"
+        assert len(called_with) > 0, (
+            "insert_security_alerts was never called with alerts"
+        )

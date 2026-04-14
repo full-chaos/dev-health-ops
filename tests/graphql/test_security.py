@@ -249,7 +249,10 @@ class TestResolveSecurityAlerts:
             mock_query.return_value = []
 
             filters = SecurityAlertFilterInput(
-                sources=[SecuritySourceInput.DEPENDABOT, SecuritySourceInput.CODE_SCANNING],
+                sources=[
+                    SecuritySourceInput.DEPENDABOT,
+                    SecuritySourceInput.CODE_SCANNING,
+                ],
             )
             await resolve_security_alerts(mock_context, "test-org", filters)
 
@@ -410,7 +413,9 @@ class TestResolveSecurityOverview:
         """Overview must fire all 4 sub-queries (via asyncio.gather)."""
         kpi = [make_kpi_row()]
         breakdown = [{"severity": "high", "count": 4}]
-        top_repos = [{"repo_id": "r1", "repo_name": "org/a", "repo_url": None, "count": 4}]
+        top_repos = [
+            {"repo_id": "r1", "repo_name": "org/a", "repo_url": None, "count": 4}
+        ]
         trend = [{"day": date(2024, 1, 15), "opened": 2, "fixed": 1}]
 
         with patch(
@@ -426,7 +431,15 @@ class TestResolveSecurityOverview:
 
     @pytest.mark.asyncio
     async def test_kpis_fields_populated(self, mock_context):
-        kpi = [make_kpi_row(open_total=20, critical=5, high=8, mean_days_to_fix_30d=3.7, open_delta_30d=-2)]
+        kpi = [
+            make_kpi_row(
+                open_total=20,
+                critical=5,
+                high=8,
+                mean_days_to_fix_30d=3.7,
+                open_delta_30d=-2,
+            )
+        ]
 
         with patch(
             "dev_health_ops.api.queries.client.query_dicts",
@@ -480,8 +493,18 @@ class TestResolveSecurityOverview:
     async def test_top_repos_includes_repo_name(self, mock_context):
         """Top repos must include repo_name, not just repo_id."""
         top_repos = [
-            {"repo_id": "uuid-1", "repo_name": "acme/backend", "repo_url": None, "count": 10},
-            {"repo_id": "uuid-2", "repo_name": "acme/frontend", "repo_url": None, "count": 5},
+            {
+                "repo_id": "uuid-1",
+                "repo_name": "acme/backend",
+                "repo_url": None,
+                "count": 10,
+            },
+            {
+                "repo_id": "uuid-2",
+                "repo_name": "acme/frontend",
+                "repo_url": None,
+                "count": 5,
+            },
         ]
 
         with patch(

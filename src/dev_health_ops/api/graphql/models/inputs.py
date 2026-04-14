@@ -327,7 +327,9 @@ class SecurityAlertFilterInput:
     states: list[SecurityStateInput] | None = None
     since: date | None = None  # created_at >= since
     until: date | None = None  # created_at <= until
-    open_only: bool = False  # shorthand for states=OPEN,DETECTED,CONFIRMED; overrides states
+    open_only: bool = (
+        False  # shorthand for states=OPEN,DETECTED,CONFIRMED; overrides states
+    )
     search: str | None = None  # ILIKE on title + package_name + cve_id
 
 
@@ -336,4 +338,6 @@ class SecurityPaginationInput:
     """Cursor-based pagination for security alert queries."""
 
     first: int = 50
-    after: str | None = None  # cursor; offset integer encoded as string, matching work_graph_edges convention
+    after: str | None = (
+        None  # cursor; offset integer encoded as string, matching work_graph_edges convention
+    )

@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.models import git as git_models
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models.git import (
     CiPipelineRun,
@@ -355,6 +356,47 @@ def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
             )
         )
     return incidents
+
+
+def _fetch_github_security_alerts_sync(
+    connector, owner, repo_name, repo_id, max_alerts, since
+):
+    """Sync helper to fetch GitHub security alerts (Dependabot, code scanning, advisories)."""
+    security_alert_cls = getattr(git_models, "SecurityAlert")
+    alerts = []
+    for fetch_fn in [
+        connector.get_dependabot_alerts,
+        connector.get_code_scanning_alerts,
+        connector.get_security_advisories,
+    ]:
+        try:
+            raw_alerts = fetch_fn(owner, repo_name, max_alerts=max_alerts)
+            for item in raw_alerts:
+                created_at = item.created_at
+                if not created_at:
+                    continue
+                if since is not None and created_at.astimezone(timezone.utc) < since:
+                    continue
+                alerts.append(
+                    security_alert_cls(
+                        repo_id=repo_id,
+                        alert_id=item.alert_id,
+                        source=item.source,
+                        severity=item.severity,
+                        state=item.state,
+                        package_name=item.package_name,
+                        cve_id=item.cve_id,
+                        url=item.url,
+                        title=item.title,
+                        description=item.description,
+                        created_at=created_at,
+                        fixed_at=item.fixed_at,
+                        dismissed_at=item.dismissed_at,
+                    )
+                )
+        except Exception as exc:
+            logging.debug("Failed to fetch %s: %s", fetch_fn.__name__, exc)
+    return alerts
 
 
 def _collect_github_pr_objects(
@@ -812,6 +854,7 @@ async def process_github_repo(
     sync_cicd: bool = True,
     sync_deployments: bool = True,
     sync_incidents: bool = True,
+    sync_security: bool = True,
     since: datetime | None = None,
 ) -> None:
     """
@@ -985,6 +1028,25 @@ async def process_github_repo(
                 await ingestion_sink.insert_incidents(incidents)
                 logging.info("Stored %d incidents", len(incidents))
 
+        if sync_security:
+            logging.info("Fetching security alerts from GitHub...")
+            security_alerts = await loop.run_in_executor(
+                None,
+                _fetch_github_security_alerts_sync,
+                connector,
+                owner,
+                repo_name,
+                db_repo.id,
+                BATCH_SIZE,
+                since,
+            )
+            if security_alerts:
+                insert_security_alerts = getattr(
+                    ingestion_sink, "insert_security_alerts"
+                )
+                await insert_security_alerts(security_alerts)
+                logging.info("Stored %d security alerts", len(security_alerts))
+
         # 5. Fetch Blame (Optional & Stubbed)
         if fetch_blame:
             logging.info("Fetching blame data (file list) from GitHub...")
@@ -1025,6 +1087,7 @@ async def process_github_repos_batch(
     sync_cicd: bool = True,
     sync_deployments: bool = True,
     sync_incidents: bool = True,
+    sync_security: bool = True,
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
@@ -1231,6 +1294,31 @@ async def process_github_repos_batch(
             except Exception as e:
                 logging.warning(
                     "Failed to fetch incidents for GitHub repo %s: %s",
+                    repo_info.full_name,
+                    e,
+                )
+
+        if sync_security:
+            try:
+                owner, repo_name = _split_full_name(repo_info.full_name)
+                security_alerts = await loop.run_in_executor(
+                    None,
+                    _fetch_github_security_alerts_sync,
+                    connector,
+                    owner,
+                    repo_name,
+                    db_repo.id,
+                    BATCH_SIZE,
+                    since,
+                )
+                if security_alerts:
+                    insert_security_alerts = getattr(
+                        ingestion_sink, "insert_security_alerts"
+                    )
+                    await insert_security_alerts(security_alerts)
+            except Exception as e:
+                logging.warning(
+                    "Failed to fetch security alerts for GitHub repo %s: %s",
                     repo_info.full_name,
                     e,
                 )

@@ -14,6 +14,7 @@ from dev_health_ops.models.git import (
     GitPullRequestReview,
     Incident,
     Repo,
+    SecurityAlert,
 )
 
 
@@ -62,3 +63,6 @@ class IngestionSink:
 
     async def insert_incidents(self, incidents: list[Incident]) -> None:
         await self._store.insert_incidents(incidents)
+
+    async def insert_security_alerts(self, alerts: list[SecurityAlert]) -> None:
+        await self._store.insert_security_alerts(alerts)

@@ -377,3 +377,59 @@ class GitLabRESTClient(RESTClient):
             project_id,
         )
         return metrics
+
+    def get_vulnerability_findings(
+        self,
+        project_id: int,
+        state: str | None = None,
+        severity: str | None = None,
+        per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Get vulnerability findings for a project."""
+        endpoint = f"projects/{project_id}/vulnerability_findings"
+        params: dict[str, Any] = {"per_page": per_page}
+        if state:
+            params["state"] = state
+        if severity:
+            params["severity"] = severity
+
+        logger.debug(
+            "Fetching vulnerability findings for project %s (state=%s, severity=%s, per_page=%s)",
+            project_id,
+            state,
+            severity,
+            per_page,
+        )
+        findings = self.get_list(endpoint, params=params)
+        logger.debug(
+            "Fetched %d vulnerability findings for project %s",
+            len(findings),
+            project_id,
+        )
+        return findings
+
+    def get_dependencies(
+        self,
+        project_id: int,
+        package_manager: str | None = None,
+        per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Get dependencies for a project."""
+        endpoint = f"projects/{project_id}/dependencies"
+        params: dict[str, Any] = {"per_page": per_page}
+        if package_manager:
+            params["package_manager"] = package_manager
+
+        logger.debug(
+            "Fetching dependencies for project %s (package_manager=%s, per_page=%s)",
+            project_id,
+            package_manager,
+            per_page,
+        )
+        dependencies = self.get_list(endpoint, params=params)
+        logger.debug(
+            "Fetched %d dependencies for project %s",
+            len(dependencies),
+            project_id,
+        )
+        return dependencies

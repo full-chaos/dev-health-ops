@@ -13,6 +13,7 @@ from typing import Any
 import gitlab
 from gitlab.exceptions import GitlabAuthenticationError, GitlabError
 
+from dev_health_ops.connectors import models as connector_models
 from dev_health_ops.connectors.base import BatchResult, GitConnector, RateLimitException
 from dev_health_ops.connectors.exceptions import (
     APIException,
@@ -1027,6 +1028,124 @@ class GitLabConnector(GitConnector):
                 # Silently catch re-raised exceptions to return empty metrics
                 pass
             return DORAMetrics(metric_name=metric, data_points=[])
+
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(RateLimitException, APIException),
+    )
+    def get_security_alerts(
+        self,
+        project_id: int | None = None,
+        project_name: str | None = None,
+        max_alerts: int | None = None,
+    ) -> list[Any]:
+        project_identifier = project_name if project_name else project_id
+        if not project_identifier:
+            raise ValueError("Either project_id or project_name must be provided")
+
+        try:
+            actual_project_id = int(self.gitlab.projects.get(project_identifier).id)
+            rest_client: Any = self.rest_client
+
+            security_alert_data_cls = getattr(connector_models, "SecurityAlertData")
+            alerts: list[Any] = []
+
+            try:
+                findings = rest_client.get_vulnerability_findings(actual_project_id)
+                for item in findings:
+                    created_at = None
+                    created_at_value = item.get("created_at")
+                    if created_at_value:
+                        try:
+                            created_at = datetime.fromisoformat(
+                                created_at_value.replace("Z", "+00:00")
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Failed to parse vulnerability finding created_at: %s",
+                                created_at_value,
+                            )
+
+                    cve_id = None
+                    for identifier in item.get("identifiers", []) or []:
+                        if identifier.get("type") == "cve":
+                            cve_id = identifier.get("name")
+                            break
+
+                    alerts.append(
+                        security_alert_data_cls(
+                            alert_id=f"gitlab_vuln:{item['id']}",
+                            source="gitlab_vulnerability",
+                            severity=item.get("severity"),
+                            state=item.get("state"),
+                            package_name=None,
+                            cve_id=cve_id,
+                            url=(item.get("links", {}) or {}).get("url"),
+                            title=item.get("name"),
+                            description=None,
+                            created_at=created_at,
+                            fixed_at=None,
+                            dismissed_at=None,
+                        )
+                    )
+            except APIException as e:
+                if "Forbidden:" in str(e) or "Not found:" in str(e):
+                    logger.debug(
+                        "GitLab vulnerability findings unavailable for project %s: %s",
+                        project_identifier,
+                        e,
+                    )
+                else:
+                    raise
+            except Exception as e:
+                self._handle_gitlab_exception(e)
+
+            try:
+                dependencies = rest_client.get_dependencies(actual_project_id)
+                for dep in dependencies:
+                    vulnerabilities = dep.get("vulnerabilities") or []
+                    if not vulnerabilities:
+                        continue
+
+                    for vuln in vulnerabilities:
+                        alerts.append(
+                            security_alert_data_cls(
+                                alert_id=f"gitlab_dep:{vuln['id']}",
+                                source="gitlab_dependency",
+                                severity=vuln.get("severity"),
+                                state=None,
+                                package_name=dep.get("name"),
+                                cve_id=None,
+                                url=vuln.get("url"),
+                                title=vuln.get("name"),
+                                description=None,
+                                created_at=datetime.now(timezone.utc),
+                                fixed_at=None,
+                                dismissed_at=None,
+                            )
+                        )
+            except APIException as e:
+                if "Forbidden:" in str(e) or "Not found:" in str(e):
+                    logger.debug(
+                        "GitLab dependencies unavailable for project %s: %s",
+                        project_identifier,
+                        e,
+                    )
+                else:
+                    raise
+            except Exception as e:
+                self._handle_gitlab_exception(e)
+
+            if max_alerts is not None:
+                return alerts[:max_alerts]
+            return alerts
+
+        except (RateLimitException, APIException):
+            raise
+        except Exception as e:
+            self._handle_gitlab_exception(e)
+            return []
 
     def get_rate_limit(self) -> dict[str, Any]:
         """Get current rate limit status."""

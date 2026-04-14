@@ -31,6 +31,7 @@ def _sync_flags_for_target(target: str) -> dict:
         "sync_cicd": target == "cicd",
         "sync_deployments": target == "deployments",
         "sync_incidents": target == "incidents",
+        "sync_security": target == "security",
         "blame_only": target == "blame",
     }
 
@@ -112,6 +113,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
                 "sync_cicd": flags["sync_cicd"],
                 "sync_deployments": flags["sync_deployments"],
                 "sync_incidents": flags["sync_incidents"],
+                "sync_security": flags["sync_security"],
                 "blame_only": flags["blame_only"],
                 "backfill_missing": False,
                 "since": since,
@@ -137,6 +139,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
             sync_cicd=flags["sync_cicd"],
             sync_deployments=flags["sync_deployments"],
             sync_incidents=flags["sync_incidents"],
+            sync_security=flags["sync_security"],
             since=since,
         )
 
@@ -174,6 +177,7 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
                 "sync_cicd": flags["sync_cicd"],
                 "sync_deployments": flags["sync_deployments"],
                 "sync_incidents": flags["sync_incidents"],
+                "sync_security": flags["sync_security"],
                 "blame_only": flags["blame_only"],
                 "backfill_missing": False,
                 "since": since,
@@ -199,6 +203,7 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
             sync_cicd=flags["sync_cicd"],
             sync_deployments=flags["sync_deployments"],
             sync_incidents=flags["sync_incidents"],
+            sync_security=flags["sync_security"],
             since=since,
         )
 
@@ -260,9 +265,17 @@ def run_sync_target(ns: argparse.Namespace) -> int:
     if provider not in {"local", "github", "gitlab", "synthetic"}:
         raise SystemExit("Provider must be one of: local, github, gitlab, synthetic.")
 
-    if target not in {"git", "prs", "blame", "cicd", "deployments", "incidents"}:
+    if target not in {
+        "git",
+        "prs",
+        "blame",
+        "cicd",
+        "deployments",
+        "incidents",
+        "security",
+    }:
         raise SystemExit(
-            "Sync target must be git, prs, blame, cicd, deployments, or incidents."
+            "Sync target must be git, prs, blame, cicd, deployments, incidents, or security."
         )
 
     if provider == "local":
@@ -322,6 +335,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "cicd": "Sync CI/CD runs and pipelines.",
         "deployments": "Sync deployments.",
         "incidents": "Sync incidents.",
+        "security": "Sync security and dependency alerts.",
     }
 
     for target, help_text in target_parsers.items():

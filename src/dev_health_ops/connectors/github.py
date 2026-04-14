@@ -635,56 +635,101 @@ class GitHubConnector(GitConnector):
             logger.debug("Failed to parse GitHub datetime: %s", value)
             return None
 
+    def _is_github_rate_limit_403(self, response: requests.Response) -> bool:
+        body = response.text.lower()
+        return "rate limit" in body or "abuse" in body or "secondary" in body
+
     def _get_security_alert_page(
         self,
         owner: str,
         repo: str,
         endpoint: str,
         params: dict[str, Any],
+        max_items: int | None = None,
     ) -> list[dict[str, Any]]:
-        self.github.get_repo(f"{owner}/{repo}")
-
-        url = f"{self._rest_base_url()}/repos/{owner}/{repo}/{endpoint.lstrip('/')}"
+        base_url = (
+            f"{self._rest_base_url()}/repos/{owner}/{repo}/{endpoint.lstrip('/')}"
+        )
         headers = {
             "Authorization": f"token {self.token}",
             "Accept": "application/vnd.github+json",
         }
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        all_items: list[dict[str, Any]] = []
+        url: str | None = base_url
 
-        if response.status_code in {403, 404}:
-            logger.debug(
-                "GitHub security endpoint unavailable for %s/%s (%s): %s",
-                owner,
-                repo,
-                endpoint,
-                response.status_code,
-            )
-            return []
-
-        if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            raise RateLimitException(
-                f"GitHub rate limit exceeded for {endpoint}: {response.text}",
-                retry_after_seconds=float(retry_after) if retry_after else None,
+        while url:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            params = (
+                None  # only use params on first request; pagination URLs are absolute
             )
 
-        if response.status_code >= 400:
-            raise APIException(
-                f"GitHub security endpoint error for {endpoint}: "
-                f"{response.status_code} {response.text}"
-            )
+            if response.status_code == 403:
+                if self._is_github_rate_limit_403(response):
+                    retry_after = response.headers.get("Retry-After")
+                    raise RateLimitException(
+                        f"GitHub rate limit (403) for {endpoint}: {response.text}",
+                        retry_after_seconds=float(retry_after) if retry_after else None,
+                    )
+                logger.debug(
+                    "GitHub security endpoint unavailable for %s/%s (%s): 403",
+                    owner,
+                    repo,
+                    endpoint,
+                )
+                return []
 
-        payload = response.json()
-        if not isinstance(payload, list):
-            logger.debug(
-                "Unexpected GitHub security response for %s/%s (%s): %s",
-                owner,
-                repo,
-                endpoint,
-                type(payload).__name__,
-            )
-            return []
-        return payload
+            if response.status_code == 404:
+                logger.debug(
+                    "GitHub security endpoint not found for %s/%s (%s): 404",
+                    owner,
+                    repo,
+                    endpoint,
+                )
+                return []
+
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                raise RateLimitException(
+                    f"GitHub rate limit exceeded for {endpoint}: {response.text}",
+                    retry_after_seconds=float(retry_after) if retry_after else None,
+                )
+
+            if response.status_code >= 400:
+                raise APIException(
+                    f"GitHub security endpoint error for {endpoint}: "
+                    f"{response.status_code} {response.text}"
+                )
+
+            payload = response.json()
+            if not isinstance(payload, list):
+                logger.debug(
+                    "Unexpected GitHub security response for %s/%s (%s): %s",
+                    owner,
+                    repo,
+                    endpoint,
+                    type(payload).__name__,
+                )
+                return all_items
+
+            all_items.extend(payload)
+            if max_items is not None and len(all_items) >= max_items:
+                return all_items[:max_items]
+
+            # Follow Link: <url>; rel="next" header for pagination
+            url = self._parse_next_link(response.headers.get("Link"))
+
+        return all_items
+
+    @staticmethod
+    def _parse_next_link(link_header: str | None) -> str | None:
+        if not link_header:
+            return None
+        for part in link_header.split(","):
+            if 'rel="next"' in part:
+                start = part.index("<") + 1
+                end = part.index(">")
+                return part[start:end]
+        return None
 
     @retry_with_backoff(
         max_retries=3,

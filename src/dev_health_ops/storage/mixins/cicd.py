@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident
+from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident, SecurityAlert
 
 
 class CicdMixin:
@@ -135,6 +135,69 @@ class CicdMixin:
                 "status",
                 "started_at",
                 "resolved_at",
+                "last_synced",
+            ],
+        )
+
+    async def insert_security_alerts(self, alerts: list[SecurityAlert]) -> None:
+        if not alerts:
+            return
+        synced_at_default = datetime.now(timezone.utc)
+        rows: list[dict[str, Any]] = []
+        for item in alerts:
+            if isinstance(item, dict):
+                row = {
+                    "repo_id": item.get("repo_id"),
+                    "alert_id": item.get("alert_id"),
+                    "source": item.get("source"),
+                    "severity": item.get("severity"),
+                    "state": item.get("state"),
+                    "package_name": item.get("package_name"),
+                    "cve_id": item.get("cve_id"),
+                    "url": item.get("url"),
+                    "title": item.get("title"),
+                    "description": item.get("description"),
+                    "created_at": item.get("created_at"),
+                    "fixed_at": item.get("fixed_at"),
+                    "dismissed_at": item.get("dismissed_at"),
+                    "last_synced": item.get("last_synced") or synced_at_default,
+                }
+            else:
+                row = {
+                    "repo_id": item.repo_id,
+                    "alert_id": item.alert_id,
+                    "source": item.source,
+                    "severity": getattr(item, "severity", None),
+                    "state": getattr(item, "state", None),
+                    "package_name": getattr(item, "package_name", None),
+                    "cve_id": getattr(item, "cve_id", None),
+                    "url": getattr(item, "url", None),
+                    "title": getattr(item, "title", None),
+                    "description": getattr(item, "description", None),
+                    "created_at": item.created_at,
+                    "fixed_at": getattr(item, "fixed_at", None),
+                    "dismissed_at": getattr(item, "dismissed_at", None),
+                    "last_synced": getattr(item, "last_synced", None)
+                    or synced_at_default,
+                }
+            rows.append(row)
+
+        await self._upsert_many(
+            SecurityAlert,
+            rows,
+            conflict_columns=["repo_id", "alert_id"],
+            update_columns=[
+                "source",
+                "severity",
+                "state",
+                "package_name",
+                "cve_id",
+                "url",
+                "title",
+                "description",
+                "created_at",
+                "fixed_at",
+                "dismissed_at",
                 "last_synced",
             ],
         )

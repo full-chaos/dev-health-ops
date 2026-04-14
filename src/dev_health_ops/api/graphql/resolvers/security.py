@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -384,7 +385,7 @@ async def resolve_security_overview(
     kpi_row = kpi_rows[0] if kpi_rows else {}
     mean_raw = kpi_row.get("mean_days_to_fix_30d")
     mean_days: float | None = float(mean_raw) if mean_raw is not None else None
-    if mean_days is not None and (mean_days != mean_days):  # NaN check
+    if mean_days is not None and math.isnan(mean_days):  # NaN check
         mean_days = None
 
     kpis = SecurityKpis(

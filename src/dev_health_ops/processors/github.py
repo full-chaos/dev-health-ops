@@ -3,8 +3,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.models import git as git_models
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
+from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,

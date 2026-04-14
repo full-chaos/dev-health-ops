@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 
 from dev_health_ops.connectors.models import SecurityAlertData
 
-
 FAKE_REPO_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 JAN_1 = datetime(2025, 1, 1, tzinfo=timezone.utc)
 FEB_1 = datetime(2025, 2, 1, tzinfo=timezone.utc)

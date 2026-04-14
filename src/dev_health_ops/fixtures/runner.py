@@ -381,6 +381,22 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 store.insert_incidents, incidents, allow_parallel=allow_parallel_inserts
             )
 
+            # 6c. Security alerts
+            security_alerts = generator.generate_security_alerts(
+                [repo], count_per_repo=15, days=ns.days
+            )
+            if hasattr(store, "insert_security_alerts"):
+                await _insert_batches(
+                    store.insert_security_alerts,
+                    security_alerts,
+                    allow_parallel=allow_parallel_inserts,
+                )
+                logging.info(
+                    "Inserted %d synthetic security alerts for repo %s.",
+                    len(security_alerts),
+                    r_name,
+                )
+
             # 6b. TestOps raw data (ci_job_runs, test results, coverage)
             if hasattr(store, "insert_ci_job_runs"):
                 job_runs = generator.generate_ci_job_runs(pipeline_runs, org_id=org_id)

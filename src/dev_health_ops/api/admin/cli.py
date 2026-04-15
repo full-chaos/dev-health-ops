@@ -349,7 +349,9 @@ def billing_sync_stripe(ns: argparse.Namespace) -> int:
 
 
 async def _bundles_create_async(ns: argparse.Namespace) -> int:
-    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
     from dev_health_ops.models.billing import FeatureBundle
 
     features = [f.strip() for f in ns.features.split(",") if f.strip()]

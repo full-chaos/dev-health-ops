@@ -27,6 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 
+class FeatureBundleIntegrityError(RuntimeError):
+    """Raised when FeatureBundle rows reference feature keys not in STANDARD_FEATURES."""
+
+
 def _known_feature_keys() -> frozenset[str]:
     """Return the canonical set of feature keys from STANDARD_FEATURES."""
     from dev_health_ops.models.licensing import STANDARD_FEATURES  # noqa: PLC0415
@@ -47,8 +51,7 @@ def validate_bundle_feature_keys(features: list[str]) -> None:
     for key in features:
         if key not in known:
             raise ValueError(
-                f"Unknown feature key {key!r}. "
-                f"Valid keys are: {sorted(known)}"
+                f"Unknown feature key {key!r}. Valid keys are: {sorted(known)}"
             )
 
 
@@ -65,16 +68,14 @@ async def validate_bundle_keys(session: AsyncSession) -> None:
         session: async SQLAlchemy session with access to the feature_bundles table.
 
     Raises:
-        RuntimeError: if unknown keys are found and ALLOW_STALE_FEATURE_BUNDLES != "1".
+        FeatureBundleIntegrityError: if unknown keys are found and ALLOW_STALE_FEATURE_BUNDLES != "1".
     """
     from dev_health_ops.models.billing import FeatureBundle  # noqa: PLC0415
 
     known = _known_feature_keys()
     allow_stale = os.getenv("ALLOW_STALE_FEATURE_BUNDLES", "0").strip() == "1"
 
-    result = await session.execute(
-        select(FeatureBundle.key, FeatureBundle.features)
-    )
+    result = await session.execute(select(FeatureBundle.key, FeatureBundle.features))
     rows = result.all()
 
     violations: list[tuple[str, str]] = []  # (bundle_key, bad_feature_key)
@@ -90,10 +91,7 @@ async def validate_bundle_keys(session: AsyncSession) -> None:
         return
 
     # Format the report
-    lines = [
-        f"  bundle={bkey!r} unknown_feature={fkey!r}"
-        for bkey, fkey in violations
-    ]
+    lines = [f"  bundle={bkey!r} unknown_feature={fkey!r}" for bkey, fkey in violations]
     detail = "\n".join(lines)
 
     if allow_stale:
@@ -110,7 +108,7 @@ async def validate_bundle_keys(session: AsyncSession) -> None:
         len(violations),
         detail,
     )
-    raise RuntimeError(
+    raise FeatureBundleIntegrityError(
         f"FeatureBundle integrity check failed: {len(violations)} unknown feature key(s). "
         f"Set ALLOW_STALE_FEATURE_BUNDLES=1 to bypass."
     )

@@ -688,4 +688,6 @@ STANDARD_FEATURES = [
 
 # Re-export get_features_for_tier for callers that import from models.licensing.
 # The canonical definition lives in licensing.types to avoid circular imports.
-from dev_health_ops.licensing.types import get_features_for_tier as get_features_for_tier  # noqa: E402,F401
+from dev_health_ops.licensing.types import (
+    get_features_for_tier as get_features_for_tier,
+)  # noqa: E402,F401

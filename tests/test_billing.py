@@ -799,7 +799,9 @@ def test_get_tier_price_id():
 
 def test_validate_bundle_feature_keys_valid():
     """Creating a bundle with known keys succeeds."""
-    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
 
     # "git_sync" and "api_access" are both in STANDARD_FEATURES
     validate_bundle_feature_keys(["git_sync", "api_access"])
@@ -807,7 +809,9 @@ def test_validate_bundle_feature_keys_valid():
 
 def test_validate_bundle_feature_keys_unknown_raises():
     """Creating a bundle with an unknown key raises ValueError naming the key."""
-    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
 
     with pytest.raises(ValueError) as exc_info:
         validate_bundle_feature_keys(["git_sync", "totally_fake_feature"])
@@ -817,14 +821,18 @@ def test_validate_bundle_feature_keys_unknown_raises():
 
 def test_validate_bundle_feature_keys_empty_succeeds():
     """Empty feature list is valid (no keys to check)."""
-    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
 
     validate_bundle_feature_keys([])
 
 
 def test_validate_bundle_feature_keys_all_standard():
     """All 25 STANDARD_FEATURES keys pass validation."""
-    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
     from dev_health_ops.models.licensing import STANDARD_FEATURES
 
     all_keys = [key for key, *_rest in STANDARD_FEATURES]
@@ -873,7 +881,10 @@ async def test_validate_bundle_keys_stale_raises():
     with pytest.raises(RuntimeError) as exc_info:
         await validate_bundle_keys(mock_session)
 
-    assert "old_removed_feature" in str(exc_info.value) or "integrity check failed" in str(exc_info.value).lower()
+    assert (
+        "old_removed_feature" in str(exc_info.value)
+        or "integrity check failed" in str(exc_info.value).lower()
+    )
 
 
 @pytest.mark.asyncio

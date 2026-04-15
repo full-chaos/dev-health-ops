@@ -310,14 +310,15 @@ async def lifespan(app: FastAPI):
     if postgres_uri:
         try:
             from dev_health_ops.api.billing.bundle_validation import (
+                FeatureBundleIntegrityError,
                 validate_bundle_keys,
             )
             from dev_health_ops.db import get_postgres_session
 
             async with get_postgres_session() as _session:
                 await validate_bundle_keys(_session)
-        except RuntimeError:
-            # validate_bundle_keys already logged; re-raise to abort startup
+        except FeatureBundleIntegrityError:
+            # Integrity check failed; re-raise to abort startup.
             raise
         except Exception as _exc:
             logger.warning(

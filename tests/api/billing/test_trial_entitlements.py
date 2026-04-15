@@ -95,7 +95,7 @@ async def test_trialing_org_gets_team_entitlements(session_maker):
         entitlements = await _get_entitlements(cast(uuid.UUID, org.id), session)
 
     assert entitlements["tier"] == "team"
-    assert entitlements["features"]["team_dashboard"] is True
+    assert entitlements["features"]["investment_view"] is True
     assert entitlements["limits"]["users"] == 20
 
 
@@ -106,7 +106,7 @@ async def test_community_org_gets_community_entitlements(session_maker):
         entitlements = await _get_entitlements(cast(uuid.UUID, org.id), session)
 
     assert entitlements["tier"] == "community"
-    assert entitlements["features"]["team_dashboard"] is False
+    assert entitlements["features"]["investment_view"] is False
     assert entitlements["limits"]["users"] == 5
 
 

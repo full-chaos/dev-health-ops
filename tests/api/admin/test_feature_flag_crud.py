@@ -5,6 +5,7 @@ Verifies:
 - 403 when non-superuser attempts to patch
 - Individual field updates (only is_enabled, only is_beta, only is_deprecated)
 """
+
 from __future__ import annotations
 
 import importlib
@@ -21,7 +22,6 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag
 
-
 _TABLES = [FeatureFlag.__table__]
 
 # Import the actual module (not the re-exported router object)
@@ -30,9 +30,7 @@ _features_router_module = importlib.import_module(
 )
 _features_router = _features_router_module.router
 
-_common_module = importlib.import_module(
-    "dev_health_ops.api.admin.routers.common"
-)
+_common_module = importlib.import_module("dev_health_ops.api.admin.routers.common")
 _get_session = _common_module.get_session
 
 _middleware_module = importlib.import_module("dev_health_ops.api.admin.middleware")
@@ -151,7 +149,7 @@ async def test_patch_only_is_enabled(session_maker, seeded_flag):
     assert response.status_code == 200
     data = response.json()
     assert data["is_enabled"] is False
-    assert data["is_beta"] is False      # unchanged from seed
+    assert data["is_beta"] is False  # unchanged from seed
     assert data["is_deprecated"] is False  # unchanged from seed
 
 
@@ -169,7 +167,7 @@ async def test_patch_only_is_beta(session_maker, seeded_flag):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["is_enabled"] is True    # unchanged from seed
+    assert data["is_enabled"] is True  # unchanged from seed
     assert data["is_beta"] is True
     assert data["is_deprecated"] is False  # unchanged from seed
 
@@ -188,8 +186,8 @@ async def test_patch_only_is_deprecated(session_maker, seeded_flag):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["is_enabled"] is True    # unchanged from seed
-    assert data["is_beta"] is False      # unchanged from seed
+    assert data["is_enabled"] is True  # unchanged from seed
+    assert data["is_beta"] is False  # unchanged from seed
     assert data["is_deprecated"] is True
 
 

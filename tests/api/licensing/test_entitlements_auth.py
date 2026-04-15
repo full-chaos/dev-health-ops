@@ -5,6 +5,7 @@ Verifies:
 - 403 when authenticated but not a member of the requested org
 - 200 when authenticated org member
 """
+
 from __future__ import annotations
 
 import importlib
@@ -23,9 +24,10 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.users import Organization
 
-
 # Use importlib to get the actual module (not the re-exported router object)
-_licensing_router_module = importlib.import_module("dev_health_ops.api.licensing.router")
+_licensing_router_module = importlib.import_module(
+    "dev_health_ops.api.licensing.router"
+)
 licensing_router = _licensing_router_module.router
 
 
@@ -78,7 +80,9 @@ def _make_postgres_patcher(session_maker):
 
 
 @pytest.mark.asyncio
-async def test_entitlements_unauthenticated_returns_401(session_maker, seeded_org, monkeypatch):
+async def test_entitlements_unauthenticated_returns_401(
+    session_maker, seeded_org, monkeypatch
+):
     """No Authorization header → 401."""
     app = FastAPI()
     app.include_router(licensing_router)
@@ -97,7 +101,9 @@ async def test_entitlements_unauthenticated_returns_401(session_maker, seeded_or
 
 
 @pytest.mark.asyncio
-async def test_entitlements_wrong_org_returns_403(session_maker, seeded_org, monkeypatch):
+async def test_entitlements_wrong_org_returns_403(
+    session_maker, seeded_org, monkeypatch
+):
     """Authenticated user whose org_id != requested org_id → 403."""
     other_org_id = str(uuid.uuid4())
     user = AuthenticatedUser(
@@ -126,7 +132,9 @@ async def test_entitlements_wrong_org_returns_403(session_maker, seeded_org, mon
 
 
 @pytest.mark.asyncio
-async def test_entitlements_org_member_returns_200(session_maker, seeded_org, monkeypatch):
+async def test_entitlements_org_member_returns_200(
+    session_maker, seeded_org, monkeypatch
+):
     """Authenticated user whose org_id == requested org_id → 200."""
     user = AuthenticatedUser(
         user_id=str(uuid.uuid4()),

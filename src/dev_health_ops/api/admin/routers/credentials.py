@@ -291,6 +291,8 @@ async def test_connection(
             success, details = await _test_jira_connection(creds)
         elif payload.provider == "linear":
             success, details = await _test_linear_connection(creds)
+        elif payload.provider == "launchdarkly":
+            success, details = await _test_launchdarkly_connection(creds)
         else:
             error = f"Unknown provider: {payload.provider}"
     except Exception as e:
@@ -456,3 +458,18 @@ async def _test_linear_connection(creds: dict) -> tuple[bool, dict]:
             if viewer:
                 return True, {"user": viewer.get("email"), "name": viewer.get("name")}
         return False, {"status": resp.status_code, "error": resp.text[:200]}
+
+
+async def _test_launchdarkly_connection(creds: dict) -> tuple[bool, dict]:
+    from dev_health_ops.connectors.launchdarkly import LaunchDarklyConnector
+
+    api_key = creds.get("api_key")
+    project_key = creds.get("project_key")
+    if not api_key or not project_key:
+        return False, {"error": "Missing required credentials (api_key, project_key)"}
+
+    async with LaunchDarklyConnector(
+        api_key=api_key, project_key=project_key
+    ) as connector:
+        flags = await connector.get_flags(project_key)
+        return True, {"project_key": project_key, "flag_count": len(flags)}

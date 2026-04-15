@@ -38,44 +38,6 @@ class LicensePayload(BaseModel):
     license_id: str | None = None
 
 
-DEFAULT_FEATURES: dict[LicenseTier, dict[str, bool]] = {
-    LicenseTier.COMMUNITY: {
-        "basic_analytics": True,
-        "investment_view": True,
-        "team_dashboard": False,
-        "scheduled_jobs": False,
-        "sso": False,
-        "audit_log": False,
-        "ip_allowlist": False,
-        "retention_policies": False,
-        "custom_integrations": False,
-        "priority_support": False,
-    },
-    LicenseTier.TEAM: {
-        "basic_analytics": True,
-        "investment_view": True,
-        "team_dashboard": True,
-        "scheduled_jobs": True,
-        "sso": False,
-        "audit_log": False,
-        "ip_allowlist": False,
-        "retention_policies": False,
-        "custom_integrations": True,
-        "priority_support": False,
-    },
-    LicenseTier.ENTERPRISE: {
-        "basic_analytics": True,
-        "investment_view": True,
-        "team_dashboard": True,
-        "scheduled_jobs": True,
-        "sso": True,
-        "audit_log": True,
-        "ip_allowlist": True,
-        "retention_policies": True,
-        "custom_integrations": True,
-        "priority_support": True,
-    },
-}
 
 DEFAULT_LIMITS: dict[LicenseTier, LicenseLimits] = {
     LicenseTier.COMMUNITY: LicenseLimits(
@@ -92,3 +54,30 @@ GRACE_DAYS: dict[LicenseTier, int] = {
     LicenseTier.TEAM: 14,
     LicenseTier.ENTERPRISE: 30,
 }
+
+# Tier ordering for comparison (higher index = higher tier)
+_TIER_ORDER: list[LicenseTier] = [
+    LicenseTier.COMMUNITY,
+    LicenseTier.TEAM,
+    LicenseTier.ENTERPRISE,
+]
+
+
+def get_features_for_tier(tier: LicenseTier) -> dict[str, bool]:
+    """Return a feature-key → enabled dict for the given tier.
+
+    A feature is enabled when its ``min_tier`` is <= the requested tier.
+    This is the single source of truth replacing the deleted ``DEFAULT_FEATURES``.
+    Lazily imports STANDARD_FEATURES from models.licensing to avoid circular imports.
+    """
+    # Lazy import to break the circular dependency:
+    # models/licensing.py imports licensing.types → licensing/__init__ → gating.py
+    # → models/licensing.py (circular if imported at module level)
+    from dev_health_ops.models.licensing import STANDARD_FEATURES  # noqa: PLC0415
+
+    tier_index = _TIER_ORDER.index(tier) if tier in _TIER_ORDER else 0
+    result: dict[str, bool] = {}
+    for key, _name, _category, min_tier, _desc in STANDARD_FEATURES:
+        min_index = _TIER_ORDER.index(min_tier) if min_tier in _TIER_ORDER else 0
+        result[key] = tier_index >= min_index
+    return result

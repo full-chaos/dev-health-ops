@@ -18,6 +18,9 @@ from dev_health_ops.metrics.schemas import (
     CommitMetricsRecord,
     DeployMetricsDailyRecord,
     DORAMetricsRecord,
+    FeatureFlagEventRecord,
+    FeatureFlagLinkRecord,
+    FeatureFlagRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
@@ -27,10 +30,12 @@ from dev_health_ops.metrics.schemas import (
     InvestmentExplanationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    ReleaseImpactDailyRecord,
     RepoComplexityDaily,
     RepoMetricsDailyRecord,
     ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
+    TelemetrySignalBucketRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
     WorkGraphPRCommitRecord,
@@ -305,6 +310,35 @@ class BaseMetricsSink(ABC):
     @abstractmethod
     def write_issue_type_metrics(self, rows: Sequence[IssueTypeMetricsRecord]) -> None:
         """Write aggregated metrics by issue type."""
+        pass
+
+    @abstractmethod
+    def write_feature_flags(self, rows: Sequence[FeatureFlagRecord]) -> None:
+        """Write feature flag registry records."""
+        pass
+
+    @abstractmethod
+    def write_feature_flag_events(self, rows: Sequence[FeatureFlagEventRecord]) -> None:
+        """Write feature flag lifecycle event records."""
+        pass
+
+    @abstractmethod
+    def write_feature_flag_links(self, rows: Sequence[FeatureFlagLinkRecord]) -> None:
+        """Write feature flag linkage records."""
+        pass
+
+    @abstractmethod
+    def write_telemetry_signal_buckets(
+        self, rows: Sequence[TelemetrySignalBucketRecord]
+    ) -> None:
+        """Write aggregated telemetry signal bucket records."""
+        pass
+
+    @abstractmethod
+    def write_release_impact_daily(
+        self, rows: Sequence[ReleaseImpactDailyRecord]
+    ) -> None:
+        """Write daily release impact rollup records."""
         pass
 
     # -------------------------------------------------------------------------

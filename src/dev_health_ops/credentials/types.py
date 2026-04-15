@@ -138,3 +138,36 @@ class AtlassianCredentials(ProviderCredentials):
             raise ValueError("Atlassian credentials require 'api_token'")
         if not self.email:
             raise ValueError("Atlassian credentials require 'email'")
+
+
+@dataclass
+class LaunchDarklyCredentials(ProviderCredentials):
+    """LaunchDarkly provider credentials.
+
+    Supports API key authentication with optional project/environment scoping.
+    """
+
+    provider: str = "launchdarkly"
+    api_key: str = ""
+    project_key: str | None = None
+    environment: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.api_key:
+            raise ValueError("LaunchDarkly credentials require 'api_key'")
+
+
+@dataclass
+class TelemetryCredentials(ProviderCredentials):
+    """Telemetry provider credentials.
+
+    Supports API key authentication with optional schema version.
+    """
+
+    provider: str = "telemetry"
+    api_key: str = ""
+    schema_version: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.api_key:
+            raise ValueError("Telemetry credentials require 'api_key'")

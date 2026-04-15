@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Entity schemas (provider-agnostic, mirroring internal models)
@@ -79,6 +80,32 @@ class IngestWorkItem(BaseModel):
     url: str | None = None
 
 
+class IngestTelemetrySignalBucket(BaseModel):
+    signal_type: str  # e.g. friction.rage_click, error.unhandled, adoption.feature_used
+    signal_count: int
+    session_count: int
+    unique_pseudonymous_count: int | None = None
+    endpoint_group: str = ""
+    environment: str
+    repo_id: UUID | str = ""
+    release_ref: str = ""
+    bucket_start: datetime
+    bucket_end: datetime
+    is_sampled: bool = False
+    schema_version: str = "1.0"
+    dedupe_key: str
+
+    @field_validator("repo_id", mode="before")
+    @classmethod
+    def validate_repo_id(cls, v: Any) -> UUID | str:
+        if not v or v == "":
+            return ""
+        try:
+            return UUID(str(v))
+        except ValueError:
+            raise ValueError(f"repo_id must be a valid UUID, got: {v!r}")
+
+
 class IngestDeployment(BaseModel):
     deployment_id: str
     status: str
@@ -87,6 +114,8 @@ class IngestDeployment(BaseModel):
     finished_at: datetime | None = None
     deployed_at: datetime | None = None
     pull_request_number: int | None = None
+    release_ref: str | None = None
+    release_ref_confidence: float | None = None
 
 
 class IngestIncident(BaseModel):
@@ -120,6 +149,11 @@ class IngestWorkItemsRequest(BaseModel):
     org_id: str
     items: list[IngestWorkItem] = Field(..., min_length=1, max_length=1000)
     # No repo_url — work items are project-scoped, not repo-scoped
+
+
+class IngestTelemetryRequest(BaseModel):
+    org_id: str
+    items: list[IngestTelemetrySignalBucket] = Field(..., min_length=1, max_length=5000)
 
 
 class IngestDeploymentsRequest(IngestBatchRequest):

@@ -108,5 +108,18 @@ def _register_builtins() -> None:
 
     register_provider("linear", _linear_factory)
 
+    # Stub providers — connectors not yet implemented
+    def _launchdarkly_factory() -> Provider:
+        raise NotImplementedError(
+            "LaunchDarkly connector not yet implemented (CHAOS-822)"
+        )
+
+    register_provider("launchdarkly", _launchdarkly_factory)
+
+    def _telemetry_factory() -> Provider:
+        raise NotImplementedError("Telemetry connector not yet implemented (CHAOS-823)")
+
+    register_provider("telemetry", _telemetry_factory)
+
 
 _register_builtins()

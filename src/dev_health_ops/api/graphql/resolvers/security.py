@@ -27,6 +27,8 @@ import math
 from datetime import date, datetime, timezone
 from typing import Any
 
+from dev_health_ops.utils.datetime import utc_today
+
 from ..authz import require_org_id
 from ..context import GraphQLContext
 from ..models.inputs import SecurityAlertFilterInput, SecurityPaginationInput
@@ -423,7 +425,7 @@ async def resolve_security_overview(
         try:
             return date.fromisoformat(str(val))
         except (ValueError, TypeError):
-            return date.today()
+            return utc_today()
 
     trend = [
         TrendPoint(

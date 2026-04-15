@@ -29,6 +29,7 @@ from dev_health_ops.processors.fetch_utils import (
 from dev_health_ops.processors.fetch_utils import (
     safe_parse_datetime as _coerce_datetime,
 )
+from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.processors.storage_protocol import GitSyncStore
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
@@ -300,6 +301,12 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
     deployments = []
     if not hasattr(gh_repo, "get_deployments"):
         return deployments
+    release_objects = []
+    if hasattr(gh_repo, "get_releases"):
+        try:
+            release_objects = list(gh_repo.get_releases()[:max_deployments])
+        except Exception as exc:
+            logging.debug("Failed to fetch GitHub releases for release_ref: %s", exc)
     try:
         raw_deployments = list(gh_repo.get_deployments()[:max_deployments])
     except Exception as exc:
@@ -312,6 +319,11 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
             continue
         if since is not None and created_at.astimezone(timezone.utc) < since:
             continue
+        enrichment = get_release_ref_enrichment(
+            dep,
+            "github",
+            releases=release_objects,
+        )
         deployments.append(
             Deployment(
                 repo_id=repo_id,
@@ -323,6 +335,8 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
                 deployed_at=created_at,
                 merged_at=None,
                 pull_request_number=None,
+                release_ref=enrichment.release_ref,
+                release_ref_confidence=enrichment.confidence,
             )
         )
     return deployments

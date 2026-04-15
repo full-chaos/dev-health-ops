@@ -1097,7 +1097,6 @@ async def test_g4_new_subscription_creates_org_license(bridge_db):
     stripe_price_id = "price_enterprise_monthly"
 
     async with bridge_db() as session:
-
         from dev_health_ops.models.billing import BillingPrice
         from dev_health_ops.models.users import Organization
 

@@ -860,10 +860,14 @@ class SyntheticDataGenerator:
         days: int = 30,
         deployments_per_day: int = 2,
         pr_numbers: list[int] | None = None,
+        release_refs: list[str] | None = None,
     ) -> list[Deployment]:
         deployments = []
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
+
+        if not release_refs:
+            release_refs = self._default_release_refs(days)
 
         deploy_index = 0
         current_date = start_date
@@ -885,6 +889,8 @@ class SyntheticDataGenerator:
                 if pr_numbers:
                     pr_number = random.choice(pr_numbers)
 
+                release_ref = random.choice(release_refs)
+
                 deploy_index += 1
                 deployments.append(
                     Deployment(
@@ -897,6 +903,8 @@ class SyntheticDataGenerator:
                         deployed_at=deployed_at,
                         merged_at=merged_at,
                         pull_request_number=pr_number,
+                        release_ref=release_ref,
+                        release_ref_confidence=1.0,
                     )
                 )
             current_date += timedelta(days=1)
@@ -3079,6 +3087,7 @@ class SyntheticDataGenerator:
         org_id: str = "",
         issue_ids: list[str] | None = None,
         pr_numbers: list[int] | None = None,
+        release_refs: list[str] | None = None,
     ) -> list[FeatureFlagLinkRecord]:
         """Generate flag-to-work-item links."""
         links: list[FeatureFlagLinkRecord] = []
@@ -3091,12 +3100,17 @@ class SyntheticDataGenerator:
         if pr_numbers:
             for prn in pr_numbers:
                 targets.append(("pr", f"{self.repo_id}#pr{prn}"))
+        if release_refs:
+            for release_ref in release_refs:
+                targets.append(("release", release_ref))
 
         if not targets:
             for i in range(min(len(flags), 10)):
                 targets.append(("issue", f"{self.repo_name}-{100 + i}"))
             for i in range(min(len(flags), 5)):
                 targets.append(("pr", f"{self.repo_id}#pr{i + 1}"))
+            for release_ref in self._default_release_refs(max(len(flags), 7)):
+                targets.append(("release", release_ref))
 
         confidence_profiles = [
             (1.0, "native", "api_link"),
@@ -3123,7 +3137,13 @@ class SyntheticDataGenerator:
                         target_id=target_id,
                         provider=flag.provider,
                         link_source=link_source,
-                        link_type="controls" if target_type == "pr" else "tracks",
+                        link_type=(
+                            "controls"
+                            if target_type == "pr"
+                            else "rollout"
+                            if target_type == "release"
+                            else "tracks"
+                        ),
                         evidence_type=evidence_type,
                         confidence=confidence,
                         valid_from=flag_created,
@@ -3148,7 +3168,7 @@ class SyntheticDataGenerator:
         start = now - timedelta(days=days)
 
         if not release_refs:
-            release_refs = [f"v1.{i}.0" for i in range(max(1, days // 7))]
+            release_refs = self._default_release_refs(days)
 
         environments = ["production", "staging"]
         endpoint_groups = ["/api/checkout", "/api/auth", "/api/search", None]
@@ -3215,7 +3235,7 @@ class SyntheticDataGenerator:
         computed_at = now
 
         if not release_refs:
-            release_refs = [f"v1.{i}.0" for i in range(max(1, days // 7))]
+            release_refs = self._default_release_refs(days)
 
         environments = ["production", "staging"]
 
@@ -3264,3 +3284,6 @@ class SyntheticDataGenerator:
                     )
 
         return records
+
+    def _default_release_refs(self, days: int) -> list[str]:
+        return [f"v1.{i}.0" for i in range(max(1, days // 7))]

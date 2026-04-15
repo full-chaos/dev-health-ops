@@ -803,9 +803,7 @@ def test_get_tier_price_id():
 @pytest_asyncio.fixture
 async def billing_cascade_db(tmp_path):
     """SQLite DB with FK enforcement, containing billing + subscription tables."""
-    from pathlib import Path
 
-    import sqlalchemy as sa
     from sqlalchemy import event as sa_event
     from sqlalchemy.ext.asyncio import (
         AsyncSession,

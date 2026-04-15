@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS feature_flag (
     archived_at Nullable(DateTime64(3, 'UTC')),
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (org_id, provider, flag_key);
+ORDER BY (org_id, provider, project_key, flag_key);
 
 CREATE TABLE IF NOT EXISTS feature_flag_event (
     org_id String DEFAULT 'default',

@@ -170,7 +170,7 @@ class LaunchDarklyConnector:
     # ------------------------------------------------------------------
 
     async def get_flags(self, project_key: str | None = None) -> list[dict]:
-        """Fetch all feature flags for a project.
+        """Fetch all feature flags for a project, paginating through all pages.
 
         :param project_key: LD project key; falls back to ``self.default_project_key``.
         :returns: List of raw flag dicts from the LD API.
@@ -181,10 +181,21 @@ class LaunchDarklyConnector:
                 "project_key is required (pass it or set default_project_key)"
             )
 
-        data = await self._request("GET", f"/flags/{key}")
-        items = data.get("items", [])
-        logger.info("Fetched %d flags for project %s", len(items), key)
-        return items
+        all_items: list[dict] = []
+        offset = 0
+        limit = 50
+        while True:
+            data = await self._request(
+                "GET", f"/flags/{key}", params={"limit": limit, "offset": offset}
+            )
+            items = data.get("items", [])
+            all_items.extend(items)
+            total = data.get("totalCount", len(all_items))
+            if len(all_items) >= total or len(items) < limit:
+                break
+            offset += limit
+        logger.info("Fetched %d flags for project %s", len(all_items), key)
+        return all_items
 
     async def get_audit_log(
         self,

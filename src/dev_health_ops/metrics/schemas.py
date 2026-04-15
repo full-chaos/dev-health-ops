@@ -553,17 +553,18 @@ class ReleaseImpactDailyRecord:
     release_post_friction_rate: float | None
     release_error_rate_delta: float | None
     release_post_error_rate: float | None
-    time_to_first_user_issue_after_release_hours: float | None
+    time_to_first_user_issue_after_release: float | None
     release_impact_confidence_score: float | None
-    coverage_ratio: float | None
+    release_impact_coverage_ratio: float | None
     flag_exposure_rate: float | None
     flag_activation_rate: float | None
     flag_reliability_guardrail: float | None
     flag_friction_delta: float | None
-    flag_rollout_half_life_hours: float | None
+    flag_rollout_half_life: float | None
     flag_churn_rate: float | None
     issue_to_release_impact_link_rate: float | None
-    rollback_or_disable_after_impact_spike_count: int | None
+    rollback_or_disable_after_impact_spike: int | None
+    coverage_ratio: float | None
     missing_required_fields_count: int = 0
     instrumentation_change_flag: bool = False
     data_completeness: float = 1.0

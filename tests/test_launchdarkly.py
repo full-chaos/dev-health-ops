@@ -109,10 +109,11 @@ class TestLaunchDarklyConnector:
         mock_response.status_code = 200
         mock_response.headers = {"X-RateLimit-Route-Remaining": "100"}
         mock_response.json.return_value = {
+            "totalCount": 2,
             "items": [
                 {"key": "flag-1", "name": "Flag One", "kind": "boolean"},
                 {"key": "flag-2", "name": "Flag Two", "kind": "multivariate"},
-            ]
+            ],
         }
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -124,7 +125,7 @@ class TestLaunchDarklyConnector:
         assert len(flags) == 2
         assert flags[0]["key"] == "flag-1"
         mock_client.request.assert_called_once_with(
-            "GET", "/flags/default", params=None
+            "GET", "/flags/default", params={"limit": 50, "offset": 0}
         )
 
     @pytest.mark.asyncio

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Entity schemas (provider-agnostic, mirroring internal models)
@@ -86,13 +87,23 @@ class IngestTelemetrySignalBucket(BaseModel):
     unique_pseudonymous_count: int | None = None
     endpoint_group: str = ""
     environment: str
-    repo_id: str = ""
+    repo_id: UUID | str = ""
     release_ref: str = ""
     bucket_start: datetime
     bucket_end: datetime
     is_sampled: bool = False
     schema_version: str = "1.0"
     dedupe_key: str
+
+    @field_validator("repo_id", mode="before")
+    @classmethod
+    def validate_repo_id(cls, v: Any) -> UUID | str:
+        if not v or v == "":
+            return ""
+        try:
+            return UUID(str(v))
+        except ValueError:
+            raise ValueError(f"repo_id must be a valid UUID, got: {v!r}")
 
 
 class IngestDeployment(BaseModel):

@@ -177,7 +177,7 @@ async def ingest_telemetry(
             unique_pseudonymous_count=item.unique_pseudonymous_count,
             endpoint_group=item.endpoint_group or None,
             environment=item.environment,
-            repo_id=uuid.UUID(item.repo_id) if item.repo_id else None,
+            repo_id=item.repo_id if isinstance(item.repo_id, uuid.UUID) else None,
             release_ref=item.release_ref or None,
             bucket_start=item.bucket_start,
             bucket_end=item.bucket_end,

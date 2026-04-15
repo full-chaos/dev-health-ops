@@ -84,11 +84,18 @@ def normalize_audit_events(
 
         target = entry.get("target", {}) or {}
         flag_key = ""
+        environment = ""
         if target:
             resources = target.get("resources", [])
             for res in resources:
                 if not isinstance(res, str):
                     continue
+                # Extract environment from :env/<name>: segment
+                if ":env/" in res:
+                    env_part = res.split(":env/", 1)[1]
+                    environment = (
+                        env_part.split(":", 1)[0] if ":" in env_part else env_part
+                    )
                 if "/flags/" in res:
                     flag_key = res.rsplit("/flags/", 1)[-1]
                     break
@@ -105,7 +112,7 @@ def normalize_audit_events(
             FeatureFlagEventRecord(
                 event_type=event_kind,
                 flag_key=flag_key,
-                environment="",
+                environment=environment,
                 repo_id=None,
                 actor_type=str(actor) if actor else None,
                 prev_state=None,

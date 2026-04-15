@@ -26,6 +26,10 @@ down_revision: str | None = "0005"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# Alembic reads the four names above via module introspection; declare them
+# as public to quiet `py/unused-global-variable`.
+__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
+
 # Keys seeded by this migration — used in downgrade() to delete only these rows.
 # Must stay in sync with STANDARD_FEATURES in models/licensing.py.
 # Inlined here to avoid importing application code at migration runtime.

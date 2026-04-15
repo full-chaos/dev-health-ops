@@ -30,9 +30,18 @@ router = APIRouter()
 # Jira/Linear only support work-items; Git/CI/CD come from code hosts.
 PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
     "github": ["git", "prs", "cicd", "deployments", "incidents", "work-items"],
-    "gitlab": ["git", "prs", "cicd", "deployments", "incidents", "work-items"],
+    "gitlab": [
+        "git",
+        "prs",
+        "cicd",
+        "deployments",
+        "incidents",
+        "work-items",
+        "feature-flags",
+    ],
     "jira": ["work-items"],
     "linear": ["work-items"],
+    "launchdarkly": ["feature-flags"],
 }
 
 

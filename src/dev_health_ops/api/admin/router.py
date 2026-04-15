@@ -22,6 +22,7 @@ from .routers.credentials import (
     _test_github_connection,
     _test_gitlab_connection,
     _test_jira_connection,
+    _test_launchdarkly_connection,
     _test_linear_connection,
 )
 
@@ -49,5 +50,6 @@ __all__ = [
     "_test_github_connection",
     "_test_gitlab_connection",
     "_test_jira_connection",
+    "_test_launchdarkly_connection",
     "_test_linear_connection",
 ]

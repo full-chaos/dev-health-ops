@@ -80,6 +80,7 @@ def _inject_provider_token(provider: str, token: str) -> None:
     env_var = {
         "github": "GITHUB_TOKEN",
         "gitlab": "GITLAB_TOKEN",
+        "launchdarkly": "LAUNCHDARKLY_API_KEY",
         # Extended provider env var mappings
         "linear": "LINEAR_API_KEY",
         "jira": "JIRA_API_TOKEN",
@@ -96,6 +97,8 @@ def _extract_provider_token(provider: str, credentials: dict[str, Any]) -> str:
         return str(credentials.get("api_key") or credentials.get("apiKey") or "")
     if provider == "jira":
         return str(credentials.get("api_token") or credentials.get("apiToken") or "")
+    if provider == "launchdarkly":
+        return str(credentials.get("api_key") or credentials.get("apiKey") or "")
     # GitHub, GitLab, and others use "token"
     return str(credentials.get("token") or "")
 

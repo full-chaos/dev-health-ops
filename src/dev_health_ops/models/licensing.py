@@ -201,6 +201,11 @@ class OrgFeatureOverride(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    updated_by = Column(
+        GUID(),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     created_at = Column(
         DateTime(timezone=True),
@@ -216,7 +221,8 @@ class OrgFeatureOverride(Base):
 
     organization = relationship("Organization")
     feature = relationship("FeatureFlag")
-    creator = relationship("User")
+    creator = relationship("User", foreign_keys=[created_by])
+    updater = relationship("User", foreign_keys=[updated_by])
 
     __table_args__ = (
         UniqueConstraint("org_id", "feature_id", name="uq_org_feature_override"),
@@ -233,6 +239,7 @@ class OrgFeatureOverride(Base):
         config: dict | None = None,
         reason: str | None = None,
         created_by: uuid.UUID | None = None,
+        updated_by: uuid.UUID | None = None,
     ):
         self.id = uuid.uuid4()
         self.org_id = org_id
@@ -242,6 +249,7 @@ class OrgFeatureOverride(Base):
         self.config = config or {}
         self.reason = reason
         self.created_by = created_by
+        self.updated_by = updated_by
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
 

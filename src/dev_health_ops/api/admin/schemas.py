@@ -559,9 +559,28 @@ class FeatureFlagResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class FeatureFlagUpdateRequest(BaseModel):
+    """Patchable fields for a FeatureFlag row.
+
+    Only is_enabled, is_beta, and is_deprecated may be updated here.
+    key, name, min_tier, and category are immutable via this endpoint.
+    """
+
+    is_enabled: bool | None = None
+    is_beta: bool | None = None
+    is_deprecated: bool | None = None
+
+
 class FeatureOverrideCreate(BaseModel):
     feature_id: str
     is_enabled: bool = True
+    expires_at: datetime | None = None
+    config: dict[str, Any] | None = None
+    reason: str | None = None
+
+
+class FeatureOverrideUpdate(BaseModel):
+    is_enabled: bool | None = None
     expires_at: datetime | None = None
     config: dict[str, Any] | None = None
     reason: str | None = None
@@ -577,6 +596,7 @@ class FeatureOverrideResponse(BaseModel):
     config: dict[str, Any] | None
     reason: str | None
     created_by: str | None
+    updated_by: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

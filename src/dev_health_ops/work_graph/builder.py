@@ -252,10 +252,11 @@ class WorkGraphBuilder:
     def add_release_edge(
         self,
         release_id: str,
-        pr_id: str,
+        target_id: str,
         edge_type: EdgeType,
         confidence: float,
         *,
+        target_type: NodeType = NodeType.PR,
         evidence: str = "",
         provenance: Provenance = Provenance.NATIVE,
         repo_id: uuid.UUID | None = None,
@@ -266,20 +267,59 @@ class WorkGraphBuilder:
             NodeType.RELEASE,
             release_id,
             edge_type,
-            NodeType.PR,
-            pr_id,
+            target_type,
+            target_id,
         )
         edge = WorkGraphEdge(
             edge_id=edge_id,
             source_type=NodeType.RELEASE,
             source_id=release_id,
-            target_type=NodeType.PR,
-            target_id=pr_id,
+            target_type=target_type,
+            target_id=target_id,
             edge_type=edge_type,
             provenance=provenance,
             confidence=confidence,
             evidence=evidence,
             repo_id=repo_id or self.config.repo_id,
+            event_ts=event_ts or self._now,
+        )
+        self._write_edges([edge])
+        return edge
+
+    def add_feature_flag_edge(
+        self,
+        flag_id: str,
+        target_type: NodeType,
+        target_id: str,
+        edge_type: EdgeType,
+        confidence: float,
+        *,
+        evidence: str = "",
+        provenance: Provenance = Provenance.NATIVE,
+        repo_id: uuid.UUID | None = None,
+        provider: str | None = None,
+        event_ts: datetime | None = None,
+    ) -> WorkGraphEdge:
+        """Create an edge from a FEATURE_FLAG node to another graph node."""
+        edge_id = generate_edge_id(
+            NodeType.FEATURE_FLAG,
+            flag_id,
+            edge_type,
+            target_type,
+            target_id,
+        )
+        edge = WorkGraphEdge(
+            edge_id=edge_id,
+            source_type=NodeType.FEATURE_FLAG,
+            source_id=flag_id,
+            target_type=target_type,
+            target_id=target_id,
+            edge_type=edge_type,
+            provenance=provenance,
+            confidence=confidence,
+            evidence=evidence,
+            repo_id=repo_id or self.config.repo_id,
+            provider=provider,
             event_ts=event_ts or self._now,
         )
         self._write_edges([edge])

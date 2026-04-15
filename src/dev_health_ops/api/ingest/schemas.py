@@ -79,6 +79,22 @@ class IngestWorkItem(BaseModel):
     url: str | None = None
 
 
+class IngestTelemetrySignalBucket(BaseModel):
+    signal_type: str  # e.g. friction.rage_click, error.unhandled, adoption.feature_used
+    signal_count: int
+    session_count: int
+    unique_pseudonymous_count: int | None = None
+    endpoint_group: str = ""
+    environment: str
+    repo_id: str = ""
+    release_ref: str = ""
+    bucket_start: datetime
+    bucket_end: datetime
+    is_sampled: bool = False
+    schema_version: str = "1.0"
+    dedupe_key: str
+
+
 class IngestDeployment(BaseModel):
     deployment_id: str
     status: str
@@ -120,6 +136,11 @@ class IngestWorkItemsRequest(BaseModel):
     org_id: str
     items: list[IngestWorkItem] = Field(..., min_length=1, max_length=1000)
     # No repo_url — work items are project-scoped, not repo-scoped
+
+
+class IngestTelemetryRequest(BaseModel):
+    org_id: str
+    items: list[IngestTelemetrySignalBucket] = Field(..., min_length=1, max_length=5000)
 
 
 class IngestDeploymentsRequest(IngestBatchRequest):

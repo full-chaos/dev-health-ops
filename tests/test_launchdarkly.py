@@ -1,7 +1,7 @@
 """Tests for LaunchDarkly connector and processor normalization."""
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -23,7 +23,6 @@ from dev_health_ops.processors.launchdarkly import (
     normalize_audit_events,
     normalize_flags,
 )
-
 
 # ---------------------------------------------------------------------------
 # Connector helpers

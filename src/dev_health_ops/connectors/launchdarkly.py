@@ -6,7 +6,7 @@ lifecycle events (create, update, toggle, rule changes, rollouts).
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import httpx

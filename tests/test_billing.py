@@ -790,3 +790,140 @@ def test_get_tier_price_id():
         reset_price_tier_map()
         assert get_tier_price_id(LicenseTier.TEAM) == "price_t"
         assert get_tier_price_id(LicenseTier.ENTERPRISE) is None
+
+
+# ---------------------------------------------------------------------------
+# FeatureBundle key validation — Layer 1 (write-time)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_bundle_feature_keys_valid():
+    """Creating a bundle with known keys succeeds."""
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+
+    # "git_sync" and "api_access" are both in STANDARD_FEATURES
+    validate_bundle_feature_keys(["git_sync", "api_access"])
+
+
+def test_validate_bundle_feature_keys_unknown_raises():
+    """Creating a bundle with an unknown key raises ValueError naming the key."""
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_bundle_feature_keys(["git_sync", "totally_fake_feature"])
+
+    assert "totally_fake_feature" in str(exc_info.value)
+
+
+def test_validate_bundle_feature_keys_empty_succeeds():
+    """Empty feature list is valid (no keys to check)."""
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+
+    validate_bundle_feature_keys([])
+
+
+def test_validate_bundle_feature_keys_all_standard():
+    """All 25 STANDARD_FEATURES keys pass validation."""
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_feature_keys
+    from dev_health_ops.models.licensing import STANDARD_FEATURES
+
+    all_keys = [key for key, *_rest in STANDARD_FEATURES]
+    validate_bundle_feature_keys(all_keys)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# FeatureBundle key validation — Layer 2 (startup-time)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_clean_db_passes():
+    """Startup check passes when all bundles reference known keys."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("core-bundle", ["git_sync", "basic_analytics"]),
+        ("team-bundle", ["investment_view", "api_access"]),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    # Should not raise
+    await validate_bundle_keys(mock_session)
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_stale_raises():
+    """Startup check raises RuntimeError when a stale key is found."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("good-bundle", ["git_sync"]),
+        ("bad-bundle", ["git_sync", "old_removed_feature"]),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await validate_bundle_keys(mock_session)
+
+    assert "old_removed_feature" in str(exc_info.value) or "integrity check failed" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_allow_stale_env_var():
+    """ALLOW_STALE_FEATURE_BUNDLES=1 causes stale keys to be logged as warnings
+    instead of raising RuntimeError."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("bad-bundle", ["unknown_key_xyz"]),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch.dict("os.environ", {"ALLOW_STALE_FEATURE_BUNDLES": "1"}):
+        # Should NOT raise — only warn
+        await validate_bundle_keys(mock_session)
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_empty_bundles_passes():
+    """Startup check passes when no bundles exist."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = []
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    await validate_bundle_keys(mock_session)
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_null_features_passes():
+    """Bundles with null/empty features list are skipped without error."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("empty-bundle", []),
+        ("null-bundle", None),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    await validate_bundle_keys(mock_session)

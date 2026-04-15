@@ -3,9 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.licensing.types import LicenseTier
 
@@ -33,7 +35,13 @@ TIER_RANK = {
 
 
 @router.get("/entitlements/{org_id}", response_model=EntitlementsResponse)
-async def get_entitlements(org_id: str) -> EntitlementsResponse:
+async def get_entitlements(
+    org_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> EntitlementsResponse:
+    # Org-member auth: superusers may query any org; others only their own.
+    if not current_user.is_superuser and current_user.org_id != org_id:
+        raise HTTPException(status_code=403, detail="Access forbidden")
     from sqlalchemy import select
 
     from dev_health_ops.models.licensing import (

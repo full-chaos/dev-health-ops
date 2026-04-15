@@ -6,6 +6,7 @@ import logging
 import os
 import uuid
 
+from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,13 @@ async def _persist_deployments(store: ClickHouseStore, items: list[dict]) -> Non
         item.pop("_org_id", None)
         item.pop("_ingestion_id", None)
         item["repo_id"] = _repo_id_from_url(repo_url)
+        enrichment = get_release_ref_enrichment(item, "generic")
+        item["release_ref"] = item.get("release_ref") or enrichment.release_ref
+        item["release_ref_confidence"] = (
+            item.get("release_ref_confidence")
+            if item.get("release_ref_confidence") is not None
+            else enrichment.confidence
+        )
         rows.append(item)
     if rows:
         await store.insert_deployments(rows)

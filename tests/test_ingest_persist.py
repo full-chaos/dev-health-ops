@@ -166,6 +166,8 @@ class TestPersistDeployments:
         store.insert_deployments.assert_awaited_once()
         call_args = store.insert_deployments.call_args[0][0]
         assert "repo_id" in call_args[0]
+        assert call_args[0]["release_ref"] == "d-1"
+        assert call_args[0]["release_ref_confidence"] == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio

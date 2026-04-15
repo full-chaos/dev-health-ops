@@ -534,8 +534,7 @@ def run_sync_config(
                 )
 
             if not gitlab_targets:
-                completed_at = datetime.now(timezone.utc)
-                duration_seconds = int((completed_at - started_at).total_seconds())
+                pass  # feature-flags-only sync handled above
             else:
                 project_id = sync_options.get("project_id")
                 if project_id is None:

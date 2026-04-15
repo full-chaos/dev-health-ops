@@ -1154,12 +1154,19 @@ class TestOrgFeatureOverrideUpdatedBy:
 
     @pytest_asyncio.fixture
     async def session_maker(self, tmp_path):
-        import importlib
 
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            async_sessionmaker,
+            create_async_engine,
+        )
 
         from dev_health_ops.models.git import Base
-        from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
+        from dev_health_ops.models.licensing import (
+            FeatureFlag,
+            OrgFeatureOverride,
+            OrgLicense,
+        )
         from dev_health_ops.models.users import Membership, Organization, User
 
         db_path = tmp_path / "override-updated-by.db"
@@ -1195,14 +1202,22 @@ class TestOrgFeatureOverrideUpdatedBy:
         feature_id = uuid.uuid4()
 
         async with session_maker() as session:
-            org = Organization(id=org_id, slug="test-org", name="Test Org", tier="enterprise")
-            user = User(id=user_id, email="super@example.com", is_superuser=True, is_active=True)
+            org = Organization(
+                id=org_id, slug="test-org", name="Test Org", tier="enterprise"
+            )
+            user = User(
+                id=user_id, email="super@example.com", is_superuser=True, is_active=True
+            )
             ff = FeatureFlag(key="test_feat", name="Test Feat")
             ff.id = feature_id
             session.add_all([org, user, ff])
             await session.commit()
 
-        return {"org_id": str(org_id), "user_id": str(user_id), "feature_id": str(feature_id)}
+        return {
+            "org_id": str(org_id),
+            "user_id": str(user_id),
+            "feature_id": str(feature_id),
+        }
 
     @pytest_asyncio.fixture
     async def client(self, session_maker, seeded):
@@ -1250,7 +1265,11 @@ class TestOrgFeatureOverrideUpdatedBy:
         """POST /feature-overrides sets created_by to the acting superuser."""
         resp = await client.post(
             f"/api/v1/admin/orgs/{seeded['org_id']}/feature-overrides",
-            json={"feature_id": seeded["feature_id"], "is_enabled": True, "reason": "trial"},
+            json={
+                "feature_id": seeded["feature_id"],
+                "is_enabled": True,
+                "reason": "trial",
+            },
         )
         assert resp.status_code == 201, resp.text
         data = resp.json()

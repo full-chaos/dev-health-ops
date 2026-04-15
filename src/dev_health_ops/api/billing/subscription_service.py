@@ -361,9 +361,8 @@ class SubscriptionService:
                 return
             if plan is None:
                 logger.warning(
-                    "BillingPlan %s not found for subscription org_id=%s; "
+                    "BillingPlan not found for subscription org_id=%s; "
                     "skipping org-license sync",
-                    billing_plan_id,
                     org_id,
                 )
                 return

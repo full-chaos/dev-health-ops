@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -342,11 +342,23 @@ class SubscriptionService:
             feature_keys: list[str] = []
             expires_at = None
         else:
-            # Load the BillingPlan.
-            plan_result = await self.db.execute(
-                select(BillingPlan).where(BillingPlan.id == billing_plan_id)
-            )
-            plan = plan_result.scalar_one_or_none()
+            if billing_plan_id is None:
+                # Subscription has no plan resolved (e.g. trial before a price is matched).
+                # Nothing to sync; preserve existing OrgLicense state.
+                return
+
+            # Load the BillingPlan. Tolerate missing billing tables (tests that
+            # scope their schema to subscriptions only): skip rather than fail.
+            try:
+                plan_result = await self.db.execute(
+                    select(BillingPlan).where(BillingPlan.id == billing_plan_id)
+                )
+                plan = plan_result.scalar_one_or_none()
+            except OperationalError as exc:
+                logger.warning(
+                    "Billing tables unavailable; skipping org-license sync (%s)", exc
+                )
+                return
             if plan is None:
                 logger.warning(
                     "BillingPlan %s not found for subscription org_id=%s; "

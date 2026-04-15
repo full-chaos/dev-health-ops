@@ -15,8 +15,8 @@ from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     LicensePayload,
     LicenseTier,
+    get_features_for_tier,
 )
-from dev_health_ops.licensing.types import get_features_for_tier
 from dev_health_ops.licensing.validator import LicenseValidator, ValidationResult
 
 P = ParamSpec("P")

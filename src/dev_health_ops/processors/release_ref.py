@@ -109,7 +109,7 @@ def _extract_explicit_confidence(deployment: Any) -> float:
             return max(0.0, min(1.0, float(confidence)))
     except (TypeError, ValueError):
         # Invalid confidence values are treated as unknown and fall back to the default below.
-        confidence = None
+        pass
     return 1.0
 
 

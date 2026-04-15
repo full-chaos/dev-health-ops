@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import importlib
+import sys
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-# Import the router module (not the APIRouter object exported by __init__)
-import dev_health_ops.api.ingest.router as ingest_router
 from dev_health_ops.api.main import app
 
-_router_mod = ingest_router
+# __init__.py exports the APIRouter as "router", shadowing the module name.
+# Force-load the actual module so monkeypatch can reach _persist_telemetry.
+importlib.import_module("dev_health_ops.api.ingest.router")
+_router_mod = sys.modules["dev_health_ops.api.ingest.router"]
 
 
 @pytest_asyncio.fixture

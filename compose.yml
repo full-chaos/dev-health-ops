@@ -93,7 +93,7 @@ services:
       EMAIL_API_KEY: ${EMAIL_API_KEY:-}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
       # Observability — OpenTelemetry (traces → SigNoz)
-      OTEL_ENABLED: ${OTEL_ENABLED:-true}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-signoz-otel-collector:4317}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-dev-health-ops}
       # Observability — Error reporting (Sentry SDK → BugSink)

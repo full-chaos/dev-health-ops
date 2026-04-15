@@ -1714,6 +1714,8 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                     value = data.get(col)
                     if isinstance(value, datetime):
                         value = _dt_to_clickhouse_datetime(value)
+                    elif isinstance(value, uuid.UUID):
+                        value = str(value)
                     values.append(value)
                 matrix.append(values)
             self.client.insert(table, matrix, column_names=columns)

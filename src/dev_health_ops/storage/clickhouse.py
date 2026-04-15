@@ -915,6 +915,10 @@ class ClickHouseStore:
                         ),
                         "merged_at": self._normalize_datetime(item.get("merged_at")),
                         "pull_request_number": item.get("pull_request_number"),
+                        "release_ref": str(item.get("release_ref") or ""),
+                        "release_ref_confidence": float(
+                            item.get("release_ref_confidence") or 0.0
+                        ),
                         "last_synced": self._normalize_datetime(
                             item.get("last_synced") or synced_at_default
                         ),
@@ -942,6 +946,10 @@ class ClickHouseStore:
                         "pull_request_number": getattr(
                             item, "pull_request_number", None
                         ),
+                        "release_ref": str(getattr(item, "release_ref", "") or ""),
+                        "release_ref_confidence": float(
+                            getattr(item, "release_ref_confidence", 0.0) or 0.0
+                        ),
                         "last_synced": self._normalize_datetime(
                             getattr(item, "last_synced", None) or synced_at_default
                         ),
@@ -960,6 +968,8 @@ class ClickHouseStore:
                 "deployed_at",
                 "merged_at",
                 "pull_request_number",
+                "release_ref",
+                "release_ref_confidence",
                 "last_synced",
             ],
             rows,

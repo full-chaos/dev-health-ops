@@ -75,6 +75,8 @@ class DeploymentRow(TypedDict):
     deployed_at: datetime | None
     merged_at: NotRequired[datetime | None]
     pull_request_number: NotRequired[int | None]
+    release_ref: NotRequired[str]
+    release_ref_confidence: NotRequired[float]
 
 
 class IncidentRow(TypedDict):

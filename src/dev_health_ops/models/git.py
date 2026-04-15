@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
@@ -668,6 +669,8 @@ class Deployment(Base):
     deployed_at = Column(DateTime(timezone=True))
     merged_at = Column(DateTime(timezone=True))
     pull_request_number = Column(Integer)
+    release_ref = Column(Text, nullable=False, default="")
+    release_ref_confidence = Column(Float, nullable=False, default=0.0)
     last_synced = Column(
         DateTime(timezone=True),
         nullable=False,

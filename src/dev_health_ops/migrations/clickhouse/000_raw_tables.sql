@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS deployments (
     deployed_at Nullable(DateTime64(3, 'UTC')),
     merged_at Nullable(DateTime64(3, 'UTC')),
     pull_request_number Nullable(UInt32),
+    release_ref String DEFAULT '',
+    release_ref_confidence Float64 DEFAULT 0.0,
     last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (repo_id, deployment_id);

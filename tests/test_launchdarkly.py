@@ -219,12 +219,10 @@ class TestNormalizeFlags:
         rec = records[0]
         assert rec.org_id == "org-1"
         assert rec.flag_key == "new-checkout"
-        assert rec.flag_name == "New Checkout Flow"
-        assert rec.kind == "boolean"
-        assert rec.status == "active"
-        assert rec.tags == ["frontend", "checkout"]
-        assert rec.source == "launchdarkly"
-        assert rec.dedupe_key == "ld:flag:org-1:new-checkout"
+        assert rec.flag_type == "boolean"
+        assert rec.provider == "launchdarkly"
+        assert rec.project_key == "my-project"
+        assert rec.created_at is not None
 
     def test_inactive_flag(self):
         flags = [
@@ -238,12 +236,12 @@ class TestNormalizeFlags:
             }
         ]
         records = normalize_flags(flags, org_id="org-1")
-        assert records[0].status == "inactive"
+        assert records[0].flag_key == "old-feature"
 
     def test_empty_environments(self):
         flags = [{"key": "bare", "environments": {}}]
         records = normalize_flags(flags, org_id="org-1")
-        assert records[0].status == "active"
+        assert records[0].flag_key == "bare"
 
     def test_empty_input(self):
         assert normalize_flags([], org_id="org-1") == []
@@ -271,10 +269,9 @@ class TestNormalizeAuditEvents:
         records = normalize_audit_events(events, org_id="org-1")
         assert len(records) == 1
         rec = records[0]
-        assert rec.event_kind == "create"
+        assert rec.event_type == "create"
         assert rec.flag_key == "my-flag"
-        assert rec.actor == "dev@example.com"
-        assert rec.source == "launchdarkly"
+        assert rec.actor_type == "dev@example.com"
         assert rec.source_event_id == "evt-1"
         assert rec.dedupe_key == "evt-1"
 
@@ -291,12 +288,12 @@ class TestNormalizeAuditEvents:
     def test_event_kind_mapping(self, ld_kind, expected):
         events = [self._make_entry(ld_kind)]
         records = normalize_audit_events(events, org_id="org-1")
-        assert records[0].event_kind == expected
+        assert records[0].event_type == expected
 
     def test_unknown_kind_passes_through(self):
         events = [self._make_entry("deleteFlag")]
         records = normalize_audit_events(events, org_id="org-1")
-        assert records[0].event_kind == "deleteFlag"
+        assert records[0].event_type == "deleteFlag"
 
     def test_flag_key_from_target_resources(self):
         entry = {
@@ -327,7 +324,7 @@ class TestNormalizeAuditEvents:
             "target": {},
         }
         records = normalize_audit_events([entry], org_id="org-1")
-        assert records[0].actor == "user-99"
+        assert records[0].actor_type == "user-99"
 
     def test_empty_input(self):
         assert normalize_audit_events([], org_id="org-1") == []

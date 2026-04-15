@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS feature_flag_event (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(event_ts)
 ORDER BY (org_id, flag_key, environment, event_ts)
-TTL event_ts + INTERVAL 90 DAY DELETE;
+TTL toDateTime(event_ts) + INTERVAL 90 DAY DELETE;
 
 CREATE TABLE IF NOT EXISTS feature_flag_link (
     org_id String DEFAULT 'default',
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS telemetry_signal_bucket (
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(bucket_start)
 ORDER BY (org_id, environment, repo_id, release_ref, bucket_start)
-TTL bucket_start + INTERVAL 90 DAY DELETE;
+TTL toDateTime(bucket_start) + INTERVAL 90 DAY DELETE;
 
 CREATE TABLE IF NOT EXISTS release_impact_daily (
     org_id String DEFAULT 'default',

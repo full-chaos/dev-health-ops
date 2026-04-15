@@ -7,39 +7,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, NamedTuple
+from typing import Any
+
+from dev_health_ops.metrics.schemas import (
+    FeatureFlagEventRecord,
+    FeatureFlagRecord,
+)
 
 logger = logging.getLogger(__name__)
-
-try:
-    from dev_health_ops.metrics.schemas import (
-        FeatureFlagEventRecord,
-        FeatureFlagRecord,
-    )
-except ImportError:
-    # Will be available when branches merge; define compatible namedtuples
-    class FeatureFlagRecord(NamedTuple):  # type: ignore[no-redef]
-        org_id: str
-        flag_key: str
-        flag_name: str
-        project_key: str
-        kind: str
-        status: str
-        tags: list[str]
-        created_at: datetime | None
-        source: str
-        dedupe_key: str
-
-    class FeatureFlagEventRecord(NamedTuple):  # type: ignore[no-redef]
-        org_id: str
-        flag_key: str
-        event_kind: str
-        actor: str
-        timestamp: datetime | None
-        description: str
-        source: str
-        source_event_id: str
-        dedupe_key: str
 
 
 _EVENT_KIND_MAP: dict[str, str] = {
@@ -75,26 +50,18 @@ def normalize_flags(
     records: list[FeatureFlagRecord] = []
     for flag in flags:
         key = flag.get("key", "")
-        env_statuses = flag.get("environments", {})
-        status = "active"
-        if env_statuses:
-            first_env = next(iter(env_statuses.values()), {})
-            if isinstance(first_env, dict):
-                on = first_env.get("on")
-                status = "active" if on else "inactive"
-
         records.append(
             FeatureFlagRecord(
-                org_id=org_id,
+                provider=_SOURCE,
                 flag_key=key,
-                flag_name=flag.get("name", key),
-                project_key=flag.get("_projectKey", ""),
-                kind=flag.get("kind", "boolean"),
-                status=status,
-                tags=flag.get("tags", []),
+                project_key=flag.get("_projectKey") or None,
+                repo_id=None,
+                environment="",
+                flag_type=flag.get("kind", "boolean"),
                 created_at=_parse_iso(flag.get("creationDate")),
-                source=_SOURCE,
-                dedupe_key=f"ld:flag:{org_id}:{key}",
+                archived_at=None,
+                last_synced=datetime.now(tz=timezone.utc),
+                org_id=org_id,
             )
         )
     logger.info("Normalized %d flags for org %s", len(records), org_id)
@@ -133,17 +100,21 @@ def normalize_audit_events(
             if name:
                 flag_key = name
 
+        now = datetime.now(tz=timezone.utc)
         records.append(
             FeatureFlagEventRecord(
-                org_id=org_id,
+                event_type=event_kind,
                 flag_key=flag_key,
-                event_kind=event_kind,
-                actor=str(actor),
-                timestamp=_parse_iso(entry.get("date")),
-                description=entry.get("description", ""),
-                source=_SOURCE,
-                source_event_id=entry_id,
+                environment="",
+                repo_id=None,
+                actor_type=str(actor) if actor else None,
+                prev_state=None,
+                next_state=None,
+                event_ts=_parse_iso(entry.get("date")) or now,
+                ingested_at=now,
+                source_event_id=entry_id or None,
                 dedupe_key=entry_id,
+                org_id=org_id,
             )
         )
     logger.info("Normalized %d audit events for org %s", len(records), org_id)

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-import sys
-
-from dev_health_ops.api.main import app
-
 # Import the router module (not the APIRouter object exported by __init__)
 import dev_health_ops.api.ingest.router  # noqa: F401
+from dev_health_ops.api.main import app
 
 _router_mod = sys.modules["dev_health_ops.api.ingest.router"]
 

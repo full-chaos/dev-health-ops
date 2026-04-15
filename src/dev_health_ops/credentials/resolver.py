@@ -13,8 +13,10 @@ from dev_health_ops.credentials.types import (
     GitHubCredentials,
     GitLabCredentials,
     JiraCredentials,
+    LaunchDarklyCredentials,
     LinearCredentials,
     ProviderCredentials,
+    TelemetryCredentials,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,8 @@ PROVIDER_ENV_VARS: dict[str, dict[str, str]] = {
         "email": "ATLASSIAN_EMAIL",
         "cloud_id": "ATLASSIAN_CLOUD_ID",
     },
+    "launchdarkly": {"api_key": "LAUNCHDARKLY_API_KEY"},
+    "telemetry": {"api_key": "TELEMETRY_API_KEY"},
 }
 
 PROVIDER_CREDENTIAL_TYPES: dict[str, type[ProviderCredentials]] = {
@@ -43,6 +47,8 @@ PROVIDER_CREDENTIAL_TYPES: dict[str, type[ProviderCredentials]] = {
     "jira": JiraCredentials,
     "linear": LinearCredentials,
     "atlassian": AtlassianCredentials,
+    "launchdarkly": LaunchDarklyCredentials,
+    "telemetry": TelemetryCredentials,
 }
 
 

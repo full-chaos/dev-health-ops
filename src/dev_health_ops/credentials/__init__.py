@@ -29,8 +29,10 @@ from dev_health_ops.credentials.types import (
     GitHubCredentials,
     GitLabCredentials,
     JiraCredentials,
+    LaunchDarklyCredentials,
     LinearCredentials,
     ProviderCredentials,
+    TelemetryCredentials,
 )
 
 __all__ = [
@@ -41,7 +43,9 @@ __all__ = [
     "GitHubCredentials",
     "GitLabCredentials",
     "JiraCredentials",
+    "LaunchDarklyCredentials",
     "LinearCredentials",
     "ProviderCredentials",
+    "TelemetryCredentials",
     "resolve_credentials_sync",
 ]

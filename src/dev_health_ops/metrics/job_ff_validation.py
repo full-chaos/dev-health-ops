@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import logging
 
 from dev_health_ops.db import resolve_sink_uri

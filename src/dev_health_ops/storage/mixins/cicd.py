@@ -66,6 +66,8 @@ class CicdMixin:
                     "deployed_at": item.get("deployed_at"),
                     "merged_at": item.get("merged_at"),
                     "pull_request_number": item.get("pull_request_number"),
+                    "release_ref": item.get("release_ref", ""),
+                    "release_ref_confidence": item.get("release_ref_confidence", 0.0),
                     "last_synced": item.get("last_synced") or synced_at_default,
                 }
             else:
@@ -79,6 +81,10 @@ class CicdMixin:
                     "deployed_at": getattr(item, "deployed_at", None),
                     "merged_at": getattr(item, "merged_at", None),
                     "pull_request_number": getattr(item, "pull_request_number", None),
+                    "release_ref": getattr(item, "release_ref", ""),
+                    "release_ref_confidence": getattr(
+                        item, "release_ref_confidence", 0.0
+                    ),
                     "last_synced": getattr(item, "last_synced", None)
                     or synced_at_default,
                 }
@@ -96,6 +102,8 @@ class CicdMixin:
                 "deployed_at",
                 "merged_at",
                 "pull_request_number",
+                "release_ref",
+                "release_ref_confidence",
                 "last_synced",
             ],
         )

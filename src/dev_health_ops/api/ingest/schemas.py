@@ -103,6 +103,8 @@ class IngestDeployment(BaseModel):
     finished_at: datetime | None = None
     deployed_at: datetime | None = None
     pull_request_number: int | None = None
+    release_ref: str | None = None
+    release_ref_confidence: float | None = None
 
 
 class IngestIncident(BaseModel):

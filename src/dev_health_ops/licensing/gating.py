@@ -12,10 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.licensing.types import (
-    DEFAULT_FEATURES,
     DEFAULT_LIMITS,
     LicensePayload,
     LicenseTier,
+    get_features_for_tier,
 )
 from dev_health_ops.licensing.validator import LicenseValidator, ValidationResult
 
@@ -324,7 +324,7 @@ def get_entitlements() -> dict:
         features = manager.payload.features
         limits = manager.payload.limits
     else:
-        features = DEFAULT_FEATURES[tier]
+        features = get_features_for_tier(tier)
         limits = DEFAULT_LIMITS[tier]
 
     return {
@@ -377,7 +377,7 @@ async def get_org_entitlements_from_db(
                     org_id,
                 )
 
-    features = DEFAULT_FEATURES[tier]
+    features = get_features_for_tier(tier)
     limits = DEFAULT_LIMITS[tier]
 
     subscription_result = await session.execute(
@@ -418,7 +418,7 @@ def has_feature(feature: str, *, log_denial: bool = True) -> bool:
     if manager.payload:
         has_it = manager.payload.features.get(feature, False)
     else:
-        has_it = DEFAULT_FEATURES[manager.tier].get(feature, False)
+        has_it = get_features_for_tier(manager.tier).get(feature, False)
 
     if not has_it and log_denial:
         audit_logger = get_license_audit_logger()
@@ -504,7 +504,7 @@ async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool
         org_license = result.scalar_one_or_none()
         if org_license:
             org_tier = LicenseTier(org_license.tier)
-            if DEFAULT_FEATURES.get(org_tier, {}).get(feature, False):
+            if get_features_for_tier(org_tier).get(feature, False):
                 return True
             if org_license.features_override and org_license.features_override.get(
                 feature
@@ -519,7 +519,7 @@ async def _check_org_feature_async(feature: str, kwargs: dict[str, Any]) -> bool
         org_tier_str = org_result.scalar_one_or_none()
         if org_tier_str:
             org_tier = LicenseTier(org_tier_str)
-            if DEFAULT_FEATURES.get(org_tier, {}).get(feature, False):
+            if get_features_for_tier(org_tier).get(feature, False):
                 return True
     except Exception:
         logger.debug("Per-org feature check failed for feature=%s", feature)

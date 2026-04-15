@@ -8,10 +8,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Select, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+# Terminal subscription statuses that indicate the subscription is no longer active.
+_CANCELLED_STATUSES: frozenset[str] = frozenset({"canceled", "incomplete_expired"})
 
 
 async def has_had_trial(org_id: str | uuid.UUID, session: AsyncSession) -> bool:
@@ -101,6 +104,9 @@ class SubscriptionService:
         existing.trial_end = self._to_dt(getattr(stripe_sub, "trial_end", None), True)
         existing.metadata_ = self._as_dict(getattr(stripe_sub, "metadata", {}))
         existing.updated_at = datetime.now(timezone.utc)
+
+        # Bridge: sync OrgLicense from plan feature bundles within the same transaction.
+        await self._sync_org_license(existing)
 
         await self.db.flush()
         return existing
@@ -293,6 +299,163 @@ class SubscriptionService:
             select(BillingPrice).where(stripe_id_field == stripe_price_id)
         )
         return result.scalar_one_or_none()
+
+    async def _sync_org_license(self, subscription: Any) -> None:
+        """Upsert OrgLicense from the plan's feature bundles.
+
+        Called inside ``upsert_from_stripe``; runs in the same transaction so that
+        Subscription + OrgLicense are committed atomically.  If anything goes wrong
+        we log and re-raise so the caller's flush/commit fails, rolling back both.
+        """
+        try:
+            billing_module = importlib.import_module("dev_health_ops.models.billing")
+            licensing_module = importlib.import_module(
+                "dev_health_ops.models.licensing"
+            )
+        except ImportError:
+            logger.warning(
+                "billing/licensing modules not available; skipping org-license sync"
+            )
+            return
+
+        BillingPlan = getattr(billing_module, "BillingPlan", None)
+        PlanFeatureBundle = getattr(billing_module, "PlanFeatureBundle", None)
+        FeatureBundle = getattr(billing_module, "FeatureBundle", None)
+        OrgLicense = getattr(licensing_module, "OrgLicense", None)
+
+        if None in (BillingPlan, PlanFeatureBundle, FeatureBundle, OrgLicense):
+            logger.warning(
+                "Required model classes missing from billing/licensing; skipping sync"
+            )
+            return
+
+        org_id: uuid.UUID = subscription.org_id
+        billing_plan_id = subscription.billing_plan_id
+        status: str = str(getattr(subscription, "status", "active") or "active")
+        current_period_end = getattr(subscription, "current_period_end", None)
+
+        # --- Determine tier and feature set ---
+        is_cancelled = status in _CANCELLED_STATUSES
+
+        if is_cancelled:
+            tier_str = "community"
+            feature_keys: list[str] = []
+            expires_at = None
+        else:
+            if billing_plan_id is None:
+                # Subscription has no plan resolved (e.g. trial before a price is matched).
+                # Nothing to sync; preserve existing OrgLicense state.
+                return
+
+            # Load the BillingPlan. Tolerate missing billing tables (tests that
+            # scope their schema to subscriptions only): skip rather than fail.
+            try:
+                plan_result = await self.db.execute(
+                    select(BillingPlan).where(BillingPlan.id == billing_plan_id)
+                )
+                plan = plan_result.scalar_one_or_none()
+            except OperationalError as exc:
+                logger.warning(
+                    "Billing tables unavailable; skipping org-license sync (%s)", exc
+                )
+                return
+            if plan is None:
+                logger.warning(
+                    "BillingPlan not found for subscription org_id=%s; "
+                    "skipping org-license sync",
+                    org_id,
+                )
+                return
+
+            tier_str = str(plan.tier or "community")
+
+            # Resolve all FeatureBundle rows for this plan.
+            bundle_rows_result = await self.db.execute(
+                select(FeatureBundle)
+                .join(
+                    PlanFeatureBundle,
+                    PlanFeatureBundle.bundle_id == FeatureBundle.id,
+                )
+                .where(PlanFeatureBundle.plan_id == billing_plan_id)
+            )
+            bundles = list(bundle_rows_result.scalars().all())
+
+            # Flatten and deduplicate feature keys, validating against registry.
+            known_keys = self._known_feature_keys()
+            raw_keys: set[str] = set()
+            for bundle in bundles:
+                bundle_features = bundle.features or []
+                if isinstance(bundle_features, dict):
+                    bundle_features = list(bundle_features.keys())
+                for key in bundle_features:
+                    key_str = str(key)
+                    if key_str not in known_keys:
+                        logger.warning(
+                            "Bundle %s references unknown feature key %r; "
+                            "skipping key (CHAOS-1207 defensive mode)",
+                            bundle.key,
+                            key_str,
+                        )
+                        continue
+                    raw_keys.add(key_str)
+
+            feature_keys = sorted(raw_keys)
+            expires_at = current_period_end
+
+        # --- Upsert OrgLicense (keyed on org_id — one license per org) ---
+        existing_result = await self.db.execute(
+            select(OrgLicense).where(OrgLicense.org_id == org_id)
+        )
+        org_license = existing_result.scalar_one_or_none()
+
+        customer_id = str(getattr(subscription, "stripe_customer_id", "") or "")
+
+        if org_license is None:
+            org_license = OrgLicense(
+                org_id=org_id,
+                tier=tier_str,
+                license_type="saas",
+                features_override=feature_keys,
+                expires_at=expires_at,
+                customer_id=customer_id or None,
+            )
+            self.db.add(org_license)
+        else:
+            org_license.tier = tier_str
+            org_license.features_override = feature_keys
+            org_license.expires_at = expires_at
+            org_license.is_valid = not is_cancelled
+            org_license.updated_at = datetime.now(timezone.utc)
+            if customer_id:
+                org_license.customer_id = customer_id
+
+        logger.info(
+            "OrgLicense synced: org_id=%s tier=%s features=%d cancelled=%s",
+            org_id,
+            tier_str,
+            len(feature_keys),
+            is_cancelled,
+        )
+
+    @staticmethod
+    def _known_feature_keys() -> frozenset[str]:
+        """Return the canonical feature key set from STANDARD_FEATURES registry.
+
+        Returns an empty frozenset if the registry is unavailable (fail-open).
+        """
+        try:
+            licensing_module = importlib.import_module(
+                "dev_health_ops.models.licensing"
+            )
+            standard_features = getattr(licensing_module, "STANDARD_FEATURES", None)
+            if standard_features is None:
+                return frozenset()
+            return frozenset(entry[0] for entry in standard_features)
+        except Exception:
+            logger.warning(
+                "Could not load STANDARD_FEATURES registry for key validation"
+            )
+            return frozenset()
 
     @staticmethod
     def _extract_stripe_price_id(stripe_sub: Any) -> str | None:

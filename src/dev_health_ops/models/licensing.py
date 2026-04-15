@@ -693,3 +693,9 @@ STANDARD_FEATURES = [
         "Priority support SLA",
     ),
 ]
+
+# Re-export get_features_for_tier for callers that import from models.licensing.
+# The canonical definition lives in licensing.types to avoid circular imports.
+from dev_health_ops.licensing.types import (  # noqa: E402,F401,I001
+    get_features_for_tier as get_features_for_tier,
+)

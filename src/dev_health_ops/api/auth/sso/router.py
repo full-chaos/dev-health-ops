@@ -102,7 +102,7 @@ def _provider_to_response(provider) -> SSOProviderResponse:
 
 
 @sso_router.get("/sso/providers", response_model=SSOProviderListResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def list_sso_providers(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     protocol: str | None = None,
@@ -131,7 +131,7 @@ async def list_sso_providers(
 
 
 @sso_router.post("/sso/providers", response_model=SSOProviderResponse, status_code=201)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def create_sso_provider(
     payload: SSOProviderCreate,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -180,7 +180,7 @@ async def create_sso_provider(
 
 
 @sso_router.get("/sso/providers/{provider_id}", response_model=SSOProviderResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def get_sso_provider(
     provider_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -201,7 +201,7 @@ async def get_sso_provider(
 
 
 @sso_router.patch("/sso/providers/{provider_id}", response_model=SSOProviderResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def update_sso_provider(
     provider_id: str,
     payload: SSOProviderUpdate,
@@ -250,7 +250,7 @@ async def update_sso_provider(
 
 
 @sso_router.delete("/sso/providers/{provider_id}", status_code=204)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def delete_sso_provider(
     provider_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -329,7 +329,7 @@ async def deactivate_sso_provider(
 
 
 @sso_router.get("/saml/{provider_id}/metadata", response_model=SAMLMetadataResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def get_saml_metadata(provider_id: str) -> SAMLMetadataResponse:
     import os
     import uuid as uuid_mod
@@ -368,7 +368,7 @@ async def get_saml_metadata(provider_id: str) -> SAMLMetadataResponse:
 
 
 @sso_router.post("/saml/{provider_id}/initiate", response_model=SAMLAuthResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def initiate_saml_auth(
     provider_id: str,
     payload: SAMLAuthRequest,
@@ -406,7 +406,7 @@ async def initiate_saml_auth(
 
 
 @sso_router.post("/saml/{provider_id}/acs", response_model=SSOLoginResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def saml_acs_callback(
     provider_id: str,
     payload: SAMLCallbackRequest,
@@ -549,7 +549,7 @@ async def saml_acs_callback(
 
 
 @sso_router.post("/oidc/{provider_id}/authorize", response_model=OIDCAuthResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def initiate_oidc_auth(
     provider_id: str,
     payload: OIDCAuthRequest,
@@ -592,7 +592,7 @@ async def initiate_oidc_auth(
 
 
 @sso_router.post("/oidc/{provider_id}/callback", response_model=SSOLoginResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def oidc_callback(
     provider_id: str,
     payload: OIDCCallbackRequest,
@@ -738,7 +738,7 @@ async def oidc_callback(
 @sso_router.post(
     "/oauth/providers", response_model=SSOProviderResponse, status_code=201
 )
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def create_oauth_provider(
     payload: OAuthProviderCreate,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -817,7 +817,7 @@ async def create_oauth_provider(
 
 
 @sso_router.patch("/oauth/providers/{provider_id}", response_model=SSOProviderResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def update_oauth_provider(
     provider_id: str,
     payload: OAuthProviderUpdate,
@@ -886,7 +886,7 @@ async def update_oauth_provider(
 
 
 @sso_router.post("/oauth/{provider_id}/authorize", response_model=OAuthAuthResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def initiate_oauth_auth(
     provider_id: str,
     payload: OAuthAuthRequest,
@@ -949,7 +949,7 @@ async def initiate_oauth_auth(
 
 
 @sso_router.post("/oauth/{provider_id}/callback", response_model=SSOLoginResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def oauth_callback(
     provider_id: str,
     payload: OAuthCallbackRequest,
@@ -1134,7 +1134,7 @@ async def oauth_callback(
 
 
 @sso_router.get("/oauth/{provider_type}/authorize", response_model=OAuthAuthResponse)
-@require_feature("sso", required_tier="enterprise")
+@require_feature("sso_saml", required_tier="enterprise")
 async def initiate_oauth_by_type(
     provider_type: str,
     org_id: str,

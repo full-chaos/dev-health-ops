@@ -13,12 +13,12 @@ from uuid import uuid4
 from nacl.signing import SigningKey
 
 from dev_health_ops.licensing.types import (
-    DEFAULT_FEATURES,
     DEFAULT_LIMITS,
     GRACE_DAYS,
     LicenseLimits,
     LicensePayload,
     LicenseTier,
+    get_features_for_tier,
 )
 
 
@@ -89,7 +89,7 @@ def sign_license(
         iat=now,
         exp=now + duration_days * 86400,
         tier=tier,
-        features=features if features is not None else DEFAULT_FEATURES[tier],
+        features=features if features is not None else get_features_for_tier(tier),
         limits=limits if limits is not None else DEFAULT_LIMITS[tier],
         grace_days=grace_days if grace_days is not None else GRACE_DAYS[tier],
         org_name=org_name,

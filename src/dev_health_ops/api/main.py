@@ -305,6 +305,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("License initialization failed: %s (using community tier)", e)
 
+    # Validate FeatureBundle feature keys against the canonical STANDARD_FEATURES registry
+    postgres_uri = _postgres_url()
+    if postgres_uri:
+        try:
+            from dev_health_ops.api.billing.bundle_validation import (
+                FeatureBundleIntegrityError,
+                validate_bundle_keys,
+            )
+            from dev_health_ops.db import get_postgres_session
+
+            async with get_postgres_session() as _session:
+                await validate_bundle_keys(_session)
+        except FeatureBundleIntegrityError:
+            # Integrity check failed; re-raise to abort startup.
+            raise
+        except Exception as _exc:
+            logger.warning(
+                "FeatureBundle key validation skipped (DB not ready): %s", _exc
+            )
+
     yield
     await close_global_client()
 

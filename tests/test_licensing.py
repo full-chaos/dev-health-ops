@@ -18,10 +18,10 @@ from dev_health_ops.licensing import (
     sign_payload,
 )
 from dev_health_ops.licensing.types import (
-    DEFAULT_FEATURES,
     DEFAULT_LIMITS,
     GRACE_DAYS,
     LicenseLimits,
+    get_features_for_tier,
 )
 
 
@@ -861,7 +861,7 @@ class TestSignLicense:
 
             assert result.valid is True
             assert result.payload.tier == tier
-            assert result.payload.features == DEFAULT_FEATURES[tier]
+            assert result.payload.features == get_features_for_tier(tier)
             assert result.payload.limits == DEFAULT_LIMITS[tier]
             assert result.payload.grace_days == GRACE_DAYS[tier]
 
@@ -988,7 +988,7 @@ class TestSignPayload:
             iat=now,
             exp=now + 86400,
             tier=LicenseTier.ENTERPRISE,
-            features=DEFAULT_FEATURES[LicenseTier.ENTERPRISE],
+            features=get_features_for_tier(LicenseTier.ENTERPRISE),
             limits=DEFAULT_LIMITS[LicenseTier.ENTERPRISE],
             grace_days=30,
         )
@@ -1142,6 +1142,116 @@ class TestLicensesCliCommands:
         assert result.payload.sub == "org-42"
         assert result.payload.tier == LicenseTier.ENTERPRISE
         assert result.payload.org_name == "Test Corp"
+
+
+class TestGetFeaturesForTier:
+    """Tests for the canonical STANDARD_FEATURES registry via get_features_for_tier."""
+
+    def test_community_has_basic_analytics(self):
+        features = get_features_for_tier(LicenseTier.COMMUNITY)
+        assert features["basic_analytics"] is True
+
+    def test_community_lacks_sso_saml(self):
+        features = get_features_for_tier(LicenseTier.COMMUNITY)
+        assert features["sso_saml"] is False
+
+    def test_community_lacks_scheduled_jobs(self):
+        features = get_features_for_tier(LicenseTier.COMMUNITY)
+        assert features["scheduled_jobs"] is False
+
+    def test_team_has_scheduled_jobs(self):
+        features = get_features_for_tier(LicenseTier.TEAM)
+        assert features["scheduled_jobs"] is True
+
+    def test_team_inherits_community_features(self):
+        features = get_features_for_tier(LicenseTier.TEAM)
+        assert features["basic_analytics"] is True
+        assert features["git_sync"] is True
+
+    def test_team_lacks_sso_saml(self):
+        features = get_features_for_tier(LicenseTier.TEAM)
+        assert features["sso_saml"] is False
+
+    def test_enterprise_has_sso_saml(self):
+        features = get_features_for_tier(LicenseTier.ENTERPRISE)
+        assert features["sso_saml"] is True
+
+    def test_enterprise_has_audit_log(self):
+        features = get_features_for_tier(LicenseTier.ENTERPRISE)
+        assert features["audit_log"] is True
+
+    def test_enterprise_inherits_all_lower_tiers(self):
+        features = get_features_for_tier(LicenseTier.ENTERPRISE)
+        # community features
+        assert features["basic_analytics"] is True
+        assert features["git_sync"] is True
+        # team features
+        assert features["scheduled_jobs"] is True
+        assert features["capacity_forecast"] is True
+
+    def test_all_tiers_return_same_key_set(self):
+        community = get_features_for_tier(LicenseTier.COMMUNITY)
+        team = get_features_for_tier(LicenseTier.TEAM)
+        enterprise = get_features_for_tier(LicenseTier.ENTERPRISE)
+        assert set(community.keys()) == set(team.keys()) == set(enterprise.keys())
+
+    def test_returns_25_features(self):
+        features = get_features_for_tier(LicenseTier.COMMUNITY)
+        assert len(features) == 25
+
+    def test_sign_license_uses_canonical_registry(self):
+        """sign_license() with no explicit features uses get_features_for_tier."""
+        from dev_health_ops.licensing import (
+            LicenseValidator,
+            generate_keypair,
+            sign_license,
+        )
+
+        kp = generate_keypair()
+        license_str = sign_license(kp.private_key, org_id="org-1", tier="enterprise")
+        validator = LicenseValidator(kp.public_key)
+        result = validator.validate(license_str)
+
+        assert result.valid is True
+        assert result.payload.features == get_features_for_tier(LicenseTier.ENTERPRISE)
+        assert result.payload.features["sso_saml"] is True
+
+    def test_require_feature_passes_for_enterprise_sso_saml(self):
+        """@require_feature works for the canonical sso_saml key at enterprise tier."""
+        from dev_health_ops.licensing import (
+            LicenseManager,
+            generate_keypair,
+            generate_test_license,
+            require_feature,
+        )
+
+        LicenseManager.reset()
+        try:
+            kp = generate_keypair()
+            # generate_test_license defaults to enterprise tier with canonical features
+            license_str = generate_test_license(org_id="test-org")
+            LicenseManager.initialize(kp.public_key, license_str)
+
+            @require_feature("sso_saml", raise_http=False)
+            def protected_endpoint():
+                return "ok"
+
+            # Enterprise license should have sso_saml enabled
+            # Note: this uses the JWT payload features (from sign_license via
+            # generate_test_license), which now uses get_features_for_tier
+            # Sign fresh with the correct key so the manager can validate it
+            from dev_health_ops.licensing import sign_license
+
+            LicenseManager.reset()
+            real_license = sign_license(
+                kp.private_key, org_id="org-1", tier="enterprise"
+            )
+            LicenseManager.initialize(kp.public_key, real_license)
+
+            result = protected_endpoint()
+            assert result == "ok"
+        finally:
+            LicenseManager.reset()
 
 
 # ---------------------------------------------------------------------------

@@ -477,6 +477,100 @@ class IssueTypeMetricsRecord:
 
 
 @dataclass(frozen=True)
+class FeatureFlagRecord:
+    provider: str
+    flag_key: str
+    project_key: str | None
+    repo_id: UUID | None
+    environment: str
+    flag_type: str | None
+    created_at: datetime | None
+    archived_at: datetime | None
+    last_synced: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class FeatureFlagEventRecord:
+    event_type: str
+    flag_key: str
+    environment: str
+    repo_id: UUID | None
+    actor_type: str | None
+    prev_state: str | None
+    next_state: str | None
+    event_ts: datetime
+    ingested_at: datetime
+    source_event_id: str | None
+    dedupe_key: str
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class FeatureFlagLinkRecord:
+    flag_key: str
+    target_type: str
+    target_id: str
+    provider: str
+    link_source: str
+    link_type: str
+    evidence_type: str | None
+    confidence: float
+    valid_from: datetime
+    valid_to: datetime | None
+    last_synced: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class TelemetrySignalBucketRecord:
+    signal_type: str
+    signal_count: int
+    session_count: int
+    unique_pseudonymous_count: int | None
+    endpoint_group: str | None
+    environment: str
+    repo_id: UUID | None
+    release_ref: str | None
+    bucket_start: datetime
+    bucket_end: datetime
+    ingested_at: datetime
+    is_sampled: bool
+    schema_version: str
+    dedupe_key: str
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
+class ReleaseImpactDailyRecord:
+    day: date
+    release_ref: str
+    environment: str
+    repo_id: UUID | None
+    release_user_friction_delta: float | None
+    release_post_friction_rate: float | None
+    release_error_rate_delta: float | None
+    release_post_error_rate: float | None
+    time_to_first_user_issue_after_release_hours: float | None
+    release_impact_confidence_score: float | None
+    coverage_ratio: float | None
+    flag_exposure_rate: float | None
+    flag_activation_rate: float | None
+    flag_reliability_guardrail: float | None
+    flag_friction_delta: float | None
+    flag_rollout_half_life_hours: float | None
+    flag_churn_rate: float | None
+    issue_to_release_impact_link_rate: float | None
+    rollback_or_disable_after_impact_spike_count: int | None
+    missing_required_fields_count: int = 0
+    instrumentation_change_flag: bool = False
+    data_completeness: float = 1.0
+    concurrent_deploy_count: int = 0
+    computed_at: datetime | None = None
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class WorkGraphEdgeRecord:
     edge_id: str
     source_type: str

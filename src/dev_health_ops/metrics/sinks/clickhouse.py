@@ -17,6 +17,9 @@ from dev_health_ops.metrics.schemas import (
     CommitMetricsRecord,
     DeployMetricsDailyRecord,
     DORAMetricsRecord,
+    FeatureFlagEventRecord,
+    FeatureFlagLinkRecord,
+    FeatureFlagRecord,
     FileComplexitySnapshot,
     FileHotspotDaily,
     FileMetricsRecord,
@@ -26,10 +29,12 @@ from dev_health_ops.metrics.schemas import (
     InvestmentExplanationRecord,
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
+    ReleaseImpactDailyRecord,
     RepoComplexityDaily,
     RepoMetricsDailyRecord,
     ReviewEdgeDailyRecord,
     TeamMetricsDailyRecord,
+    TelemetrySignalBucketRecord,
     UserMetricsDailyRecord,
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
@@ -1179,6 +1184,134 @@ class ClickHouseMetricsSink(BaseMetricsSink):
                 "lead_p50_hours",
                 "computed_at",
                 "org_id",
+            ],
+            rows,
+        )
+
+    def write_feature_flags(self, rows: Sequence[FeatureFlagRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "feature_flag",
+            [
+                "org_id",
+                "provider",
+                "flag_key",
+                "project_key",
+                "repo_id",
+                "environment",
+                "flag_type",
+                "created_at",
+                "archived_at",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    def write_feature_flag_events(self, rows: Sequence[FeatureFlagEventRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "feature_flag_event",
+            [
+                "org_id",
+                "event_type",
+                "flag_key",
+                "environment",
+                "repo_id",
+                "actor_type",
+                "prev_state",
+                "next_state",
+                "event_ts",
+                "ingested_at",
+                "source_event_id",
+                "dedupe_key",
+            ],
+            rows,
+        )
+
+    def write_feature_flag_links(self, rows: Sequence[FeatureFlagLinkRecord]) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "feature_flag_link",
+            [
+                "org_id",
+                "flag_key",
+                "target_type",
+                "target_id",
+                "provider",
+                "link_source",
+                "link_type",
+                "evidence_type",
+                "confidence",
+                "valid_from",
+                "valid_to",
+                "last_synced",
+            ],
+            rows,
+        )
+
+    def write_telemetry_signal_buckets(
+        self, rows: Sequence[TelemetrySignalBucketRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "telemetry_signal_bucket",
+            [
+                "org_id",
+                "signal_type",
+                "signal_count",
+                "session_count",
+                "unique_pseudonymous_count",
+                "endpoint_group",
+                "environment",
+                "repo_id",
+                "release_ref",
+                "bucket_start",
+                "bucket_end",
+                "ingested_at",
+                "is_sampled",
+                "schema_version",
+                "dedupe_key",
+            ],
+            rows,
+        )
+
+    def write_release_impact_daily(
+        self, rows: Sequence[ReleaseImpactDailyRecord]
+    ) -> None:
+        if not rows:
+            return
+        self._insert_rows(
+            "release_impact_daily",
+            [
+                "org_id",
+                "day",
+                "release_ref",
+                "environment",
+                "repo_id",
+                "release_user_friction_delta",
+                "release_post_friction_rate",
+                "release_error_rate_delta",
+                "release_post_error_rate",
+                "time_to_first_user_issue_after_release_hours",
+                "release_impact_confidence_score",
+                "coverage_ratio",
+                "flag_exposure_rate",
+                "flag_activation_rate",
+                "flag_reliability_guardrail",
+                "flag_friction_delta",
+                "flag_rollout_half_life_hours",
+                "flag_churn_rate",
+                "issue_to_release_impact_link_rate",
+                "rollback_or_disable_after_impact_spike_count",
+                "missing_required_fields_count",
+                "instrumentation_change_flag",
+                "data_completeness",
+                "concurrent_deploy_count",
+                "computed_at",
             ],
             rows,
         )

@@ -4,7 +4,14 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+import sys
+
 from dev_health_ops.api.main import app
+
+# Import the router module (not the APIRouter object exported by __init__)
+import dev_health_ops.api.ingest.router  # noqa: F401
+
+_router_mod = sys.modules["dev_health_ops.api.ingest.router"]
 
 
 @pytest_asyncio.fixture
@@ -52,6 +59,16 @@ VALID_INCIDENT = {
     "status": "resolved",
     "started_at": "2025-01-14T03:00:00Z",
     "resolved_at": "2025-01-14T05:30:00Z",
+}
+
+VALID_TELEMETRY_BUCKET = {
+    "signal_type": "friction.rage_click",
+    "signal_count": 42,
+    "session_count": 10,
+    "environment": "production",
+    "bucket_start": "2025-01-15T00:00:00Z",
+    "bucket_end": "2025-01-15T01:00:00Z",
+    "dedupe_key": "rage-click-prod-2025-01-15T00",
 }
 
 
@@ -261,3 +278,75 @@ async def test_ingest_deployments_missing_required_field(client):
         },
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ingest_telemetry_happy_path(client, monkeypatch):
+    persisted: list = []
+
+    async def fake_persist(records):
+        persisted.extend(records)
+
+    monkeypatch.setattr(_router_mod, "_persist_telemetry", fake_persist)
+
+    resp = await client.post(
+        "/api/v1/ingest/telemetry",
+        json={"org_id": "test-org", "items": [VALID_TELEMETRY_BUCKET]},
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "accepted"
+    assert body["items_received"] == 1
+    assert body["stream"] == "ingest:test-org:telemetry"
+    assert "ingestion_id" in body
+    assert len(persisted) == 1
+    assert persisted[0].signal_type == "friction.rage_click"
+    assert persisted[0].org_id == "test-org"
+
+
+@pytest.mark.asyncio
+async def test_ingest_telemetry_empty_items(client):
+    resp = await client.post(
+        "/api/v1/ingest/telemetry",
+        json={"org_id": "test-org", "items": []},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ingest_telemetry_missing_required_field(client):
+    bad_bucket = {
+        "signal_type": "error.unhandled",
+        "signal_count": 5,
+        "session_count": 2,
+        "environment": "staging",
+        "bucket_start": "2025-01-15T00:00:00Z",
+        "bucket_end": "2025-01-15T01:00:00Z",
+    }
+    resp = await client.post(
+        "/api/v1/ingest/telemetry",
+        json={"org_id": "test-org", "items": [bad_bucket]},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_ingest_telemetry_multiple_items(client, monkeypatch):
+    persisted: list = []
+
+    async def fake_persist(records):
+        persisted.extend(records)
+
+    monkeypatch.setattr(_router_mod, "_persist_telemetry", fake_persist)
+
+    buckets = [
+        {**VALID_TELEMETRY_BUCKET, "dedupe_key": f"key-{i}", "signal_count": i}
+        for i in range(3)
+    ]
+    resp = await client.post(
+        "/api/v1/ingest/telemetry",
+        json={"org_id": "acme", "items": buckets},
+    )
+    assert resp.status_code == 202
+    assert resp.json()["items_received"] == 3
+    assert len(persisted) == 3

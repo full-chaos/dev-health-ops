@@ -47,7 +47,12 @@ class BillingPrice(Base):
     __tablename__ = "billing_prices"
 
     id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    plan_id = Column(GUID(), ForeignKey("billing_plans.id"), nullable=False, index=True)
+    plan_id = Column(
+        GUID(),
+        ForeignKey("billing_plans.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     interval = Column(Text, nullable=False)
     amount = Column(Integer, nullable=False)
     currency = Column(Text, server_default="usd", nullable=False)

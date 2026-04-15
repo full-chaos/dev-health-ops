@@ -4,6 +4,7 @@ import json
 import time
 
 import pytest
+import pytest_asyncio
 from nacl.signing import SigningKey
 
 from dev_health_ops.licensing import (
@@ -1141,3 +1142,168 @@ class TestLicensesCliCommands:
         assert result.payload.sub == "org-42"
         assert result.payload.tier == LicenseTier.ENTERPRISE
         assert result.payload.org_name == "Test Corp"
+
+
+# ---------------------------------------------------------------------------
+# G6 (CHAOS-1209) — OrgFeatureOverride updated_by tracking
+# ---------------------------------------------------------------------------
+
+
+class TestOrgFeatureOverrideUpdatedBy:
+    """Verify that updated_by is set on override mutations via the admin API."""
+
+    @pytest_asyncio.fixture
+    async def session_maker(self, tmp_path):
+
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            async_sessionmaker,
+            create_async_engine,
+        )
+
+        from dev_health_ops.models.git import Base
+        from dev_health_ops.models.licensing import (
+            FeatureFlag,
+            OrgFeatureOverride,
+            OrgLicense,
+        )
+        from dev_health_ops.models.users import Membership, Organization, User
+
+        db_path = tmp_path / "override-updated-by.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+
+        _tables = [
+            User.__table__,
+            Organization.__table__,
+            Membership.__table__,
+            OrgLicense.__table__,
+            FeatureFlag.__table__,
+            OrgFeatureOverride.__table__,
+        ]
+
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables))
+
+        maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        try:
+            yield maker
+        finally:
+            await engine.dispose()
+
+    @pytest_asyncio.fixture
+    async def seeded(self, session_maker):
+        import uuid
+
+        from dev_health_ops.models.licensing import FeatureFlag
+        from dev_health_ops.models.users import Organization, User
+
+        org_id = uuid.uuid4()
+        user_id = uuid.uuid4()
+        feature_id = uuid.uuid4()
+
+        async with session_maker() as session:
+            org = Organization(
+                id=org_id, slug="test-org", name="Test Org", tier="enterprise"
+            )
+            user = User(
+                id=user_id, email="super@example.com", is_superuser=True, is_active=True
+            )
+            ff = FeatureFlag(key="test_feat", name="Test Feat")
+            ff.id = feature_id
+            session.add_all([org, user, ff])
+            await session.commit()
+
+        return {
+            "org_id": str(org_id),
+            "user_id": str(user_id),
+            "feature_id": str(feature_id),
+        }
+
+    @pytest_asyncio.fixture
+    async def client(self, session_maker, seeded):
+        import importlib
+
+        from fastapi import FastAPI
+        from httpx import ASGITransport, AsyncClient
+
+        from dev_health_ops.api.services.auth import AuthenticatedUser
+
+        admin_module = importlib.import_module("dev_health_ops.api.admin")
+        auth_module = importlib.import_module("dev_health_ops.api.auth.router")
+
+        app = FastAPI()
+        app.include_router(admin_module.router)
+
+        current_user = AuthenticatedUser(
+            user_id=seeded["user_id"],
+            email="super@example.com",
+            org_id=seeded["org_id"],
+            role="owner",
+            is_superuser=True,
+        )
+
+        async def _session_override():
+            async with session_maker() as session:
+                try:
+                    yield session
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    raise
+
+        app.dependency_overrides[auth_module.get_current_user] = lambda: current_user
+        app.dependency_overrides[admin_module.get_session] = _session_override
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+        app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_create_override_records_created_by(self, client, seeded):
+        """POST /feature-overrides sets created_by to the acting superuser."""
+        resp = await client.post(
+            f"/api/v1/admin/orgs/{seeded['org_id']}/feature-overrides",
+            json={
+                "feature_id": seeded["feature_id"],
+                "is_enabled": True,
+                "reason": "trial",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["created_by"] == seeded["user_id"]
+        assert data["updated_by"] is None
+
+    @pytest.mark.asyncio
+    async def test_update_override_records_updated_by(self, client, seeded):
+        """PATCH /feature-overrides/:id sets updated_by to the acting superuser."""
+        create_resp = await client.post(
+            f"/api/v1/admin/orgs/{seeded['org_id']}/feature-overrides",
+            json={"feature_id": seeded["feature_id"], "is_enabled": True},
+        )
+        assert create_resp.status_code == 201
+        override_id = create_resp.json()["id"]
+
+        patch_resp = await client.patch(
+            f"/api/v1/admin/orgs/{seeded['org_id']}/feature-overrides/{override_id}",
+            json={"is_enabled": False, "reason": "disabled by admin"},
+        )
+        assert patch_resp.status_code == 200, patch_resp.text
+        data = patch_resp.json()
+        assert data["is_enabled"] is False
+        assert data["updated_by"] == seeded["user_id"]
+        assert data["reason"] == "disabled by admin"
+
+    @pytest.mark.asyncio
+    async def test_update_nonexistent_override_returns_404(self, client, seeded):
+        """PATCH on a non-existent override returns 404."""
+        import uuid
+
+        fake_id = str(uuid.uuid4())
+        resp = await client.patch(
+            f"/api/v1/admin/orgs/{seeded['org_id']}/feature-overrides/{fake_id}",
+            json={"is_enabled": False},
+        )
+        assert resp.status_code == 404

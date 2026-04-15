@@ -26,7 +26,9 @@ from dev_health_ops.work_graph.extractors.text_parser import (
 from dev_health_ops.work_graph.ids import (
     generate_commit_id,
     generate_edge_id,
+    generate_feature_flag_id,
     generate_pr_id,
+    generate_release_id,
 )
 from dev_health_ops.work_graph.models import (
     EdgeType,
@@ -171,6 +173,117 @@ class WorkGraphBuilder:
         if raw:
             return Provenance.NATIVE
         return Provenance.NATIVE
+
+    def add_release_node(
+        self,
+        release_ref: str,
+        environment: str,
+        *,
+        provider: str | None = None,
+        repo_id: uuid.UUID | None = None,
+        event_ts: datetime | None = None,
+    ) -> WorkGraphEdge:
+        """Create a RELEASE node placeholder edge (self-referencing identity edge).
+
+        Returns the identity edge so callers can chain ``add_release_edge``.
+        """
+        release_id = generate_release_id(self.config.org_id, release_ref)
+        edge_id = generate_edge_id(
+            NodeType.RELEASE,
+            release_id,
+            EdgeType.RELATES,
+            NodeType.RELEASE,
+            release_id,
+        )
+        edge = WorkGraphEdge(
+            edge_id=edge_id,
+            source_type=NodeType.RELEASE,
+            source_id=release_id,
+            target_type=NodeType.RELEASE,
+            target_id=release_id,
+            edge_type=EdgeType.RELATES,
+            provenance=Provenance.NATIVE,
+            confidence=1.0,
+            evidence=f"release:{release_ref}@{environment}",
+            repo_id=repo_id or self.config.repo_id,
+            provider=provider,
+            event_ts=event_ts or self._now,
+        )
+        self._write_edges([edge])
+        return edge
+
+    def add_feature_flag_node(
+        self,
+        flag_key: str,
+        provider: str,
+        project_key: str,
+        *,
+        repo_id: uuid.UUID | None = None,
+        event_ts: datetime | None = None,
+    ) -> WorkGraphEdge:
+        """Create a FEATURE_FLAG node placeholder edge (self-referencing identity edge)."""
+        flag_id = generate_feature_flag_id(
+            self.config.org_id, provider, project_key, flag_key
+        )
+        edge_id = generate_edge_id(
+            NodeType.FEATURE_FLAG,
+            flag_id,
+            EdgeType.RELATES,
+            NodeType.FEATURE_FLAG,
+            flag_id,
+        )
+        edge = WorkGraphEdge(
+            edge_id=edge_id,
+            source_type=NodeType.FEATURE_FLAG,
+            source_id=flag_id,
+            target_type=NodeType.FEATURE_FLAG,
+            target_id=flag_id,
+            edge_type=EdgeType.RELATES,
+            provenance=Provenance.NATIVE,
+            confidence=1.0,
+            evidence=f"flag:{provider}/{project_key}/{flag_key}",
+            repo_id=repo_id or self.config.repo_id,
+            provider=provider,
+            event_ts=event_ts or self._now,
+        )
+        self._write_edges([edge])
+        return edge
+
+    def add_release_edge(
+        self,
+        release_id: str,
+        pr_id: str,
+        edge_type: EdgeType,
+        confidence: float,
+        *,
+        evidence: str = "",
+        provenance: Provenance = Provenance.NATIVE,
+        repo_id: uuid.UUID | None = None,
+        event_ts: datetime | None = None,
+    ) -> WorkGraphEdge:
+        """Create an edge from a RELEASE node to a PR (or other target)."""
+        edge_id = generate_edge_id(
+            NodeType.RELEASE,
+            release_id,
+            edge_type,
+            NodeType.PR,
+            pr_id,
+        )
+        edge = WorkGraphEdge(
+            edge_id=edge_id,
+            source_type=NodeType.RELEASE,
+            source_id=release_id,
+            target_type=NodeType.PR,
+            target_id=pr_id,
+            edge_type=edge_type,
+            provenance=provenance,
+            confidence=confidence,
+            evidence=evidence,
+            repo_id=repo_id or self.config.repo_id,
+            event_ts=event_ts or self._now,
+        )
+        self._write_edges([edge])
+        return edge
 
     def build(self) -> dict:
         """

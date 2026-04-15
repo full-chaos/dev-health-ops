@@ -222,6 +222,8 @@ class WorkGraphNodeTypeInput(Enum):
     PR = "pr"
     COMMIT = "commit"
     FILE = "file"
+    RELEASE = "release"
+    FEATURE_FLAG = "feature_flag"
 
 
 @strawberry.enum
@@ -241,6 +243,10 @@ class WorkGraphEdgeTypeInput(Enum):
     FIXES = "fixes"
     CONTAINS = "contains"
     TOUCHES = "touches"
+    INTRODUCED_BY = "introduced_by"
+    CONFIG_CHANGED_BY = "config_changed_by"
+    GUARDS = "guards"
+    IMPACTS = "impacts"
 
 
 @strawberry.input

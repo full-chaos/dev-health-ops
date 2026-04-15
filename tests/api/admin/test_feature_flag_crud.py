@@ -33,7 +33,7 @@ _features_router = _features_router_module.router
 _common_module = importlib.import_module("dev_health_ops.api.admin.routers.common")
 _get_session = _common_module.get_session
 
-_middleware_module = importlib.import_module("dev_health_ops.api.admin.middleware")
+_unused_middleware_module = importlib.import_module("dev_health_ops.api.admin.middleware")
 
 
 def _build_user(*, superuser: bool) -> AuthenticatedUser:

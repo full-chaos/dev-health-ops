@@ -3,10 +3,7 @@ import pytest
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.metrics.schemas import (
     FeatureFlagEventRecord,
-    FeatureFlagLinkRecord,
     FeatureFlagRecord,
-    ReleaseImpactDailyRecord,
-    TelemetrySignalBucketRecord,
 )
 
 
@@ -45,6 +42,7 @@ class TestGenerateFeatureFlags:
     def test_some_archived(self, flags: list[FeatureFlagRecord]) -> None:
         archived = [f for f in flags if f.archived_at is not None]
         active = [f for f in flags if f.archived_at is None]
+        assert len(archived) > 0
         assert len(active) > 0
 
 
@@ -71,9 +69,9 @@ class TestGenerateFeatureFlagEvents:
             ):
                 first_per_flag[evt.flag_key] = evt
         for flag_key, evt in first_per_flag.items():
-            assert evt.event_type == "create", (
-                f"First event for {flag_key} should be 'create', got '{evt.event_type}'"
-            )
+            assert (
+                evt.event_type == "create"
+            ), f"First event for {flag_key} should be 'create', got '{evt.event_type}'"
 
     def test_events_chronologically_ordered(
         self,

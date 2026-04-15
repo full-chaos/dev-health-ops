@@ -16,7 +16,6 @@ from dev_health_ops.models.git import (
     Incident,
     Repo,
 )
-from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.processors.base_git import (
     BaseGitProcessor,
     backfill_file_records,
@@ -26,6 +25,7 @@ from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
     safe_parse_datetime,
 )
+from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.processors.storage_protocol import GitSyncStore
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (

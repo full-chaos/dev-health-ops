@@ -566,6 +566,49 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     if hasattr(sink, "write_file_hotspot_daily") and hotspot_records:
                         sink.write_file_hotspot_daily(hotspot_records)
 
+                    ff_gen = SyntheticDataGenerator(repo_name=r_name, seed=seed_value)
+                    ff_flags = ff_gen.generate_feature_flags(org_id=org_id)
+                    if hasattr(sink, "write_feature_flags") and ff_flags:
+                        sink.write_feature_flags(ff_flags)
+
+                    ff_events = ff_gen.generate_feature_flag_events(
+                        ff_flags, org_id=org_id
+                    )
+                    if hasattr(sink, "write_feature_flag_events") and ff_events:
+                        sink.write_feature_flag_events(ff_events)
+
+                    ff_links = ff_gen.generate_feature_flag_links(
+                        ff_flags, org_id=org_id
+                    )
+                    if hasattr(sink, "write_feature_flag_links") and ff_links:
+                        sink.write_feature_flag_links(ff_links)
+
+                    telemetry_buckets = ff_gen.generate_telemetry_signal_buckets(
+                        days=ns.days, org_id=org_id
+                    )
+                    if (
+                        hasattr(sink, "write_telemetry_signal_buckets")
+                        and telemetry_buckets
+                    ):
+                        sink.write_telemetry_signal_buckets(telemetry_buckets)
+
+                    release_impact = ff_gen.generate_release_impact_daily(
+                        days=ns.days, org_id=org_id
+                    )
+                    if hasattr(sink, "write_release_impact_daily") and release_impact:
+                        sink.write_release_impact_daily(release_impact)
+
+                    logging.info(
+                        "Wrote %d feature flags, %d events, %d links, "
+                        "%d telemetry buckets, %d release impact records for repo %s.",
+                        len(ff_flags),
+                        len(ff_events),
+                        len(ff_links),
+                        len(telemetry_buckets),
+                        len(release_impact),
+                        r_name,
+                    )
+
                 logging.info(
                     "Wrote DORA, investment classifications, investment metrics, "
                     "and file hotspot daily records for %d repos.",

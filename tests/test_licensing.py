@@ -17,11 +17,11 @@ from dev_health_ops.licensing import (
     sign_license,
     sign_payload,
 )
+from dev_health_ops.licensing.registry import get_features_for_tier
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     GRACE_DAYS,
     LicenseLimits,
-    get_features_for_tier,
 )
 
 

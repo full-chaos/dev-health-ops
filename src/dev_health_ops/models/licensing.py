@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from enum import Enum
 
 from sqlalchemy import (
     JSON,
@@ -28,19 +27,16 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
+# Back-compat re-exports: callers that imported these from `models.licensing`
+# pre-refactor should keep working. Canonical homes are licensing/{types,registry}.py.
+from dev_health_ops.licensing.registry import (
+    STANDARD_FEATURES as STANDARD_FEATURES,  # noqa: F401
+)
+from dev_health_ops.licensing.types import (
+    FeatureCategory as FeatureCategory,  # noqa: F401
+)
 from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.git import GUID, Base
-
-
-class FeatureCategory(str, Enum):
-    """Categories for grouping features."""
-
-    CORE = "core"
-    ANALYTICS = "analytics"
-    INTEGRATIONS = "integrations"
-    SECURITY = "security"
-    COMPLIANCE = "compliance"
-    ADMIN = "admin"
 
 
 class FeatureFlag(Base):
@@ -515,187 +511,3 @@ TIER_LIMITS_DEFAULTS = {
 
 # Backward-compat alias — existing code imports TIER_LIMITS
 TIER_LIMITS = TIER_LIMITS_DEFAULTS
-
-STANDARD_FEATURES = [
-    (
-        "git_sync",
-        "Git Sync",
-        FeatureCategory.CORE,
-        LicenseTier.COMMUNITY,
-        "Sync git commits and PRs",
-    ),
-    (
-        "work_items_sync",
-        "Work Items Sync",
-        FeatureCategory.CORE,
-        LicenseTier.COMMUNITY,
-        "Sync work items from providers",
-    ),
-    (
-        "basic_analytics",
-        "Basic Analytics",
-        FeatureCategory.ANALYTICS,
-        LicenseTier.COMMUNITY,
-        "Basic metrics and dashboards",
-    ),
-    (
-        "team_management",
-        "Team Management",
-        FeatureCategory.CORE,
-        LicenseTier.COMMUNITY,
-        "Basic team configuration",
-    ),
-    (
-        "github_integration",
-        "GitHub Integration",
-        FeatureCategory.INTEGRATIONS,
-        LicenseTier.TEAM,
-        "GitHub provider integration",
-    ),
-    (
-        "gitlab_integration",
-        "GitLab Integration",
-        FeatureCategory.INTEGRATIONS,
-        LicenseTier.TEAM,
-        "GitLab provider integration",
-    ),
-    (
-        "jira_integration",
-        "Jira Integration",
-        FeatureCategory.INTEGRATIONS,
-        LicenseTier.TEAM,
-        "Jira provider integration",
-    ),
-    (
-        "investment_view",
-        "Investment View",
-        FeatureCategory.ANALYTICS,
-        LicenseTier.TEAM,
-        "Investment categorization view",
-    ),
-    (
-        "api_access",
-        "API Access",
-        FeatureCategory.CORE,
-        LicenseTier.TEAM,
-        "REST and GraphQL API access",
-    ),
-    (
-        "capacity_forecast",
-        "Capacity Forecast",
-        FeatureCategory.ANALYTICS,
-        LicenseTier.TEAM,
-        "Capacity planning forecasts",
-    ),
-    (
-        "work_graph",
-        "Work Graph",
-        FeatureCategory.ANALYTICS,
-        LicenseTier.TEAM,
-        "Work graph analysis",
-    ),
-    (
-        "quadrant_analysis",
-        "Quadrant Analysis",
-        FeatureCategory.ANALYTICS,
-        LicenseTier.TEAM,
-        "Quadrant metrics analysis",
-    ),
-    (
-        "linear_integration",
-        "Linear Integration",
-        FeatureCategory.INTEGRATIONS,
-        LicenseTier.TEAM,
-        "Linear provider integration",
-    ),
-    (
-        "llm_categorization",
-        "LLM Categorization",
-        FeatureCategory.ANALYTICS,
-        LicenseTier.TEAM,
-        "AI-powered work categorization",
-    ),
-    (
-        "webhooks",
-        "Webhooks",
-        FeatureCategory.INTEGRATIONS,
-        LicenseTier.TEAM,
-        "Webhook ingestion",
-    ),
-    (
-        "scheduled_jobs",
-        "Scheduled Jobs",
-        FeatureCategory.CORE,
-        LicenseTier.TEAM,
-        "Automated scheduled sync jobs",
-    ),
-    (
-        "sso_saml",
-        "SAML SSO",
-        FeatureCategory.SECURITY,
-        LicenseTier.ENTERPRISE,
-        "SAML single sign-on",
-    ),
-    (
-        "sso_oidc",
-        "OIDC SSO",
-        FeatureCategory.SECURITY,
-        LicenseTier.ENTERPRISE,
-        "OIDC single sign-on",
-    ),
-    (
-        "audit_log",
-        "Audit Log",
-        FeatureCategory.COMPLIANCE,
-        LicenseTier.ENTERPRISE,
-        "Audit logging",
-    ),
-    (
-        "custom_retention",
-        "Custom Retention",
-        FeatureCategory.COMPLIANCE,
-        LicenseTier.ENTERPRISE,
-        "Custom data retention policies",
-    ),
-    (
-        "ip_allowlist",
-        "IP Allowlist",
-        FeatureCategory.SECURITY,
-        LicenseTier.ENTERPRISE,
-        "IP address allowlisting",
-    ),
-    (
-        "data_export",
-        "Data Export",
-        FeatureCategory.COMPLIANCE,
-        LicenseTier.ENTERPRISE,
-        "Bulk data export",
-    ),
-    (
-        "multi_org",
-        "Multi-Organization",
-        FeatureCategory.ADMIN,
-        LicenseTier.ENTERPRISE,
-        "Multiple organization support",
-    ),
-    (
-        "custom_branding",
-        "Custom Branding",
-        FeatureCategory.ADMIN,
-        LicenseTier.ENTERPRISE,
-        "Custom branding and white-label",
-    ),
-    (
-        "priority_support",
-        "Priority Support",
-        FeatureCategory.ADMIN,
-        LicenseTier.ENTERPRISE,
-        "Priority support SLA",
-    ),
-]
-
-# Re-export get_features_for_tier for callers that import from models.licensing.
-# The canonical definition lives in licensing.types to avoid circular imports.
-from dev_health_ops.licensing.types import (  # noqa: E402,F401,I001
-    get_features_for_tier as get_features_for_tier,
-)

@@ -12,6 +12,17 @@ class LicenseTier(str, Enum):
     ENTERPRISE = "enterprise"
 
 
+class FeatureCategory(str, Enum):
+    """Categories for grouping features."""
+
+    CORE = "core"
+    ANALYTICS = "analytics"
+    INTEGRATIONS = "integrations"
+    SECURITY = "security"
+    COMPLIANCE = "compliance"
+    ADMIN = "admin"
+
+
 class LicenseLimits(BaseModel):
     users: int = Field(description="Max users, -1 for unlimited")
     repos: int = Field(description="Max repos, -1 for unlimited")
@@ -55,28 +66,8 @@ GRACE_DAYS: dict[LicenseTier, int] = {
 }
 
 # Tier ordering for comparison (higher index = higher tier)
-_TIER_ORDER: list[LicenseTier] = [
+TIER_ORDER: list[LicenseTier] = [
     LicenseTier.COMMUNITY,
     LicenseTier.TEAM,
     LicenseTier.ENTERPRISE,
 ]
-
-
-def get_features_for_tier(tier: LicenseTier) -> dict[str, bool]:
-    """Return a feature-key → enabled dict for the given tier.
-
-    A feature is enabled when its ``min_tier`` is <= the requested tier.
-    This is the single source of truth replacing the deleted ``DEFAULT_FEATURES``.
-    Lazily imports STANDARD_FEATURES from models.licensing to avoid circular imports.
-    """
-    # Lazy import to break the circular dependency:
-    # models/licensing.py imports licensing.types → licensing/__init__ → gating.py
-    # → models/licensing.py (circular if imported at module level)
-    from dev_health_ops.models.licensing import STANDARD_FEATURES  # noqa: PLC0415
-
-    tier_index = _TIER_ORDER.index(tier) if tier in _TIER_ORDER else 0
-    result: dict[str, bool] = {}
-    for key, _name, _category, min_tier, _desc in STANDARD_FEATURES:
-        min_index = _TIER_ORDER.index(min_tier) if min_tier in _TIER_ORDER else 0
-        result[key] = tier_index >= min_index
-    return result

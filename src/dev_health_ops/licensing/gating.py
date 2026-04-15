@@ -11,11 +11,11 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.licensing.registry import get_features_for_tier
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     LicensePayload,
     LicenseTier,
-    get_features_for_tier,
 )
 from dev_health_ops.licensing.validator import LicenseValidator, ValidationResult
 

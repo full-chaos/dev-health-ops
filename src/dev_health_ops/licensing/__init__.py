@@ -18,13 +18,17 @@ from dev_health_ops.licensing.generator import (
     sign_license,
     sign_payload,
 )
+from dev_health_ops.licensing.registry import (
+    STANDARD_FEATURES,
+    get_features_for_tier,
+)
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     GRACE_DAYS,
+    FeatureCategory,
     LicenseLimits,
     LicensePayload,
     LicenseTier,
-    get_features_for_tier,
 )
 from dev_health_ops.licensing.validator import (
     LicenseExpiredError,
@@ -40,6 +44,8 @@ __all__ = [
     "LicensePayload",
     "DEFAULT_LIMITS",
     "GRACE_DAYS",
+    "FeatureCategory",
+    "STANDARD_FEATURES",
     "get_features_for_tier",
     # Validator
     "LicenseValidator",

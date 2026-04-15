@@ -23,6 +23,256 @@ from dev_health_ops.workers.task_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _sync_launchdarkly_feature_flags(
+    *,
+    db_url: str,
+    org_id: str,
+    credentials: dict[str, Any],
+    sync_options: dict[str, Any],
+    since_dt: datetime | None,
+) -> dict[str, Any]:
+    from dev_health_ops.connectors.launchdarkly import LaunchDarklyConnector
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+    from dev_health_ops.processors.launchdarkly import (
+        normalize_audit_events,
+        normalize_flags,
+    )
+    from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
+    from dev_health_ops.work_graph.ids import generate_feature_flag_id
+    from dev_health_ops.work_graph.models import EdgeType, NodeType, Provenance
+
+    api_key = str(credentials.get("api_key") or "")
+    project_key = str(
+        credentials.get("project_key") or sync_options.get("project_key") or ""
+    )
+    environment = str(
+        credentials.get("environment") or sync_options.get("environment") or ""
+    )
+    if not api_key or not project_key:
+        raise ValueError(
+            "LaunchDarkly feature-flag sync requires api_key and project_key"
+        )
+    if not db_url.startswith("clickhouse://"):
+        raise ValueError(
+            "Feature-flag sync requires CLICKHOUSE_URI / ClickHouse analytics sink"
+        )
+
+    async def _run() -> dict[str, Any]:
+        async with LaunchDarklyConnector(
+            api_key=api_key, project_key=project_key
+        ) as connector:
+            raw_flags = await connector.get_flags(project_key)
+            raw_events = await connector.get_audit_log(since=since_dt, limit=200)
+
+        flags = normalize_flags(raw_flags, org_id)
+        if environment:
+            flags = [
+                flag.__class__(
+                    provider=flag.provider,
+                    flag_key=flag.flag_key,
+                    project_key=flag.project_key,
+                    repo_id=flag.repo_id,
+                    environment=environment,
+                    flag_type=flag.flag_type,
+                    created_at=flag.created_at,
+                    archived_at=flag.archived_at,
+                    last_synced=flag.last_synced,
+                    org_id=flag.org_id,
+                )
+                for flag in flags
+            ]
+        events = normalize_audit_events(raw_events, org_id)
+        if environment:
+            events = [
+                event.__class__(
+                    event_type=event.event_type,
+                    flag_key=event.flag_key,
+                    environment=event.environment or environment,
+                    repo_id=event.repo_id,
+                    actor_type=event.actor_type,
+                    prev_state=event.prev_state,
+                    next_state=event.next_state,
+                    event_ts=event.event_ts,
+                    ingested_at=event.ingested_at,
+                    source_event_id=event.source_event_id,
+                    dedupe_key=event.dedupe_key,
+                    org_id=event.org_id,
+                )
+                for event in events
+            ]
+
+        sink = ClickHouseMetricsSink(db_url)
+        sink.org_id = org_id  # type: ignore[attr-defined]
+        builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
+        try:
+            sink.write_feature_flags(flags)
+            sink.write_feature_flag_events(events)
+
+            latest_events: dict[str, Any] = {}
+            for event in events:
+                existing = latest_events.get(event.flag_key)
+                if existing is None or event.event_ts > existing.event_ts:
+                    latest_events[event.flag_key] = event
+
+            for flag in flags:
+                builder.add_feature_flag_node(
+                    flag_key=flag.flag_key,
+                    provider=flag.provider,
+                    project_key=flag.project_key or project_key,
+                    repo_id=flag.repo_id,
+                    event_ts=flag.created_at,
+                )
+                latest_event = latest_events.get(flag.flag_key)
+                if latest_event is None:
+                    continue
+                flag_id = generate_feature_flag_id(
+                    org_id,
+                    flag.provider,
+                    flag.project_key or project_key,
+                    flag.flag_key,
+                )
+                builder.add_feature_flag_edge(
+                    flag_id=flag_id,
+                    target_type=NodeType.FEATURE_FLAG,
+                    target_id=flag_id,
+                    edge_type=EdgeType.CONFIG_CHANGED_BY,
+                    confidence=1.0,
+                    evidence=(
+                        f"{latest_event.event_ts.isoformat()}"
+                        f"|{latest_event.event_type}"
+                        f"|{latest_event.next_state or ''}"
+                    ),
+                    provenance=Provenance.NATIVE,
+                    provider=flag.provider,
+                    event_ts=latest_event.event_ts,
+                )
+        finally:
+            builder.close()
+            sink.close()
+
+        return {
+            "flags_synced": len(flags),
+            "events_synced": len(events),
+            "project_key": project_key,
+            "environment": environment or None,
+        }
+
+    return run_async(_run())
+
+
+def _sync_gitlab_feature_flags(
+    *,
+    db_url: str,
+    org_id: str,
+    credentials: dict[str, Any],
+    sync_options: dict[str, Any],
+) -> dict[str, Any]:
+    from dev_health_ops.connectors.gitlab import GitLabConnector
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+    from dev_health_ops.processors.gitlab_feature_flags import (
+        normalize_gitlab_feature_flags,
+        snapshot_gitlab_feature_flag_events,
+    )
+    from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
+    from dev_health_ops.work_graph.ids import generate_feature_flag_id
+    from dev_health_ops.work_graph.models import EdgeType, NodeType, Provenance
+
+    token = str(credentials.get("token") or "")
+    gitlab_url = str(
+        credentials.get("url")
+        or credentials.get("base_url")
+        or sync_options.get("gitlab_url")
+        or "https://gitlab.com"
+    )
+    project_id_or_path = (
+        sync_options.get("project_id")
+        or sync_options.get("repo")
+        or sync_options.get("project_key")
+    )
+    if not token or not project_id_or_path:
+        raise ValueError(
+            "GitLab feature-flag sync requires token and project_id/project path"
+        )
+    if not db_url.startswith("clickhouse://"):
+        raise ValueError(
+            "Feature-flag sync requires CLICKHOUSE_URI / ClickHouse analytics sink"
+        )
+
+    connector = GitLabConnector(url=gitlab_url, private_token=token)
+    raw_flags = connector.get_feature_flags(project_id_or_path)
+    project_key = connector.get_project_name(project_id_or_path)
+    repo_id = None
+
+    flags = normalize_gitlab_feature_flags(
+        raw_flags,
+        project_key=project_key,
+        org_id=org_id,
+        repo_id=repo_id,
+    )
+    events = snapshot_gitlab_feature_flag_events(
+        raw_flags,
+        project_key=project_key,
+        org_id=org_id,
+        repo_id=repo_id,
+    )
+
+    sink = ClickHouseMetricsSink(db_url)
+    sink.org_id = org_id  # type: ignore[attr-defined]
+    builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
+    try:
+        sink.write_feature_flags(flags)
+        sink.write_feature_flag_events(events)
+
+        latest_events: dict[str, Any] = {}
+        for event in events:
+            existing = latest_events.get(event.flag_key)
+            if existing is None or event.event_ts > existing.event_ts:
+                latest_events[event.flag_key] = event
+
+        for flag in flags:
+            builder.add_feature_flag_node(
+                flag_key=flag.flag_key,
+                provider=flag.provider,
+                project_key=flag.project_key or project_key,
+                repo_id=flag.repo_id,
+                event_ts=flag.created_at,
+            )
+            latest_event = latest_events.get(flag.flag_key)
+            if latest_event is None:
+                continue
+            flag_id = generate_feature_flag_id(
+                org_id,
+                flag.provider,
+                flag.project_key or project_key,
+                flag.flag_key,
+            )
+            builder.add_feature_flag_edge(
+                flag_id=flag_id,
+                target_type=NodeType.FEATURE_FLAG,
+                target_id=flag_id,
+                edge_type=EdgeType.CONFIG_CHANGED_BY,
+                confidence=1.0,
+                evidence=(
+                    f"{latest_event.event_ts.isoformat()}"
+                    f"|{latest_event.event_type}"
+                    f"|{latest_event.next_state or ''}"
+                ),
+                provenance=Provenance.NATIVE,
+                provider=flag.provider,
+                event_ts=latest_event.event_ts,
+            )
+    finally:
+        builder.close()
+        sink.close()
+
+    return {
+        "flags_synced": len(flags),
+        "events_synced": len(events),
+        "project_key": project_key,
+        "gitlab_url": gitlab_url,
+    }
+
+
 def _dispatch_post_sync_tasks(
     *,
     provider: str,
@@ -212,9 +462,18 @@ def run_sync_config(
             if _owr:
                 repo_id_for_watermark = f"{_owr[0]}/{_owr[1]}"
         elif provider == "gitlab":
-            _pid = sync_options.get("project_id")
+            _pid = sync_options.get("project_id") or sync_options.get("repo")
             if _pid is not None:
                 repo_id_for_watermark = str(_pid)
+        elif provider == "launchdarkly":
+            project_key = sync_options.get("project_key") or credentials.get(
+                "project_key"
+            )
+            environment = sync_options.get("environment") or credentials.get(
+                "environment"
+            )
+            if project_key:
+                repo_id_for_watermark = f"{project_key}:{environment or 'default'}"
 
         if repo_id_for_watermark and not full_resync:
             with get_postgres_session_sync() as session:
@@ -262,34 +521,65 @@ def run_sync_config(
             )
 
         elif provider == "gitlab":
-            project_id = sync_options.get("project_id")
-            if project_id is None:
-                raise ValueError("Missing GitLab project_id in sync options")
-
-            token = str(credentials.get("token") or "")
-            if not token:
-                raise ValueError("Missing GitLab token for sync configuration")
-
-            gitlab_url = str(sync_options.get("gitlab_url", "https://gitlab.com"))
-            merged_flags = _merge_sync_flags(sync_targets)
-
-            async def _gitlab_handler(store):
-                await process_gitlab_project(
-                    store=store,
-                    project_id=int(project_id),
-                    token=token,
-                    gitlab_url=gitlab_url,
-                    since=since_dt,
-                    **merged_flags,
+            feature_flag_requested = "feature-flags" in sync_targets
+            gitlab_targets = [
+                target for target in sync_targets if target != "feature-flags"
+            ]
+            if feature_flag_requested:
+                result_payload["feature_flags"] = _sync_gitlab_feature_flags(
+                    db_url=db_url,
+                    org_id=org_id,
+                    credentials=credentials,
+                    sync_options=sync_options,
                 )
 
-            run_async(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
-            result_payload.update(
-                {
-                    "project_id": int(project_id),
-                    "gitlab_url": gitlab_url,
-                    "flags": merged_flags,
-                }
+            if not gitlab_targets:
+                completed_at = datetime.now(timezone.utc)
+                duration_seconds = int((completed_at - started_at).total_seconds())
+            else:
+                project_id = sync_options.get("project_id")
+                if project_id is None:
+                    raise ValueError("Missing GitLab project_id in sync options")
+
+                token = str(credentials.get("token") or "")
+                if not token:
+                    raise ValueError("Missing GitLab token for sync configuration")
+
+                gitlab_url = str(sync_options.get("gitlab_url", "https://gitlab.com"))
+                merged_flags = _merge_sync_flags(gitlab_targets)
+
+                async def _gitlab_handler(store):
+                    await process_gitlab_project(
+                        store=store,
+                        project_id=int(project_id),
+                        token=token,
+                        gitlab_url=gitlab_url,
+                        since=since_dt,
+                        **merged_flags,
+                    )
+
+                run_async(
+                    run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id)
+                )
+                result_payload.update(
+                    {
+                        "project_id": int(project_id),
+                        "gitlab_url": gitlab_url,
+                        "flags": merged_flags,
+                    }
+                )
+
+        elif provider == "launchdarkly":
+            if "feature-flags" not in sync_targets:
+                raise ValueError(
+                    "LaunchDarkly sync configurations currently support only the feature-flags target"
+                )
+            result_payload["feature_flags"] = _sync_launchdarkly_feature_flags(
+                db_url=db_url,
+                org_id=org_id,
+                credentials=credentials,
+                sync_options=sync_options,
+                since_dt=since_dt,
             )
 
         elif provider == "jira":

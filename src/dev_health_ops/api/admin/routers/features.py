@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.admin.middleware import require_superuser
 from dev_health_ops.api.admin.schemas import (
     FeatureFlagResponse,
+    FeatureFlagUpdateRequest,
     FeatureOverrideCreate,
     FeatureOverrideResponse,
 )
@@ -154,3 +155,46 @@ async def delete_feature_override(
 
     await session.delete(override)
     await session.flush()
+
+
+@router.patch("/feature-flags/{flag_id}", response_model=FeatureFlagResponse)
+async def update_feature_flag(
+    flag_id: str,
+    payload: FeatureFlagUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
+) -> FeatureFlagResponse:
+    """Update patchable properties of a feature flag.
+
+    Only is_enabled, is_beta, and is_deprecated may be updated.
+    name, key, min_tier, and category are immutable via this endpoint.
+    """
+    flag_uuid = uuid.UUID(flag_id)
+    result = await session.execute(
+        select(FeatureFlag).where(FeatureFlag.id == flag_uuid)
+    )
+    flag = result.scalar_one_or_none()
+    if flag is None:
+        raise HTTPException(status_code=404, detail="Feature flag not found")
+
+    if payload.is_enabled is not None:
+        flag.is_enabled = payload.is_enabled
+    if payload.is_beta is not None:
+        flag.is_beta = payload.is_beta
+    if payload.is_deprecated is not None:
+        flag.is_deprecated = payload.is_deprecated
+
+    await session.flush()
+
+    return FeatureFlagResponse(
+        id=str(flag.id),
+        key=flag.key,
+        name=flag.name,
+        description=flag.description,
+        category=flag.category,
+        min_tier=flag.min_tier,
+        is_enabled=bool(flag.is_enabled),
+        is_beta=bool(flag.is_beta),
+        is_deprecated=bool(flag.is_deprecated),
+        created_at=flag.created_at,
+    )

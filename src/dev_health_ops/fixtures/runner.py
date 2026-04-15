@@ -470,6 +470,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 )
             sink = ClickHouseMetricsSink(ns.sink)
 
+            all_ff_flags: list = []
+            all_ff_events: list = []
+
             if sink:
                 # Propagate org_id to sink for auto-injection into metric records.
                 sink.org_id = org_id  # type: ignore[attr-defined]
@@ -568,12 +571,14 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
                     ff_gen = SyntheticDataGenerator(repo_name=r_name, seed=seed_value)
                     ff_flags = ff_gen.generate_feature_flags(org_id=org_id)
+                    all_ff_flags.extend(ff_flags)
                     if hasattr(sink, "write_feature_flags") and ff_flags:
                         sink.write_feature_flags(ff_flags)
 
                     ff_events = ff_gen.generate_feature_flag_events(
                         ff_flags, org_id=org_id
                     )
+                    all_ff_events.extend(ff_events)
                     if hasattr(sink, "write_feature_flag_events") and ff_events:
                         sink.write_feature_flag_events(ff_events)
 
@@ -647,6 +652,18 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         builder = WorkGraphBuilder(config)
         try:
             builder.build()
+            if all_ff_flags:
+                for flag in all_ff_flags:
+                    builder.add_feature_flag_node(
+                        flag_key=flag.flag_key,
+                        provider=flag.provider,
+                        project_key=flag.project_key or "",
+                        repo_id=flag.repo_id,
+                        event_ts=flag.created_at,
+                    )
+                logging.info(
+                    "Added %d feature flag nodes to work graph.", len(all_ff_flags)
+                )
             if config.from_date and config.to_date:
                 await materialize_fixture_investments(
                     db_url=ns.sink,

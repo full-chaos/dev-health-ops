@@ -793,6 +793,154 @@ def test_get_tier_price_id():
 
 
 # ---------------------------------------------------------------------------
+# FeatureBundle key validation — Layer 1 (write-time)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_bundle_feature_keys_valid():
+    """Creating a bundle with known keys succeeds."""
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
+
+    # "git_sync" and "api_access" are both in STANDARD_FEATURES
+    validate_bundle_feature_keys(["git_sync", "api_access"])
+
+
+def test_validate_bundle_feature_keys_unknown_raises():
+    """Creating a bundle with an unknown key raises ValueError naming the key."""
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_bundle_feature_keys(["git_sync", "totally_fake_feature"])
+
+    assert "totally_fake_feature" in str(exc_info.value)
+
+
+def test_validate_bundle_feature_keys_empty_succeeds():
+    """Empty feature list is valid (no keys to check)."""
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
+
+    validate_bundle_feature_keys([])
+
+
+def test_validate_bundle_feature_keys_all_standard():
+    """All 25 STANDARD_FEATURES keys pass validation."""
+    from dev_health_ops.api.billing.bundle_validation import (
+        validate_bundle_feature_keys,
+    )
+    from dev_health_ops.models.licensing import STANDARD_FEATURES
+
+    all_keys = [key for key, *_rest in STANDARD_FEATURES]
+    validate_bundle_feature_keys(all_keys)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# FeatureBundle key validation — Layer 2 (startup-time)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_clean_db_passes():
+    """Startup check passes when all bundles reference known keys."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("core-bundle", ["git_sync", "basic_analytics"]),
+        ("team-bundle", ["investment_view", "api_access"]),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    # Should not raise
+    await validate_bundle_keys(mock_session)
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_stale_raises():
+    """Startup check raises RuntimeError when a stale key is found."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("good-bundle", ["git_sync"]),
+        ("bad-bundle", ["git_sync", "old_removed_feature"]),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await validate_bundle_keys(mock_session)
+
+    assert (
+        "old_removed_feature" in str(exc_info.value)
+        or "integrity check failed" in str(exc_info.value).lower()
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_allow_stale_env_var():
+    """ALLOW_STALE_FEATURE_BUNDLES=1 causes stale keys to be logged as warnings
+    instead of raising RuntimeError."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("bad-bundle", ["unknown_key_xyz"]),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch.dict("os.environ", {"ALLOW_STALE_FEATURE_BUNDLES": "1"}):
+        # Should NOT raise — only warn
+        await validate_bundle_keys(mock_session)
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_empty_bundles_passes():
+    """Startup check passes when no bundles exist."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = []
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    await validate_bundle_keys(mock_session)
+
+
+@pytest.mark.asyncio
+async def test_validate_bundle_keys_null_features_passes():
+    """Bundles with null/empty features list are skipped without error."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from dev_health_ops.api.billing.bundle_validation import validate_bundle_keys
+
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        ("empty-bundle", []),
+        ("null-bundle", None),
+    ]
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    await validate_bundle_keys(mock_session)
+
+
+# ---------------------------------------------------------------------------
 # G4 (CHAOS-1207) — Bridge: plan subscription → org feature enablement
 # ---------------------------------------------------------------------------
 
@@ -802,11 +950,19 @@ async def bridge_db(tmp_path):
     """SQLite in-memory DB with all billing + licensing tables for bridge tests."""
     from datetime import datetime, timezone
 
-    import sqlalchemy as sa
     from sqlalchemy import event as sa_event
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
 
-    from dev_health_ops.models.billing import BillingPlan, BillingPrice, FeatureBundle, PlanFeatureBundle
+    from dev_health_ops.models.billing import (
+        BillingPlan,
+        BillingPrice,
+        FeatureBundle,
+        PlanFeatureBundle,
+    )
     from dev_health_ops.models.git import Base
     from dev_health_ops.models.licensing import OrgLicense
     from dev_health_ops.models.subscriptions import Subscription, SubscriptionEvent
@@ -856,7 +1012,12 @@ async def _seed_enterprise_plan(session, plan_id, price_id, bundle_id):
     import uuid
     from datetime import datetime, timezone
 
-    from dev_health_ops.models.billing import BillingPlan, BillingPrice, FeatureBundle, PlanFeatureBundle
+    from dev_health_ops.models.billing import (
+        BillingPlan,
+        BillingPrice,
+        FeatureBundle,
+        PlanFeatureBundle,
+    )
 
     now = datetime.now(timezone.utc)
     plan = BillingPlan(
@@ -946,12 +1107,18 @@ async def test_subscription_creates_org_license(bridge_db):
         await _seed_enterprise_plan(session, plan_id, price_id, bundle_id)
 
         # Update stripe_price_id on the BillingPrice row.
-        price_row = (await session.execute(sa_select(BillingPrice).where(BillingPrice.id == price_id))).scalar_one()
+        price_row = (
+            await session.execute(
+                sa_select(BillingPrice).where(BillingPrice.id == price_id)
+            )
+        ).scalar_one()
         price_row.stripe_price_id = stripe_price_id
         await session.commit()
 
         # Insert a minimal Organization row (needed for FK).
-        org = Organization(id=org_id, slug=f"acme-corp-{org_id.hex[:8]}", name="Acme Corp")
+        org = Organization(
+            id=org_id, slug=f"acme-corp-{org_id.hex[:8]}", name="Acme Corp"
+        )
         session.add(org)
         await session.commit()
 
@@ -963,7 +1130,9 @@ async def test_subscription_creates_org_license(bridge_db):
         await session.commit()
 
     async with bridge_db() as session:
-        lic = (await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))).scalar_one_or_none()
+        lic = (
+            await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))
+        ).scalar_one_or_none()
         assert lic is not None, "OrgLicense must be created after subscription upsert"
         assert lic.tier == "enterprise"
         features = lic.features_override
@@ -997,11 +1166,17 @@ async def test_subscription_update_does_not_duplicate_license(bridge_db):
         from dev_health_ops.models.users import Organization
 
         await _seed_enterprise_plan(session, plan_id, price_id, bundle_id)
-        price_row = (await session.execute(sa_select(BillingPrice).where(BillingPrice.id == price_id))).scalar_one()
+        price_row = (
+            await session.execute(
+                sa_select(BillingPrice).where(BillingPrice.id == price_id)
+            )
+        ).scalar_one()
         price_row.stripe_price_id = stripe_price_id
         await session.commit()
 
-        org = Organization(id=org_id, slug=f"acme-corp-2-{org_id.hex[:8]}", name="Acme Corp 2")
+        org = Organization(
+            id=org_id, slug=f"acme-corp-2-{org_id.hex[:8]}", name="Acme Corp 2"
+        )
         session.add(org)
         await session.commit()
 
@@ -1013,14 +1188,24 @@ async def test_subscription_update_does_not_duplicate_license(bridge_db):
         await session.commit()
 
     # Second upsert with updated period — must update, not duplicate.
-    stripe_sub2 = _make_stripe_sub(stripe_sub_id, stripe_price_id, org_id, current_period_end=2_100_000_000.0)
+    stripe_sub2 = _make_stripe_sub(
+        stripe_sub_id, stripe_price_id, org_id, current_period_end=2_100_000_000.0
+    )
     async with bridge_db() as session:
         svc = SubscriptionService(session)
         await svc.upsert_from_stripe(stripe_sub2, org_id)
         await session.commit()
 
     async with bridge_db() as session:
-        rows = (await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))).scalars().all()
+        rows = (
+            (
+                await session.execute(
+                    select(OrgLicense).where(OrgLicense.org_id == org_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1, "Upsert must not duplicate OrgLicense rows"
         assert rows[0].tier == "enterprise"
 
@@ -1049,11 +1234,17 @@ async def test_subscription_cancellation_downgrades_license(bridge_db):
         from dev_health_ops.models.users import Organization
 
         await _seed_enterprise_plan(session, plan_id, price_id, bundle_id)
-        price_row = (await session.execute(sa_select(BillingPrice).where(BillingPrice.id == price_id))).scalar_one()
+        price_row = (
+            await session.execute(
+                sa_select(BillingPrice).where(BillingPrice.id == price_id)
+            )
+        ).scalar_one()
         price_row.stripe_price_id = stripe_price_id
         await session.commit()
 
-        org = Organization(id=org_id, slug=f"cancelling-corp-{org_id.hex[:8]}", name="Cancelling Corp")
+        org = Organization(
+            id=org_id, slug=f"cancelling-corp-{org_id.hex[:8]}", name="Cancelling Corp"
+        )
         session.add(org)
         await session.commit()
 
@@ -1065,16 +1256,22 @@ async def test_subscription_cancellation_downgrades_license(bridge_db):
         await session.commit()
 
     # Cancel the subscription.
-    stripe_cancelled = _make_stripe_sub(stripe_sub_id, stripe_price_id, org_id, status="canceled")
+    stripe_cancelled = _make_stripe_sub(
+        stripe_sub_id, stripe_price_id, org_id, status="canceled"
+    )
     async with bridge_db() as session:
         svc = SubscriptionService(session)
         await svc.upsert_from_stripe(stripe_cancelled, org_id)
         await session.commit()
 
     async with bridge_db() as session:
-        lic = (await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))).scalar_one_or_none()
+        lic = (
+            await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))
+        ).scalar_one_or_none()
         assert lic is not None, "OrgLicense row must survive cancellation (audit trail)"
-        assert lic.tier == "community", "Cancelled subscription must downgrade to community"
+        assert lic.tier == "community", (
+            "Cancelled subscription must downgrade to community"
+        )
         assert lic.is_valid is False, "Cancelled OrgLicense must be marked invalid"
         assert lic.features_override == [], "No features for community downgrade"
 
@@ -1096,24 +1293,53 @@ async def test_bridge_skips_unknown_keys(bridge_db, caplog):
     async with bridge_db() as session:
         from datetime import datetime, timezone
 
-        from sqlalchemy import select as sa_select
-
-        from dev_health_ops.models.billing import BillingPlan, BillingPrice, FeatureBundle, PlanFeatureBundle
+        from dev_health_ops.models.billing import (
+            BillingPlan,
+            BillingPrice,
+            FeatureBundle,
+            PlanFeatureBundle,
+        )
         from dev_health_ops.models.users import Organization
 
         now = datetime.now(timezone.utc)
-        plan = BillingPlan(id=plan_id, key="team-monthly", name="Team Monthly", tier="team", created_at=now, updated_at=now)
-        price = BillingPrice(id=price_id, plan_id=plan_id, interval="monthly", amount=2900, stripe_price_id=stripe_price_id, created_at=now, updated_at=now)
+        plan = BillingPlan(
+            id=plan_id,
+            key="team-monthly",
+            name="Team Monthly",
+            tier="team",
+            created_at=now,
+            updated_at=now,
+        )
+        price = BillingPrice(
+            id=price_id,
+            plan_id=plan_id,
+            interval="monthly",
+            amount=2900,
+            stripe_price_id=stripe_price_id,
+            created_at=now,
+            updated_at=now,
+        )
         # Bundle with one valid key and one bogus key.
-        bundle = FeatureBundle(id=bundle_id, key="team-core", name="Team Core", features=["api_access", "totally_unknown_feature_xyz"], created_at=now, updated_at=now)
+        bundle = FeatureBundle(
+            id=bundle_id,
+            key="team-core",
+            name="Team Core",
+            features=["api_access", "totally_unknown_feature_xyz"],
+            created_at=now,
+            updated_at=now,
+        )
         pfb = PlanFeatureBundle(id=uuid.uuid4(), plan_id=plan_id, bundle_id=bundle_id)
-        org = Organization(id=org_id, slug=f"bad-bundle-{org_id.hex[:8]}", name="Bad Bundle Corp")
+        org = Organization(
+            id=org_id, slug=f"bad-bundle-{org_id.hex[:8]}", name="Bad Bundle Corp"
+        )
         session.add_all([plan, price, bundle, pfb, org])
         await session.commit()
 
     stripe_sub = _make_stripe_sub("sub_unk_1", stripe_price_id, org_id)
 
-    with caplog.at_level(logging.WARNING, logger="dev_health_ops.api.billing.subscription_service"):
+    with caplog.at_level(
+        logging.WARNING, logger="dev_health_ops.api.billing.subscription_service"
+    ):
         async with bridge_db() as session:
             svc = SubscriptionService(session)
             # Must not raise.
@@ -1129,7 +1355,9 @@ async def test_bridge_skips_unknown_keys(bridge_db, caplog):
     from dev_health_ops.models.licensing import OrgLicense
 
     async with bridge_db() as session:
-        lic = (await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))).scalar_one_or_none()
+        lic = (
+            await session.execute(select(OrgLicense).where(OrgLicense.org_id == org_id))
+        ).scalar_one_or_none()
         assert lic is not None
         # Valid key survived; bogus key was dropped.
         assert "api_access" in (lic.features_override or [])
@@ -1161,18 +1389,28 @@ async def test_bridge_failure_rolls_back_subscription(bridge_db):
         from dev_health_ops.models.users import Organization
 
         await _seed_enterprise_plan(session, plan_id, price_id, bundle_id)
-        price_row = (await session.execute(sa_select(BillingPrice).where(BillingPrice.id == price_id))).scalar_one()
+        price_row = (
+            await session.execute(
+                sa_select(BillingPrice).where(BillingPrice.id == price_id)
+            )
+        ).scalar_one()
         price_row.stripe_price_id = stripe_price_id
         await session.commit()
 
-        org = Organization(id=org_id, slug=f"atomic-corp-{org_id.hex[:8]}", name="Atomic Corp")
+        org = Organization(
+            id=org_id, slug=f"atomic-corp-{org_id.hex[:8]}", name="Atomic Corp"
+        )
         session.add(org)
         await session.commit()
 
     stripe_sub = _make_stripe_sub(stripe_sub_id, stripe_price_id, org_id)
 
     # Patch _sync_org_license to raise, simulating a DB write failure.
-    with patch.object(SubscriptionService, "_sync_org_license", side_effect=SQLAlchemyError("simulated write failure")):
+    with patch.object(
+        SubscriptionService,
+        "_sync_org_license",
+        side_effect=SQLAlchemyError("simulated write failure"),
+    ):
         with pytest.raises(SQLAlchemyError):
             async with bridge_db() as session:
                 svc = SubscriptionService(session)
@@ -1181,5 +1419,13 @@ async def test_bridge_failure_rolls_back_subscription(bridge_db):
 
     # Subscription must not have been committed.
     async with bridge_db() as session:
-        sub_row = (await session.execute(select(Subscription).where(Subscription.stripe_subscription_id == stripe_sub_id))).scalar_one_or_none()
-        assert sub_row is None, "Subscription must be rolled back when OrgLicense write fails"
+        sub_row = (
+            await session.execute(
+                select(Subscription).where(
+                    Subscription.stripe_subscription_id == stripe_sub_id
+                )
+            )
+        ).scalar_one_or_none()
+        assert sub_row is None, (
+            "Subscription must be rolled back when OrgLicense write fails"
+        )

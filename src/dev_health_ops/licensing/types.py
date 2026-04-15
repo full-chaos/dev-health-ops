@@ -38,7 +38,6 @@ class LicensePayload(BaseModel):
     license_id: str | None = None
 
 
-
 DEFAULT_LIMITS: dict[LicenseTier, LicenseLimits] = {
     LicenseTier.COMMUNITY: LicenseLimits(
         users=5, repos=3, api_rate=100, backfill_days=30

@@ -1200,7 +1200,11 @@ class TestGetFeaturesForTier:
 
     def test_sign_license_uses_canonical_registry(self):
         """sign_license() with no explicit features uses get_features_for_tier."""
-        from dev_health_ops.licensing import LicenseValidator, generate_keypair, sign_license
+        from dev_health_ops.licensing import (
+            LicenseValidator,
+            generate_keypair,
+            sign_license,
+        )
 
         kp = generate_keypair()
         license_str = sign_license(kp.private_key, org_id="org-1", tier="enterprise")
@@ -1236,8 +1240,11 @@ class TestGetFeaturesForTier:
             # generate_test_license), which now uses get_features_for_tier
             # Sign fresh with the correct key so the manager can validate it
             from dev_health_ops.licensing import sign_license
+
             LicenseManager.reset()
-            real_license = sign_license(kp.private_key, org_id="org-1", tier="enterprise")
+            real_license = sign_license(
+                kp.private_key, org_id="org-1", tier="enterprise"
+            )
             LicenseManager.initialize(kp.public_key, real_license)
 
             result = protected_endpoint()

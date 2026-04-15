@@ -309,7 +309,9 @@ class SubscriptionService:
         """
         try:
             billing_module = importlib.import_module("dev_health_ops.models.billing")
-            licensing_module = importlib.import_module("dev_health_ops.models.licensing")
+            licensing_module = importlib.import_module(
+                "dev_health_ops.models.licensing"
+            )
         except ImportError:
             logger.warning(
                 "billing/licensing modules not available; skipping org-license sync"
@@ -431,7 +433,9 @@ class SubscriptionService:
         Returns an empty frozenset if the registry is unavailable (fail-open).
         """
         try:
-            licensing_module = importlib.import_module("dev_health_ops.models.licensing")
+            licensing_module = importlib.import_module(
+                "dev_health_ops.models.licensing"
+            )
             standard_features = getattr(licensing_module, "STANDARD_FEATURES", None)
             if standard_features is None:
                 return frozenset()

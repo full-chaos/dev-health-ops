@@ -40,6 +40,10 @@ class MeasureInput(Enum):
     COVERAGE_LINE_PCT = "coverage_line_pct"
     COVERAGE_BRANCH_PCT = "coverage_branch_pct"
     COVERAGE_DELTA_PCT = "coverage_delta_pct"
+    FLAG_FRICTION_DELTA = "flag_friction_delta"
+    FLAG_ERROR_RATE_DELTA = "flag_error_rate_delta"
+    FLAG_COVERAGE_RATIO = "flag_coverage_ratio"
+    FLAG_ACTIVATION_RATE = "flag_activation_rate"
 
 
 @strawberry.enum

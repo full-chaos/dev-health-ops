@@ -4,7 +4,6 @@ from typing import Any
 
 import pytest
 
-
 EXPECTED_METRIC_KEYS = [
     "release_user_friction_delta",
     "release_error_rate_delta",

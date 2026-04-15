@@ -16,6 +16,7 @@ from dev_health_ops.models.git import (
     Incident,
     Repo,
 )
+from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.processors.base_git import (
     BaseGitProcessor,
     backfill_file_records,
@@ -406,6 +407,14 @@ def _fetch_gitlab_deployments_sync(
 ):
     """Sync helper to fetch GitLab deployments."""
     deployments = []
+    release_objects = []
+    try:
+        release_objects = connector.rest_client.get_releases(
+            project_id=project_id,
+            per_page=min(max_deployments, 100),
+        )
+    except Exception as exc:
+        logging.debug("Failed to fetch GitLab releases for release_ref: %s", exc)
     try:
         # Use REST API to fetch deployments
         raw_deployments = connector.rest_client.get_deployments(
@@ -436,6 +445,16 @@ def _fetch_gitlab_deployments_sync(
         if finished_at_str:
             finished_at = safe_parse_datetime(finished_at_str)
 
+        enrichment = get_release_ref_enrichment(
+            {
+                **dep,
+                "deployment_id": str(dep.get("id", "")),
+                "deployment_iid": dep.get("iid"),
+            },
+            "gitlab",
+            releases=release_objects,
+        )
+
         deployments.append(
             Deployment(
                 repo_id=repo_id,
@@ -449,6 +468,8 @@ def _fetch_gitlab_deployments_sync(
                 deployed_at=created_at,
                 merged_at=None,
                 pull_request_number=None,
+                release_ref=enrichment.release_ref,
+                release_ref_confidence=enrichment.confidence,
             )
         )
 

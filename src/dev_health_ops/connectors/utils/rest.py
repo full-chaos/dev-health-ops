@@ -343,6 +343,38 @@ class GitLabRESTClient(RESTClient):
         )
         return mrs
 
+    def get_deployments(
+        self,
+        project_id: int,
+        page: int = 1,
+        per_page: int = 100,
+        order_by: str | None = None,
+        sort: str | None = None,
+    ) -> list[dict[str, Any]]:
+        endpoint = f"projects/{project_id}/deployments"
+        params: dict[str, Any] = {
+            "page": page,
+            "per_page": per_page,
+        }
+        if order_by:
+            params["order_by"] = order_by
+        if sort:
+            params["sort"] = sort
+        return self.get_list(endpoint, params=params)
+
+    def get_releases(
+        self,
+        project_id: int,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[dict[str, Any]]:
+        endpoint = f"projects/{project_id}/releases"
+        params: dict[str, Any] = {
+            "page": page,
+            "per_page": per_page,
+        }
+        return self.get_list(endpoint, params=params)
+
     def get_dora_metrics(
         self,
         project_id: int,

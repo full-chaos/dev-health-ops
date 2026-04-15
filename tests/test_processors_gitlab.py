@@ -186,10 +186,13 @@ def test_fetch_gitlab_pipelines_sync():
 
 def test_fetch_gitlab_deployments_sync():
     mock_connector = Mock()
+    mock_connector.rest_client.get_releases.return_value = [{"tag_name": "v1.2.3"}]
     mock_connector.rest_client.get_deployments.return_value = [
         {
             "id": 101,
+            "iid": 12,
             "status": "success",
+            "ref": "v1.2.3",
             "environment": {"name": "production"},
             "created_at": "2023-01-02T00:00:00Z",
             "finished_at": "2023-01-02T00:10:00Z",
@@ -203,6 +206,8 @@ def test_fetch_gitlab_deployments_sync():
     assert len(deployments) == 1
     assert deployments[0].deployment_id == "101"
     assert deployments[0].environment == "production"
+    assert deployments[0].release_ref == "v1.2.3"
+    assert deployments[0].release_ref_confidence == pytest.approx(1.0)
     assert deployments[0].deployed_at == datetime(
         2023, 1, 2, 0, 0, 0, tzinfo=timezone.utc
     )

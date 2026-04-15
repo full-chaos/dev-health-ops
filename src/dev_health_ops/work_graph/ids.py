@@ -147,6 +147,45 @@ def generate_file_id(
     return f"{repo_id}:{file_path}"
 
 
+def generate_release_id(org_id: str, release_ref: str) -> str:
+    """
+    Generate a deterministic release node ID.
+
+    Format: SHA256 of "release:{org_id}/{release_ref}"
+
+    Args:
+        org_id: Organization identifier
+        release_ref: Release reference (tag, version, SHA)
+
+    Returns:
+        64-character hex string (SHA256 hash)
+    """
+    return _sha256_hex(f"release:{org_id}/{release_ref}")
+
+
+def generate_feature_flag_id(
+    org_id: str,
+    provider: str,
+    project_key: str,
+    flag_key: str,
+) -> str:
+    """
+    Generate a deterministic feature flag node ID.
+
+    Format: SHA256 of "flag:{org_id}/{provider}/{project_key}/{flag_key}"
+
+    Args:
+        org_id: Organization identifier
+        provider: Flag provider (e.g., "launchdarkly")
+        project_key: Provider project key
+        flag_key: Flag key within the project
+
+    Returns:
+        64-character hex string (SHA256 hash)
+    """
+    return _sha256_hex(f"flag:{org_id}/{provider}/{project_key}/{flag_key}")
+
+
 def parse_pr_from_id(pr_id: str) -> tuple[uuid.UUID | None, int | None]:
     """
     Parse repo_id and pr_number from a canonical PR ID.

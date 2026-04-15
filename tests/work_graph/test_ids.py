@@ -5,9 +5,11 @@ import uuid
 from dev_health_ops.work_graph.ids import (
     generate_commit_id,
     generate_edge_id,
+    generate_feature_flag_id,
     generate_file_id,
     generate_issue_id,
     generate_pr_id,
+    generate_release_id,
 )
 from dev_health_ops.work_graph.models import EdgeType, NodeType
 
@@ -206,4 +208,59 @@ class TestGenerateFileId:
         repo2 = uuid.uuid4()
         id1 = generate_file_id(repo1, "src/main.py")
         id2 = generate_file_id(repo2, "src/main.py")
+        assert id1 != id2
+
+
+class TestGenerateReleaseId:
+    """Tests for release ID generation."""
+
+    def test_deterministic(self):
+        id1 = generate_release_id("org-1", "v1.2.3")
+        id2 = generate_release_id("org-1", "v1.2.3")
+        assert id1 == id2
+
+    def test_returns_hex_string(self):
+        release_id = generate_release_id("org-1", "v1.0.0")
+        assert isinstance(release_id, str)
+        int(release_id, 16)
+        assert len(release_id) == 64
+
+    def test_different_orgs(self):
+        id1 = generate_release_id("org-1", "v1.0.0")
+        id2 = generate_release_id("org-2", "v1.0.0")
+        assert id1 != id2
+
+    def test_different_refs(self):
+        id1 = generate_release_id("org-1", "v1.0.0")
+        id2 = generate_release_id("org-1", "v2.0.0")
+        assert id1 != id2
+
+
+class TestGenerateFeatureFlagId:
+    """Tests for feature flag ID generation."""
+
+    def test_deterministic(self):
+        id1 = generate_feature_flag_id("org-1", "launchdarkly", "proj-1", "enable-foo")
+        id2 = generate_feature_flag_id("org-1", "launchdarkly", "proj-1", "enable-foo")
+        assert id1 == id2
+
+    def test_returns_hex_string(self):
+        flag_id = generate_feature_flag_id("org-1", "ld", "proj", "flag")
+        assert isinstance(flag_id, str)
+        int(flag_id, 16)
+        assert len(flag_id) == 64
+
+    def test_different_providers(self):
+        id1 = generate_feature_flag_id("org-1", "launchdarkly", "proj", "flag")
+        id2 = generate_feature_flag_id("org-1", "split", "proj", "flag")
+        assert id1 != id2
+
+    def test_different_projects(self):
+        id1 = generate_feature_flag_id("org-1", "ld", "proj-a", "flag")
+        id2 = generate_feature_flag_id("org-1", "ld", "proj-b", "flag")
+        assert id1 != id2
+
+    def test_different_flags(self):
+        id1 = generate_feature_flag_id("org-1", "ld", "proj", "flag-a")
+        id2 = generate_feature_flag_id("org-1", "ld", "proj", "flag-b")
         assert id1 != id2

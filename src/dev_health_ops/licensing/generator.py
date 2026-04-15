@@ -12,13 +12,13 @@ from uuid import uuid4
 
 from nacl.signing import SigningKey
 
+from dev_health_ops.licensing.registry import get_features_for_tier
 from dev_health_ops.licensing.types import (
     DEFAULT_LIMITS,
     GRACE_DAYS,
     LicenseLimits,
     LicensePayload,
     LicenseTier,
-    get_features_for_tier,
 )
 
 

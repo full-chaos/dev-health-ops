@@ -64,6 +64,10 @@ class Measure(str, Enum):
     COVERAGE_LINE_PCT = "coverage_line_pct"
     COVERAGE_BRANCH_PCT = "coverage_branch_pct"
     COVERAGE_DELTA_PCT = "coverage_delta_pct"
+    FLAG_FRICTION_DELTA = "flag_friction_delta"
+    FLAG_ERROR_RATE_DELTA = "flag_error_rate_delta"
+    FLAG_COVERAGE_RATIO = "flag_coverage_ratio"
+    FLAG_ACTIVATION_RATE = "flag_activation_rate"
 
     @classmethod
     def values(cls) -> list[str]:
@@ -106,6 +110,13 @@ class Measure(str, Enum):
             cls.COVERAGE_DELTA_PCT: "AVG(coverage_delta_pct)",
         }
         mapping.update(testops_mapping)
+        ff_mapping: dict[Measure, str] = {
+            cls.FLAG_FRICTION_DELTA: "AVG(release_user_friction_delta) * 100",
+            cls.FLAG_ERROR_RATE_DELTA: "AVG(release_error_rate_delta) * 100",
+            cls.FLAG_COVERAGE_RATIO: "AVG(coverage_ratio) * 100",
+            cls.FLAG_ACTIVATION_RATE: "AVG(flag_activation_rate) * 100",
+        }
+        mapping.update(ff_mapping)
         return mapping[measure]
 
     @classmethod
@@ -124,6 +135,13 @@ class Measure(str, Enum):
             cls.COVERAGE_BRANCH_PCT: "testops_coverage_metrics_daily",
             cls.COVERAGE_DELTA_PCT: "testops_coverage_metrics_daily",
         }
+        ff_tables: dict[Measure, str] = {
+            cls.FLAG_FRICTION_DELTA: "release_impact_daily",
+            cls.FLAG_ERROR_RATE_DELTA: "release_impact_daily",
+            cls.FLAG_COVERAGE_RATIO: "release_impact_daily",
+            cls.FLAG_ACTIVATION_RATE: "release_impact_daily",
+        }
+        testops_tables.update(ff_tables)
         return testops_tables.get(measure)
 
 

@@ -567,6 +567,13 @@ class FeatureOverrideCreate(BaseModel):
     reason: str | None = None
 
 
+class FeatureOverrideUpdate(BaseModel):
+    is_enabled: bool | None = None
+    expires_at: datetime | None = None
+    config: dict[str, Any] | None = None
+    reason: str | None = None
+
+
 class FeatureOverrideResponse(BaseModel):
     id: str
     org_id: str
@@ -577,6 +584,7 @@ class FeatureOverrideResponse(BaseModel):
     config: dict[str, Any] | None
     reason: str | None
     created_by: str | None
+    updated_by: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

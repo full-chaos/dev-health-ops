@@ -11,6 +11,7 @@ from dev_health_ops.api.admin.schemas import (
     FeatureFlagResponse,
     FeatureOverrideCreate,
     FeatureOverrideResponse,
+    FeatureOverrideUpdate,
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride
@@ -73,6 +74,7 @@ async def list_feature_overrides(
             config=override.config,
             reason=override.reason,
             created_by=str(override.created_by) if override.created_by else None,
+            updated_by=str(override.updated_by) if override.updated_by else None,
             created_at=override.created_at,
         )
         for override, feature in rows
@@ -117,6 +119,7 @@ async def create_feature_override(
         expires_at=payload.expires_at,
         config=payload.config,
         reason=payload.reason,
+        created_by=uuid.UUID(current_user.user_id),
     )
     session.add(override)
     await session.flush()
@@ -131,6 +134,58 @@ async def create_feature_override(
         config=override.config,
         reason=override.reason,
         created_by=str(override.created_by) if override.created_by else None,
+        updated_by=str(override.updated_by) if override.updated_by else None,
+        created_at=override.created_at,
+    )
+
+
+@router.patch(
+    "/orgs/{org_id}/feature-overrides/{override_id}",
+    response_model=FeatureOverrideResponse,
+)
+async def update_feature_override(
+    org_id: str,
+    override_id: str,
+    payload: FeatureOverrideUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
+) -> FeatureOverrideResponse:
+    result = await session.execute(
+        select(OrgFeatureOverride, FeatureFlag)
+        .join(FeatureFlag, OrgFeatureOverride.feature_id == FeatureFlag.id)
+        .where(
+            OrgFeatureOverride.id == uuid.UUID(override_id),
+            OrgFeatureOverride.org_id == uuid.UUID(org_id),
+        )
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Feature override not found")
+
+    override, feature = row
+    if payload.is_enabled is not None:
+        override.is_enabled = payload.is_enabled
+    if payload.expires_at is not None:
+        override.expires_at = payload.expires_at
+    if payload.config is not None:
+        override.config = payload.config
+    if payload.reason is not None:
+        override.reason = payload.reason
+
+    override.updated_by = uuid.UUID(current_user.user_id)
+    await session.flush()
+
+    return FeatureOverrideResponse(
+        id=str(override.id),
+        org_id=str(override.org_id),
+        feature_id=str(override.feature_id),
+        feature_key=feature.key,
+        is_enabled=bool(override.is_enabled),
+        expires_at=override.expires_at,
+        config=override.config,
+        reason=override.reason,
+        created_by=str(override.created_by) if override.created_by else None,
+        updated_by=str(override.updated_by) if override.updated_by else None,
         created_at=override.created_at,
     )
 

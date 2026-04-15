@@ -22,6 +22,8 @@ from dev_health_ops.metrics import (
     job_complexity_db,
     job_daily,
     job_dora,
+    job_ff_validation,
+    job_release_impact,
     job_work_items,
 )
 
@@ -170,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
     job_complexity_db.register_commands(metrics_subparsers)
     job_dora.register_commands(metrics_subparsers)
     job_capacity.register_commands(metrics_subparsers)
+    job_release_impact.register_commands(metrics_subparsers)
+    job_ff_validation.register_commands(metrics_subparsers)
 
     # ---- audit ----
     audit_parser = sub.add_parser("audit", help="Run diagnostic audits.")

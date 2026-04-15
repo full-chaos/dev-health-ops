@@ -23,6 +23,8 @@ class TestNodeType:
         assert NodeType.PR.value == "pr"
         assert NodeType.COMMIT.value == "commit"
         assert NodeType.FILE.value == "file"
+        assert NodeType.RELEASE.value == "release"
+        assert NodeType.FEATURE_FLAG.value == "feature_flag"
 
 
 class TestEdgeType:
@@ -49,6 +51,19 @@ class TestEdgeType:
     def test_commit_file_relationships(self):
         """Commit-to-file relationship types should exist."""
         assert EdgeType.TOUCHES.value == "touches"
+
+    def test_release_relationships(self):
+        """Release relationship types should exist."""
+        assert EdgeType.INTRODUCED_BY.value == "introduced_by"
+
+    def test_feature_flag_relationships(self):
+        """Feature flag relationship types should exist."""
+        assert EdgeType.CONFIG_CHANGED_BY.value == "config_changed_by"
+        assert EdgeType.GUARDS.value == "guards"
+
+    def test_impact_relationships(self):
+        """Cross-cutting impact relationship types should exist."""
+        assert EdgeType.IMPACTS.value == "impacts"
 
 
 class TestProvenance:

@@ -17,6 +17,8 @@ class NodeType(str, Enum):
     PR = "pr"
     COMMIT = "commit"
     FILE = "file"
+    RELEASE = "release"
+    FEATURE_FLAG = "feature_flag"
 
 
 class EdgeType(str, Enum):
@@ -42,6 +44,16 @@ class EdgeType(str, Enum):
 
     # Commit-to-file relationships
     TOUCHES = "touches"  # Commit touches file
+
+    # Release relationships
+    INTRODUCED_BY = "introduced_by"  # release ← PR
+
+    # Feature flag relationships
+    CONFIG_CHANGED_BY = "config_changed_by"  # feature_flag ← flag_event
+    GUARDS = "guards"  # feature_flag → issue/epic
+
+    # Cross-cutting impact relationships
+    IMPACTS = "impacts"  # release/flag → telemetry signal
 
 
 class Provenance(str, Enum):

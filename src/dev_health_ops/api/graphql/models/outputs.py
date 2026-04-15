@@ -303,6 +303,8 @@ class WorkGraphNodeType(Enum):
     PR = "pr"
     COMMIT = "commit"
     FILE = "file"
+    RELEASE = "release"
+    FEATURE_FLAG = "feature_flag"
 
 
 @strawberry.enum
@@ -329,6 +331,16 @@ class WorkGraphEdgeType(Enum):
 
     # Commit-to-file relationships
     TOUCHES = "touches"
+
+    # Release relationships
+    INTRODUCED_BY = "introduced_by"
+
+    # Feature flag relationships
+    CONFIG_CHANGED_BY = "config_changed_by"
+    GUARDS = "guards"
+
+    # Cross-cutting impact relationships
+    IMPACTS = "impacts"
 
 
 @strawberry.enum

@@ -5,7 +5,7 @@ import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.licensing.gating import LicenseManager
@@ -116,7 +116,12 @@ async def _seed_auth_data(session, user_data: dict) -> None:
 async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     db_type = resolve_db_type(ns.sink, ns.db_type)
-    fixture_data: dict[str, list] = {"work_items": [], "transitions": [], "teams": []}
+    fixture_data: dict[str, list] = {
+        "work_items": [],
+        "transitions": [],
+        "teams": [],
+        "feature_flag_contexts": [],
+    }
 
     # Default to the fixture org UUID so demo data is queryable out of the box.
     _default_org = str(
@@ -363,8 +368,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             # 6. CI/CD + Deployments + Incidents
             pr_numbers = [pr.number for pr in prs]
             pipeline_runs = generator.generate_ci_pipeline_runs(days=ns.days)
+            release_refs = ff_release_refs = generator._default_release_refs(ns.days)
             deployments = generator.generate_deployments(
-                days=ns.days, pr_numbers=pr_numbers
+                days=ns.days, pr_numbers=pr_numbers, release_refs=release_refs
             )
             incidents = generator.generate_incidents(days=ns.days)
             await _insert_batches(
@@ -379,6 +385,18 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             )
             await _insert_batches(
                 store.insert_incidents, incidents, allow_parallel=allow_parallel_inserts
+            )
+
+            fixture_data["feature_flag_contexts"].append(
+                {
+                    "repo_name": r_name,
+                    "repo_id": generator.repo_id,
+                    "provider": ns.provider,
+                    "prs": prs,
+                    "deployments": deployments,
+                    "work_items": work_items,
+                    "release_refs": ff_release_refs,
+                }
             )
 
             # 6c. Security alerts
@@ -451,6 +469,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
     await run_with_store(ns.sink, db_type, _handler, org_id=org_id)
 
+    all_ff_flags: list = []
+    feature_flag_graph_contexts: list[dict[str, Any]] = []
+
     if ns.with_metrics:
         await run_daily_metrics_job(
             db_url=ns.sink,
@@ -470,7 +491,6 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 )
             sink = ClickHouseMetricsSink(ns.sink)
 
-            all_ff_flags: list = []
             all_ff_events: list = []
 
             if sink:
@@ -525,6 +545,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         ns.repo_name if _repo_count == 1 else f"{ns.repo_name}-{i + 1}"
                     )
                     seed_value = (int(ns.seed) + i) if ns.seed is not None else None
+                    repo_context = cast(
+                        dict[str, Any], fixture_data["feature_flag_contexts"][i]
+                    )
                     metric_gen = SyntheticDataGenerator(
                         repo_name=r_name, seed=seed_value
                     )
@@ -570,6 +593,17 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         sink.write_file_hotspot_daily(hotspot_records)
 
                     ff_gen = SyntheticDataGenerator(repo_name=r_name, seed=seed_value)
+                    release_refs = list(repo_context.get("release_refs") or [])
+                    issue_ids = [
+                        str(getattr(item, "work_item_id", "") or "")
+                        for item in cast(list, repo_context.get("work_items") or [])
+                        if str(getattr(item, "work_item_id", "") or "")
+                    ]
+                    pr_numbers = [
+                        int(getattr(pr, "number", 0))
+                        for pr in cast(list, repo_context.get("prs") or [])
+                        if int(getattr(pr, "number", 0) or 0) > 0
+                    ]
                     ff_flags = ff_gen.generate_feature_flags(org_id=org_id)
                     all_ff_flags.extend(ff_flags)
                     if hasattr(sink, "write_feature_flags") and ff_flags:
@@ -583,13 +617,17 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         sink.write_feature_flag_events(ff_events)
 
                     ff_links = ff_gen.generate_feature_flag_links(
-                        ff_flags, org_id=org_id
+                        ff_flags,
+                        org_id=org_id,
+                        issue_ids=issue_ids,
+                        pr_numbers=pr_numbers,
+                        release_refs=release_refs,
                     )
                     if hasattr(sink, "write_feature_flag_links") and ff_links:
                         sink.write_feature_flag_links(ff_links)
 
                     telemetry_buckets = ff_gen.generate_telemetry_signal_buckets(
-                        days=ns.days, org_id=org_id
+                        days=ns.days, org_id=org_id, release_refs=release_refs
                     )
                     if (
                         hasattr(sink, "write_telemetry_signal_buckets")
@@ -598,10 +636,20 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         sink.write_telemetry_signal_buckets(telemetry_buckets)
 
                     release_impact = ff_gen.generate_release_impact_daily(
-                        days=ns.days, org_id=org_id
+                        days=ns.days, org_id=org_id, release_refs=release_refs
                     )
                     if hasattr(sink, "write_release_impact_daily") and release_impact:
                         sink.write_release_impact_daily(release_impact)
+
+                    feature_flag_graph_contexts.append(
+                        {
+                            "flags": ff_flags,
+                            "events": ff_events,
+                            "links": ff_links,
+                            "release_impact": release_impact,
+                            "repo_context": repo_context,
+                        }
+                    )
 
                     logging.info(
                         "Wrote %d feature flags, %d events, %d links, "
@@ -642,6 +690,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
     if ns.with_work_graph:
         from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
+        from dev_health_ops.work_graph.ids import (
+            generate_feature_flag_id,
+            generate_release_id,
+        )
+        from dev_health_ops.work_graph.models import EdgeType, NodeType, Provenance
 
         config = BuildConfig(
             dsn=ns.sink,
@@ -664,6 +717,212 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 logging.info(
                     "Added %d feature flag nodes to work graph.", len(all_ff_flags)
                 )
+            if ns.with_metrics:
+                for context in feature_flag_graph_contexts:
+                    flags = cast(list, context.get("flags") or [])
+                    events = cast(list, context.get("events") or [])
+                    links = cast(list, context.get("links") or [])
+                    release_impact = cast(list, context.get("release_impact") or [])
+                    repo_context = cast(
+                        dict[str, Any], context.get("repo_context") or {}
+                    )
+                    deployments = cast(list, repo_context.get("deployments") or [])
+
+                    flags_by_key = {flag.flag_key: flag for flag in flags}
+                    flag_ids = {
+                        flag.flag_key: generate_feature_flag_id(
+                            org_id,
+                            flag.provider,
+                            flag.project_key or "",
+                            flag.flag_key,
+                        )
+                        for flag in flags
+                    }
+                    release_ids: dict[str, str] = {}
+
+                    for deployment in deployments:
+                        release_ref = str(getattr(deployment, "release_ref", "") or "")
+                        if not release_ref:
+                            continue
+                        release_id = release_ids.setdefault(
+                            release_ref, generate_release_id(org_id, release_ref)
+                        )
+                        builder.add_release_node(
+                            release_ref=release_ref,
+                            environment=str(
+                                getattr(deployment, "environment", "production")
+                                or "production"
+                            ),
+                            provider=str(repo_context.get("provider") or "synthetic"),
+                            repo_id=getattr(deployment, "repo_id", None),
+                            event_ts=getattr(deployment, "deployed_at", None),
+                        )
+                        pr_number = getattr(deployment, "pull_request_number", None)
+                        if pr_number:
+                            pr_id = f"{deployment.repo_id}#pr{pr_number}"
+                            builder.add_release_edge(
+                                release_id=release_id,
+                                target_id=pr_id,
+                                target_type=NodeType.PR,
+                                edge_type=EdgeType.INTRODUCED_BY,
+                                confidence=float(
+                                    getattr(
+                                        deployment,
+                                        "release_ref_confidence",
+                                        1.0,
+                                    )
+                                    or 1.0
+                                ),
+                                evidence=f"deployment:{deployment.deployment_id}",
+                                provenance=Provenance.NATIVE,
+                                repo_id=getattr(deployment, "repo_id", None),
+                                event_ts=getattr(deployment, "deployed_at", None),
+                            )
+
+                    release_refs_by_flag: dict[str, list[str]] = {}
+                    for link in links:
+                        flag = flags_by_key.get(link.flag_key)
+                        flag_id = flag_ids.get(link.flag_key)
+                        if flag is None or flag_id is None:
+                            continue
+
+                        if link.target_type == "issue":
+                            builder.add_feature_flag_edge(
+                                flag_id=flag_id,
+                                target_type=NodeType.ISSUE,
+                                target_id=link.target_id,
+                                edge_type=EdgeType.GUARDS,
+                                confidence=link.confidence,
+                                evidence=f"{link.link_type}:{link.evidence_type or 'synthetic'}",
+                                provenance=builder._parse_provenance(link.link_source),
+                                repo_id=flag.repo_id,
+                                provider=flag.provider,
+                                event_ts=link.valid_from,
+                            )
+                        elif link.target_type == "pr":
+                            builder.add_feature_flag_edge(
+                                flag_id=flag_id,
+                                target_type=NodeType.PR,
+                                target_id=link.target_id,
+                                edge_type=EdgeType.REFERENCES,
+                                confidence=link.confidence,
+                                evidence=f"{link.link_type}:{link.evidence_type or 'synthetic'}",
+                                provenance=builder._parse_provenance(link.link_source),
+                                repo_id=flag.repo_id,
+                                provider=flag.provider,
+                                event_ts=link.valid_from,
+                            )
+                        elif link.target_type == "release":
+                            release_refs_by_flag.setdefault(link.flag_key, []).append(
+                                link.target_id
+                            )
+                            release_ids.setdefault(
+                                link.target_id,
+                                generate_release_id(org_id, link.target_id),
+                            )
+
+                    latest_event_by_flag: dict[str, Any] = {}
+                    for event in events:
+                        existing = latest_event_by_flag.get(event.flag_key)
+                        if existing is None or event.event_ts > existing.event_ts:
+                            latest_event_by_flag[event.flag_key] = event
+
+                    for flag_key, linked_release_refs in release_refs_by_flag.items():
+                        flag = flags_by_key.get(flag_key)
+                        flag_id = flag_ids.get(flag_key)
+                        latest_event = latest_event_by_flag.get(flag_key)
+                        if flag is None or flag_id is None or latest_event is None:
+                            continue
+                        release_ref = linked_release_refs[0]
+                        release_id = release_ids.setdefault(
+                            release_ref, generate_release_id(org_id, release_ref)
+                        )
+                        builder.add_feature_flag_edge(
+                            flag_id=flag_id,
+                            target_type=NodeType.RELEASE,
+                            target_id=release_id,
+                            edge_type=EdgeType.CONFIG_CHANGED_BY,
+                            confidence=1.0
+                            if latest_event.event_type == "toggle"
+                            else 0.8,
+                            evidence=(
+                                f"{latest_event.event_ts.isoformat()}"
+                                f"|{latest_event.event_type}"
+                                f"|{latest_event.next_state or ''}"
+                            ),
+                            provenance=Provenance.NATIVE,
+                            repo_id=flag.repo_id,
+                            provider=flag.provider,
+                            event_ts=latest_event.event_ts,
+                        )
+
+                    impact_seen: set[tuple[str, str, str]] = set()
+                    for impact in release_impact:
+                        release_ref = str(getattr(impact, "release_ref", "") or "")
+                        release_id = release_ids.get(release_ref)
+                        if not release_id:
+                            continue
+                        for (
+                            flag_key,
+                            linked_release_refs,
+                        ) in release_refs_by_flag.items():
+                            if release_ref not in linked_release_refs:
+                                continue
+                            flag_id = flag_ids.get(flag_key)
+                            if flag_id is None:
+                                continue
+                            impact_specs = [
+                                (
+                                    "friction",
+                                    abs(
+                                        float(
+                                            getattr(
+                                                impact,
+                                                "release_user_friction_delta",
+                                                0.0,
+                                            )
+                                            or 0.0
+                                        )
+                                    ),
+                                ),
+                                (
+                                    "error",
+                                    abs(
+                                        float(
+                                            getattr(
+                                                impact,
+                                                "release_error_rate_delta",
+                                                0.0,
+                                            )
+                                            or 0.0
+                                        )
+                                    ),
+                                ),
+                            ]
+                            for metric_name, confidence in impact_specs:
+                                dedupe_key = (release_id, flag_id, metric_name)
+                                if dedupe_key in impact_seen:
+                                    continue
+                                impact_seen.add(dedupe_key)
+                                builder.add_release_edge(
+                                    release_id=release_id,
+                                    target_id=flag_id,
+                                    target_type=NodeType.FEATURE_FLAG,
+                                    edge_type=EdgeType.IMPACTS,
+                                    confidence=min(confidence, 1.0),
+                                    evidence=(
+                                        f"{metric_name}:release={release_ref}"
+                                        f"|env={getattr(impact, 'environment', '')}"
+                                        f"|confidence={min(confidence, 1.0):.4f}"
+                                    ),
+                                    provenance=Provenance.HEURISTIC,
+                                    repo_id=getattr(impact, "repo_id", None),
+                                    event_ts=datetime.combine(
+                                        getattr(impact, "day"),
+                                        datetime.min.time(),
+                                        tzinfo=timezone.utc,
+                                    ),
+                                )
             if config.from_date and config.to_date:
                 await materialize_fixture_investments(
                     db_url=ns.sink,

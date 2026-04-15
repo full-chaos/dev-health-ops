@@ -6,6 +6,7 @@ contributors, statistics, merge requests, and blame information from GitLab.
 """
 
 import logging
+import urllib.parse
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -334,6 +335,52 @@ class GitLabConnector(GitConnector):
         except Exception as e:
             self._handle_gitlab_exception(e)
             return []
+
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(RateLimitException, APIException),
+    )
+    def get_feature_flags(
+        self,
+        project_id_or_path: int | str,
+        *,
+        per_page: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch feature flags for a GitLab project via the management API."""
+        encoded_project = urllib.parse.quote(str(project_id_or_path), safe="")
+        endpoint = f"projects/{encoded_project}/feature_flags"
+        page = 1
+        effective_per_page = per_page or self.per_page
+        flags: list[dict[str, Any]] = []
+
+        while True:
+            batch = self.rest_client.get_list(
+                endpoint,
+                params={"page": page, "per_page": effective_per_page},
+            )
+            if not batch:
+                break
+            flags.extend(batch)
+            if len(batch) < effective_per_page:
+                break
+            page += 1
+
+        logger.info(
+            "Fetched %d GitLab feature flags for project %s",
+            len(flags),
+            project_id_or_path,
+        )
+        return flags
+
+    def get_project_name(self, project_id_or_path: int | str) -> str:
+        """Return the canonical path for a GitLab project."""
+        project = self.get_project(project_id_or_path)
+        return str(
+            getattr(project, "path_with_namespace", None)
+            or getattr(project, "path", None)
+            or project_id_or_path
+        )
 
     @retry_with_backoff(
         max_retries=3,

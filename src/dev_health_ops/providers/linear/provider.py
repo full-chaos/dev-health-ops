@@ -19,19 +19,18 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.providers.base import (
     IngestionContext,
-    Provider,
     ProviderBatch,
     ProviderCapabilities,
+    ProviderWithClient,
 )
-from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
+from dev_health_ops.providers.linear.client import LinearClient
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
-from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
 from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
 
 
-class LinearProvider(Provider):
+class LinearProvider(ProviderWithClient[LinearClient]):
     """
     Provider implementation for Linear.
 
@@ -62,34 +61,7 @@ class LinearProvider(Provider):
         reopen_events=True,
         priority=True,
     )
-
-    def __init__(
-        self,
-        *,
-        status_mapping: StatusMapping | None = None,
-        identity: IdentityResolver | None = None,
-    ) -> None:
-        """
-        Initialize the Linear provider.
-
-        Args:
-            status_mapping: optional StatusMapping instance (loads default if None)
-            identity: optional IdentityResolver instance (loads default if None)
-        """
-        self._status_mapping = status_mapping
-        self._identity = identity
-
-    @property
-    def status_mapping(self) -> StatusMapping:
-        if self._status_mapping is None:
-            self._status_mapping = load_status_mapping()
-        return self._status_mapping
-
-    @property
-    def identity(self) -> IdentityResolver:
-        if self._identity is None:
-            self._identity = load_identity_resolver()
-        return self._identity
+    client_cls = LinearClient
 
     def ingest(self, ctx: IngestionContext) -> ProviderBatch:
         """Backward-compatible single-batch ingest that merges iter_ingest()."""
@@ -103,8 +75,12 @@ class LinearProvider(Provider):
         return merged
 
     def iter_ingest(self, ctx: IngestionContext) -> Iterable[ProviderBatch]:
-        """Yield one ProviderBatch per GraphQL page for memory-bounded ingestion."""
-        from dev_health_ops.providers.linear.client import LinearClient
+        """Yield one ProviderBatch per GraphQL page for memory-bounded ingestion.
+
+        Linear overrides ``iter_ingest`` (not ``_ingest_with_client``) because
+        its ingestion is naturally streaming: each GraphQL page yields one
+        ProviderBatch for memory-bounded processing.
+        """
         from dev_health_ops.providers.linear.normalize import (
             detect_linear_reopen_events,
             linear_comment_to_interaction_event,
@@ -112,7 +88,7 @@ class LinearProvider(Provider):
             linear_issue_to_work_item,
         )
 
-        client = LinearClient.from_env()
+        client = self._make_client()
 
         fetch_comments = _env_flag("LINEAR_FETCH_COMMENTS", True)
         fetch_history = _env_flag("LINEAR_FETCH_HISTORY", True)

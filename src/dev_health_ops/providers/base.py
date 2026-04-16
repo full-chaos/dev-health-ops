@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 if TYPE_CHECKING:
     from dev_health_ops.models.work_items import (
@@ -123,3 +123,87 @@ class Provider(ABC):
         batches for memory-bounded processing.
         """
         yield self.ingest(ctx)
+
+
+_TClient = TypeVar("_TClient")
+
+
+class ProviderWithClient(Provider, Generic[_TClient]):
+    """Base class for providers that wrap an API client built from env vars.
+
+    Subclasses declare:
+
+    - ``name``, ``capabilities`` — required by :class:`Provider`.
+    - ``client_cls`` — a class with a ``from_env()`` classmethod/staticmethod
+      that returns a configured client instance.
+    - ``_ingest_with_client(*, client, ctx)`` — business logic. Receives the
+      constructed client plus the ingestion context.
+
+    The base handles:
+
+    - Lazy loading of ``status_mapping`` and ``identity`` with dependency-
+      injection support via ``__init__`` kwargs.
+    - ``ingest()`` boilerplate: build the client via ``client_cls.from_env()``
+      and delegate to the subclass-defined ``_ingest_with_client``.
+    - ``_make_client()`` helper for subclasses that need to override
+      ``ingest``/``iter_ingest`` directly (e.g. streaming iterators).
+    """
+
+    client_cls: ClassVar[type]
+
+    def __init__(
+        self,
+        *,
+        status_mapping: StatusMapping | None = None,
+        identity: IdentityResolver | None = None,
+    ) -> None:
+        self._status_mapping = status_mapping
+        self._identity = identity
+
+    @property
+    def status_mapping(self) -> StatusMapping:
+        if self._status_mapping is None:
+            from dev_health_ops.providers.status_mapping import load_status_mapping
+
+            self._status_mapping = load_status_mapping()
+        return self._status_mapping
+
+    @property
+    def identity(self) -> IdentityResolver:
+        if self._identity is None:
+            from dev_health_ops.providers.identity import load_identity_resolver
+
+            self._identity = load_identity_resolver()
+        return self._identity
+
+    def _make_client(self) -> _TClient:
+        """Build a client instance via ``client_cls.from_env()``.
+
+        Resolved on ``type(self)`` at call-time, which lets tests patch the
+        classmethod directly (e.g. ``patch("pkg.client.Cls.from_env")``).
+        """
+        return type(self).client_cls.from_env()
+
+    def _validate_ctx(self, ctx: IngestionContext) -> None:
+        """Validate ``ctx`` before any client is built.
+
+        Subclasses override to enforce provider-specific required fields
+        (e.g. ``ctx.repo`` for GitHub/GitLab). Raising here ensures the
+        caller fails fast without paying the cost of client construction or
+        surfacing a misleading auth error.
+        """
+
+    def ingest(self, ctx: IngestionContext) -> ProviderBatch:
+        self._validate_ctx(ctx)
+        client = self._make_client()
+        return self._ingest_with_client(client=client, ctx=ctx)
+
+    def _ingest_with_client(
+        self, *, client: _TClient, ctx: IngestionContext
+    ) -> ProviderBatch:
+        raise NotImplementedError
+
+
+if TYPE_CHECKING:
+    from dev_health_ops.providers.identity import IdentityResolver
+    from dev_health_ops.providers.status_mapping import StatusMapping

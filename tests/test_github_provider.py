@@ -901,12 +901,12 @@ def test_github_project_v2_item_no_transitions(mock_status_mapping, mock_identit
 
 
 @patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}, clear=False)
-@patch("dev_health_ops.providers.github.client.GitHubWorkClient")
-def test_github_provider_ingest(mock_client_class, mock_status_mapping, mock_identity):
+@patch("dev_health_ops.providers.github.client.GitHubWorkClient.from_env")
+def test_github_provider_ingest(mock_from_env, mock_status_mapping, mock_identity):
     """Test full provider ingest flow."""
     # Setup mock client
     mock_client = MagicMock()
-    mock_client_class.from_env.return_value = mock_client
+    mock_from_env.return_value = mock_client
 
     # Mock milestones
     mock_client.iter_repo_milestones.return_value = [

@@ -37,6 +37,14 @@ class CacheBackend(ABC):
         """Check the status of the cache backend."""
         pass
 
+    def mget(self, keys: list[str]) -> list[Any | None]:
+        """Batch get. Default implementation calls get() per key.
+
+        Backends with a native multi-get primitive (e.g. Redis MGET) should
+        override this to issue a single round-trip.
+        """
+        return [self.get(k) for k in keys]
+
 
 class MemoryBackend(CacheBackend):
     """In-memory cache backend (default)."""
@@ -89,6 +97,29 @@ class RedisBackend(CacheBackend):
             logger.warning("Redis get failed: %s", e)
             return None
 
+    def mget(self, keys: list[str]) -> list[Any | None]:
+        """Batch get via Redis MGET — a single round-trip instead of N."""
+        if not keys:
+            return []
+        if not self._available:
+            return self._fallback.mget(keys)
+        try:
+            raw_values = self._client.mget(keys)
+        except Exception as e:
+            logger.warning("Redis mget failed: %s", e)
+            return [None] * len(keys)
+        results: list[Any | None] = []
+        for raw in raw_values:
+            if raw is None:
+                results.append(None)
+                continue
+            try:
+                results.append(json.loads(raw))
+            except Exception as e:
+                logger.warning("Redis mget value decode failed: %s", e)
+                results.append(None)
+        return results
+
     def set(self, key: str, value: Any, ttl_seconds: int) -> None:
         if not self._available:
             self._fallback.set(key, value, ttl_seconds)
@@ -121,6 +152,10 @@ class TTLCache:
 
     def get(self, key: str) -> Any | None:
         return self._backend.get(key)
+
+    def mget(self, keys: list[str]) -> list[Any | None]:
+        """Batch get delegating to the underlying backend."""
+        return self._backend.mget(keys)
 
     def set(self, key: str, value: Any) -> None:
         self._backend.set(key, value, self.ttl_seconds)

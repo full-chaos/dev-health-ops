@@ -4,17 +4,70 @@ Sets the org_id contextvar for every HTTP request from:
   1. X-Org-Id header (authoritative - sent by frontend for all API calls)
   2. JWT org_id claim (fallback - when header is absent)
 
+IDOR protection: the X-Org-Id header is ONLY accepted if the authenticated
+user has a Membership row for that org (or the JWT org_id matches). Any
+other value yields HTTP 403.
+
 This is the SINGLE enforcement point for tenant scoping. All downstream
 ClickHouse queries auto-inject org_id via query_dicts().
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import uuid as uuid_mod
+from collections.abc import Iterable
+
+from sqlalchemy import select
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from dev_health_ops.api.services.auth import (
+    AuthenticatedUser,
+    _current_org_id,
+    extract_token_from_header,
+    get_auth_service,
+    set_current_org_id,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def get_authenticated_user_from_headers(
+    headers: Iterable[tuple[bytes, bytes]],
+) -> AuthenticatedUser | None:
+    for key, value in headers:
+        if key == b"authorization":
+            token = extract_token_from_header(value.decode("latin-1"))
+            if not token:
+                return None
+            return get_auth_service().get_authenticated_user(token)
+    return None
+
+
+async def user_is_member_of_org(user_id: str, org_id: str) -> bool:
+    """Return True iff the user has an active Membership for org_id."""
+    try:
+        user_uuid = uuid_mod.UUID(user_id)
+        org_uuid = uuid_mod.UUID(org_id)
+    except (ValueError, TypeError):
+        return False
+
+    from dev_health_ops.db import get_postgres_session
+    from dev_health_ops.models.users import Membership
+
+    async with get_postgres_session() as session:
+        result = await session.execute(
+            select(Membership.id)
+            .where(Membership.user_id == user_uuid)
+            .where(Membership.org_id == org_uuid)
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
 
 class OrgIdMiddleware:
-    """Pure ASGI middleware - extracts org_id and sets request-scoped contextvar."""
+    """Pure ASGI middleware — extracts org_id, verifies membership, sets contextvar."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -24,11 +77,36 @@ class OrgIdMiddleware:
             await self.app(scope, receive, send)
             return
 
-        from dev_health_ops.api.services.auth import _current_org_id, set_current_org_id
+        headers = scope.get("headers", [])
+        header_org_id: str | None = None
+        for key, value in headers:
+            if key == b"x-org-id":
+                header_org_id = value.decode("latin-1").strip() or None
+                break
 
-        org_id = self._extract_org_id(scope)
-        token = set_current_org_id(org_id) if org_id else None
+        user = get_authenticated_user_from_headers(headers)
 
+        resolved_org_id: str | None = None
+        if header_org_id:
+            if user is None:
+                await self._deny(send, "Authentication required for X-Org-Id")
+                return
+            if header_org_id == user.org_id:
+                resolved_org_id = header_org_id
+            elif await user_is_member_of_org(user.user_id, header_org_id):
+                resolved_org_id = header_org_id
+            else:
+                logger.warning(
+                    "X-Org-Id rejected: user=%s tried to access org=%s",
+                    user.user_id,
+                    header_org_id,
+                )
+                await self._deny(send, "X-Org-Id not permitted for this user")
+                return
+        elif user is not None and user.org_id:
+            resolved_org_id = user.org_id
+
+        token = set_current_org_id(resolved_org_id) if resolved_org_id else None
         try:
             await self.app(scope, receive, send)
         finally:
@@ -36,33 +114,23 @@ class OrgIdMiddleware:
                 _current_org_id.reset(token)
 
     @staticmethod
-    def _extract_org_id(scope: Scope) -> str | None:
-        """Extract org_id from ASGI headers: X-Org-Id first, then JWT fallback."""
-        from dev_health_ops.api.services.auth import (
-            extract_token_from_header,
-            get_auth_service,
+    async def _deny(send: Send, message: str) -> None:
+        body = json.dumps({"detail": message}).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
         )
-
-        org_id: str | None = None
-        auth_value: str | None = None
-
-        for key, value in scope.get("headers", []):
-            if key == b"x-org-id":
-                org_id = value.decode("latin-1")
-            elif key == b"authorization":
-                auth_value = value.decode("latin-1")
-
-        if org_id:
-            return org_id
-
-        if auth_value:
-            token_str = extract_token_from_header(auth_value)
-            if token_str:
-                user = get_auth_service().get_authenticated_user(token_str)
-                if user and user.org_id:
-                    return user.org_id
-
-        return None
+        await send({"type": "http.response.body", "body": body})
 
 
-__all__ = ["OrgIdMiddleware"]
+__all__ = [
+    "OrgIdMiddleware",
+    "get_authenticated_user_from_headers",
+    "user_is_member_of_org",
+]

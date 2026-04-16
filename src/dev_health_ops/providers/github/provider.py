@@ -28,20 +28,10 @@ from dev_health_ops.providers.base import (
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
+from dev_health_ops.providers.utils import env_flag as _env_flag
+from dev_health_ops.providers.utils import env_int
 
 logger = logging.getLogger(__name__)
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 class GitHubProvider(Provider):
@@ -151,16 +141,7 @@ class GitHubProvider(Provider):
         fetch_comments = _env_flag("GITHUB_FETCH_COMMENTS", True)
         fetch_milestones = _env_flag("GITHUB_FETCH_MILESTONES", True)
 
-        raw_comments_limit = os.getenv("GITHUB_COMMENTS_LIMIT")
-        comments_limit = 500
-        if raw_comments_limit is not None:
-            try:
-                comments_limit = int(raw_comments_limit)
-            except ValueError:
-                logger.warning(
-                    "Invalid GITHUB_COMMENTS_LIMIT value %r; falling back to 500",
-                    raw_comments_limit,
-                )
+        comments_limit = env_int("GITHUB_COMMENTS_LIMIT", 500)
 
         sprint_cache: dict[str, Sprint] = {}
         repo_full_name = f"{owner}/{repo}"

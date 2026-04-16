@@ -84,6 +84,15 @@ class GitConnector(ABC):
         self.cache = cache
         self.cache_prefix = cache_prefix
         self.cache_ttl = cache_ttl
+        # Lazy-created so workers not in an asyncio context don't pay the cost.
+        self._concurrency_semaphore: asyncio.Semaphore | None = None
+
+    @property
+    def concurrency_semaphore(self) -> asyncio.Semaphore:
+        """Shared semaphore gating concurrent async calls to this connector."""
+        if self._concurrency_semaphore is None:
+            self._concurrency_semaphore = asyncio.Semaphore(self.max_workers)
+        return self._concurrency_semaphore
 
     @abstractmethod
     def list_organizations(

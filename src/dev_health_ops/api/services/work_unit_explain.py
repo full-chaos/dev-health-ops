@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 
 from dev_health_ops.llm import get_provider, is_llm_available
 from dev_health_ops.llm.explainers.work_unit_explainer import (
@@ -24,6 +25,18 @@ from dev_health_ops.llm.explainers.work_unit_explainer import (
 from ..models.schemas import EvidenceQuality, WorkUnitExplanation, WorkUnitInvestment
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=256)
+def _compiled_category_pattern(category: str) -> re.Pattern[str]:
+    """Cache compiled regex for a category key.
+
+    Category names come from a bounded taxonomy of investment themes, so the
+    lru_cache cannot grow unbounded. Uses ``re.escape`` so that categories
+    containing regex metacharacters (e.g. ``feature_delivery.customer``) are
+    matched literally rather than re-interpreted as a pattern.
+    """
+    return re.compile(rf"{re.escape(category)}[^.]*\.", re.IGNORECASE)
 
 
 async def explain_work_unit(
@@ -178,9 +191,9 @@ def _extract_category_rationale(
     analysis_section = _extract_section(text, "Category Analysis")
 
     for category in categories:
-        # Look for mentions of the category
-        pattern = rf"{category}[^.]*\."
-        matches = re.findall(pattern, text, re.IGNORECASE)
+        # Look for mentions of the category using a cached compiled pattern.
+        pattern = _compiled_category_pattern(category)
+        matches = pattern.findall(text)
         if matches:
             rationale[category] = matches[0].strip()
         elif analysis_section:

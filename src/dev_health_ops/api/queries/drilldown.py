@@ -13,9 +13,7 @@ def _assert_org_id(org_id: str) -> None:
         raise ValueError("org_id is required for drilldown queries")
     ctx = get_current_org_id()
     if ctx is not None and ctx != org_id:
-        raise PermissionError(
-            f"org_id mismatch: contextvar={ctx!r} caller={org_id!r}"
-        )
+        raise PermissionError(f"org_id mismatch: contextvar={ctx!r} caller={org_id!r}")
 
 
 async def fetch_pull_requests(

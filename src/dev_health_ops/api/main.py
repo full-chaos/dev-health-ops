@@ -367,9 +367,7 @@ def _validation_error_handler(
     )
 
 
-async def _generic_exception_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all 500 handler that returns a sanitized response.
 
     Logs the real exception with stack trace at ERROR level so operators can

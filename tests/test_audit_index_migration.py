@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 INITIAL_MIGRATION = (
     Path(__file__).resolve().parents[1]
     / "src"

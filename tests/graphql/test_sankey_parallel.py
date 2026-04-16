@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
-from unittest.mock import patch
 
 import pytest
-
-from dev_health_ops.api.graphql.context import GraphQLContext
 
 
 @pytest.mark.asyncio

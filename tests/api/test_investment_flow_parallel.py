@@ -41,9 +41,7 @@ async def test_repo_and_team_edges_fetched_in_parallel(monkeypatch):
     monkeypatch.setattr(mod, "_tables_present", AsyncMock(return_value=True))
     monkeypatch.setattr(mod, "_columns_present", AsyncMock(return_value=True))
     monkeypatch.setattr(mod, "resolve_repo_filter_ids", AsyncMock(return_value=[]))
-    monkeypatch.setattr(
-        mod, "build_scope_filter_multi", lambda *_a, **_kw: ("", {})
-    )
+    monkeypatch.setattr(mod, "build_scope_filter_multi", lambda *_a, **_kw: ("", {}))
 
     class _Scope:
         level = "org"

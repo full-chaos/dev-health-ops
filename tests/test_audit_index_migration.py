@@ -35,9 +35,7 @@ def test_initial_migration_has_audit_composite_index():
 def test_audit_model_declares_composite_index():
     from dev_health_ops.models.audit import AuditLog
 
-    index_names = [
-        getattr(ix, "name", None) for ix in AuditLog.__table_args__
-    ]
+    index_names = [getattr(ix, "name", None) for ix in AuditLog.__table_args__]
     assert "ix_audit_logs_org_action_created" in index_names, (
         "AuditLog.__table_args__ no longer declares the composite "
         "ix_audit_logs_org_action_created index."

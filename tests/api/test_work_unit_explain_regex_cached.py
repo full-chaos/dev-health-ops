@@ -30,8 +30,7 @@ def test_category_pattern_compiled_once_per_key():
     compiled_category_patterns = [p for p in compile_calls if "[^.]*" in p]
     # 2 categories, each should appear 0 or 1 time (cache hit on second call)
     counts = {
-        k: sum(1 for p in compiled_category_patterns if k in p)
-        for k in categories
+        k: sum(1 for p in compiled_category_patterns if k in p) for k in categories
     }
     for k, n in counts.items():
         assert n <= 1, f"{k} re-compiled {n} times across calls (expected <=1)"

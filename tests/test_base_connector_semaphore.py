@@ -43,7 +43,9 @@ class _Dummy(GitConnector):
     ):
         return []
 
-    def get_file_blame(self, owner, repo, path, ref="HEAD"):  # pragma: no cover - unused
+    def get_file_blame(
+        self, owner, repo, path, ref="HEAD"
+    ):  # pragma: no cover - unused
         raise NotImplementedError
 
     def close(self):  # pragma: no cover - unused

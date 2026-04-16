@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -9,6 +8,8 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+
+from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
@@ -334,10 +335,13 @@ class LinearClient:
 
     @classmethod
     def from_env(cls) -> LinearClient:
-        api_key = os.getenv("LINEAR_API_KEY") or ""
-        if not api_key:
-            raise ValueError("Linear API key required (set LINEAR_API_KEY)")
-        return cls(auth=LinearAuth(api_key=api_key))
+        env = read_env_spec(
+            EnvSpec(
+                required={"api_key": "LINEAR_API_KEY"},
+                missing_error="Linear API key required (set LINEAR_API_KEY)",
+            )
+        )
+        return cls(auth=LinearAuth(api_key=str(env["api_key"])))
 
     def _execute(
         self,

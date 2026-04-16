@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +11,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitGate,
 )
 from dev_health_ops.providers._ratelimit import penalize_from_response
+from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
@@ -88,18 +88,23 @@ class JiraClient:
 
     @classmethod
     def from_env(cls) -> JiraClient:
-        base_url = os.getenv("JIRA_BASE_URL") or ""
-        email = os.getenv("JIRA_EMAIL") or ""
-        api_token = os.getenv("JIRA_API_TOKEN") or ""
-        if not base_url or not email or not api_token:
-            raise ValueError(
-                "Jira env vars required: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN"
+        env = read_env_spec(
+            EnvSpec(
+                required={
+                    "base_url": "JIRA_BASE_URL",
+                    "email": "JIRA_EMAIL",
+                    "api_token": "JIRA_API_TOKEN",
+                },
+                missing_error=(
+                    "Jira env vars required: JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN"
+                ),
             )
+        )
         return cls(
             auth=JiraAuth(
-                base_url=_normalize_jira_base_url(base_url),
-                email=email,
-                api_token=api_token,
+                base_url=_normalize_jira_base_url(str(env["base_url"])),
+                email=str(env["email"]),
+                api_token=str(env["api_token"]),
             )
         )
 

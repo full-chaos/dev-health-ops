@@ -8,7 +8,6 @@ the underlying ingestion behavior.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 
 from dev_health_ops.models.work_items import (
@@ -101,7 +100,7 @@ class GitHubProvider(Provider):
         - GITHUB_COMMENTS_LIMIT: max comments per item (default: 500)
         - GITHUB_FETCH_MILESTONES: whether to fetch milestones (default: true)
         """
-        from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
+        from dev_health_ops.providers.github.client import GitHubWorkClient
         from dev_health_ops.providers.github.normalize import (
             detect_github_reopen_events,
             enrich_work_item_with_priority,
@@ -122,13 +121,7 @@ class GitHubProvider(Provider):
         owner, repo = parts
 
         # Get auth from environment
-        token = os.getenv("GITHUB_TOKEN")
-        if not token:
-            raise ValueError("GITHUB_TOKEN environment variable is required")
-
-        base_url = os.getenv("GITHUB_BASE_URL")
-        auth = GitHubAuth(token=token, base_url=base_url)
-        client = GitHubWorkClient(auth=auth)
+        client = GitHubWorkClient.from_env()
 
         work_items: list[WorkItem] = []
         transitions: list[WorkItemStatusTransition] = []

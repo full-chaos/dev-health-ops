@@ -21,20 +21,19 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.providers.base import (
     IngestionContext,
-    Provider,
     ProviderBatch,
     ProviderCapabilities,
+    ProviderWithClient,
 )
-from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
 from dev_health_ops.providers.jira.atlassian_compat import atlassian_client_enabled
+from dev_health_ops.providers.jira.client import JiraClient
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
-from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
 from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
 
 
-class JiraProvider(Provider):
+class JiraProvider(ProviderWithClient[JiraClient]):
     """
     Provider implementation for Jira Cloud.
 
@@ -58,34 +57,7 @@ class JiraProvider(Provider):
         reopen_events=True,
         priority=True,
     )
-
-    def __init__(
-        self,
-        *,
-        status_mapping: StatusMapping | None = None,
-        identity: IdentityResolver | None = None,
-    ) -> None:
-        """
-        Initialize the Jira provider.
-
-        Args:
-            status_mapping: optional StatusMapping instance (loads default if None)
-            identity: optional IdentityResolver instance (loads default if None)
-        """
-        self._status_mapping = status_mapping
-        self._identity = identity
-
-    @property
-    def status_mapping(self) -> StatusMapping:
-        if self._status_mapping is None:
-            self._status_mapping = load_status_mapping()
-        return self._status_mapping
-
-    @property
-    def identity(self) -> IdentityResolver:
-        if self._identity is None:
-            self._identity = load_identity_resolver()
-        return self._identity
+    client_cls = JiraClient
 
     def ingest(self, ctx: IngestionContext) -> ProviderBatch:
         """
@@ -103,6 +75,12 @@ class JiraProvider(Provider):
         - ATLASSIAN_CLIENT_ENABLED: use new atlassian-client library
         - ATLASSIAN_GQL_ENABLED: enable GraphQL worklog enrichment (REST fallback)
         """
+        # JiraProvider has two ingest variants (legacy JiraClient vs.
+        # atlassian-client library) so it overrides ingest() directly rather
+        # than using the base class's _make_client() + _ingest_with_client
+        # flow. The legacy path calls self._make_client() to honor the shared
+        # client construction idiom; the atlassian path uses its own client
+        # factories.
         if atlassian_client_enabled():
             logger.info(
                 "Jira: using atlassian-client library (ATLASSIAN_CLIENT_ENABLED=true)"
@@ -111,7 +89,7 @@ class JiraProvider(Provider):
         return self._ingest_via_legacy_client(ctx)
 
     def _ingest_via_legacy_client(self, ctx: IngestionContext) -> ProviderBatch:
-        from dev_health_ops.providers.jira.client import JiraClient, build_jira_jql
+        from dev_health_ops.providers.jira.client import build_jira_jql
         from dev_health_ops.providers.jira.normalize import (
             detect_reopen_events,
             extract_jira_issue_dependencies,
@@ -136,7 +114,7 @@ class JiraProvider(Provider):
             "on",
         }
 
-        client = JiraClient.from_env()
+        client = self._make_client()
 
         work_items: list[WorkItem] = []
         transitions: list[WorkItemStatusTransition] = []

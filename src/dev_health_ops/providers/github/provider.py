@@ -20,20 +20,19 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.providers.base import (
     IngestionContext,
-    Provider,
     ProviderBatch,
     ProviderCapabilities,
+    ProviderWithClient,
 )
-from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
+from dev_health_ops.providers.github.client import GitHubWorkClient
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
-from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
 from dev_health_ops.providers.utils import env_flag as _env_flag
 from dev_health_ops.providers.utils import env_int
 
 logger = logging.getLogger(__name__)
 
 
-class GitHubProvider(Provider):
+class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
     """
     Provider implementation for GitHub.
 
@@ -57,36 +56,18 @@ class GitHubProvider(Provider):
         reopen_events=True,
         priority=True,
     )
+    client_cls = GitHubWorkClient
 
-    def __init__(
-        self,
-        *,
-        status_mapping: StatusMapping | None = None,
-        identity: IdentityResolver | None = None,
-    ) -> None:
-        """
-        Initialize the GitHub provider.
+    def _validate_ctx(self, ctx: IngestionContext) -> None:
+        if not ctx.repo:
+            raise ValueError("GitHub provider requires ctx.repo (owner/repo)")
+        parts = ctx.repo.split("/")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid repo format: {ctx.repo} (expected owner/repo)")
 
-        Args:
-            status_mapping: optional StatusMapping instance (loads default if None)
-            identity: optional IdentityResolver instance (loads default if None)
-        """
-        self._status_mapping = status_mapping
-        self._identity = identity
-
-    @property
-    def status_mapping(self) -> StatusMapping:
-        if self._status_mapping is None:
-            self._status_mapping = load_status_mapping()
-        return self._status_mapping
-
-    @property
-    def identity(self) -> IdentityResolver:
-        if self._identity is None:
-            self._identity = load_identity_resolver()
-        return self._identity
-
-    def ingest(self, ctx: IngestionContext) -> ProviderBatch:
+    def _ingest_with_client(
+        self, *, client: GitHubWorkClient, ctx: IngestionContext
+    ) -> ProviderBatch:
         """
         Ingest work items from GitHub within the given context.
 
@@ -100,7 +81,6 @@ class GitHubProvider(Provider):
         - GITHUB_COMMENTS_LIMIT: max comments per item (default: 500)
         - GITHUB_FETCH_MILESTONES: whether to fetch milestones (default: true)
         """
-        from dev_health_ops.providers.github.client import GitHubWorkClient
         from dev_health_ops.providers.github.normalize import (
             detect_github_reopen_events,
             enrich_work_item_with_priority,
@@ -111,17 +91,9 @@ class GitHubProvider(Provider):
             github_pr_to_work_item,
         )
 
-        if not ctx.repo:
-            raise ValueError("GitHub provider requires ctx.repo (owner/repo)")
-
-        # Parse owner/repo from ctx.repo
-        parts = ctx.repo.split("/")
-        if len(parts) != 2:
-            raise ValueError(f"Invalid repo format: {ctx.repo} (expected owner/repo)")
-        owner, repo = parts
-
-        # Get auth from environment
-        client = GitHubWorkClient.from_env()
+        # ctx.repo is already validated by _validate_ctx() in the base's ingest()
+        assert ctx.repo is not None  # for type checker
+        owner, repo = ctx.repo.split("/")
 
         work_items: list[WorkItem] = []
         transitions: list[WorkItemStatusTransition] = []

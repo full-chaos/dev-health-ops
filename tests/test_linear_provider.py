@@ -644,15 +644,15 @@ class TestLinearProviderRegistration:
 
 class TestLinearProviderIngest:
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
-    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_ingest_all_teams(
         self,
-        mock_client_class: MagicMock,
+        mock_from_env: MagicMock,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
         mock_client = MagicMock()
-        mock_client_class.from_env.return_value = mock_client
+        mock_from_env.return_value = mock_client
 
         mock_client.iter_teams.return_value = [
             {"id": "team-1", "key": "ENG", "name": "Engineering"}
@@ -677,15 +677,15 @@ class TestLinearProviderIngest:
         assert len(batch.sprints) == 1
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
-    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_ingest_specific_team(
         self,
-        mock_client_class: MagicMock,
+        mock_from_env: MagicMock,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
         mock_client = MagicMock()
-        mock_client_class.from_env.return_value = mock_client
+        mock_from_env.return_value = mock_client
 
         mock_client.iter_teams.return_value = [
             {"id": "team-1", "key": "ENG", "name": "Engineering"},
@@ -712,15 +712,15 @@ class TestLinearProviderIngest:
         mock_client.iter_issues_pages.assert_called_once()
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
-    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_ingest_team_not_found(
         self,
-        mock_client_class: MagicMock,
+        mock_from_env: MagicMock,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
         mock_client = MagicMock()
-        mock_client_class.from_env.return_value = mock_client
+        mock_from_env.return_value = mock_client
 
         mock_client.iter_teams.return_value = [
             {"id": "team-1", "key": "ENG", "name": "Engineering"}
@@ -759,15 +759,15 @@ class TestLinearProviderIngest:
             provider.ingest(ctx)
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
-    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_ingest_with_history_and_comments(
         self,
-        mock_client_class: MagicMock,
+        mock_from_env: MagicMock,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
         mock_client = MagicMock()
-        mock_client_class.from_env.return_value = mock_client
+        mock_from_env.return_value = mock_client
 
         mock_client.iter_teams.return_value = [
             {"id": "team-1", "key": "ENG", "name": "Engineering"}
@@ -805,15 +805,15 @@ class TestLinearProviderIngest:
         assert len(batch.interactions) == 1
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
-    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_iter_ingest_yields_per_page_batches(
         self,
-        mock_client_class: MagicMock,
+        mock_from_env: MagicMock,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
         mock_client = MagicMock()
-        mock_client_class.from_env.return_value = mock_client
+        mock_from_env.return_value = mock_client
 
         mock_client.iter_teams.return_value = [
             {"id": "team-1", "key": "ENG", "name": "Engineering"}
@@ -845,15 +845,15 @@ class TestLinearProviderIngest:
         assert max_batch_work_items < total_work_items
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
-    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_iter_ingest_reads_history_from_inline_data(
         self,
-        mock_client_class: MagicMock,
+        mock_from_env: MagicMock,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
         mock_client = MagicMock()
-        mock_client_class.from_env.return_value = mock_client
+        mock_from_env.return_value = mock_client
 
         mock_client.iter_teams.return_value = [
             {"id": "team-1", "key": "ENG", "name": "Engineering"}
@@ -889,15 +889,15 @@ class TestLinearProviderIngest:
         mock_client.get_issue_comments.assert_not_called()
 
     @patch.dict(os.environ, {"LINEAR_API_KEY": "test-api-key"}, clear=False)
-    @patch("dev_health_ops.providers.linear.client.LinearClient")
+    @patch("dev_health_ops.providers.linear.client.LinearClient.from_env")
     def test_ingest_merges_all_iter_ingest_batches(
         self,
-        mock_client_class: MagicMock,
+        mock_from_env: MagicMock,
         mock_identity: IdentityResolver,
         mock_status_mapping: StatusMapping,
     ) -> None:
         mock_client = MagicMock()
-        mock_client_class.from_env.return_value = mock_client
+        mock_from_env.return_value = mock_client
 
         mock_client.iter_teams.return_value = [
             {"id": "team-1", "key": "ENG", "name": "Engineering"}

@@ -22,19 +22,18 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.providers.base import (
     IngestionContext,
-    Provider,
     ProviderBatch,
     ProviderCapabilities,
+    ProviderWithClient,
 )
-from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
+from dev_health_ops.providers.gitlab.client import GitLabWorkClient
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
-from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
 from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
 
 
-class GitLabProvider(Provider):
+class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
     """
     Provider implementation for GitLab.
 
@@ -58,36 +57,15 @@ class GitLabProvider(Provider):
         reopen_events=True,
         priority=True,
     )
+    client_cls = GitLabWorkClient
 
-    def __init__(
-        self,
-        *,
-        status_mapping: StatusMapping | None = None,
-        identity: IdentityResolver | None = None,
-    ) -> None:
-        """
-        Initialize the GitLab provider.
+    def _validate_ctx(self, ctx: IngestionContext) -> None:
+        if not ctx.repo:
+            raise ValueError("GitLab provider requires ctx.repo (project path)")
 
-        Args:
-            status_mapping: optional StatusMapping instance (loads default if None)
-            identity: optional IdentityResolver instance (loads default if None)
-        """
-        self._status_mapping = status_mapping
-        self._identity = identity
-
-    @property
-    def status_mapping(self) -> StatusMapping:
-        if self._status_mapping is None:
-            self._status_mapping = load_status_mapping()
-        return self._status_mapping
-
-    @property
-    def identity(self) -> IdentityResolver:
-        if self._identity is None:
-            self._identity = load_identity_resolver()
-        return self._identity
-
-    def ingest(self, ctx: IngestionContext) -> ProviderBatch:
+    def _ingest_with_client(
+        self, *, client: GitLabWorkClient, ctx: IngestionContext
+    ) -> ProviderBatch:
         """
         Ingest work items from GitLab within the given context.
 
@@ -103,7 +81,6 @@ class GitLabProvider(Provider):
         - GITLAB_FETCH_MILESTONES: whether to fetch milestones (default: true)
         - GITLAB_FETCH_EPICS: whether to fetch epics (requires Premium/Ultimate, default: true)
         """
-        from dev_health_ops.providers.gitlab.client import GitLabWorkClient
         from dev_health_ops.providers.gitlab.normalize import (
             build_epic_id_for_issue,
             detect_gitlab_reopen_events,
@@ -116,11 +93,9 @@ class GitLabProvider(Provider):
             gitlab_note_to_interaction_event,
         )
 
-        if not ctx.repo:
-            raise ValueError("GitLab provider requires ctx.repo (project path)")
-
+        # ctx.repo is already validated by _validate_ctx() in the base's ingest()
+        assert ctx.repo is not None  # for type checker
         project_path = ctx.repo
-        client = GitLabWorkClient.from_env()
 
         work_items: list[WorkItem] = []
         transitions: list[WorkItemStatusTransition] = []

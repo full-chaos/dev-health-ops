@@ -906,7 +906,7 @@ def test_github_provider_ingest(mock_client_class, mock_status_mapping, mock_ide
     """Test full provider ingest flow."""
     # Setup mock client
     mock_client = MagicMock()
-    mock_client_class.return_value = mock_client
+    mock_client_class.from_env.return_value = mock_client
 
     # Mock milestones
     mock_client.iter_repo_milestones.return_value = [

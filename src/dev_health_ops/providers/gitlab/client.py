@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +11,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitGate,
 )
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,19 @@ class GitLabWorkClient:
 
     @classmethod
     def from_env(cls) -> GitLabWorkClient:
-        token = os.getenv("GITLAB_TOKEN") or ""
-        url = os.getenv("GITLAB_URL") or "https://gitlab.com"
-        if not token:
-            raise ValueError("GitLab token required (set GITLAB_TOKEN)")
-        return cls(auth=GitLabAuth(token=token, base_url=url))
+        env = read_env_spec(
+            EnvSpec(
+                required={"token": "GITLAB_TOKEN"},
+                optional={"base_url": ("GITLAB_URL", "https://gitlab.com")},
+                missing_error="GitLab token required (set GITLAB_TOKEN)",
+            )
+        )
+        return cls(
+            auth=GitLabAuth(
+                token=str(env["token"]),
+                base_url=str(env["base_url"]),
+            )
+        )
 
     def get_project(self, project_id_or_path: str) -> Any:
         with gate_call(self.gate):

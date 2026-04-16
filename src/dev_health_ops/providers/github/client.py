@@ -12,6 +12,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitGate,
 )
 from dev_health_ops.providers._ratelimit import gate_call
+from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,23 @@ class GitHubWorkClient:
 
         # GraphQL client (api.github.com only for now).
         self.graphql = GitHubGraphQLClient(auth.token)
+
+    @classmethod
+    def from_env(cls) -> GitHubWorkClient:
+        env = read_env_spec(
+            EnvSpec(
+                required={"token": "GITHUB_TOKEN"},
+                optional={"base_url": ("GITHUB_BASE_URL", None)},
+                missing_error="GITHUB_TOKEN environment variable is required",
+            )
+        )
+        base = env["base_url"]
+        return cls(
+            auth=GitHubAuth(
+                token=str(env["token"]),
+                base_url=str(base) if base else None,
+            )
+        )
 
     def get_repo(self, *, owner: str, repo: str) -> Any:
         return self.github.get_repo(f"{owner}/{repo}")

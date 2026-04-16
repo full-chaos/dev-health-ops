@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -8,17 +7,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops import __version__
+from dev_health_ops.api.dependencies import get_postgres_session_dep as get_session
 from dev_health_ops.api.services.telemetry import TelemetryService
-from dev_health_ops.db import get_postgres_session
 
 from .schemas import TelemetryReport, TelemetryStatus
 
 router = APIRouter(prefix="/api/v1/telemetry", tags=["telemetry"])
-
-
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async with get_postgres_session() as session:
-        yield session
 
 
 def get_org_id(x_org_id: Annotated[str, Header(alias="X-Org-Id")]) -> str:

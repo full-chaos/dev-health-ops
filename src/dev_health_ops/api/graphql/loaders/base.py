@@ -70,26 +70,40 @@ class CachedDataLoader(DataLoader[K, V], Generic[K, V], ABC):
         """
         Load values with optional cache lookup.
 
-        First checks cache for each key, then batch loads missing keys,
-        and finally caches the newly loaded values.
+        Uses a single ``mget()`` call per batch when the cache backend
+        supports it, falling back to per-key ``get()`` otherwise. Missing
+        keys are resolved via ``batch_load`` and then written back to cache.
         """
         results: dict[int, V] = {}
         missing_keys: list[tuple[int, K]] = []
 
-        # Check cache for each key
-        if self._external_cache:
-            for idx, key in enumerate(keys):
-                cache_key = make_cache_key(self._cache_prefix, self._org_id, key)
-                try:
-                    cached = self._external_cache.get(cache_key)
-                    if cached is not None:
-                        results[idx] = cached
-                        continue
-                except Exception as e:
-                    logger.debug("Cache lookup failed for %s: %s", cache_key, e)
-                missing_keys.append((idx, key))
-        else:
+        if self._external_cache is None:
             missing_keys = [(idx, key) for idx, key in enumerate(keys)]
+        else:
+            cache_keys = [
+                make_cache_key(self._cache_prefix, self._org_id, key) for key in keys
+            ]
+            mget_fn = getattr(self._external_cache, "mget", None)
+            if callable(mget_fn):
+                try:
+                    cached_values = list(mget_fn(cache_keys))
+                except Exception as e:
+                    logger.debug("Cache mget failed: %s", e)
+                    cached_values = [None] * len(cache_keys)
+            else:
+                cached_values = []
+                for ck in cache_keys:
+                    try:
+                        cached_values.append(self._external_cache.get(ck))
+                    except Exception as e:
+                        logger.debug("Cache get failed for %s: %s", ck, e)
+                        cached_values.append(None)
+
+            for idx, key, cached in zip(range(len(keys)), keys, cached_values):
+                if cached is not None:
+                    results[idx] = cached
+                else:
+                    missing_keys.append((idx, key))
 
         # Batch load missing keys
         if missing_keys:

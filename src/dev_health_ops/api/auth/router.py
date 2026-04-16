@@ -946,11 +946,24 @@ async def _issue_membership_tokens(
 def _extract_unverified_org_and_subject(
     token: str,
 ) -> tuple[uuid_mod.UUID | None, str | None]:
-    try:
-        from jose import jwt
+    """Extract org_id/subject from an already-rejected refresh token for audit logging.
 
-        claims = jwt.get_unverified_claims(token)
-    except Exception:
+    This is deliberately unverified. Callers invoke this function AFTER
+    validate_token has already failed — the only purpose is to emit an audit
+    log entry describing which org a failed refresh attempt targeted. The
+    returned org_id is never used for authorization; it is passed straight to
+    emit_audit_log.
+    """
+    import jwt as _jwt
+    from jwt.exceptions import InvalidTokenError
+
+    try:
+        # Intentional: audit-logging only — see docstring above. Callers emit the
+        # result straight to emit_audit_log; never used for authorization.
+        # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
+        claims = _jwt.decode(token, options={"verify_signature": False})
+    except (InvalidTokenError, ValueError, AttributeError, TypeError) as exc:
+        logger.debug("Could not parse unverified claims: %s", exc)
         return None, None
 
     return _parse_uuid(claims.get("org_id")), claims.get("sub")

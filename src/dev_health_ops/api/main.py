@@ -34,6 +34,7 @@ from dev_health_ops.api.middleware import OrgIdMiddleware
 from dev_health_ops.api.middleware.correlation_id import CorrelationIdMiddleware
 from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.api.middleware.security_headers import SecurityHeadersMiddleware
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.licensing import LicenseManager
 
@@ -366,12 +367,31 @@ def _validation_error_handler(
     )
 
 
+async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all 500 handler that returns a sanitized response.
+
+    Logs the real exception with stack trace at ERROR level so operators can
+    investigate via logs/Sentry, but never leaks internals to the client.
+    """
+    logger.error(
+        "Unhandled exception on %s %s",
+        request.method,
+        request.url.path,
+        exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error"},
+    )
+
+
 app.state.limiter = limiter
 app.add_exception_handler(
     RateLimitExceeded,
     _rate_limit_handler,
 )
 app.add_exception_handler(RequestValidationError, _validation_error_handler)
+app.add_exception_handler(Exception, _generic_exception_handler)
 
 _cors_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 _cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
@@ -384,6 +404,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Request-ID"],
     expose_headers=["X-Request-ID"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
 OriginValidationMiddleware = import_module(
     "dev_health_ops.api.middleware.csrf"
 ).OriginValidationMiddleware

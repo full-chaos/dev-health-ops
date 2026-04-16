@@ -821,6 +821,7 @@ dependencies = [
     { name = "celery", extra = ["redis"] },
     { name = "clickhouse-connect" },
     { name = "croniter" },
+    { name = "defusedxml" },
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "gitpython" },
@@ -871,7 +872,6 @@ dev = [
     { name = "ruff" },
 ]
 enterprise-sso = [
-    { name = "defusedxml" },
     { name = "signxml" },
 ]
 
@@ -886,7 +886,7 @@ requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.3.0" },
     { name = "clickhouse-connect" },
     { name = "croniter", specifier = ">=1.3.0" },
-    { name = "defusedxml", marker = "extra == 'enterprise-sso'", specifier = ">=0.7.0" },
+    { name = "defusedxml", specifier = ">=0.7.0" },
     { name = "email-validator", specifier = ">=2.0.0" },
     { name = "fakeredis", extras = ["valkey"], marker = "extra == 'dev'" },
     { name = "fastapi" },

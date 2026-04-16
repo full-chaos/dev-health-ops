@@ -7,7 +7,6 @@ for the GraphQL API and REST endpoints.
 from __future__ import annotations
 
 import contextvars
-import hashlib
 import logging
 import os
 import uuid
@@ -96,33 +95,10 @@ JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "dev-health-api")
 def _get_jwt_secret() -> str:
     secret = os.getenv("JWT_SECRET_KEY")
     if not secret:
-        logger.warning(
-            "JWT_SECRET_KEY not set, using derived key from SETTINGS_ENCRYPTION_KEY"
+        raise RuntimeError(
+            "JWT_SECRET_KEY is required and must be set in the environment. "
+            "Derivation from SETTINGS_ENCRYPTION_KEY is no longer supported."
         )
-        encryption_key = os.getenv("SETTINGS_ENCRYPTION_KEY", "dev-key-not-for-prod")
-        secret = hashlib.sha256(encryption_key.encode()).hexdigest()
-
-        environment = (
-            (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower()
-        )
-        has_platform_production_hint = any(
-            os.getenv(var)
-            for var in (
-                "RAILWAY_ENVIRONMENT",
-                "FLY_APP_NAME",
-                "RENDER_SERVICE_ID",
-                "KUBERNETES_SERVICE_HOST",
-            )
-        )
-        is_production = (
-            environment in {"production", "prod"} or has_platform_production_hint
-        )
-
-        if encryption_key == "dev-key-not-for-prod" and is_production:
-            raise RuntimeError(
-                "JWT_SECRET_KEY must be explicitly set in production environments"
-            )
-
     if len(secret) < 32:
         raise ValueError("JWT secret must be at least 32 characters")
     return secret

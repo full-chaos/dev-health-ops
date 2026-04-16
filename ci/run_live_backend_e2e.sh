@@ -236,12 +236,26 @@ echo "==> generating deterministic ClickHouse fixtures (metrics + work graph)"
     --with-work-graph
 )
 
+# JWT_SECRET_KEY is now required (no SHA256 derivation fallback) — derive the same
+# value generate_auth_token() uses so tokens match between API and e2e client.
+if [ -z "${JWT_SECRET_KEY:-}" ]; then
+  JWT_SECRET_KEY="$(
+    ENC_KEY_INPUT="${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}" run_python - <<'PY'
+import hashlib, os
+enc_key = os.environ["ENC_KEY_INPUT"]
+print(hashlib.sha256(enc_key.encode()).hexdigest())
+PY
+  )"
+  export JWT_SECRET_KEY
+fi
+
 echo "==> starting API at ${BASE_URL}"
 (
   export DISABLE_DOTENV=1
   export DATABASE_URI="${DATABASE_URI}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
   export POSTGRES_URI="${POSTGRES_URI}"
+  export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
   exec_dev_hops \
     --db "${POSTGRES_URI}" \
     --analytics-db "${CLICKHOUSE_URI}" \

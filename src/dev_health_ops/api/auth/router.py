@@ -946,11 +946,13 @@ async def _issue_membership_tokens(
 def _extract_unverified_org_and_subject(
     token: str,
 ) -> tuple[uuid_mod.UUID | None, str | None]:
-    try:
-        from jose import jwt
+    import jwt as _jwt
+    from jwt.exceptions import InvalidTokenError
 
-        claims = jwt.get_unverified_claims(token)
-    except Exception:
+    try:
+        claims = _jwt.decode(token, options={"verify_signature": False})
+    except (InvalidTokenError, ValueError, AttributeError, TypeError) as exc:
+        logger.debug("Could not parse unverified claims: %s", exc)
         return None, None
 
     return _parse_uuid(claims.get("org_id")), claims.get("sub")

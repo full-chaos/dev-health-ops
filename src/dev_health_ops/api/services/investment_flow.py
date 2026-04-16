@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, time, timezone
 
 from dev_health_ops.core.taxonomy import (
@@ -386,27 +387,28 @@ async def build_investment_flow_response(
                 "repo", repo_ids, repo_column="repo_id"
             )
 
-        # 1. Fetch both sets of edges
-        repo_rows = await fetch_investment_subcategory_edges(
-            sink,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            scope_filter=scope_filter,
-            scope_params=scope_params,
-            org_id=org_id,
-            themes=theme_filters or None,
-            subcategories=subcategory_filters or None,
-        )
-
-        team_rows = await fetch_investment_team_edges(
-            sink,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            scope_filter=scope_filter,
-            scope_params=scope_params,
-            org_id=org_id,
-            themes=theme_filters or None,
-            subcategories=subcategory_filters or None,
+        # 1. Fetch both sets of edges in parallel.
+        repo_rows, team_rows = await asyncio.gather(
+            fetch_investment_subcategory_edges(
+                sink,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                scope_filter=scope_filter,
+                scope_params=scope_params,
+                org_id=org_id,
+                themes=theme_filters or None,
+                subcategories=subcategory_filters or None,
+            ),
+            fetch_investment_team_edges(
+                sink,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                scope_filter=scope_filter,
+                scope_params=scope_params,
+                org_id=org_id,
+                themes=theme_filters or None,
+                subcategories=subcategory_filters or None,
+            ),
         )
 
     # 2. Calculate stats

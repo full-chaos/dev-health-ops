@@ -596,6 +596,22 @@ class SSOService:
         if not provider:
             raise SSOProcessingError("SSO provider not found")
 
+        allowed = [d.strip().lower() for d in (provider.allowed_domains or []) if d]
+        if allowed:
+            try:
+                _, domain = email.rsplit("@", 1)
+            except ValueError as exc:
+                raise SSOProcessingError("Invalid email from IdP") from exc
+            if domain.lower() not in allowed:
+                logger.warning(
+                    "SSO provision rejected: domain=%s not in allowed_domains for provider=%s",
+                    sanitize_for_log(domain),
+                    provider.id,
+                )
+                raise SSOProcessingError(
+                    "Email domain is not permitted for this SSO provider"
+                )
+
         stmt = select(User).where(User.email == email)
         result = await self.session.execute(stmt)
         user = result.scalar_one_or_none()

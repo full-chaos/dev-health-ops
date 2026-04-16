@@ -1231,6 +1231,37 @@ class TeamMembershipService:
 
         return await asyncio.to_thread(_discover)
 
+    async def discover_members_jira_bulk(
+        self,
+        *,
+        email: str,
+        api_token: str,
+        url: str,
+        project_keys: list[str],
+        concurrency: int = 5,
+    ) -> list[Any]:
+        """Fan out Jira project member lookups concurrently.
+
+        Uses an asyncio.Semaphore to cap simultaneous HTTPS requests so we
+        don't trip Jira's per-IP rate limits.
+        """
+        sem = asyncio.Semaphore(max(1, concurrency))
+
+        async def _one(project_key: str) -> list[Any]:
+            async with sem:
+                return await self.discover_members_jira(
+                    email=email,
+                    api_token=api_token,
+                    url=url,
+                    project_key=project_key,
+                )
+
+        results = await asyncio.gather(*(_one(k) for k in project_keys))
+        flat: list[Any] = []
+        for group in results:
+            flat.extend(group)
+        return flat
+
     async def match_members(
         self,
         members: list[DiscoveredMember],

@@ -958,8 +958,9 @@ def _extract_unverified_org_and_subject(
     from jwt.exceptions import InvalidTokenError
 
     try:
+        # Intentional: audit-logging only — see docstring above. Callers emit the
+        # result straight to emit_audit_log; never used for authorization.
         # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
-        # Intentional: audit-logging only — see docstring above.
         claims = _jwt.decode(token, options={"verify_signature": False})
     except (InvalidTokenError, ValueError, AttributeError, TypeError) as exc:
         logger.debug("Could not parse unverified claims: %s", exc)

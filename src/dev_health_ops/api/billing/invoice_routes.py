@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any
@@ -12,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import require_admin
 from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.dependencies import get_postgres_session_dep as get_session
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.db import get_postgres_session
 
 from ._helpers import _resolve_org_id
 from .invoice_service import InvoiceService
@@ -21,11 +20,6 @@ from .stripe_client import get_stripe_client
 
 router = APIRouter(prefix="/invoices", tags=["billing"])
 invoice_service = InvoiceService()
-
-
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async with get_postgres_session() as session:
-        yield session
 
 
 class InvoiceLineItemResponse(BaseModel):

@@ -67,13 +67,15 @@ async def client(app_and_sessionmaker):
 
 @pytest.fixture(autouse=True)
 def _override_invoice_session(monkeypatch):
-    from dev_health_ops.api.billing import invoice_routes
+    from dev_health_ops.api import dependencies as api_dependencies
 
     @asynccontextmanager
     async def _fake_postgres_session():
         yield object()
 
-    monkeypatch.setattr(invoice_routes, "get_postgres_session", _fake_postgres_session)
+    monkeypatch.setattr(
+        api_dependencies, "get_postgres_session", _fake_postgres_session
+    )
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, TypedDict
@@ -11,6 +11,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
 )
+from dev_health_ops.providers._ratelimit import gate_call
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,29 @@ class GitHubWorkClient:
     def get_repo(self, *, owner: str, repo: str) -> Any:
         return self.github.get_repo(f"{owner}/{repo}")
 
+    def _iter_with_limit(
+        self,
+        source: Iterable[Any],
+        *,
+        limit: int | None,
+        skip: Callable[[Any], bool] | None = None,
+    ) -> Iterable[Any]:
+        """Yield items from ``source`` respecting ``limit`` and optional skip filter.
+
+        ``skip`` receives each item and returns ``True`` when the item should be
+        excluded (used for PR-vs-issue filtering on the issues feed).
+        """
+        if limit is not None and int(limit) <= 0:
+            return
+        count = 0
+        for item in source:
+            if skip is not None and skip(item):
+                continue
+            yield item
+            count += 1
+            if limit is not None and count >= int(limit):
+                return
+
     def iter_issues(
         self,
         *,
@@ -104,15 +128,11 @@ class GitHubWorkClient:
     ) -> Iterable[_GitHubIssueLike]:
         gh_repo = self.get_repo(owner=owner, repo=repo)
         issues = gh_repo.get_issues(state=state, since=since)
-        count = 0
-        for issue in issues:
-            # Exclude pull requests from issues feed.
-            if getattr(issue, "pull_request", None) is not None:
-                continue
-            yield issue
-            count += 1
-            if limit is not None and count >= int(limit):
-                return
+        yield from self._iter_with_limit(
+            issues,
+            limit=limit,
+            skip=lambda issue: getattr(issue, "pull_request", None) is not None,
+        )
 
     def iter_issue_events(
         self, issue: _GitHubIssueLike, *, limit: int | None = None
@@ -120,13 +140,7 @@ class GitHubWorkClient:
         """
         Iterate issue events (labeled/unlabeled/closed/reopened/assigned/...) via REST.
         """
-        events = issue.get_events()
-        count = 0
-        for ev in events:
-            yield ev
-            count += 1
-            if limit is not None and count >= int(limit):
-                return
+        yield from self._iter_with_limit(issue.get_events(), limit=limit)
 
     def iter_pull_requests(
         self,
@@ -143,12 +157,7 @@ class GitHubWorkClient:
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
         pulls = gh_repo.get_pulls(state=state, sort=sort, direction=direction)
-        count = 0
-        for pr in pulls:
-            yield pr
-            count += 1
-            if limit is not None and count >= int(limit):
-                return
+        yield from self._iter_with_limit(pulls, limit=limit)
 
     def iter_issue_comments(
         self, issue: _GitHubIssueLike, *, limit: int | None = None
@@ -156,13 +165,7 @@ class GitHubWorkClient:
         """
         Iterate comments on an issue via REST.
         """
-        comments = issue.get_comments()
-        count = 0
-        for comment in comments:
-            yield comment
-            count += 1
-            if limit is not None and count >= int(limit):
-                return
+        yield from self._iter_with_limit(issue.get_comments(), limit=limit)
 
     def iter_pr_comments(
         self, pr: _GitHubPullRequestLike, *, limit: int | None = None
@@ -179,13 +182,7 @@ class GitHubWorkClient:
         """
         Iterate review comments on a pull request.
         """
-        comments = pr.get_review_comments()
-        count = 0
-        for comment in comments:
-            yield comment
-            count += 1
-            if limit is not None and count >= int(limit):
-                return
+        yield from self._iter_with_limit(pr.get_review_comments(), limit=limit)
 
     def iter_repo_milestones(
         self,
@@ -199,13 +196,9 @@ class GitHubWorkClient:
         Iterate milestones in a repository via REST.
         """
         gh_repo = self.get_repo(owner=owner, repo=repo)
-        milestones = gh_repo.get_milestones(state=state)
-        count = 0
-        for ms in milestones:
-            yield ms
-            count += 1
-            if limit is not None and count >= int(limit):
-                return
+        yield from self._iter_with_limit(
+            gh_repo.get_milestones(state=state), limit=limit
+        )
 
     def iter_project_v2_items(
         self,
@@ -332,17 +325,16 @@ class GitHubWorkClient:
         after = None
         fetched = 0
         while True:
-            self.gate.wait_sync()
-            data = self.graphql.query(
-                query,
-                variables={
-                    "login": org_login,
-                    "number": int(project_number),
-                    "after": after,
-                    "first": int(max(1, min(100, first))),
-                },
-            )
-            self.gate.reset()
+            with gate_call(self.gate):
+                data = self.graphql.query(
+                    query,
+                    variables={
+                        "login": org_login,
+                        "number": int(project_number),
+                        "after": after,
+                        "first": int(max(1, min(100, first))),
+                    },
+                )
 
             org = (data or {}).get("organization") or {}
             project = org.get("projectV2") or {}
@@ -363,12 +355,11 @@ class GitHubWorkClient:
 
                     # Fetch remaining changes for this specific item
                     while changes_cursor:
-                        self.gate.wait_sync()
-                        more_changes = self._fetch_item_changes(
-                            item_id=item.get("id"),
-                            after=changes_cursor,
-                        )
-                        self.gate.reset()
+                        with gate_call(self.gate):
+                            more_changes = self._fetch_item_changes(
+                                item_id=item.get("id"),
+                                after=changes_cursor,
+                            )
 
                         if not more_changes or not more_changes.get("nodes"):
                             break

@@ -29,20 +29,9 @@ from dev_health_ops.providers.identity import IdentityResolver, load_identity_re
 from dev_health_ops.providers.jira.atlassian_compat import atlassian_client_enabled
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
+from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 class JiraProvider(Provider):

@@ -11,6 +11,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
 )
+from dev_health_ops.providers._ratelimit import penalize_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -119,12 +120,7 @@ class JiraClient:
         try:
             resp = self.session.get(url, params=params, timeout=self.timeout_seconds)
             if resp.status_code == 429:
-                retry_after = None
-                try:
-                    retry_after = float(resp.headers.get("Retry-After") or "")
-                except Exception:
-                    retry_after = None
-                applied = self.gate.penalize(retry_after)
+                applied = penalize_from_response(self.gate, resp)
                 logger.info("Jira rate limited; backoff %.1fs (HTTP 429)", applied)
             resp.raise_for_status()
             self.gate.reset()

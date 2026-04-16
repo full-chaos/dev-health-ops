@@ -11,6 +11,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
 )
+from dev_health_ops.providers._ratelimit import gate_call
 
 logger = logging.getLogger(__name__)
 
@@ -76,14 +77,8 @@ class GitLabWorkClient:
         return cls(auth=GitLabAuth(token=token, base_url=url))
 
     def get_project(self, project_id_or_path: str) -> Any:
-        self.gate.wait_sync()
-        try:
-            project = self.gl.projects.get(project_id_or_path)
-            self.gate.reset()
-            return project
-        except Exception:
-            self.gate.penalize(None)
-            raise
+        with gate_call(self.gate):
+            return self.gl.projects.get(project_id_or_path)
 
     def iter_project_issues(
         self,
@@ -134,13 +129,11 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get notes/comments for an issue."""
         try:
-            self.gate.wait_sync()
-            notes = list(issue.notes.list(per_page=100, iterator=True))[:limit]
-            self.gate.reset()
+            with gate_call(self.gate):
+                notes = list(issue.notes.list(per_page=100, iterator=True))[:limit]
             return notes
         except Exception as exc:
             logger.debug("Failed to fetch issue notes: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def get_mr_notes(
@@ -151,13 +144,11 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get notes/comments for a merge request."""
         try:
-            self.gate.wait_sync()
-            notes = list(mr.notes.list(per_page=100, iterator=True))[:limit]
-            self.gate.reset()
+            with gate_call(self.gate):
+                notes = list(mr.notes.list(per_page=100, iterator=True))[:limit]
             return notes
         except Exception as exc:
             logger.debug("Failed to fetch MR notes: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def get_issue_resource_label_events(
@@ -168,15 +159,13 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get resource label events for an issue."""
         try:
-            self.gate.wait_sync()
-            events = list(
-                issue.resource_label_events.list(per_page=100, iterator=True)
-            )[:limit]
-            self.gate.reset()
+            with gate_call(self.gate):
+                events = list(
+                    issue.resource_label_events.list(per_page=100, iterator=True)
+                )[:limit]
             return events
         except Exception as exc:
             logger.debug("Failed to fetch issue label events: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def get_issue_resource_state_events(
@@ -187,15 +176,13 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get resource state events for an issue (open/close/reopen)."""
         try:
-            self.gate.wait_sync()
-            events = list(
-                issue.resource_state_events.list(per_page=100, iterator=True)
-            )[:limit]
-            self.gate.reset()
+            with gate_call(self.gate):
+                events = list(
+                    issue.resource_state_events.list(per_page=100, iterator=True)
+                )[:limit]
             return events
         except Exception as exc:
             logger.debug("Failed to fetch issue state events: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def get_mr_resource_state_events(
@@ -206,15 +193,13 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get resource state events for a merge request."""
         try:
-            self.gate.wait_sync()
-            events = list(mr.resource_state_events.list(per_page=100, iterator=True))[
-                :limit
-            ]
-            self.gate.reset()
+            with gate_call(self.gate):
+                events = list(
+                    mr.resource_state_events.list(per_page=100, iterator=True)
+                )[:limit]
             return events
         except Exception as exc:
             logger.debug("Failed to fetch MR state events: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def get_issue_links(
@@ -223,13 +208,11 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get linked issues for an issue."""
         try:
-            self.gate.wait_sync()
-            links = list(issue.links.list(per_page=100, iterator=True))
-            self.gate.reset()
+            with gate_call(self.gate):
+                links = list(issue.links.list(per_page=100, iterator=True))
             return links
         except Exception as exc:
             logger.debug("Failed to fetch issue links: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def iter_project_milestones(
@@ -251,14 +234,12 @@ class GitLabWorkClient:
     ) -> Iterable[Any]:
         """Iterate milestones for a group."""
         try:
-            self.gate.wait_sync()
-            group = self.gl.groups.get(group_id_or_path)
-            self.gate.reset()
+            with gate_call(self.gate):
+                group = self.gl.groups.get(group_id_or_path)
             milestones = group.milestones.list(state=state, iterator=True)
             yield from milestones
         except Exception as exc:
             logger.debug("Failed to fetch group milestones: %s", exc)
-            self.gate.penalize(None)
             return
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -267,14 +248,8 @@ class GitLabWorkClient:
 
     def get_group(self, group_id_or_path: str) -> Any:
         """Get a GitLab group by ID or path."""
-        self.gate.wait_sync()
-        try:
-            group = self.gl.groups.get(group_id_or_path)
-            self.gate.reset()
-            return group
-        except Exception:
-            self.gate.penalize(None)
-            raise
+        with gate_call(self.gate):
+            return self.gl.groups.get(group_id_or_path)
 
     def iter_group_epics(
         self,
@@ -305,9 +280,8 @@ class GitLabWorkClient:
             if updated_after is not None:
                 params["updated_after"] = updated_after.isoformat()
 
-            self.gate.wait_sync()
-            epics = group.epics.list(iterator=True, **params)
-            self.gate.reset()
+            with gate_call(self.gate):
+                epics = group.epics.list(iterator=True, **params)
 
             count = 0
             for epic in epics:
@@ -325,7 +299,6 @@ class GitLabWorkClient:
                 )
             else:
                 logger.warning("Failed to fetch group epics: %s", exc)
-            self.gate.penalize(None)
             return
 
     def get_epic_notes(
@@ -336,13 +309,11 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get notes/comments for an epic."""
         try:
-            self.gate.wait_sync()
-            notes = list(epic.notes.list(per_page=100, iterator=True))[:limit]
-            self.gate.reset()
+            with gate_call(self.gate):
+                notes = list(epic.notes.list(per_page=100, iterator=True))[:limit]
             return notes
         except Exception as exc:
             logger.debug("Failed to fetch epic notes: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def get_epic_issues(
@@ -355,13 +326,11 @@ class GitLabWorkClient:
         Returns list of issue objects that are children of this epic.
         """
         try:
-            self.gate.wait_sync()
-            issues = list(epic.issues.list(per_page=100, iterator=True))
-            self.gate.reset()
+            with gate_call(self.gate):
+                issues = list(epic.issues.list(per_page=100, iterator=True))
             return issues
         except Exception as exc:
             logger.debug("Failed to fetch epic issues: %s", exc)
-            self.gate.penalize(None)
             return []
 
     def get_epic_resource_state_events(
@@ -372,13 +341,11 @@ class GitLabWorkClient:
     ) -> list[Any]:
         """Get resource state events for an epic (open/close/reopen)."""
         try:
-            self.gate.wait_sync()
-            events = list(epic.resource_state_events.list(per_page=100, iterator=True))[
-                :limit
-            ]
-            self.gate.reset()
+            with gate_call(self.gate):
+                events = list(
+                    epic.resource_state_events.list(per_page=100, iterator=True)
+                )[:limit]
             return events
         except Exception as exc:
             logger.debug("Failed to fetch epic state events: %s", exc)
-            self.gate.penalize(None)
             return []

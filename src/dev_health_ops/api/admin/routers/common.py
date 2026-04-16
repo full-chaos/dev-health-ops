@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastapi import Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dev_health_ops.api.dependencies import get_postgres_session_dep as get_session
 from dev_health_ops.api.middleware.rate_limit import (
     ADMIN_PASSWORD_LIMIT,
     get_admin_user_key,
@@ -15,13 +15,7 @@ from dev_health_ops.api.middleware.rate_limit import (
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.users import MembershipService
-from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.users import Membership, User
-
-
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async with get_postgres_session() as session:
-        yield session
 
 
 def get_user_id(

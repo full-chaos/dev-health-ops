@@ -7,7 +7,6 @@ This wraps the Linear client and normalization logic for work item ingestion.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterable
 from datetime import datetime
 
@@ -27,20 +26,9 @@ from dev_health_ops.providers.base import (
 from dev_health_ops.providers.identity import IdentityResolver, load_identity_resolver
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.status_mapping import StatusMapping, load_status_mapping
+from dev_health_ops.providers.utils import env_flag as _env_flag
 
 logger = logging.getLogger(__name__)
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 class LinearProvider(Provider):

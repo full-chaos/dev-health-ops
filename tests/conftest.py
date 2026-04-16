@@ -11,8 +11,15 @@ from git import Repo as GitRepo
 
 @pytest.fixture(autouse=True)
 def setup_test_env(monkeypatch):
-    """Ensure a default DATABASE_URI is set for tests."""
+    """Ensure a default DATABASE_URI and JWT_SECRET_KEY are set for tests."""
     monkeypatch.setenv("DATABASE_URI", "sqlite:///:memory:")
+    # JWT_SECRET_KEY is now a hard requirement with no derivation fallback
+    # (CHAOS-1266). Provide a safe default for tests; tests that need to
+    # assert the "unset" behaviour use monkeypatch.delenv to override.
+    monkeypatch.setenv(
+        "JWT_SECRET_KEY",
+        "test-jwt-secret-key-at-least-32-characters-long",
+    )
 
 
 @pytest.fixture(autouse=True)

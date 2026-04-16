@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 
 from dev_health_ops.api.services.auth import _get_jwt_secret
@@ -31,28 +29,25 @@ def test_jwt_secret_key_env_var_is_used_when_set(
     assert _get_jwt_secret() == jwt_secret
 
 
-def test_fallback_to_settings_encryption_key_works_in_dev(
+def test_missing_jwt_secret_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """JWT_SECRET_KEY absent in ANY environment must fail closed."""
     _clear_secret_env(monkeypatch)
-    encryption_key = "local-dev-encryption-key"
-    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", encryption_key)
+
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        _get_jwt_secret()
+
+
+def test_missing_jwt_secret_with_settings_encryption_key_still_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SETTINGS_ENCRYPTION_KEY must NOT be used as a fallback."""
+    _clear_secret_env(monkeypatch)
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "some-dev-key")
     monkeypatch.setenv("ENVIRONMENT", "development")
 
-    expected = hashlib.sha256(encryption_key.encode()).hexdigest()
-    assert _get_jwt_secret() == expected
-
-
-def test_insecure_default_raises_runtime_error_in_production(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_secret_env(monkeypatch)
-    monkeypatch.setenv("ENVIRONMENT", "production")
-
-    with pytest.raises(
-        RuntimeError,
-        match="JWT_SECRET_KEY must be explicitly set in production environments",
-    ):
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
         _get_jwt_secret()
 
 

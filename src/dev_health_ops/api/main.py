@@ -34,6 +34,7 @@ from dev_health_ops.api.middleware import OrgIdMiddleware
 from dev_health_ops.api.middleware.correlation_id import CorrelationIdMiddleware
 from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.api.middleware.security_headers import SecurityHeadersMiddleware
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 from dev_health_ops.licensing import LicenseManager
 
@@ -405,6 +406,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Request-ID"],
     expose_headers=["X-Request-ID"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
 OriginValidationMiddleware = import_module(
     "dev_health_ops.api.middleware.csrf"
 ).OriginValidationMiddleware

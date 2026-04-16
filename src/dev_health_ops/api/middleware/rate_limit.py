@@ -62,17 +62,26 @@ def get_auth_key(request: Request) -> str:
     return f"{ip}:{email}"
 
 
-def get_forwarded_ip(request: Request) -> str:
-    """Return real client IP via X-Forwarded-For, falling back to peer IP.
+def _trusted_proxies() -> frozenset[str]:
+    """Return the configured set of trusted proxy IPs (fail-closed: empty if unset)."""
+    raw = os.getenv("TRUSTED_PROXIES", "")
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
 
-    Behind a reverse proxy (Next.js rewrite, nginx, etc.) the TCP peer is
-    the proxy, not the end-user.  X-Forwarded-For carries the original IP.
+
+def get_forwarded_ip(request: Request) -> str:
+    """Return real client IP via X-Forwarded-For, honoured only if the TCP peer
+    is in the TRUSTED_PROXIES allowlist.
+
+    Behind a reverse proxy (Next.js rewrite, nginx, etc.) the TCP peer is the
+    proxy, not the end-user. X-Forwarded-For carries the original IP — but it
+    is attacker-controlled when sent directly to the API, so we only trust it
+    when the peer address is an expected proxy.
     """
+    peer = (request.client.host if request.client else None) or "unknown"
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        # First entry is the original client
+    if forwarded and peer in _trusted_proxies():
         return forwarded.split(",")[0].strip()
-    return get_remote_address(request) or "unknown"
+    return peer
 
 
 def get_admin_user_key(request: Request) -> str:

@@ -46,6 +46,65 @@ from ..sql.compiler import (
 logger = logging.getLogger(__name__)
 
 
+async def _execute_sankey_inner(
+    client: Any,
+    nodes_queries: list[tuple[str, dict[str, Any]]],
+    edges_queries: list[tuple[str, dict[str, Any]]],
+) -> tuple[list[SankeyNode], list[SankeyEdge]]:
+    """Execute all node and edge queries concurrently and aggregate results."""
+    from dev_health_ops.api.queries.client import query_dicts
+
+    async def _nodes() -> list[SankeyNode]:
+        results = await asyncio.gather(
+            *(query_dicts(client, sql, params) for sql, params in nodes_queries)
+        )
+        out: list[SankeyNode] = []
+        for rows in results:
+            if not rows:
+                continue
+            for row in rows:
+                dim = str(row.get("dimension", ""))
+                node_id = str(row.get("node_id", ""))
+                value = float(row.get("value", 0))
+                out.append(
+                    SankeyNode(
+                        id=f"{dim}:{node_id}",
+                        label=node_id,
+                        dimension=dim,
+                        value=value,
+                    )
+                )
+        return out
+
+    async def _edges() -> list[SankeyEdge]:
+        results = await asyncio.gather(
+            *(query_dicts(client, sql, params) for sql, params in edges_queries)
+        )
+        out: list[SankeyEdge] = []
+        for rows in results:
+            if not rows:
+                continue
+            for row in rows:
+                source_dim = str(row.get("source_dimension", ""))
+                target_dim = str(row.get("target_dimension", ""))
+                source = str(row.get("source", ""))
+                target = str(row.get("target", ""))
+                value = float(row.get("value", 0))
+                out.append(
+                    SankeyEdge(
+                        source=f"{source_dim}:{source}",
+                        target=f"{target_dim}:{target}",
+                        value=value,
+                    )
+                )
+        return out
+
+    nodes_task = _nodes()
+    edges_task = _edges()
+    nodes, edges = await asyncio.gather(nodes_task, edges_task)
+    return nodes, edges
+
+
 async def _execute_timeseries_query(
     client: Any,
     ts_req: TimeseriesRequestInput,
@@ -275,65 +334,16 @@ async def resolve_analytics(
         edges: list[SankeyEdge] = []
 
         try:
-            # Execute nodes and edges queries in parallel
-            async def fetch_nodes() -> list[SankeyNode]:
-                result_nodes: list[SankeyNode] = []
-                for sql, params in nodes_queries:
-                    rows = await query_dicts(client, sql, params)
-                    if not rows:
-                        continue
-                    for row in rows:
-                        dim = str(row.get("dimension", ""))
-                        node_id = str(row.get("node_id", ""))
-                        value = float(row.get("value", 0))
-                        result_nodes.append(
-                            SankeyNode(
-                                id=f"{dim}:{node_id}",
-                                label=node_id,
-                                dimension=dim,
-                                value=value,
-                            )
-                        )
-                return result_nodes
-
-            async def fetch_edges() -> list[SankeyEdge]:
-                result_edges: list[SankeyEdge] = []
-                for sql, params in edges_queries:
-                    rows = await query_dicts(client, sql, params)
-                    if not rows:
-                        continue
-                    for row in rows:
-                        source_dim = str(row.get("source_dimension", ""))
-                        target_dim = str(row.get("target_dimension", ""))
-                        source = str(row.get("source", ""))
-                        target = str(row.get("target", ""))
-                        value = float(row.get("value", 0))
-                        result_edges.append(
-                            SankeyEdge(
-                                source=f"{source_dim}:{source}",
-                                target=f"{target_dim}:{target}",
-                                value=value,
-                            )
-                        )
-                return result_edges
-
-            # Execute nodes and edges in parallel
-            nodes_result, edges_result = await asyncio.gather(
-                fetch_nodes(),
-                fetch_edges(),
-                return_exceptions=True,
-            )
-
-            # Handle results/exceptions
-            if isinstance(nodes_result, Exception):
-                logger.error("Sankey nodes query failed: %s", nodes_result)
-            else:
-                nodes = nodes_result
-
-            if isinstance(edges_result, Exception):
-                logger.error("Sankey edges query failed: %s", edges_result)
-            else:
-                edges = edges_result
+            # Execute nodes and edges queries concurrently via asyncio.gather.
+            try:
+                nodes, edges = await _execute_sankey_inner(
+                    client,
+                    nodes_queries,
+                    edges_queries,
+                )
+            except Exception as exc:
+                logger.error("Sankey query failed: %s", exc)
+                nodes, edges = [], []
 
             # Calculate coverage metrics if requested
             coverage: SankeyCoverage | None = None

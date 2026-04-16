@@ -10,10 +10,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode, urlparse
-from xml.etree import ElementTree
+from xml.etree.ElementTree import Element, ParseError
 
 import httpx
 import jwt
+from defusedxml import ElementTree as DefusedElementTree
+from defusedxml.common import DefusedXmlException
 from jwt import PyJWKClient
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -651,25 +653,17 @@ class SSOService:
         return user, membership, provider
 
     @staticmethod
-    def _parse_saml_xml(xml_bytes: bytes) -> ElementTree.Element:
+    def _parse_saml_xml(xml_bytes: bytes) -> Element:
         try:
-            try:
-                from defusedxml import ElementTree as safe_tree
-
-                return safe_tree.fromstring(xml_bytes)
-            except ImportError as exc:
-                logger.error(
-                    "defusedxml is required for secure SAML XML parsing but is not installed"
-                )
-                raise SAMLProcessingError(
-                    "SAML processing requires the 'defusedxml' package to be installed"
-                ) from exc
-        except ElementTree.ParseError as exc:
+            return DefusedElementTree.fromstring(xml_bytes)
+        except DefusedXmlException as exc:
+            raise SAMLProcessingError("Unsafe SAML XML rejected") from exc
+        except ParseError as exc:
             raise SAMLProcessingError("Invalid SAML XML") from exc
 
     @staticmethod
     def _find_text(
-        element: ElementTree.Element,
+        element: Element,
         path: str,
         namespaces: Mapping[str, str],
     ) -> str | None:
@@ -679,7 +673,7 @@ class SSOService:
         return node.text.strip()
 
     def _validate_saml_signature(
-        self, xml_root: ElementTree.Element, certificate: str | None
+        self, xml_root: Element, certificate: str | None
     ) -> None:
         if not certificate:
             raise SAMLProcessingError("SAML certificate is required for validation")
@@ -698,7 +692,7 @@ class SSOService:
 
     @staticmethod
     def _extract_saml_attributes(
-        assertion: ElementTree.Element,
+        assertion: Element,
         namespaces: Mapping[str, str],
     ) -> dict[str, str]:
         attributes: dict[str, str] = {}
@@ -725,8 +719,8 @@ class SSOService:
 
     def _validate_saml_timestamps(
         self,
-        assertion: ElementTree.Element,
-        subject_confirmation: ElementTree.Element,
+        assertion: Element,
+        subject_confirmation: Element,
         namespaces: Mapping[str, str],
     ) -> None:
         now = datetime.now(timezone.utc)

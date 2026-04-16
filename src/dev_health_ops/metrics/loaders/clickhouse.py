@@ -12,6 +12,7 @@ from dev_health_ops.metrics.loaders.base import (
     parse_uuid,
     to_dataclass,
 )
+from dev_health_ops.metrics.query_builder import OrgScopedQuery
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
     DeploymentRow,
@@ -55,20 +56,15 @@ class ClickHouseDataLoader(DataLoader):
     def __init__(self, client: Any, org_id: str = "") -> None:
         self.client = client
         self.org_id = org_id
+        self._scope = OrgScopedQuery(org_id)
 
     def _org_filter(self, *, alias: str = "") -> str:
         """Return an ``AND org_id = …`` clause when *org_id* is set."""
-        if not self.org_id:
-            return ""
-        col = f"{alias}.org_id" if alias else "org_id"
-        return f" AND {col} = {{org_id:String}}"
+        return self._scope.filter(alias=alias)
 
     def _inject_org_id(self, params: dict[str, Any]) -> dict[str, Any]:
         """Inject *org_id* into query parameters when set."""
-        if self.org_id:
-            params = dict(params)
-            params["org_id"] = self.org_id
-        return params
+        return self._scope.inject(params)
 
     async def load_git_rows(
         self,

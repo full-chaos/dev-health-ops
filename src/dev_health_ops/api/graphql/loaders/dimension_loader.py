@@ -98,4 +98,8 @@ def get_measure_descriptions() -> dict[str, str]:
         Measure.COVERAGE_LINE_PCT.value: "Line coverage percentage",
         Measure.COVERAGE_BRANCH_PCT.value: "Branch coverage percentage",
         Measure.COVERAGE_DELTA_PCT.value: "Coverage change from prior period",
+        Measure.FLAG_FRICTION_DELTA.value: "Feature flag friction delta (error-rate change gated by flag)",
+        Measure.FLAG_ERROR_RATE_DELTA.value: "Error-rate change attributable to feature flag rollout",
+        Measure.FLAG_COVERAGE_RATIO.value: "Share of flagged code paths exercised by tests",
+        Measure.FLAG_ACTIVATION_RATE.value: "Rate of feature flag activations over time",
     }

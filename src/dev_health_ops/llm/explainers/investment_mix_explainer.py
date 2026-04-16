@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
+from dev_health_ops.llm.json_utils import extract_json_object as _extract_json_object
+
 PROMPT_PATH = (
     Path(__file__).parent.parent / "prompts" / "investment_mix_explain_prompt.txt"
 )
@@ -69,47 +71,6 @@ def build_prompt(*, base_prompt: str, payload: dict[str, Any]) -> str:
         + "\n---\n"
         + "\nOutput must be valid JSON."
     )
-
-
-def _extract_json_object(text: str) -> dict[str, Any] | None:
-    if not text or not text.strip():
-        logger.warning("LLM response is empty or whitespace-only")
-        return None
-
-    candidate = text.strip()
-
-    start = candidate.find("{")
-    end = candidate.rfind("}")
-
-    if start == -1 or end == -1 or end < start:
-        safe_preview = text[:500].replace("\r", "\\r").replace("\n", "\\n")
-        logger.warning(
-            "Failed to find JSON object in LLM response. "
-            "Preview of text (%d chars shown, total %d): %r",
-            len(safe_preview),
-            len(text),
-            safe_preview,
-        )
-        return None
-
-    json_str = candidate[start : end + 1]
-
-    try:
-        parsed = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        safe_preview = json_str[:500].replace("\r", "\\r").replace("\n", "\\n")
-        logger.warning(
-            "JSON decode error in LLM response: %s. Text preview (%d chars shown, total %d): %r",
-            e,
-            len(safe_preview),
-            len(json_str),
-            safe_preview,
-        )
-        return None
-    if not isinstance(parsed, dict):
-        logger.warning("Parsed JSON is not a dictionary")
-        return None
-    return parsed
 
 
 def _as_string_list(value: Any) -> list[str]:

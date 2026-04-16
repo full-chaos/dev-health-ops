@@ -14,10 +14,11 @@ Notes:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any
+
+from dev_health_ops.llm.json_utils import validate_json_or_empty
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +53,6 @@ def system_message(prompt: str) -> str:
         "Do NOT introduce new conclusions or recommendations.\n"
         "Return ONLY valid JSON."
     )
-
-
-def validate_json_or_empty(s: str) -> str:
-    """Return a compact JSON string if valid; otherwise return empty."""
-    if not s or not s.strip():
-        return ""
-    try:
-        obj = json.loads(s)
-        return json.dumps(obj, ensure_ascii=False)
-    except Exception:
-        return ""
 
 
 def categorization_json_schema() -> dict[str, Any]:

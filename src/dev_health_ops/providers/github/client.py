@@ -11,6 +11,7 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
 )
+from dev_health_ops.providers._ratelimit import gate_call
 
 logger = logging.getLogger(__name__)
 
@@ -324,17 +325,16 @@ class GitHubWorkClient:
         after = None
         fetched = 0
         while True:
-            self.gate.wait_sync()
-            data = self.graphql.query(
-                query,
-                variables={
-                    "login": org_login,
-                    "number": int(project_number),
-                    "after": after,
-                    "first": int(max(1, min(100, first))),
-                },
-            )
-            self.gate.reset()
+            with gate_call(self.gate):
+                data = self.graphql.query(
+                    query,
+                    variables={
+                        "login": org_login,
+                        "number": int(project_number),
+                        "after": after,
+                        "first": int(max(1, min(100, first))),
+                    },
+                )
 
             org = (data or {}).get("organization") or {}
             project = org.get("projectV2") or {}
@@ -355,12 +355,11 @@ class GitHubWorkClient:
 
                     # Fetch remaining changes for this specific item
                     while changes_cursor:
-                        self.gate.wait_sync()
-                        more_changes = self._fetch_item_changes(
-                            item_id=item.get("id"),
-                            after=changes_cursor,
-                        )
-                        self.gate.reset()
+                        with gate_call(self.gate):
+                            more_changes = self._fetch_item_changes(
+                                item_id=item.get("id"),
+                                after=changes_cursor,
+                            )
 
                         if not more_changes or not more_changes.get("nodes"):
                             break

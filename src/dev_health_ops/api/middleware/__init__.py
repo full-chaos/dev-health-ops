@@ -87,11 +87,13 @@ class OrgIdMiddleware:
         user = get_authenticated_user_from_headers(headers)
 
         resolved_org_id: str | None = None
-        if header_org_id:
-            if user is None:
-                await self._deny(send, "Authentication required for X-Org-Id")
-                return
-            if header_org_id == user.org_id:
+        if header_org_id and user is not None:
+            # IDOR check: authenticated user's X-Org-Id must match their JWT
+            # org_id or an existing Membership. Mismatch → 403. Superusers are
+            # permitted to scope to any org (intentional — admin API contract).
+            if user.is_superuser:
+                resolved_org_id = header_org_id
+            elif header_org_id == user.org_id:
                 resolved_org_id = header_org_id
             elif await user_is_member_of_org(user.user_id, header_org_id):
                 resolved_org_id = header_org_id
@@ -105,6 +107,9 @@ class OrgIdMiddleware:
                 return
         elif user is not None and user.org_id:
             resolved_org_id = user.org_id
+        # Anonymous requests with an X-Org-Id header: pass through. The header
+        # is not a security claim without auth — downstream endpoints that
+        # require auth will 401 via their own dependencies.
 
         token = set_current_org_id(resolved_org_id) if resolved_org_id else None
         try:

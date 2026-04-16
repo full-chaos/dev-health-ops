@@ -105,6 +105,8 @@ def consume_streams(
 
     total_processed = 0
     iterations = 0
+    backoff_s = 1.0
+    BACKOFF_MAX_S = 30.0
 
     while max_iterations is None or iterations < max_iterations:
         iterations += 1
@@ -116,9 +118,11 @@ def consume_streams(
                 count=BATCH_SIZE,
                 block=BLOCK_MS,
             )
+            backoff_s = 1.0
         except Exception:
-            logger.exception("XREADGROUP failed")
-            time.sleep(1)
+            logger.exception("XREADGROUP failed (backoff=%ss)", backoff_s)
+            time.sleep(backoff_s)
+            backoff_s = min(backoff_s * 2, BACKOFF_MAX_S)
             continue
 
         if not results:

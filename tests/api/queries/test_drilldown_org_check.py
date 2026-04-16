@@ -1,4 +1,5 @@
 """Defense-in-depth org_id re-check for drilldown queries (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 from datetime import date

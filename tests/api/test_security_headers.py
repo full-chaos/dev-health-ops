@@ -1,4 +1,5 @@
 """Security-headers middleware tests (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import pytest

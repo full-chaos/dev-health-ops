@@ -1,10 +1,10 @@
 """XXE-resistance tests for SAML XML parsing (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import pytest
 
 from dev_health_ops.api.services.sso import SAMLProcessingError, SSOService
-
 
 XXE_PAYLOAD = b"""<?xml version="1.0"?>
 <!DOCTYPE foo [

@@ -1,4 +1,5 @@
 """Generic 500 exception handler returns sanitized JSON (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import pytest
@@ -54,5 +55,7 @@ async def test_500_logs_original_exception(sanitized_app, caplog):
     ) as ac:
         await ac.get("/boom")
     # The full text must appear in the logs, not the response.
-    assert any("hunter2" in rec.message or "hunter2" in (rec.exc_text or "")
-               for rec in caplog.records)
+    assert any(
+        "hunter2" in rec.message or "hunter2" in (rec.exc_text or "")
+        for rec in caplog.records
+    )

@@ -1,4 +1,5 @@
 """Enforcement tests for SSO allowed_domains (CHAOS security sprint)."""
+
 from __future__ import annotations
 
 import uuid

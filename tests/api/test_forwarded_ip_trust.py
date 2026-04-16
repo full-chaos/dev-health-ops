@@ -1,7 +1,7 @@
 """X-Forwarded-For trust boundary tests (CHAOS security sprint)."""
+
 from __future__ import annotations
 
-import pytest
 from fastapi import Request
 
 from dev_health_ops.api.middleware.rate_limit import get_forwarded_ip
@@ -55,7 +55,5 @@ def test_trusted_proxies_unset_disables_xff(monkeypatch):
 def test_xff_takes_first_entry(monkeypatch):
     """When trusted, the leftmost XFF entry is the original client."""
     monkeypatch.setenv("TRUSTED_PROXIES", "10.0.0.1")
-    req = _make_request(
-        client_host="10.0.0.1", xff="203.0.113.1, 10.0.0.1"
-    )
+    req = _make_request(client_host="10.0.0.1", xff="203.0.113.1, 10.0.0.1")
     assert get_forwarded_ip(req) == "203.0.113.1"

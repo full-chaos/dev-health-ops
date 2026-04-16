@@ -4,7 +4,6 @@ import logging
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any
 from uuid import UUID
 
 from dev_health_ops.models.work_items import (
@@ -25,15 +24,10 @@ from dev_health_ops.providers.normalize_common import (
 from dev_health_ops.providers.normalize_common import (
     to_utc as _to_utc,
 )
+from dev_health_ops.providers.normalize_helpers import get_attr as _get
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 logger = logging.getLogger(__name__)
-
-
-def _get(obj: object, key: str) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(key)
-    return getattr(obj, key, None)
 
 
 def gitlab_issue_to_work_item(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Protocol, TypedDict
 from uuid import UUID
@@ -25,11 +25,22 @@ from dev_health_ops.providers.normalize_common import (
 from dev_health_ops.providers.normalize_common import (
     to_utc as _to_utc,
 )
+from dev_health_ops.providers.normalize_helpers import (
+    as_dict as _as_dict,
+)
+from dev_health_ops.providers.normalize_helpers import (
+    as_int as _as_int,
+)
+from dev_health_ops.providers.normalize_helpers import (
+    as_node_list as _as_node_list,
+)
+from dev_health_ops.providers.normalize_helpers import (
+    as_str as _as_str,
+)
+from dev_health_ops.providers.normalize_helpers import (
+    labels_from_nodes as _labels_from_nodes,
+)
 from dev_health_ops.providers.status_mapping import StatusMapping
-
-
-class _NamedObject(Protocol):
-    name: object
 
 
 class _GitHubIssueLike(Protocol):
@@ -89,50 +100,6 @@ class _ProjectItemNode(TypedDict, total=False):
     content: dict[str, object]
     fieldValues: _NodeCollection
     changes: _ItemChanges
-
-
-def _as_dict(value: object) -> dict[str, object]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_str(value: object) -> str | None:
-    if value is None:
-        return None
-    return value if isinstance(value, str) else str(value)
-
-
-def _as_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, (int, float, str)):
-        try:
-            return int(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _as_node_list(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
-
-
-def _labels_from_nodes(
-    nodes: Sequence[Mapping[str, object] | _NamedObject] | None,
-) -> list[str]:
-    labels: list[str] = []
-    for node in nodes or []:
-        name = (
-            (node or {}).get("name")
-            if isinstance(node, dict)
-            else getattr(node, "name", None)
-        )
-        if name:
-            labels.append(str(name))
-    return labels
 
 
 def _update_transitions_work_item_id(

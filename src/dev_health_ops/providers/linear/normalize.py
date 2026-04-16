@@ -15,6 +15,7 @@ from dev_health_ops.models.work_items import (
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
+from dev_health_ops.providers.normalize_helpers import get_nested as _get
 from dev_health_ops.providers.status_mapping import StatusMapping
 
 logger = logging.getLogger(__name__)
@@ -44,17 +45,6 @@ def _parse_iso(value: str | None) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
-
-
-def _get(obj: Any, *keys: str) -> Any:
-    for key in keys:
-        if obj is None:
-            return None
-        if isinstance(obj, dict):
-            obj = obj.get(key)
-        else:
-            obj = getattr(obj, key, None)
-    return obj
 
 
 def _priority_from_linear(

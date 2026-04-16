@@ -68,6 +68,7 @@ async def list_organizations(
 async def get_organization(
     org_id: str,
     session: AsyncSession = Depends(get_session),
+    current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> OrganizationResponse:
     svc = OrganizationService(session)
     org = await svc.get_by_id(org_id)

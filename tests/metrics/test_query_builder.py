@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from dev_health_ops.metrics.query_builder import OrgScopedQuery
 
 
@@ -39,3 +41,26 @@ class TestOrgScopedQuery:
     def test_bool_truthiness(self) -> None:
         assert bool(OrgScopedQuery("")) is False
         assert bool(OrgScopedQuery("acme")) is True
+
+    @pytest.mark.parametrize(
+        "bad_alias",
+        [
+            "c; DROP TABLE users--",
+            "c OR 1=1",
+            "c.d",
+            "1c",
+            "c-d",
+            "c d",
+            "'; --",
+        ],
+    )
+    def test_filter_rejects_non_identifier_alias(self, bad_alias: str) -> None:
+        q = OrgScopedQuery("acme")
+        with pytest.raises(ValueError, match="valid identifier"):
+            q.filter(alias=bad_alias)
+
+    def test_filter_accepts_snake_case_alias(self) -> None:
+        q = OrgScopedQuery("acme")
+        assert (
+            q.filter(alias="work_units") == " AND work_units.org_id = {org_id:String}"
+        )

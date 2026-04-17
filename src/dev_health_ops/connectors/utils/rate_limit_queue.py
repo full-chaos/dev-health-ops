@@ -63,9 +63,13 @@ class RateLimitGate:
                     self._config.max_backoff_seconds,
                 )
             else:
-                # If we get an explicit server reset delay, keep exponential
-                # backoff state but still honor the explicit delay.
-                delay_seconds = max(0.0, float(delay_seconds))
+                # Clamp explicit (e.g. server-provided Retry-After) delays
+                # to the configured max so a malicious or misbehaving upstream
+                # cannot park the gate for an unbounded period.
+                delay_seconds = max(
+                    0.0,
+                    min(float(delay_seconds), self._config.max_backoff_seconds),
+                )
 
             now = time.time()
             self._next_allowed_at = max(
@@ -205,7 +209,12 @@ class DistributedRateLimitGate(RateLimitGate):
                     self._config.max_backoff_seconds,
                 )
             else:
-                delay_seconds = max(0.0, float(delay_seconds))
+                # Clamp explicit delay (e.g. Retry-After) to max_backoff_seconds
+                # so an upstream-supplied value cannot park the gate unbounded.
+                delay_seconds = max(
+                    0.0,
+                    min(float(delay_seconds), self._config.max_backoff_seconds),
+                )
 
             now = time.time()
             proposed = now + delay_seconds

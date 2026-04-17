@@ -150,6 +150,38 @@ class TestDistributedPenalize:
         assert gate._next_allowed_at >= first
 
 
+class TestLocalGatePenalizeClamping:
+    """Explicit delay (e.g. server Retry-After) must be clamped to max_backoff."""
+
+    def test_explicit_delay_above_max_is_clamped(self):
+        cfg = RateLimitConfig(max_backoff_seconds=60.0)
+        gate = RateLimitGate(cfg)
+        applied = gate.penalize(99_999_999.0)
+        assert applied == 60.0
+
+    def test_explicit_delay_below_max_is_preserved(self):
+        cfg = RateLimitConfig(max_backoff_seconds=60.0)
+        gate = RateLimitGate(cfg)
+        assert gate.penalize(10.0) == 10.0
+
+    def test_negative_delay_is_zero(self):
+        cfg = RateLimitConfig(max_backoff_seconds=60.0)
+        gate = RateLimitGate(cfg)
+        assert gate.penalize(-5.0) == 0.0
+
+
+class TestDistributedGatePenalizeClamping:
+    def test_explicit_delay_above_max_is_clamped(self):
+        cfg = RateLimitConfig(max_backoff_seconds=30.0)
+        client = _make_redis_mock()
+        # force local-fallback path so we can inspect applied delay deterministically
+        gate = DistributedRateLimitGate("gh", config=cfg, redis_client=client)
+        gate._redis_available = False
+        before = time.time()
+        gate.penalize(10_000.0)
+        assert gate._next_allowed_at - before <= 30.0 + 0.5
+
+
 class TestDistributedSleepSeconds:
     def test_reads_from_redis(self):
         client = _make_redis_mock()

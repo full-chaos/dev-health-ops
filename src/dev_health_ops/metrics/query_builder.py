@@ -22,7 +22,19 @@ class OrgScopedQuery:
         return bool(self.org_id)
 
     def filter(self, *, alias: str = "") -> str:
-        """Return ``" AND {alias?.}org_id = {org_id:String}"`` or ``""``."""
+        """Return ``" AND {alias?.}org_id = {org_id:String}"`` or ``""``.
+
+        ``alias`` is interpolated into SQL directly and MUST be a valid SQL
+        identifier (ASCII letters/digits/underscore, non-digit first char).
+        Defense in depth: all known call sites pass hardcoded literals, but
+        a stray user-supplied value would be a SQL-injection vector without
+        this check.
+        """
+        if alias and not alias.isidentifier():
+            raise ValueError(
+                "OrgScopedQuery.filter: alias must be a valid identifier, "
+                f"got {alias!r}"
+            )
         if not self.org_id:
             return ""
         col = f"{alias}.org_id" if alias else "org_id"

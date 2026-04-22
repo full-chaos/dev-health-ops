@@ -14,6 +14,8 @@ from .filter_translation import translate_filters
 from .templates import (
     breakdown_template,
     catalog_values_template,
+    flow_matrix_team_edges_template,
+    flow_matrix_team_nodes_template,
     sankey_edges_template,
     sankey_nodes_template,
     timeseries_template,
@@ -333,10 +335,18 @@ def compile_flow_matrix(
     """Compile a same-dimension flow matrix request to parameterized SQL.
 
     Produces the same (nodes_queries, edges_queries) tuple shape as
-    compile_sankey so _execute_sankey_inner can execute either. The edges
-    query uses the same dimension column for both source and target — the
-    existing sankey_edges_template handles this correctly because GROUP BY
-    source, target partitions the rows even when the columns are identical.
+    compile_sankey so _execute_sankey_inner can execute either.
+
+    For TEAM, edges come from work_item_cycle_times: each work item's first
+    team (argMin by day) is the source and its last team (argMax by day) is
+    the target. Only cross-team handoffs are emitted, giving an asymmetric
+    signal that unlocks the chord's directional modes. Nodes also come from
+    work_item_cycle_times so node ids and edge endpoints stay consistent.
+
+    For REPO and WORK_TYPE the schema doesn't carry a natural directional
+    team-level-equivalent signal per work item, so the existing same-column
+    self-aggregation is used. These dimensions will mostly emit self-loops
+    (which the frontend drops) — tracked as follow-up.
     """
     dimension = validate_dimension(request.dimension)
     measure = validate_measure(request.measure)
@@ -351,29 +361,34 @@ def compile_flow_matrix(
         filters, use_investment=ctx.get("use_investment", False)
     )
 
-    nodes_sql = sankey_nodes_template(
-        [dimension], measure, filter_clause=filter_clause, **ctx
-    )
-    nodes_params: dict[str, Any] = {
+    common_params: dict[str, Any] = {
         "start_date": request.start_date,
         "end_date": request.end_date,
-        "limit_per_dim": request.max_nodes,
         "timeout": timeout,
     }
-    nodes_params.update(filter_params)
-    nodes_params = enforce_org_scope(org_id, nodes_params)
 
-    edge_sql = sankey_edges_template(
-        dimension, dimension, measure, filter_clause=filter_clause, **ctx
-    )
-    edge_params: dict[str, Any] = {
-        "start_date": request.start_date,
-        "end_date": request.end_date,
-        "max_edges": request.max_edges,
-        "timeout": timeout,
-    }
-    edge_params.update(filter_params)
-    edge_params = enforce_org_scope(org_id, edge_params)
+    if dimension == Dimension.TEAM:
+        nodes_sql = flow_matrix_team_nodes_template()
+        nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
+        nodes_params = enforce_org_scope(org_id, nodes_params)
+
+        edge_sql = flow_matrix_team_edges_template()
+        edge_params = {**common_params, "max_edges": request.max_edges}
+        edge_params = enforce_org_scope(org_id, edge_params)
+    else:
+        nodes_sql = sankey_nodes_template(
+            [dimension], measure, filter_clause=filter_clause, **ctx
+        )
+        nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
+        nodes_params.update(filter_params)
+        nodes_params = enforce_org_scope(org_id, nodes_params)
+
+        edge_sql = sankey_edges_template(
+            dimension, dimension, measure, filter_clause=filter_clause, **ctx
+        )
+        edge_params = {**common_params, "max_edges": request.max_edges}
+        edge_params.update(filter_params)
+        edge_params = enforce_org_scope(org_id, edge_params)
 
     return [(nodes_sql, nodes_params)], [(edge_sql, edge_params)]
 

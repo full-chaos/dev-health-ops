@@ -148,6 +148,64 @@ SETTINGS max_execution_time = %(timeout)s
 """
 
 
+def flow_matrix_team_nodes_template() -> str:
+    """Nodes query for TEAM flow matrix, sourced from work_item_cycle_times.
+
+    Counts distinct work items per team within the window. Uses the same table
+    as the handoff edge query so node ids and edge endpoints stay consistent.
+    """
+    return """
+SELECT
+    'TEAM' AS dimension,
+    toString(team_id) AS node_id,
+    uniqExact(work_item_id) AS value
+FROM work_item_cycle_times
+WHERE day >= %(start_date)s AND day <= %(end_date)s
+  AND org_id = %(org_id)s
+  AND team_id IS NOT NULL
+  AND team_id != ''
+GROUP BY node_id
+ORDER BY value DESC
+LIMIT %(limit_per_dim)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
+def flow_matrix_team_edges_template() -> str:
+    """Directional team→team handoff edges from work_item_cycle_times.
+
+    Each work item's first-observed team (argMin by day) is the source, its
+    last-observed team (argMax by day) is the target. Only cross-team handoffs
+    are emitted, giving a genuinely asymmetric signal so inflow/outflow/net
+    chord modes produce distinct matrices.
+    """
+    return """
+SELECT
+    'TEAM' AS source_dimension,
+    'TEAM' AS target_dimension,
+    toString(from_team) AS source,
+    toString(to_team) AS target,
+    count() AS value
+FROM (
+    SELECT
+        work_item_id,
+        argMin(team_id, day) AS from_team,
+        argMax(team_id, day) AS to_team
+    FROM work_item_cycle_times
+    WHERE day >= %(start_date)s AND day <= %(end_date)s
+      AND org_id = %(org_id)s
+      AND team_id IS NOT NULL
+      AND team_id != ''
+    GROUP BY work_item_id
+    HAVING from_team != to_team
+)
+GROUP BY source, target
+ORDER BY value DESC
+LIMIT %(max_edges)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
 def catalog_values_template(
     dimension: Dimension,
     source_table: str = "investment_metrics_daily",

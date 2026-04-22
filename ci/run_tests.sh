@@ -144,8 +144,11 @@ emit_junit_paths() {
 
 unit_tests() {
   require_cmd pytest
+  # The `clickhouse` marker is opt-in (mirrors `benchmark`). Tests under
+  # that marker require a live ClickHouse seeded with demo data and are
+  # intended for local development via `pytest -m clickhouse`.
   run_pytest_step "unit tests" "${JUNIT_XML_UNIT}" \
-    tests -v --tb=short -m "not benchmark" \
+    tests -v --tb=short -m "not benchmark and not clickhouse" \
     --ignore=tests/test_connectors_integration.py \
     --ignore=tests/test_private_repo_access.py
 }

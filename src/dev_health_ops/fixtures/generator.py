@@ -1424,7 +1424,13 @@ class SyntheticDataGenerator:
                     )
                 )
 
-        for (
+        fallback_team_plan = self._build_fallback_team_plan(
+            items_to_process=items_to_process,
+            member_map=member_map,
+            teams_to_use=teams_to_use,
+        )
+
+        for item_index, (
             work_item_id,
             provider,
             item_type,
@@ -1432,7 +1438,7 @@ class SyntheticDataGenerator:
             created_at,
             started_at,
             completed_at,
-        ) in items_to_process:
+        ) in enumerate(items_to_process):
             if started_at is None or completed_at is None:
                 continue
 
@@ -1447,7 +1453,10 @@ class SyntheticDataGenerator:
                 if entry:
                     team_id, team_name = entry
             if team_id is None:
-                team_id, team_name = random.choice(teams_to_use)
+                team_id, team_name = fallback_team_plan.get(
+                    item_index,
+                    teams_to_use[0],
+                )
 
             efficiency = random.uniform(0.1, 0.6)
             active_hours = cycle_time * efficiency
@@ -1502,6 +1511,121 @@ class SyntheticDataGenerator:
                     member_map[str(member).strip().lower()] = (team.id, team.name)
             return member_map
         return self.get_team_assignment().get("member_map", {})
+
+    def _stable_hash_int(self, *parts: object) -> int:
+        payload = "::".join(str(part) for part in parts)
+        return int(hashlib.sha256(payload.encode("utf-8")).hexdigest(), 16)
+
+    def _allocate_fallback_team_counts(
+        self,
+        work_item_count: int,
+        weights: list[int],
+    ) -> list[int]:
+        if work_item_count <= 0 or not weights:
+            return []
+
+        team_count = min(work_item_count, len(weights))
+        counts = [1] * team_count
+        remaining = work_item_count - team_count
+        if remaining <= 0:
+            return counts
+
+        selected_weights = weights[:team_count]
+        total_weight = sum(selected_weights)
+        remainders: list[tuple[float, int]] = []
+        for idx, weight in enumerate(selected_weights):
+            exact = remaining * weight / total_weight
+            extra = int(exact)
+            counts[idx] += extra
+            remainders.append((exact - extra, idx))
+
+        assigned = sum(counts)
+        for _, idx in sorted(remainders, key=lambda item: (-item[0], item[1]))[
+            : work_item_count - assigned
+        ]:
+            counts[idx] += 1
+
+        return counts
+
+    def _build_fallback_team_sequence(
+        self,
+        completed_day: date,
+        work_item_count: int,
+        teams_to_use: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        if work_item_count <= 0 or not teams_to_use:
+            return []
+        if len(teams_to_use) == 1:
+            return [teams_to_use[0]] * work_item_count
+
+        if work_item_count >= 6 and len(teams_to_use) >= 4:
+            selected_team_count = 4
+            weights = [5, 3, 2, 1]
+        elif work_item_count >= 4 and len(teams_to_use) >= 3:
+            selected_team_count = 3
+            weights = [6, 3, 1]
+        else:
+            selected_team_count = 2
+            weights = [7, 3]
+
+        start = self._stable_hash_int(
+            self.repo_name,
+            completed_day.isoformat(),
+            "team-fallback",
+        ) % len(teams_to_use)
+        rotated = [
+            teams_to_use[(start + i) % len(teams_to_use)]
+            for i in range(len(teams_to_use))
+        ]
+        selected_teams = rotated[:selected_team_count]
+        counts = self._allocate_fallback_team_counts(work_item_count, weights)
+
+        sequence: list[tuple[str, str]] = []
+        for team, count in zip(selected_teams, counts, strict=False):
+            sequence.extend([team] * count)
+        return sequence
+
+    def _build_fallback_team_plan(
+        self,
+        items_to_process: list[
+            tuple[str, str, str, str | None, datetime, datetime | None, datetime | None]
+        ],
+        member_map: dict[str, tuple[str, str]],
+        teams_to_use: list[tuple[str, str]],
+    ) -> dict[int, tuple[str, str]]:
+        plan: dict[int, tuple[str, str]] = {}
+        unresolved_by_cell: dict[tuple[str, date], list[int]] = {}
+
+        for idx, item in enumerate(items_to_process):
+            _, _, _, assignee, _, started_at, completed_at = item
+            if started_at is None or completed_at is None:
+                continue
+            if (completed_at - started_at).total_seconds() <= 0:
+                continue
+            if assignee and member_map.get(str(assignee).strip().lower()):
+                continue
+            unresolved_by_cell.setdefault(
+                (self.repo_name, completed_at.date()), []
+            ).append(idx)
+
+        for (_, completed_day), indices in unresolved_by_cell.items():
+            sequence = self._build_fallback_team_sequence(
+                completed_day=completed_day,
+                work_item_count=len(indices),
+                teams_to_use=teams_to_use,
+            )
+            ordered_indices = sorted(
+                indices,
+                key=lambda item_idx: (
+                    items_to_process[item_idx][6]
+                    or datetime.min.replace(tzinfo=timezone.utc),
+                    items_to_process[item_idx][0],
+                ),
+            )
+            for item_idx, team in zip(ordered_indices, sequence, strict=False):
+                plan[item_idx] = team
+
+        return plan
 
     def generate_user_metrics_daily(
         self,

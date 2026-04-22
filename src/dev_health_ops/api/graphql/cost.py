@@ -148,6 +148,7 @@ def validate_sub_request_count(
     timeseries_count: int,
     breakdowns_count: int,
     has_sankey: bool,
+    has_flow_matrix: bool = False,
     limits: CostLimits = DEFAULT_LIMITS,
 ) -> None:
     """
@@ -157,12 +158,18 @@ def validate_sub_request_count(
         timeseries_count: Number of timeseries requests.
         breakdowns_count: Number of breakdown requests.
         has_sankey: Whether a sankey request is included.
+        has_flow_matrix: Whether a flow matrix request is included.
         limits: Cost limits to apply.
 
     Raises:
         CostLimitExceededError: If total sub-requests exceed max_sub_requests.
     """
-    total = timeseries_count + breakdowns_count + (1 if has_sankey else 0)
+    total = (
+        timeseries_count
+        + breakdowns_count
+        + (1 if has_sankey else 0)
+        + (1 if has_flow_matrix else 0)
+    )
 
     if total > limits.max_sub_requests:
         raise CostLimitExceededError(

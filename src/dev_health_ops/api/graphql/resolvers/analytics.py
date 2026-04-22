@@ -27,6 +27,7 @@ from ..models.outputs import (
     AnalyticsResult,
     BreakdownItem,
     BreakdownResult,
+    FlowMatrixResult,
     SankeyCoverage,
     SankeyEdge,
     SankeyNode,
@@ -36,9 +37,11 @@ from ..models.outputs import (
 )
 from ..sql.compiler import (
     BreakdownRequest,
+    FlowMatrixRequest,
     SankeyRequest,
     TimeseriesRequest,
     compile_breakdown,
+    compile_flow_matrix,
     compile_sankey,
     compile_timeseries,
 )
@@ -230,6 +233,7 @@ async def resolve_analytics(
         timeseries_count=len(batch.timeseries),
         breakdowns_count=len(batch.breakdowns),
         has_sankey=batch.sankey is not None,
+        has_flow_matrix=batch.flow_matrix is not None,
     )
 
     timeout = DEFAULT_LIMITS.query_timeout_seconds
@@ -252,6 +256,15 @@ async def resolve_analytics(
             batch.sankey.date_range.start_date, batch.sankey.date_range.end_date
         )
         validate_sankey_limits(batch.sankey.max_nodes, batch.sankey.max_edges)
+
+    if batch.flow_matrix is not None:
+        validate_date_range(
+            batch.flow_matrix.date_range.start_date,
+            batch.flow_matrix.date_range.end_date,
+        )
+        validate_sankey_limits(
+            batch.flow_matrix.max_nodes, batch.flow_matrix.max_edges
+        )
 
     # Build list of all query coroutines for parallel execution
     timeseries_coros: list[Coroutine[Any, Any, list[TimeseriesResult]]] = [
@@ -445,8 +458,41 @@ async def resolve_analytics(
             # Prevent crash by returning empty result
             sankey_result = SankeyResult(nodes=[], edges=[], coverage=None)
 
+    flow_matrix_result: FlowMatrixResult | None = None
+
+    if batch.flow_matrix is not None:
+        fm_req = batch.flow_matrix
+        fm_request = FlowMatrixRequest(
+            dimension=fm_req.dimension.value,
+            measure=fm_req.measure.value,
+            start_date=fm_req.date_range.start_date,
+            end_date=fm_req.date_range.end_date,
+            max_nodes=fm_req.max_nodes,
+            max_edges=fm_req.max_edges,
+            use_investment=fm_req.use_investment
+            if fm_req.use_investment is not None
+            else batch.use_investment,
+        )
+
+        fm_nodes_queries, fm_edges_queries = compile_flow_matrix(
+            fm_request, org_id, timeout, filters=batch.filters
+        )
+
+        try:
+            fm_nodes, fm_edges = await _execute_sankey_inner(
+                client,
+                fm_nodes_queries,
+                fm_edges_queries,
+            )
+        except Exception as exc:
+            logger.error("FlowMatrix query failed: %s", exc)
+            fm_nodes, fm_edges = [], []
+
+        flow_matrix_result = FlowMatrixResult(nodes=fm_nodes, edges=fm_edges)
+
     return AnalyticsResult(
         timeseries=timeseries_results,
         breakdowns=breakdown_results,
         sankey=sankey_result,
+        flow_matrix=flow_matrix_result,
     )

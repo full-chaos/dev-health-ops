@@ -80,12 +80,26 @@ class SankeyResult:
 
 
 @strawberry.type
+class FlowMatrixResult:
+    """Result of a same-dimension flow matrix query.
+
+    Returns N×N directional flow where both source and target share a single
+    dimension (team↔team, repo↔repo, work_type↔work_type). Reuses SankeyNode
+    and SankeyEdge shapes so downstream adapters do not need to distinguish.
+    """
+
+    nodes: list[SankeyNode]
+    edges: list[SankeyEdge]
+
+
+@strawberry.type
 class AnalyticsResult:
     """Combined result of a batch analytics request."""
 
     timeseries: list[TimeseriesResult]
     breakdowns: list[BreakdownResult]
     sankey: SankeyResult | None = None
+    flow_matrix: FlowMatrixResult | None = None
 
 
 @strawberry.type

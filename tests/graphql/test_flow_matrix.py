@@ -67,9 +67,7 @@ class TestCompileFlowMatrix:
 
     @pytest.mark.parametrize("dim", ["team", "repo", "work_type"])
     def test_compiles_for_each_same_dim_grouping(self, dim: str) -> None:
-        nodes_queries, edges_queries = compile_flow_matrix(
-            _req(dim), org_id="org-1"
-        )
+        nodes_queries, edges_queries = compile_flow_matrix(_req(dim), org_id="org-1")
         nodes_sql, _ = nodes_queries[0]
         edges_sql, _ = edges_queries[0]
         expected_tag = f"'{dim.upper()}' AS"
@@ -77,9 +75,7 @@ class TestCompileFlowMatrix:
         assert expected_tag in edges_sql
 
     def test_org_scope_enforced_in_params(self) -> None:
-        nodes_queries, edges_queries = compile_flow_matrix(
-            _req(), org_id="org-42"
-        )
+        nodes_queries, edges_queries = compile_flow_matrix(_req(), org_id="org-42")
         _, nodes_params = nodes_queries[0]
         _, edges_params = edges_queries[0]
         assert nodes_params["org_id"] == "org-42"

@@ -262,9 +262,7 @@ async def resolve_analytics(
             batch.flow_matrix.date_range.start_date,
             batch.flow_matrix.date_range.end_date,
         )
-        validate_sankey_limits(
-            batch.flow_matrix.max_nodes, batch.flow_matrix.max_edges
-        )
+        validate_sankey_limits(batch.flow_matrix.max_nodes, batch.flow_matrix.max_edges)
 
     # Build list of all query coroutines for parallel execution
     timeseries_coros: list[Coroutine[Any, Any, list[TimeseriesResult]]] = [

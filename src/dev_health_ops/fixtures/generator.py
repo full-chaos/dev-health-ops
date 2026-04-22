@@ -1574,7 +1574,8 @@ class SyntheticDataGenerator:
             "team-fallback",
         ) % len(teams_to_use)
         rotated = [
-            teams_to_use[(start + i) % len(teams_to_use)] for i in range(len(teams_to_use))
+            teams_to_use[(start + i) % len(teams_to_use)]
+            for i in range(len(teams_to_use))
         ]
         selected_teams = rotated[:selected_team_count]
         counts = self._allocate_fallback_team_counts(work_item_count, weights)
@@ -1603,7 +1604,9 @@ class SyntheticDataGenerator:
                 continue
             if assignee and member_map.get(str(assignee).strip().lower()):
                 continue
-            unresolved_by_cell.setdefault((self.repo_name, completed_at.date()), []).append(idx)
+            unresolved_by_cell.setdefault(
+                (self.repo_name, completed_at.date()), []
+            ).append(idx)
 
         for (_, completed_day), indices in unresolved_by_cell.items():
             sequence = self._build_fallback_team_sequence(

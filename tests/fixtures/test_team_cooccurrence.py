@@ -31,8 +31,12 @@ def _build_work_item(
     )
 
 
-def test_cycle_times_fallback_spreads_same_cell_across_multiple_teams_asymmetrically() -> None:
-    teams = SyntheticDataGenerator(repo_name="acme/demo-app", seed=7).generate_teams(count=4)
+def test_cycle_times_fallback_spreads_same_cell_across_multiple_teams_asymmetrically() -> (
+    None
+):
+    teams = SyntheticDataGenerator(repo_name="acme/demo-app", seed=7).generate_teams(
+        count=4
+    )
     generator = SyntheticDataGenerator(
         repo_name="acme/demo-app",
         provider="github",
@@ -40,7 +44,9 @@ def test_cycle_times_fallback_spreads_same_cell_across_multiple_teams_asymmetric
         assigned_teams=teams,
     )
     completed_at = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
-    work_items = [_build_work_item(index=i, completed_at=completed_at) for i in range(6)]
+    work_items = [
+        _build_work_item(index=i, completed_at=completed_at) for i in range(6)
+    ]
 
     generate_cycle_times = getattr(generator, "generate_work_item_cycle_times")
     cycle_times = generate_cycle_times(work_items=work_items)
@@ -51,7 +57,9 @@ def test_cycle_times_fallback_spreads_same_cell_across_multiple_teams_asymmetric
 
 
 def test_assignee_resolution_wins_over_fallback_distribution() -> None:
-    teams = SyntheticDataGenerator(repo_name="acme/demo-app", seed=21).generate_teams(count=4)
+    teams = SyntheticDataGenerator(repo_name="acme/demo-app", seed=21).generate_teams(
+        count=4
+    )
     generator = SyntheticDataGenerator(
         repo_name="acme/demo-app",
         provider="github",
@@ -61,7 +69,9 @@ def test_assignee_resolution_wins_over_fallback_distribution() -> None:
     completed_at = datetime(2026, 4, 21, 15, 0, tzinfo=timezone.utc)
     explicit_member = str(teams[0].members[0])
     work_items = [
-        _build_work_item(index=1, completed_at=completed_at, assignees=[explicit_member]),
+        _build_work_item(
+            index=1, completed_at=completed_at, assignees=[explicit_member]
+        ),
         _build_work_item(index=2, completed_at=completed_at),
         _build_work_item(index=3, completed_at=completed_at),
         _build_work_item(index=4, completed_at=completed_at),
@@ -70,7 +80,9 @@ def test_assignee_resolution_wins_over_fallback_distribution() -> None:
     generate_cycle_times = getattr(generator, "generate_work_item_cycle_times")
     cycle_times = generate_cycle_times(work_items=work_items)
 
-    assigned_record = next(record for record in cycle_times if record.assignee == explicit_member)
+    assigned_record = next(
+        record for record in cycle_times if record.assignee == explicit_member
+    )
     assert assigned_record.team_id == teams[0].id
     assert assigned_record.team_name == teams[0].name
 
@@ -81,7 +93,9 @@ def test_assignee_resolution_wins_over_fallback_distribution() -> None:
 
 
 def test_repo_team_assignments_default_shape_supports_top_n_other_bucket() -> None:
-    teams = SyntheticDataGenerator(repo_name="acme/demo-app", seed=5).generate_teams(count=10)
+    teams = SyntheticDataGenerator(repo_name="acme/demo-app", seed=5).generate_teams(
+        count=10
+    )
 
     assignments = _build_repo_team_assignments(teams, repo_count=6, seed=5)
 

@@ -1398,7 +1398,10 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--with-metrics", action="store_true", help="Also generate derived metrics."
     )
     fix_gen.add_argument(
-        "--team-count", type=int, default=10, help="Number of synthetic teams to create."
+        "--team-count",
+        type=int,
+        default=10,
+        help="Number of synthetic teams to create.",
     )
     fix_gen.set_defaults(func=run_fixtures_generation)
 

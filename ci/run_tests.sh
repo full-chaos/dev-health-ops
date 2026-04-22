@@ -228,8 +228,10 @@ ci_tests() {
   fi
 
   run_step "ruff (lint gates)" ruff check --select=E9,F63,F7,F82 .
+  # Mirror unit_tests()'s marker filter: skip `clickhouse`-marked tests that
+  # need a seeded live ClickHouse (opt-in locally via `pytest -m clickhouse`).
   run_pytest_step "unit tests with coverage >= ${coverage_threshold}" "${JUNIT_XML_UNIT}" \
-    tests -v --tb=short -m "not benchmark" \
+    tests -v --tb=short -m "not benchmark and not clickhouse" \
     --ignore=tests/test_connectors_integration.py \
     --ignore=tests/test_private_repo_access.py \
     --cov=. --cov-report=xml --cov-report=term-missing --cov-fail-under="${coverage_threshold}"

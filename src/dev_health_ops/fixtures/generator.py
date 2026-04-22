@@ -1990,7 +1990,60 @@ class SyntheticDataGenerator:
 
         # Sort by created_at for realism
         items.sort(key=lambda x: x.created_at)
+        items = self._ensure_work_type_cooccurrence(items)
         return items
+
+    def _ensure_work_type_cooccurrence(
+        self,
+        items: list[WorkItem],
+    ) -> list[WorkItem]:
+        """Guarantee >=2 distinct work_item types per (repo_id, day) bucket
+        with >=2 items. Without this pass, random per-item type selection
+        can produce monotype buckets on low-item days, leaving the
+        flow_matrix WORK_TYPE template (which bridges on repo_id + day)
+        with zero cross-type edges for that day. CHAOS-1292.
+
+        WorkItem is frozen, so we rewrite the offending item's type via
+        dataclasses.replace. Deterministic: the LAST item in each monotype
+        bucket is flipped to the next type in preference order, so the same
+        input always produces the same output.
+        """
+        if len(items) < 2:
+            return items
+
+        from collections import defaultdict
+        from dataclasses import replace
+
+        type_preference: list[WorkItemType] = ["story", "task", "bug"]
+
+        bucket_indices: dict[date, list[int]] = defaultdict(list)
+        for idx, item in enumerate(items):
+            bucket_day = (
+                item.completed_at or item.started_at or item.created_at
+            ).date()
+            bucket_indices[bucket_day].append(idx)
+
+        rewrites: dict[int, WorkItemType] = {}
+        for indices in bucket_indices.values():
+            if len(indices) < 2:
+                continue
+            bucket_types = {items[i].type for i in indices}
+            if len(bucket_types) >= 2:
+                continue
+            current_type = items[indices[0]].type
+            alt_type = next(
+                (t for t in type_preference if t != current_type),
+                type_preference[0],
+            )
+            rewrites[indices[-1]] = alt_type
+
+        if not rewrites:
+            return items
+
+        return [
+            replace(item, type=rewrites[idx]) if idx in rewrites else item
+            for idx, item in enumerate(items)
+        ]
 
     def generate_teams_config(self) -> dict[str, Any]:
         """

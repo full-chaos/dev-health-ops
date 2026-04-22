@@ -1,4 +1,4 @@
-"""Tests for the analytics.flowMatrix resolver (CHAOS-1289).
+"""Tests for the analytics.flowMatrix resolver (CHAOS-1289 / CHAOS-1292).
 
 Validates the same-dimension flow matrix path end-to-end:
 - compile_flow_matrix produces the expected (nodes, edges) SQL shape
@@ -7,6 +7,7 @@ Validates the same-dimension flow matrix path end-to-end:
 - _execute_sankey_inner correctly handles same-dim rows, prefixing ids with
   the shared dimension (e.g., "team:EngineeringA")
 - validate_sub_request_count counts flow_matrix toward the budget
+- REPO + WORK_TYPE dims use asymmetric bridge-joined templates (CHAOS-1292)
 """
 
 from __future__ import annotations
@@ -24,6 +25,12 @@ from dev_health_ops.api.graphql.errors import ValidationError
 from dev_health_ops.api.graphql.sql.compiler import (
     FlowMatrixRequest,
     compile_flow_matrix,
+)
+from dev_health_ops.api.graphql.sql.templates import (
+    flow_matrix_repo_edges_template,
+    flow_matrix_repo_nodes_template,
+    flow_matrix_work_type_edges_template,
+    flow_matrix_work_type_nodes_template,
 )
 
 
@@ -98,6 +105,150 @@ class TestCompileFlowMatrix:
         _, edges_queries = compile_flow_matrix(req, org_id="org-1")
         _, edges_params = edges_queries[0]
         assert edges_params["max_edges"] == 137
+
+    def test_repo_dimension_routes_to_flow_matrix_template(self) -> None:
+        """REPO must not fall through to the sankey same-column self-aggregation
+        path anymore — it routes to the dedicated bridge-joined template."""
+        nodes_queries, edges_queries = compile_flow_matrix(_req("repo"), org_id="org-1")
+        nodes_sql, _ = nodes_queries[0]
+        edges_sql, _ = edges_queries[0]
+        assert "'REPO' AS source_dimension" in edges_sql
+        assert "INNER JOIN work_items" in edges_sql
+        assert "'REPO' AS dimension" in nodes_sql
+
+    def test_work_type_dimension_routes_to_flow_matrix_template(self) -> None:
+        """Same for WORK_TYPE — bridge-joined template, not sankey fallback."""
+        nodes_queries, edges_queries = compile_flow_matrix(
+            _req("work_type"), org_id="org-1"
+        )
+        nodes_sql, _ = nodes_queries[0]
+        edges_sql, _ = edges_queries[0]
+        assert "'WORK_TYPE' AS source_dimension" in edges_sql
+        assert "INNER JOIN work_items" in edges_sql
+        assert "'WORK_TYPE' AS dimension" in nodes_sql
+
+
+class TestRepoEdgesTemplate:
+    """CHAOS-1292: REPO edges use the same asymmetric-cooccurrence shape as
+    TEAM, bridged via (team_id, day) instead of (work_scope_id, day)."""
+
+    def test_self_joins_on_team_day_bridge(self) -> None:
+        sql = flow_matrix_repo_edges_template()
+        assert "a.team_id = b.team_id" in sql
+        assert "a.day = b.day" in sql
+        assert "a.org_id = b.org_id" in sql
+
+    def test_excludes_self_loops(self) -> None:
+        """a.repo_id != b.repo_id drops self-loops at the SQL layer so the
+        frontend doesn't have to filter empty ribbons."""
+        sql = flow_matrix_repo_edges_template()
+        assert "a.repo_id != b.repo_id" in sql
+
+    def test_counts_source_side_items_for_asymmetry(self) -> None:
+        """Edge value = SOURCE repo's distinct work items in the bridged cell.
+        Edge (r1 -> r2).value counts r1's items; (r2 -> r1).value counts r2's.
+        That's what makes the matrix asymmetric — same invariant as TEAM."""
+        sql = flow_matrix_repo_edges_template()
+        assert "uniqExact(a.work_item_id) AS value" in sql
+
+    def test_enriches_cycle_times_with_work_items_repo_id(self) -> None:
+        """work_item_cycle_times lacks repo_id — enrich via INNER JOIN to
+        work_items on work_item_id."""
+        sql = flow_matrix_repo_edges_template()
+        assert "work_item_cycle_times" in sql
+        assert "INNER JOIN work_items" in sql
+        assert "wct.work_item_id = wi.work_item_id" in sql
+
+    def test_emits_repo_dimension_tag(self) -> None:
+        sql = flow_matrix_repo_edges_template()
+        assert "'REPO' AS source_dimension" in sql
+        assert "'REPO' AS target_dimension" in sql
+
+    def test_guards_both_sides_of_bridge_against_null_and_empty_team(self) -> None:
+        """Without b-side guards, empty-string team_ids would match each other
+        via the JOIN on a.team_id = b.team_id and emit spurious edges. Both
+        sides of the join must filter NULL + empty."""
+        sql = flow_matrix_repo_edges_template()
+        assert "a.team_id IS NOT NULL AND a.team_id != ''" in sql
+        assert "b.team_id IS NOT NULL AND b.team_id != ''" in sql
+
+
+class TestWorkTypeEdgesTemplate:
+    """CHAOS-1292: WORK_TYPE edges bridged via (repo_id, day)."""
+
+    def test_self_joins_on_repo_day_bridge(self) -> None:
+        sql = flow_matrix_work_type_edges_template()
+        assert "a.repo_id = b.repo_id" in sql
+        assert "a.day = b.day" in sql
+        assert "a.org_id = b.org_id" in sql
+
+    def test_excludes_self_loops(self) -> None:
+        sql = flow_matrix_work_type_edges_template()
+        assert "a.work_item_type != b.work_item_type" in sql
+
+    def test_counts_source_side_items_for_asymmetry(self) -> None:
+        sql = flow_matrix_work_type_edges_template()
+        assert "uniqExact(a.work_item_id) AS value" in sql
+
+    def test_enriches_cycle_times_with_work_items_type(self) -> None:
+        sql = flow_matrix_work_type_edges_template()
+        assert "work_item_cycle_times" in sql
+        assert "INNER JOIN work_items" in sql
+        assert "wi.type AS work_item_type" in sql
+
+    def test_emits_work_type_dimension_tag(self) -> None:
+        sql = flow_matrix_work_type_edges_template()
+        assert "'WORK_TYPE' AS source_dimension" in sql
+        assert "'WORK_TYPE' AS target_dimension" in sql
+
+    def test_guards_work_item_type_against_null_and_empty(self) -> None:
+        """Defensive: guard both IS NOT NULL and != '' on both sides so
+        NULL-typed items can't produce NULL nodes and empty strings can't
+        match each other across the JOIN."""
+        sql = flow_matrix_work_type_edges_template()
+        assert "a.work_item_type IS NOT NULL" in sql
+        assert "a.work_item_type != ''" in sql
+        assert "b.work_item_type IS NOT NULL" in sql
+        assert "b.work_item_type != ''" in sql
+
+
+class TestRepoNodesTemplate:
+    """Node template must produce node_ids that line up with edge endpoints."""
+
+    def test_queries_enriched_cycle_times_source(self) -> None:
+        sql = flow_matrix_repo_nodes_template()
+        assert "work_item_cycle_times" in sql
+        assert "INNER JOIN work_items" in sql
+
+    def test_emits_repo_dimension_tag_and_repo_node_id(self) -> None:
+        sql = flow_matrix_repo_nodes_template()
+        assert "'REPO' AS dimension" in sql
+        assert "toString(wi.repo_id) AS node_id" in sql
+
+    def test_counts_distinct_work_items(self) -> None:
+        sql = flow_matrix_repo_nodes_template()
+        assert "uniqExact(wct.work_item_id) AS value" in sql
+
+
+class TestWorkTypeNodesTemplate:
+    def test_queries_enriched_cycle_times_source(self) -> None:
+        sql = flow_matrix_work_type_nodes_template()
+        assert "work_item_cycle_times" in sql
+        assert "INNER JOIN work_items" in sql
+
+    def test_emits_work_type_dimension_tag_and_type_node_id(self) -> None:
+        sql = flow_matrix_work_type_nodes_template()
+        assert "'WORK_TYPE' AS dimension" in sql
+        assert "wi.type AS node_id" in sql
+
+    def test_counts_distinct_work_items(self) -> None:
+        sql = flow_matrix_work_type_nodes_template()
+        assert "uniqExact(wct.work_item_id) AS value" in sql
+
+    def test_guards_type_against_null_and_empty(self) -> None:
+        sql = flow_matrix_work_type_nodes_template()
+        assert "wi.type IS NOT NULL" in sql
+        assert "wi.type != ''" in sql
 
 
 class TestValidateSubRequestCount:

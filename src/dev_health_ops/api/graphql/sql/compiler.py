@@ -14,8 +14,12 @@ from .filter_translation import translate_filters
 from .templates import (
     breakdown_template,
     catalog_values_template,
+    flow_matrix_repo_edges_template,
+    flow_matrix_repo_nodes_template,
     flow_matrix_team_edges_template,
     flow_matrix_team_nodes_template,
+    flow_matrix_work_type_edges_template,
+    flow_matrix_work_type_nodes_template,
     sankey_edges_template,
     sankey_nodes_template,
     timeseries_template,
@@ -337,16 +341,19 @@ def compile_flow_matrix(
     Produces the same (nodes_queries, edges_queries) tuple shape as
     compile_sankey so _execute_sankey_inner can execute either.
 
-    For TEAM, edges come from work_item_cycle_times: each work item's first
-    team (argMin by day) is the source and its last team (argMax by day) is
-    the target. Only cross-team handoffs are emitted, giving an asymmetric
-    signal that unlocks the chord's directional modes. Nodes also come from
-    work_item_cycle_times so node ids and edge endpoints stay consistent.
+    For TEAM, edges come from a self-join on work_item_cycle_times bridged
+    through (work_scope_id, day): every pair of teams that completed work in
+    the same scope on the same day becomes an edge, valued by the SOURCE
+    team's distinct work_item count. That yields an asymmetric signal that
+    unlocks the chord's directional modes.
 
-    For REPO and WORK_TYPE the schema doesn't carry a natural directional
-    team-level-equivalent signal per work item, so the existing same-column
-    self-aggregation is used. These dimensions will mostly emit self-loops
-    (which the frontend drops) — tracked as follow-up.
+    For REPO (CHAOS-1292), edges come from the same table joined to
+    work_items (for repo_id) and bridged through (team_id, day) — i.e., when
+    the same team touches multiple repos on one day those repos become
+    cross-edges. For WORK_TYPE, the bridge is (repo_id, day) — multiple
+    work_types on the same repo+day become cross-edges. In all three cases
+    nodes are sourced from the same underlying data so node ids and edge
+    endpoints stay consistent.
     """
     dimension = validate_dimension(request.dimension)
     measure = validate_measure(request.measure)
@@ -367,12 +374,32 @@ def compile_flow_matrix(
         "timeout": timeout,
     }
 
+    # The TEAM / REPO / WORK_TYPE branches intentionally do not thread
+    # `filter_clause`; those templates source from work_item_cycle_times +
+    # work_items where the filter column set (investment_area etc.) doesn't
+    # apply. Only the sankey fallback — which queries investment_metrics_daily —
+    # uses filters. Callers that need filtered flow matrices for same-dim TEAM /
+    # REPO / WORK_TYPE should open a follow-up to wire filter columns into the
+    # two underlying tables first.
     if dimension == Dimension.TEAM:
         nodes_sql = flow_matrix_team_nodes_template()
+        edge_sql = flow_matrix_team_edges_template()
         nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
         nodes_params = enforce_org_scope(org_id, nodes_params)
-
-        edge_sql = flow_matrix_team_edges_template()
+        edge_params = {**common_params, "max_edges": request.max_edges}
+        edge_params = enforce_org_scope(org_id, edge_params)
+    elif dimension == Dimension.REPO:
+        nodes_sql = flow_matrix_repo_nodes_template()
+        edge_sql = flow_matrix_repo_edges_template()
+        nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
+        nodes_params = enforce_org_scope(org_id, nodes_params)
+        edge_params = {**common_params, "max_edges": request.max_edges}
+        edge_params = enforce_org_scope(org_id, edge_params)
+    elif dimension == Dimension.WORK_TYPE:
+        nodes_sql = flow_matrix_work_type_nodes_template()
+        edge_sql = flow_matrix_work_type_edges_template()
+        nodes_params = {**common_params, "limit_per_dim": request.max_nodes}
+        nodes_params = enforce_org_scope(org_id, nodes_params)
         edge_params = {**common_params, "max_edges": request.max_edges}
         edge_params = enforce_org_scope(org_id, edge_params)
     else:

@@ -87,7 +87,41 @@ def _build_repo_team_assignments(all_teams, repo_count: int, seed: int | None):
             repo_to_teams[idx].append(team)
             team_to_repos[team.id].append(idx)
 
+    _verify_repo_cooccurrence_density(team_to_repos, owned_repo_count=len(owned_repos))
     return [repo_to_teams[idx] for idx in range(repo_count)]
+
+
+def _verify_repo_cooccurrence_density(
+    team_to_repos: dict[str, list[int]],
+    *,
+    owned_repo_count: int,
+    min_multi_repo_teams: int = 2,
+) -> None:
+    """Guarantee REPO bridge density for the flow_matrix chord view (CHAOS-1292).
+
+    The flow_matrix REPO template bridges on (team_id, day) and emits an
+    edge only when the same team touches different repos on the same day.
+    Without multi-repo teams in the assignment plan, the chord's Repository
+    dimension renders empty regardless of data volume. Assert the invariant
+    here so regressions in _build_repo_team_assignments surface at fixture
+    generation time, not at the chord UI.
+
+    When there's only one owned repo in the plan the invariant is vacuously
+    satisfied — bridge edges are impossible by construction and not
+    expected by the flow_matrix template.
+    """
+    if owned_repo_count < 2:
+        return
+    multi_repo_teams = sum(
+        1 for repo_indices in team_to_repos.values() if len(set(repo_indices)) >= 2
+    )
+    if multi_repo_teams < min_multi_repo_teams:
+        raise AssertionError(
+            "REPO bridge density insufficient for chord flow_matrix: "
+            f"only {multi_repo_teams} team(s) span multiple repos "
+            f"(need >= {min_multi_repo_teams}). The chord Repository "
+            "dimension would render empty. Check _build_repo_team_assignments."
+        )
 
 
 async def _seed_auth_data(session, user_data: dict) -> None:

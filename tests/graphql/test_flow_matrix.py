@@ -45,24 +45,31 @@ class TestCompileFlowMatrix:
         assert len(nodes_queries) == 1
         assert len(edges_queries) == 1
 
-    def test_team_edges_use_directional_handoff_source(self) -> None:
-        """TEAM edges must come from work_item_cycle_times with argMin/argMax
-        to produce asymmetric handoff data (CHAOS-1289 full fix)."""
+    def test_team_edges_use_asymmetric_weighted_cooccurrence(self) -> None:
+        """TEAM edges come from a self-join on investment_metrics_daily
+        weighted by the source team's own contribution, which is asymmetric
+        by construction (edge A→B weighted by A's work, B→A weighted by B's).
+        """
         _, edges_queries = compile_flow_matrix(_req("team"), org_id="org-1")
         edge_sql, _params = edges_queries[0]
         assert "'TEAM' AS source_dimension" in edge_sql
         assert "'TEAM' AS target_dimension" in edge_sql
-        assert "work_item_cycle_times" in edge_sql
-        assert "argMin(team_id, day) AS from_team" in edge_sql
-        assert "argMax(team_id, day) AS to_team" in edge_sql
-        assert "from_team != to_team" in edge_sql
+        # self-join on (repo_id, day) for cross-team co-occurrence
+        assert "investment_metrics_daily AS a" in edge_sql
+        assert "INNER JOIN investment_metrics_daily AS b" in edge_sql
+        assert "a.repo_id = b.repo_id" in edge_sql
+        assert "a.day = b.day" in edge_sql
+        # asymmetric: weighted by source-side measure only, not source*target
+        assert "SUM(a.work_items_completed) AS value" in edge_sql
+        # cross-team only (no self-loops)
+        assert "a.team_id != b.team_id" in edge_sql
 
     def test_team_nodes_use_same_source_as_edges(self) -> None:
         """Node and edge sources must match so node ids and edge endpoints
         stay consistent after the adapter's prefix-strip."""
         nodes_queries, _ = compile_flow_matrix(_req("team"), org_id="org-1")
         nodes_sql, _ = nodes_queries[0]
-        assert "work_item_cycle_times" in nodes_sql
+        assert "investment_metrics_daily" in nodes_sql
         assert "'TEAM' AS dimension" in nodes_sql
 
     @pytest.mark.parametrize("dim", ["team", "repo", "work_type"])

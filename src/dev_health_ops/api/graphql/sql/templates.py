@@ -149,19 +149,19 @@ SETTINGS max_execution_time = %(timeout)s
 
 
 def flow_matrix_team_nodes_template() -> str:
-    """Nodes query for TEAM flow matrix, sourced from work_item_cycle_times.
+    """Nodes query for TEAM flow matrix, sourced from investment_metrics_daily.
 
-    Counts distinct work items per team within the window. Uses the same table
-    as the handoff edge query so node ids and edge endpoints stay consistent.
+    Sums work items completed per team in the window. Uses the same table
+    as the edge self-join so node ids and edge endpoints stay consistent.
     """
     return """
 SELECT
     'TEAM' AS dimension,
     toString(team_id) AS node_id,
-    uniqExact(work_item_id) AS value
-FROM work_item_cycle_times
+    SUM(work_items_completed) AS value
+FROM investment_metrics_daily
 WHERE day >= %(start_date)s AND day <= %(end_date)s
-  AND org_id = %(org_id)s
+  AND investment_metrics_daily.org_id = %(org_id)s
   AND team_id IS NOT NULL
   AND team_id != ''
 GROUP BY node_id
@@ -172,33 +172,40 @@ SETTINGS max_execution_time = %(timeout)s
 
 
 def flow_matrix_team_edges_template() -> str:
-    """Directional team→team handoff edges from work_item_cycle_times.
+    """Asymmetric weighted cross-team edges from investment_metrics_daily.
 
-    Each work item's first-observed team (argMin by day) is the source, its
-    last-observed team (argMax by day) is the target. Only cross-team handoffs
-    are emitted, giving a genuinely asymmetric signal so inflow/outflow/net
-    chord modes produce distinct matrices.
+    A self-join on (repo_id, day) surfaces every pair of teams working on the
+    same repo on the same day. Each edge (A, B) is weighted by A's own
+    work_items_completed on the shared (repo, day) — not A×B — so the matrix
+    is asymmetric: edge (A, B) ≠ edge (B, A) whenever the two teams
+    contribute different volumes.
+
+    Semantic: "team A's work in shared space with B". The asymmetry powers
+    the chord's directional modes:
+      - Outflow[i][j] = team i's work volume where j is also present
+      - Inflow[i][j]  = team j's work volume where i is also present
+      - Net[i][j]     = positive surplus when i contributes more than j
+
+    Self-loops (a.team_id = b.team_id) are excluded server-side; the frontend
+    drops them as well but filtering early keeps the edge list small.
     """
     return """
 SELECT
     'TEAM' AS source_dimension,
     'TEAM' AS target_dimension,
-    toString(from_team) AS source,
-    toString(to_team) AS target,
-    count() AS value
-FROM (
-    SELECT
-        work_item_id,
-        argMin(team_id, day) AS from_team,
-        argMax(team_id, day) AS to_team
-    FROM work_item_cycle_times
-    WHERE day >= %(start_date)s AND day <= %(end_date)s
-      AND org_id = %(org_id)s
-      AND team_id IS NOT NULL
-      AND team_id != ''
-    GROUP BY work_item_id
-    HAVING from_team != to_team
-)
+    toString(a.team_id) AS source,
+    toString(b.team_id) AS target,
+    SUM(a.work_items_completed) AS value
+FROM investment_metrics_daily AS a
+INNER JOIN investment_metrics_daily AS b
+  ON a.repo_id = b.repo_id
+  AND a.day = b.day
+  AND a.org_id = b.org_id
+WHERE a.day >= %(start_date)s AND a.day <= %(end_date)s
+  AND a.org_id = %(org_id)s
+  AND a.team_id IS NOT NULL AND a.team_id != ''
+  AND b.team_id IS NOT NULL AND b.team_id != ''
+  AND a.team_id != b.team_id
 GROUP BY source, target
 ORDER BY value DESC
 LIMIT %(max_edges)s

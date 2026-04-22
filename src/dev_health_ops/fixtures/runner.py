@@ -136,7 +136,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
         repo_count = max(1, ns.repo_count)
         base_name = ns.repo_name
-        team_count = getattr(ns, "team_count", 8)
+        team_count = getattr(ns, "team_count", 10)
         team_assignment = SyntheticDataGenerator(
             repo_name=base_name, seed=ns.seed
         ).get_team_assignment(count=team_count)
@@ -1398,7 +1398,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--with-metrics", action="store_true", help="Also generate derived metrics."
     )
     fix_gen.add_argument(
-        "--team-count", type=int, default=8, help="Number of synthetic teams to create."
+        "--team-count", type=int, default=10, help="Number of synthetic teams to create."
     )
     fix_gen.set_defaults(func=run_fixtures_generation)
 

@@ -27,9 +27,7 @@ from dev_health_ops.api.graphql.sql.compiler import (
 )
 
 CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
-TEST_ORG_ID = os.environ.get(
-    "TEST_ORG_ID", "70f20609-2156-4f9d-9b9b-90c125755988"
-)
+TEST_ORG_ID = os.environ.get("TEST_ORG_ID", "70f20609-2156-4f9d-9b9b-90c125755988")
 
 pytestmark = [
     pytest.mark.clickhouse,

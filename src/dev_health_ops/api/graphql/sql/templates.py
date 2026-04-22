@@ -216,6 +216,156 @@ SETTINGS max_execution_time = %(timeout)s
 """
 
 
+_FLOW_MATRIX_ENRICHED_CTE = """WITH enriched AS (
+    SELECT
+        wct.work_item_id,
+        wct.team_id,
+        wct.day,
+        wct.org_id,
+        wi.repo_id,
+        wi.type AS work_item_type
+    FROM work_item_cycle_times AS wct
+    INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+    WHERE wct.org_id = %(org_id)s
+      AND wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+      AND wi.org_id = %(org_id)s
+)"""
+
+
+def flow_matrix_repo_nodes_template() -> str:
+    """Nodes query for REPO flow matrix.
+
+    Counts distinct work items per repo in the window. Sourced from
+    work_item_cycle_times (for the day filter) joined to work_items (for
+    repo_id) — the same enrichment used by the REPO edges template so node
+    ids and edge endpoints are guaranteed to line up.
+    """
+    return """
+SELECT
+    'REPO' AS dimension,
+    toString(wi.repo_id) AS node_id,
+    uniqExact(wct.work_item_id) AS value
+FROM work_item_cycle_times AS wct
+INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+  AND wct.org_id = %(org_id)s
+  AND wi.org_id = %(org_id)s
+  AND wi.repo_id IS NOT NULL
+GROUP BY node_id
+ORDER BY value DESC
+LIMIT %(limit_per_dim)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
+def flow_matrix_repo_edges_template() -> str:
+    """Asymmetric cross-repo edges bridged through (team_id, day).
+
+    work_item_cycle_times carries team_id + day per work item but NOT repo_id;
+    work_items carries repo_id. An INNER JOIN on work_item_id produces an
+    enriched per-item row. Self-joining that enriched set on (team_id, day,
+    org_id) gives every pair of repos that the same team touched on the same
+    day — the REPO analog of TEAM's (work_scope_id, day) bridge.
+
+    The edge value is `uniqExact(a.work_item_id)` — the count of SOURCE
+    repo's distinct work items in the shared team+day cell, not the cartesian
+    product. So edge (r1 -> r2) counts r1's items and (r2 -> r1) counts r2's,
+    and the matrix is asymmetric whenever the two repos contribute different
+    volumes to the shared team+day buckets. That unlocks the chord's
+    directional modes (outflow / inflow / net) for the REPO dimension.
+
+    Semantic: "repo A's work in team+day buckets also touched by repo B" —
+    i.e., cross-repo cooperation through shared team effort. It is NOT a
+    handoff (schema doesn't encode those natively), but a real directional
+    signal that populates on any org with teams spanning multiple repos.
+    """
+    return f"""
+{_FLOW_MATRIX_ENRICHED_CTE}
+SELECT
+    'REPO' AS source_dimension,
+    'REPO' AS target_dimension,
+    toString(a.repo_id) AS source,
+    toString(b.repo_id) AS target,
+    uniqExact(a.work_item_id) AS value
+FROM enriched AS a
+INNER JOIN enriched AS b
+  ON a.team_id = b.team_id
+  AND a.day = b.day
+  AND a.org_id = b.org_id
+WHERE a.team_id IS NOT NULL AND a.team_id != ''
+  AND a.repo_id IS NOT NULL
+  AND b.repo_id IS NOT NULL
+  AND a.repo_id != b.repo_id
+GROUP BY source, target
+ORDER BY value DESC
+LIMIT %(max_edges)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
+def flow_matrix_work_type_nodes_template() -> str:
+    """Nodes query for WORK_TYPE flow matrix.
+
+    Counts distinct work items per work_item_type in the window. Sourced
+    from the same enrichment as the edges template so node ids line up.
+    """
+    return """
+SELECT
+    'WORK_TYPE' AS dimension,
+    wi.type AS node_id,
+    uniqExact(wct.work_item_id) AS value
+FROM work_item_cycle_times AS wct
+INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
+WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
+  AND wct.org_id = %(org_id)s
+  AND wi.org_id = %(org_id)s
+  AND wi.type != ''
+GROUP BY node_id
+ORDER BY value DESC
+LIMIT %(limit_per_dim)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
+def flow_matrix_work_type_edges_template() -> str:
+    """Asymmetric cross-work_type edges bridged through (repo_id, day).
+
+    Uses the same enrichment CTE as the REPO edges template. Self-joins on
+    (repo_id, day, org_id) so every pair of work_types completed in the same
+    repo on the same day becomes an edge. Excludes self-loops.
+
+    Edge value = SOURCE work_type's distinct work items in the bridged cell,
+    producing an asymmetric matrix whenever two work_types have different
+    volumes in shared repo+day buckets.
+
+    Semantic: "work_type A's items in repo+day buckets that also contained
+    work_type B" — cross-type cooperation within a repo on a single day.
+    """
+    return f"""
+{_FLOW_MATRIX_ENRICHED_CTE}
+SELECT
+    'WORK_TYPE' AS source_dimension,
+    'WORK_TYPE' AS target_dimension,
+    a.work_item_type AS source,
+    b.work_item_type AS target,
+    uniqExact(a.work_item_id) AS value
+FROM enriched AS a
+INNER JOIN enriched AS b
+  ON a.repo_id = b.repo_id
+  AND a.day = b.day
+  AND a.org_id = b.org_id
+WHERE a.repo_id IS NOT NULL
+  AND b.repo_id IS NOT NULL
+  AND a.work_item_type != ''
+  AND b.work_item_type != ''
+  AND a.work_item_type != b.work_item_type
+GROUP BY source, target
+ORDER BY value DESC
+LIMIT %(max_edges)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
 def catalog_values_template(
     dimension: Dimension,
     source_table: str = "investment_metrics_daily",

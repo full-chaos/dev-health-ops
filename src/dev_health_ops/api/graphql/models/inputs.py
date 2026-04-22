@@ -169,6 +169,24 @@ class SankeyRequestInput:
 
 
 @strawberry.input
+class FlowMatrixRequestInput:
+    """Request for a same-dimension flow matrix (team↔team, repo↔repo, etc.).
+
+    Produces directional N×N edges where source and target share one
+    dimension. Used by the chord visualization to render true inflow /
+    outflow / net directional modes (the Sankey path validator rejects
+    duplicate dimensions, so this is a separate entry point).
+    """
+
+    dimension: DimensionInput
+    measure: MeasureInput
+    date_range: DateRangeInput
+    max_nodes: int = 100
+    max_edges: int = 500
+    use_investment: bool | None = None
+
+
+@strawberry.input
 class PaginationInput:
     """
     Input for cursor-based pagination.
@@ -195,6 +213,7 @@ class AnalyticsRequestInput:
     timeseries: list[TimeseriesRequestInput] = strawberry.field(default_factory=list)
     breakdowns: list[BreakdownRequestInput] = strawberry.field(default_factory=list)
     sankey: SankeyRequestInput | None = None
+    flow_matrix: FlowMatrixRequestInput | None = None
     use_investment: bool | None = None
     filters: FilterInput | None = None  # NEW: Filter parity with REST
 

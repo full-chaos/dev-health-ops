@@ -148,6 +148,74 @@ SETTINGS max_execution_time = %(timeout)s
 """
 
 
+def flow_matrix_team_nodes_template() -> str:
+    """Nodes query for TEAM flow matrix, sourced from work_item_cycle_times.
+
+    Counts distinct work items per team in the window. The cycle_times table
+    carries the canonical per-work-item team assignment (one row per work item
+    per completed day) with real team diversity, unlike investment_metrics_daily
+    which aggregates and may collapse to a single team in sparse data.
+    """
+    return """
+SELECT
+    'TEAM' AS dimension,
+    toString(team_id) AS node_id,
+    uniqExact(work_item_id) AS value
+FROM work_item_cycle_times
+WHERE day >= %(start_date)s AND day <= %(end_date)s
+  AND work_item_cycle_times.org_id = %(org_id)s
+  AND team_id IS NOT NULL
+  AND team_id != ''
+GROUP BY node_id
+ORDER BY value DESC
+LIMIT %(limit_per_dim)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
+def flow_matrix_team_edges_template() -> str:
+    """Asymmetric cross-team edges from work_item_cycle_times.
+
+    Self-joins on (work_scope_id, day, org_id) so every pair of teams that
+    completed work in the same scope on the same day becomes an edge. The
+    edge value is `uniqExact(a.work_item_id)` — the count of SOURCE team's
+    distinct work items in that shared cell, not the cartesian product.
+
+    Because edge (A, B) counts A's items and edge (B, A) counts B's items,
+    the matrix is asymmetric whenever the two teams contribute different
+    volumes. That unlocks the chord's directional modes:
+      - Outflow[i][j] = team i's work count where j is also present
+      - Inflow[i][j]  = team j's work count where i is also present
+      - Net[i][j]     = positive surplus when i outpaces j in shared scopes
+
+    Semantic: "team i's contribution in scopes also touched by j". Not a
+    handoff (schema doesn't encode those natively), but a real directional
+    signal that populates on any org with cross-team repo sharing.
+    """
+    return """
+SELECT
+    'TEAM' AS source_dimension,
+    'TEAM' AS target_dimension,
+    toString(a.team_id) AS source,
+    toString(b.team_id) AS target,
+    uniqExact(a.work_item_id) AS value
+FROM work_item_cycle_times AS a
+INNER JOIN work_item_cycle_times AS b
+  ON a.work_scope_id = b.work_scope_id
+  AND a.day = b.day
+  AND a.org_id = b.org_id
+WHERE a.day >= %(start_date)s AND a.day <= %(end_date)s
+  AND a.org_id = %(org_id)s
+  AND a.team_id IS NOT NULL AND a.team_id != ''
+  AND b.team_id IS NOT NULL AND b.team_id != ''
+  AND a.team_id != b.team_id
+GROUP BY source, target
+ORDER BY value DESC
+LIMIT %(max_edges)s
+SETTINGS max_execution_time = %(timeout)s
+"""
+
+
 def catalog_values_template(
     dimension: Dimension,
     source_table: str = "investment_metrics_daily",

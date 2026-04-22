@@ -20,20 +20,35 @@ def run_api_server(ns: argparse.Namespace) -> int:
 
     logger = logging.getLogger(__name__)
 
-    config = uvicorn.Config(
-        "dev_health_ops.api.main:app",
-        host=ns.host,
-        port=ns.port,
-        log_level=log_level.lower(),
-        log_config=uvicorn_log_config(level=log_level),
-        workers=ns.workers or 1,
-        reload=ns.reload if hasattr(ns, "reload") else False,
-    )
-    server = uvicorn.Server(config)
+    reload = bool(getattr(ns, "reload", False))
+    workers = ns.workers or 1
 
-    logger.info("Starting API server", extra={"host": ns.host, "port": ns.port})
+    reload_dirs: list[str] | None = None
+    if reload and os.path.isdir("/app/src"):
+        # In the docker image the src/ tree is mounted at /app/src; scope the
+        # watcher so we don't churn on venv or pyc changes. Locally (no /app),
+        # fall through to uvicorn's default of watching the cwd.
+        reload_dirs = ["/app/src"]
+
+    logger.info(
+        "Starting API server",
+        extra={"host": ns.host, "port": ns.port, "reload": reload, "workers": workers},
+    )
     try:
-        server.run()
+        # uvicorn.Server(config).run() does NOT honor reload/workers — those
+        # require the ChangeReload / Multiprocess supervisors, which only get
+        # wired up when going through uvicorn.run(). Passing reload=True
+        # directly to Server silently degrades to no-reload.
+        uvicorn.run(
+            "dev_health_ops.api.main:app",
+            host=ns.host,
+            port=ns.port,
+            log_level=log_level.lower(),
+            log_config=uvicorn_log_config(level=log_level),
+            workers=workers,
+            reload=reload,
+            reload_dirs=reload_dirs,
+        )
         return 0
     except Exception as e:
         logger.error("API server failed", extra={"error": str(e)})

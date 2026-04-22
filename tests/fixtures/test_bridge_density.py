@@ -19,7 +19,6 @@ production or in a reviewer's screenshot comparison.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -28,11 +27,6 @@ from dev_health_ops.fixtures.runner import (
     _build_repo_team_assignments,
     _verify_repo_cooccurrence_density,
 )
-
-
-class _Stub:
-    def __init__(self, team_id: str) -> None:
-        self.id = team_id
 
 
 class TestWorkTypeCooccurrence:
@@ -52,9 +46,7 @@ class TestWorkTypeCooccurrence:
 
         by_day: dict[object, set[str]] = defaultdict(set)
         for item in items:
-            day = (
-                item.completed_at or item.started_at or item.created_at
-            ).date()
+            day = (item.completed_at or item.started_at or item.created_at).date()
             by_day[day].add(item.type)
 
         bad_buckets = [
@@ -159,9 +151,7 @@ class TestFlowMatrixCrossEntityEdgeCount:
         appearing in the same bridge bucket."""
         buckets: dict[tuple, set[str]] = defaultdict(set)
         for item in items:
-            day = (
-                item.completed_at or item.started_at or item.created_at
-            ).date()
+            day = (item.completed_at or item.started_at or item.created_at).date()
             bridge_val = getattr(item, bridge_key)
             dim_val = getattr(item, dim_key)
             if not bridge_val or not dim_val:
@@ -185,9 +175,7 @@ class TestFlowMatrixCrossEntityEdgeCount:
         # All items share a single repo_id in this generator, so the (repo,
         # day) bridge reduces to (day) here — still a valid proxy for
         # the WORK_TYPE cross-type guarantee inside one repo.
-        pairs = self._cross_entity_pairs(
-            items, bridge_key="repo_id", dim_key="type"
-        )
+        pairs = self._cross_entity_pairs(items, bridge_key="repo_id", dim_key="type")
         assert pairs >= 5, (
             f"Only {pairs} cross-type pairs in 30d fixture — WORK_TYPE "
             "chord would fall below the >= 5 success criterion."

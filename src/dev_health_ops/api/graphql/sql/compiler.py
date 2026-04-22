@@ -374,6 +374,13 @@ def compile_flow_matrix(
         "timeout": timeout,
     }
 
+    # The TEAM / REPO / WORK_TYPE branches intentionally do not thread
+    # `filter_clause`; those templates source from work_item_cycle_times +
+    # work_items where the filter column set (investment_area etc.) doesn't
+    # apply. Only the sankey fallback — which queries investment_metrics_daily —
+    # uses filters. Callers that need filtered flow matrices for same-dim TEAM /
+    # REPO / WORK_TYPE should open a follow-up to wire filter columns into the
+    # two underlying tables first.
     if dimension == Dimension.TEAM:
         nodes_sql = flow_matrix_team_nodes_template()
         edge_sql = flow_matrix_team_edges_template()

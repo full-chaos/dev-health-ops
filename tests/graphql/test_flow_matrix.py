@@ -164,6 +164,14 @@ class TestRepoEdgesTemplate:
         assert "'REPO' AS source_dimension" in sql
         assert "'REPO' AS target_dimension" in sql
 
+    def test_guards_both_sides_of_bridge_against_null_and_empty_team(self) -> None:
+        """Without b-side guards, empty-string team_ids would match each other
+        via the JOIN on a.team_id = b.team_id and emit spurious edges. Both
+        sides of the join must filter NULL + empty."""
+        sql = flow_matrix_repo_edges_template()
+        assert "a.team_id IS NOT NULL AND a.team_id != ''" in sql
+        assert "b.team_id IS NOT NULL AND b.team_id != ''" in sql
+
 
 class TestWorkTypeEdgesTemplate:
     """CHAOS-1292: WORK_TYPE edges bridged via (repo_id, day)."""
@@ -192,6 +200,16 @@ class TestWorkTypeEdgesTemplate:
         sql = flow_matrix_work_type_edges_template()
         assert "'WORK_TYPE' AS source_dimension" in sql
         assert "'WORK_TYPE' AS target_dimension" in sql
+
+    def test_guards_work_item_type_against_null_and_empty(self) -> None:
+        """Defensive: guard both IS NOT NULL and != '' on both sides so
+        NULL-typed items can't produce NULL nodes and empty strings can't
+        match each other across the JOIN."""
+        sql = flow_matrix_work_type_edges_template()
+        assert "a.work_item_type IS NOT NULL" in sql
+        assert "a.work_item_type != ''" in sql
+        assert "b.work_item_type IS NOT NULL" in sql
+        assert "b.work_item_type != ''" in sql
 
 
 class TestRepoNodesTemplate:
@@ -226,6 +244,11 @@ class TestWorkTypeNodesTemplate:
     def test_counts_distinct_work_items(self) -> None:
         sql = flow_matrix_work_type_nodes_template()
         assert "uniqExact(wct.work_item_id) AS value" in sql
+
+    def test_guards_type_against_null_and_empty(self) -> None:
+        sql = flow_matrix_work_type_nodes_template()
+        assert "wi.type IS NOT NULL" in sql
+        assert "wi.type != ''" in sql
 
 
 class TestValidateSubRequestCount:

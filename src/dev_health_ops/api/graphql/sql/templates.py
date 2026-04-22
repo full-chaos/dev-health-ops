@@ -293,6 +293,7 @@ INNER JOIN enriched AS b
   AND a.day = b.day
   AND a.org_id = b.org_id
 WHERE a.team_id IS NOT NULL AND a.team_id != ''
+  AND b.team_id IS NOT NULL AND b.team_id != ''
   AND a.repo_id IS NOT NULL
   AND b.repo_id IS NOT NULL
   AND a.repo_id != b.repo_id
@@ -306,8 +307,9 @@ SETTINGS max_execution_time = %(timeout)s
 def flow_matrix_work_type_nodes_template() -> str:
     """Nodes query for WORK_TYPE flow matrix.
 
-    Counts distinct work items per work_item_type in the window. Sourced
-    from the same enrichment as the edges template so node ids line up.
+    Counts distinct work items per work_item_type in the window. Uses the
+    same cycle_times × work_items JOIN as the edges template so node ids and
+    edge endpoints stay consistent.
     """
     return """
 SELECT
@@ -319,7 +321,7 @@ INNER JOIN work_items AS wi ON wct.work_item_id = wi.work_item_id
 WHERE wct.day >= %(start_date)s AND wct.day <= %(end_date)s
   AND wct.org_id = %(org_id)s
   AND wi.org_id = %(org_id)s
-  AND wi.type != ''
+  AND wi.type IS NOT NULL AND wi.type != ''
 GROUP BY node_id
 ORDER BY value DESC
 LIMIT %(limit_per_dim)s
@@ -356,8 +358,8 @@ INNER JOIN enriched AS b
   AND a.org_id = b.org_id
 WHERE a.repo_id IS NOT NULL
   AND b.repo_id IS NOT NULL
-  AND a.work_item_type != ''
-  AND b.work_item_type != ''
+  AND a.work_item_type IS NOT NULL AND a.work_item_type != ''
+  AND b.work_item_type IS NOT NULL AND b.work_item_type != ''
   AND a.work_item_type != b.work_item_type
 GROUP BY source, target
 ORDER BY value DESC

@@ -7,6 +7,7 @@ particularly for operations not well-supported by PyGithub such as blame.
 
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -45,18 +46,32 @@ class GitHubGraphQLClient:
 
     GRAPHQL_ENDPOINT = "https://api.github.com/graphql"
 
-    def __init__(self, token: str, timeout: int = 30):
+    def __init__(
+        self,
+        token: str | None = None,
+        timeout: int = 30,
+        token_provider: Callable[[], str] | None = None,
+    ):
         """
         Initialize GitHub GraphQL client.
 
         :param token: GitHub personal access token.
         :param timeout: Request timeout in seconds.
         """
+        if not token and token_provider is None:
+            raise ValueError("GitHubGraphQLClient requires token or token_provider")
         self.token = token
         self.timeout = timeout
+        self.token_provider = token_provider
         self.headers = {
-            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+        }
+
+    def _headers(self) -> dict[str, str]:
+        token = self.token_provider() if self.token_provider is not None else self.token
+        return {
+            **self.headers,
+            "Authorization": f"Bearer {token}",
         }
 
     @retry_with_backoff(
@@ -80,7 +95,7 @@ class GitHubGraphQLClient:
         :raises RateLimitException: If rate limit is exceeded.
         :raises APIException: If API returns an error.
         """
-        payload = {"query": query}
+        payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
@@ -88,7 +103,7 @@ class GitHubGraphQLClient:
             response = requests.post(
                 self.GRAPHQL_ENDPOINT,
                 json=payload,
-                headers=self.headers,
+                headers=self._headers(),
                 timeout=self.timeout,
             )
 

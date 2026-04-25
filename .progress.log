@@ -1,8 +1,0 @@
-2026-04-25T00:00:00Z CHAOS-68 resumed; Linear moved to In Progress.
-2026-04-25T00:00:00Z Read root and dev-health-ops AGENTS guidance; verified branch feat/chaos-68-github-app-auth is clean except progress log and follows origin/main.
-2026-04-25T00:00:00Z Located sync CLI in src/dev_health_ops/processors/sync.py, GitHub connector/client auth code, resolver tests, and CLI docs.
-2026-04-25T00:00:00Z Added GitHub App JWT signing and installation-token cache/refresh utility plus dynamic GraphQL token provider support.
-2026-04-25T00:00:00Z Integrated GitHubCredentials App/PAT discrimination into connector, work client, resolver env loading, processors, and sync CLI flags.
-2026-04-25T00:00:00Z Added pytest coverage for JWT payload signing, installation token exchange cache, connector/client branching, resolver env key paths, and sync CLI parsing/validation.
-2026-04-25T00:00:00Z Documented GitHub App authentication setup and CLI auth precedence/backward compatibility.
-2026-04-25T00:00:00Z Quality gates: scoped pytest passed (59 tests); ruff check passed; ruff format --check passed. LSP diagnostics tool reported stale/pre-existing Pyright issues on large modules after passing targeted new-file checks.

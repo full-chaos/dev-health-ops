@@ -20,6 +20,10 @@ from dev_health_ops.storage import SQLAlchemyStore, resolve_db_type, run_with_st
 from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS
 from dev_health_ops.work_graph.runner import materialize_fixture_investments
 
+MIN_WORK_UNIT_INVESTMENT_RECORDS = 5
+MIN_WORK_UNIT_REPO_COVERAGE = 0.9
+MIN_WORK_UNIT_TEAM_COVERAGE = 0.8
+
 
 async def _insert_batches(
     insert_fn, items, batch_size: int = BATCH_SIZE, allow_parallel: bool = True
@@ -122,6 +126,119 @@ def _verify_repo_cooccurrence_density(
             f"(need >= {min_multi_repo_teams}). The chord Repository "
             "dimension would render empty. Check _build_repo_team_assignments."
         )
+
+
+def _query_int(client: Any, sql: str) -> int:
+    return int(client.query(sql).result_rows[0][0])
+
+
+def validate_work_unit_investment_density_and_coverage(
+    client: Any,
+    *,
+    table_exists,
+) -> bool:
+    """Validate persisted Investment View readiness, not graph topology."""
+    if not table_exists("work_unit_investments"):
+        logging.error(
+            "FAIL: work_unit_investments missing (run fixtures with --with-metrics "
+            "and --with-work-graph)."
+        )
+        return False
+    if not table_exists("repo_metrics_daily"):
+        logging.error(
+            "FAIL: repo_metrics_daily missing (run fixtures with --with-metrics)."
+        )
+        return False
+    if not table_exists("team_metrics_daily"):
+        logging.error(
+            "FAIL: team_metrics_daily missing (run fixtures with --with-metrics)."
+        )
+        return False
+
+    record_count = _query_int(client, "SELECT count() FROM work_unit_investments")
+    expected_repos = _query_int(
+        client,
+        """
+        SELECT countDistinct(repo_id)
+        FROM repo_metrics_daily
+        WHERE notEmpty(toString(repo_id))
+        """,
+    )
+    expected_teams = _query_int(
+        client,
+        """
+        SELECT countDistinct(team_id)
+        FROM team_metrics_daily
+        WHERE lower(ifNull(nullIf(team_id, ''), 'unassigned')) != 'unassigned'
+        """,
+    )
+    covered_repos = _query_int(
+        client,
+        """
+        SELECT countDistinct(repo_id)
+        FROM work_unit_investments
+        WHERE notEmpty(toString(repo_id))
+        """,
+    )
+    covered_teams = _query_int(
+        client,
+        """
+        SELECT countDistinct(wict.team_id)
+        FROM work_unit_investments AS wui
+        INNER JOIN work_item_cycle_times AS wict
+          ON position(
+            wui.structural_evidence_json,
+            concat('"', wict.work_item_id, '"')
+          ) > 0
+        WHERE lower(ifNull(nullIf(wict.team_id, ''), 'unassigned')) != 'unassigned'
+        """,
+    )
+
+    min_records = max(
+        MIN_WORK_UNIT_INVESTMENT_RECORDS,
+        expected_repos * 2,
+        expected_teams,
+    )
+    repo_coverage = covered_repos / expected_repos if expected_repos else 0.0
+    team_coverage = covered_teams / expected_teams if expected_teams else 0.0
+
+    logging.info(
+        "WorkUnit investments: records=%d (min_required=%d), "
+        "repo_coverage=%.1f%% (%d/%d), team_coverage=%.1f%% (%d/%d)",
+        record_count,
+        min_records,
+        repo_coverage * 100.0,
+        covered_repos,
+        expected_repos,
+        team_coverage * 100.0,
+        covered_teams,
+        expected_teams,
+    )
+
+    if record_count < min_records:
+        logging.error(
+            "FAIL: work_unit_investments density too low (records=%d, required>=%d).",
+            record_count,
+            min_records,
+        )
+        return False
+    if repo_coverage < MIN_WORK_UNIT_REPO_COVERAGE:
+        logging.error(
+            "FAIL: work_unit_investments repo coverage too low "
+            "(covered=%.1f%%, target>=%.1f%%).",
+            repo_coverage * 100.0,
+            MIN_WORK_UNIT_REPO_COVERAGE * 100.0,
+        )
+        return False
+    if team_coverage < MIN_WORK_UNIT_TEAM_COVERAGE:
+        logging.error(
+            "FAIL: work_unit_investments team coverage too low "
+            "(covered=%.1f%%, target>=%.1f%%).",
+            team_coverage * 100.0,
+            MIN_WORK_UNIT_TEAM_COVERAGE * 100.0,
+        )
+        return False
+    return True
 
 
 async def _seed_auth_data(session, user_data: dict) -> None:
@@ -1224,7 +1341,7 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         logging.error(f"FAIL: Could not validate prerequisites: {e}")
         return 1
 
-    # 3. Check work_graph_edges + components
+    # 3. Check work_graph_edges and persisted WorkUnit investment coverage
     try:
         edges = fetch_work_graph_edges(sink)
         if not edges:
@@ -1258,29 +1375,18 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
                     stack.append(neighbor)
             components.append(group)
 
-        component_count = len(components)
-        distinct_repos = int(
-            client.query("SELECT countDistinct(repo_id) FROM work_items").result_rows[
-                0
-            ][0]
-        )
-        min_components = max(2, distinct_repos)
         logging.info(
-            "WorkUnits (connected components): %d (min_required=%d, repos=%d)",
-            component_count,
-            min_components,
-            distinct_repos,
+            "Work graph connected components: %d (used for evidence sampling only)",
+            len(components),
         )
-        if component_count < min_components:
-            logging.error(
-                "FAIL: WorkUnits too low (components=%d, required>=%d).",
-                component_count,
-                min_components,
-            )
+
+        if not validate_work_unit_investment_density_and_coverage(
+            client, table_exists=_table_exists
+        ):
             return 1
 
     except Exception as e:
-        logging.error(f"FAIL: Could not validate work graph edges/components: {e}")
+        logging.error(f"FAIL: Could not validate work graph investment coverage: {e}")
         return 1
 
     # 4. Evidence sanity (sample bundles)

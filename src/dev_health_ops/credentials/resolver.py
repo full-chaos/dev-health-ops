@@ -24,7 +24,13 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=ProviderCredentials)
 
 PROVIDER_ENV_VARS: dict[str, dict[str, str]] = {
-    "github": {"token": "GITHUB_TOKEN", "base_url": "GITHUB_URL"},
+    "github": {
+        "token": "GITHUB_TOKEN",
+        "base_url": "GITHUB_URL",
+        "app_id": "GITHUB_APP_ID",
+        "private_key_path": "GITHUB_APP_PRIVATE_KEY_PATH",
+        "installation_id": "GITHUB_APP_INSTALLATION_ID",
+    },
     "gitlab": {"token": "GITLAB_TOKEN", "base_url": "GITLAB_URL"},
     "jira": {
         "api_token": "JIRA_API_TOKEN",
@@ -200,6 +206,12 @@ class CredentialResolver:
     ) -> T:
         cred_dict = {k: v for k, v in cred_dict.items() if v is not None}
 
+        if cred_type is GitHubCredentials and "private_key" not in cred_dict:
+            private_key_path = cred_dict.get("private_key_path")
+            if private_key_path:
+                with open(str(private_key_path), encoding="utf-8") as key_file:
+                    cred_dict["private_key"] = key_file.read()
+
         cred_dict["source"] = source
         cred_dict["credential_name"] = credential_name
 
@@ -292,8 +304,13 @@ class _EnvOnlyResolver:
         cred_type = PROVIDER_CREDENTIAL_TYPES[provider]
 
         try:
+            if cred_type is GitHubCredentials and "private_key" not in cred_dict:
+                private_key_path = cred_dict.get("private_key_path")
+                if private_key_path:
+                    with open(str(private_key_path), encoding="utf-8") as key_file:
+                        cred_dict["private_key"] = key_file.read()
             cred_dict["source"] = CredentialSource.ENVIRONMENT
             cred_dict["credential_name"] = credential_name
             return cred_type(**cred_dict)
-        except (ValueError, TypeError):
+        except (OSError, ValueError, TypeError):
             return None

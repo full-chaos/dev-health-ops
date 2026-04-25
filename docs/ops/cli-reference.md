@@ -64,6 +64,14 @@ dev-hops sync git --provider github \
   --owner torvalds \
   --repo linux
 
+# GitHub App
+dev-hops sync git --provider github \
+  --github-app-id "$GITHUB_APP_ID" \
+  --github-app-key-path "$GITHUB_APP_PRIVATE_KEY_PATH" \
+  --github-app-installation-id "$GITHUB_APP_INSTALLATION_ID" \
+  --owner my-org \
+  --repo my-repo
+
 # GitLab
 dev-hops sync git --provider gitlab \
   --auth "$GITLAB_TOKEN" \
@@ -74,6 +82,8 @@ dev-hops sync git --provider gitlab \
 | Option | Description |
 |--------|-------------|
 | `--provider` | `local`, `github`, `gitlab` |
+| `--auth` | GitHub/GitLab token override (PAT mode for GitHub) |
+| `--github-app-id`, `--github-app-key-path`, `--github-app-installation-id` | GitHub App auth flags. Mutually exclusive with PAT auth. |
 | `--repo-path` | Path to local repo |
 | `--owner`, `--repo` | GitHub owner/repo |
 | `--project-id` | GitLab project ID |
@@ -83,6 +93,8 @@ dev-hops sync git --provider gitlab \
 | `--sink` | Analytics backend (`clickhouse` only; default) |
 
 `--date` is a deprecated hidden alias for `--before`.
+
+GitHub authentication precedence is CLI flags > environment variables > stored database credentials. Use either PAT auth (`--auth` or `GITHUB_TOKEN`) or GitHub App auth, not both. See [GitHub App authentication](../user-guide/github-app-auth.md).
 
 ### `sync prs`
 

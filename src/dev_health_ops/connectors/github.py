@@ -9,7 +9,7 @@ import inspect
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 from github import Auth, Github, GithubException, RateLimitExceededException
@@ -41,12 +41,16 @@ from dev_health_ops.connectors.utils import (
     match_repo_pattern,
     retry_with_backoff,
 )
+from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
 from dev_health_ops.metrics.prometheus import (
     record_github_api_request,
     record_github_rate_limit,
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from dev_health_ops.credentials.types import GitHubCredentials
 
 
 class GitHubConnector(GitConnector):
@@ -59,7 +63,8 @@ class GitHubConnector(GitConnector):
 
     def __init__(
         self,
-        token: str,
+        token: str | None = None,
+        credentials: "GitHubCredentials | None" = None,
         base_url: str | None = None,
         per_page: int = 100,
         max_workers: int = 4,
@@ -68,11 +73,32 @@ class GitHubConnector(GitConnector):
         Initialize GitHub connector.
 
         :param token: GitHub personal access token.
+        :param credentials: Resolved GitHub credentials (PAT or App auth).
         :param base_url: Optional base URL for GitHub Enterprise.
         :param per_page: Number of items per page for pagination.
         :param max_workers: Maximum concurrent workers for operations.
         """
         super().__init__(per_page=per_page, max_workers=max_workers)
+        if credentials is not None:
+            base_url = credentials.base_url or base_url
+
+        self._app_token_provider: GitHubAppTokenProvider | None = None
+        if credentials is not None and credentials.is_app_auth:
+            assert credentials.app_id is not None
+            assert credentials.private_key is not None
+            assert credentials.installation_id is not None
+            self._app_token_provider = GitHubAppTokenProvider(
+                app_id=credentials.app_id,
+                private_key=credentials.private_key,
+                installation_id=credentials.installation_id,
+            )
+            token = self._app_token_provider.get_token()
+        elif credentials is not None:
+            token = credentials.token
+
+        if not token:
+            raise ValueError("GitHubConnector requires token or credentials")
+
         self.token = token
 
         # Initialize PyGithub client
@@ -83,7 +109,12 @@ class GitHubConnector(GitConnector):
             self.github = Github(auth=auth, per_page=per_page)
 
         # Initialize GraphQL client for blame operations
-        self.graphql = GitHubGraphQLClient(token)
+        token_provider = (
+            self._app_token_provider.get_token
+            if self._app_token_provider is not None
+            else None
+        )
+        self.graphql = GitHubGraphQLClient(token, token_provider=token_provider)
 
     def _handle_github_exception(self, e: Exception) -> None:
         """

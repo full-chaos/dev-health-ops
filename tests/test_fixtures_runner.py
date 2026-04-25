@@ -2,6 +2,7 @@ import argparse
 
 import pytest
 
+from dev_health_ops.fixtures import runner
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.fixtures.runner import (
     _build_repo_team_assignments,
@@ -164,3 +165,94 @@ async def test_fixtures_generation_initializes_license_manager(tmp_path):
 
     LicenseManager.reset()
     LicenseAuditLogger.reset()
+
+
+class _QueryResult:
+    def __init__(self, value: int):
+        self.result_rows = [(value,)]
+
+
+class _ValidationClient:
+    def __init__(
+        self,
+        *,
+        records: int = 12,
+        expected_repos: int = 3,
+        expected_teams: int = 4,
+        covered_repos: int = 3,
+        covered_teams: int = 4,
+    ):
+        self.records = records
+        self.expected_repos = expected_repos
+        self.expected_teams = expected_teams
+        self.covered_repos = covered_repos
+        self.covered_teams = covered_teams
+
+    def query(self, sql: str):
+        normalized = " ".join(sql.split())
+        if "FROM work_unit_investments AS wui" in normalized:
+            return _QueryResult(self.covered_teams)
+        if "FROM work_unit_investments" in normalized:
+            if "countDistinct(repo_id)" in normalized:
+                return _QueryResult(self.covered_repos)
+            return _QueryResult(self.records)
+        if "FROM repo_metrics_daily" in normalized:
+            return _QueryResult(self.expected_repos)
+        if "FROM team_metrics_daily" in normalized:
+            return _QueryResult(self.expected_teams)
+        raise AssertionError(f"Unexpected query: {normalized}")
+
+
+def _all_tables_exist(name: str) -> bool:
+    return name in {
+        "work_unit_investments",
+        "repo_metrics_daily",
+        "team_metrics_daily",
+    }
+
+
+def test_work_unit_investment_validation_accepts_density_and_coverage():
+    client = _ValidationClient()
+    validate = getattr(runner, "validate_work_unit_investment_density_and_coverage")
+
+    assert (
+        validate(
+            client,
+            table_exists=_all_tables_exist,
+        )
+        is True
+    )
+
+
+def test_work_unit_investment_validation_rejects_low_density():
+    client = _ValidationClient(records=4, expected_repos=3, expected_teams=4)
+    validate = getattr(runner, "validate_work_unit_investment_density_and_coverage")
+
+    assert (
+        validate(
+            client,
+            table_exists=_all_tables_exist,
+        )
+        is False
+    )
+
+
+def test_work_unit_investment_validation_rejects_low_repo_or_team_coverage():
+    low_repo_client = _ValidationClient(covered_repos=2, expected_repos=3)
+    low_team_client = _ValidationClient(covered_teams=2, expected_teams=4)
+    validate = getattr(runner, "validate_work_unit_investment_density_and_coverage")
+
+    assert (
+        validate(
+            low_repo_client,
+            table_exists=_all_tables_exist,
+        )
+        is False
+    )
+    assert (
+        validate(
+            low_team_client,
+            table_exists=_all_tables_exist,
+        )
+        is False
+    )

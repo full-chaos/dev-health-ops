@@ -54,6 +54,17 @@ class TestGitHubCredentials:
         assert creds.is_app_auth is True
         assert creds.token is None
 
+    def test_invalid_mixed_token_and_app_auth(self):
+        with pytest.raises(ValueError, match="exactly one auth mode"):
+            GitHubCredentials(
+                token="ghp_test",
+                app_id="12345",
+                private_key="key",
+                installation_id="67890",
+                source=CredentialSource.DATABASE,
+                credential_name="default",
+            )
+
     def test_invalid_missing_token_and_app(self):
         with pytest.raises(ValueError, match="require either 'token' or 'app_id'"):
             GitHubCredentials(
@@ -478,6 +489,35 @@ class TestCredentialResolver:
             assert result.is_app_auth is True
             assert result.app_id == "12345"
             assert result.installation_id == "67890"
+
+    @pytest.mark.asyncio
+    async def test_github_app_auth_from_environment_key_path(self, resolver, tmp_path):
+        """Test resolving GitHub App credentials from environment key path."""
+        key_path = tmp_path / "github-app.pem"
+        key_path.write_text("synthetic-private-key", encoding="utf-8")
+
+        with patch(
+            "dev_health_ops.api.services.settings.IntegrationCredentialsService"
+        ) as mock_svc_class:
+            mock_svc = AsyncMock()
+            mock_svc.get_decrypted_credentials = AsyncMock(return_value=None)
+            mock_svc_class.return_value = mock_svc
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_APP_ID": "12345",
+                    "GITHUB_APP_PRIVATE_KEY_PATH": str(key_path),
+                    "GITHUB_APP_INSTALLATION_ID": "67890",
+                },
+                clear=False,
+            ):
+                os.environ.pop("GITHUB_TOKEN", None)
+                result = await resolver.resolve("github")
+
+        assert isinstance(result, GitHubCredentials)
+        assert result.is_app_auth is True
+        assert result.private_key == "synthetic-private-key"
 
 
 # ---------------------------------------------------------------------------

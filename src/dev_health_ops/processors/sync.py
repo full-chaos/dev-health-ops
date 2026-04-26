@@ -2,6 +2,12 @@ import argparse
 import asyncio
 import os
 
+from dev_health_ops.credentials import (
+    CredentialResolutionError,
+    CredentialSource,
+    GitHubCredentials,
+    resolve_credentials_sync,
+)
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.processors.github import (
@@ -50,6 +56,105 @@ def _resolve_synthetic_repo_name(ns: argparse.Namespace) -> str:
     return "acme/demo-app"
 
 
+def _read_github_app_private_key(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as key_file:
+            return key_file.read()
+    except OSError as exc:
+        raise SystemExit(f"Unable to read GitHub App private key file: {path}") from exc
+
+
+def _build_github_cli_or_env_credentials(
+    *,
+    token: str | None,
+    app_id: str | None,
+    private_key_path: str | None,
+    installation_id: str | None,
+    base_url: str | None = None,
+    credential_name: str = "default",
+) -> GitHubCredentials | None:
+    has_token = bool(token)
+    app_values = [app_id, private_key_path, installation_id]
+    has_any_app = any(app_values)
+    has_all_app = all(app_values)
+
+    if has_token and has_any_app:
+        raise SystemExit(
+            "GitHub auth must use exactly one mode: PAT (--auth/GITHUB_TOKEN) XOR GitHub App."
+        )
+    if has_any_app and not has_all_app:
+        raise SystemExit(
+            "GitHub App auth requires app id, private key path, and installation id."
+        )
+    if has_token:
+        return GitHubCredentials(
+            token=token,
+            base_url=base_url,
+            source=CredentialSource.ENVIRONMENT,
+            credential_name=credential_name,
+        )
+    if has_all_app:
+        assert app_id is not None
+        assert private_key_path is not None
+        assert installation_id is not None
+        return GitHubCredentials(
+            app_id=app_id,
+            private_key=_read_github_app_private_key(private_key_path),
+            installation_id=installation_id,
+            base_url=base_url,
+            source=CredentialSource.ENVIRONMENT,
+            credential_name=credential_name,
+        )
+    return None
+
+
+def _resolve_github_sync_credentials(ns: argparse.Namespace) -> GitHubCredentials:
+    """Resolve GitHub sync auth with precedence CLI > env > DB."""
+    cli_credentials = _build_github_cli_or_env_credentials(
+        token=getattr(ns, "auth", None),
+        app_id=getattr(ns, "github_app_id", None),
+        private_key_path=getattr(ns, "github_app_key_path", None),
+        installation_id=getattr(ns, "github_app_installation_id", None),
+        credential_name="cli",
+    )
+    if cli_credentials is not None:
+        return cli_credentials
+
+    env_credentials = _build_github_cli_or_env_credentials(
+        token=os.getenv("GITHUB_TOKEN"),
+        app_id=os.getenv("GITHUB_APP_ID"),
+        private_key_path=os.getenv("GITHUB_APP_PRIVATE_KEY_PATH"),
+        installation_id=os.getenv("GITHUB_APP_INSTALLATION_ID"),
+        base_url=os.getenv("GITHUB_URL") or os.getenv("GITHUB_BASE_URL"),
+        credential_name="environment",
+    )
+    if env_credentials is not None:
+        return env_credentials
+
+    db_url = (
+        getattr(ns, "db", None)
+        or os.getenv("POSTGRES_URI")
+        or os.getenv("DATABASE_URI")
+    )
+    org_id = getattr(ns, "org", None)
+    if db_url and org_id:
+        try:
+            credentials = resolve_credentials_sync(
+                "github",
+                org_id=org_id,
+                db_url=db_url,
+                allow_env_fallback=False,
+            )
+        except CredentialResolutionError:
+            credentials = None
+        if isinstance(credentials, GitHubCredentials):
+            return credentials
+
+    raise SystemExit(
+        "Missing GitHub credentials (pass --auth, set GITHUB_TOKEN, configure GitHub App flags/env vars, or configure DB credentials)."
+    )
+
+
 async def sync_local_target(ns: argparse.Namespace, target: str) -> int:
     if target not in {"git", "prs", "blame"}:
         raise SystemExit("Local provider supports only git, prs, or blame targets.")
@@ -82,9 +187,7 @@ async def sync_local_target(ns: argparse.Namespace, target: str) -> int:
 
 
 async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
-    token = ns.auth or os.getenv("GITHUB_TOKEN") or ""
-    if not token:
-        raise SystemExit("Missing GitHub token (pass --auth or set GITHUB_TOKEN).")
+    credentials = _resolve_github_sync_credentials(ns)
 
     db_uri = resolve_sink_uri(ns)
     validate_sink(ns)
@@ -99,7 +202,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
             user_name = str(ns.owner or "") if not ns.group else ""
             batch_kwargs = {
                 "store": store,
-                "token": token,
+                "token": credentials,
                 "org_name": org_name,
                 "user_name": user_name,
                 "pattern": ns.search,
@@ -131,7 +234,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
             store,
             ns.owner,
             ns.repo,
-            token,
+            credentials,
             blame_only=flags["blame_only"],
             max_commits=max_commits,
             sync_git=flags["sync_git"],
@@ -296,6 +399,15 @@ def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
         help="Source provider for the sync job.",
     )
     parser.add_argument("--auth", help="Provider token override (GitHub/GitLab).")
+    parser.add_argument("--github-app-id", help="GitHub App ID (GitHub provider).")
+    parser.add_argument(
+        "--github-app-key-path",
+        help="Path to GitHub App private key PEM (GitHub provider).",
+    )
+    parser.add_argument(
+        "--github-app-installation-id",
+        help="GitHub App installation ID (GitHub provider).",
+    )
     parser.add_argument(
         "--repo-path", default=".", help="Local git repo path (local provider)."
     )

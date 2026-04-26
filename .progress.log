@@ -1,6 +1,0 @@
-2026-04-25T23:23:44Z CHAOS-105 moved to In Progress
-2026-04-25T23:24:00Z Read root platform guidance from session context and dev-health-ops AGENTS.md from worktree
-2026-04-25T23:25:00Z Wrote CHAOS-105 decision note under docs/decisions
-2026-04-25T23:26:00Z Refactored fixture validation to check persisted WorkUnit investment density and repo/team coverage
-2026-04-25T23:27:00Z Added fixture validation unit tests for density and coverage behavior
-2026-04-25T23:28:00Z Quality gates: pytest tests/test_fixtures_runner.py passed; ruff check and format --check passed; mypy surfaced existing project-wide errors; LSP clean for tests and runner has pre-existing diagnostics outside CHAOS-105 changes

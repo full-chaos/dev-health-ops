@@ -53,19 +53,30 @@ class GitHubCredentials(ProviderCredentials):
 
     app_id: str | None = None
     private_key: str | None = None
+    private_key_path: str | None = None
     installation_id: str | None = None
     base_url: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.token and not (self.app_id and self.private_key):
+        has_token = bool(self.token)
+        has_app_fields = bool(self.app_id or self.private_key or self.installation_id)
+        has_complete_app = bool(
+            self.app_id and self.private_key and self.installation_id
+        )
+
+        if has_token and has_app_fields:
             raise ValueError(
-                "GitHub credentials require either 'token' or 'app_id' + 'private_key'"
+                "GitHub credentials require exactly one auth mode: token or GitHub App"
+            )
+        if not has_token and not has_complete_app:
+            raise ValueError(
+                "GitHub credentials require either 'token' or 'app_id' + 'private_key' + 'installation_id'"
             )
 
     @property
     def is_app_auth(self) -> bool:
         """Check if using GitHub App authentication."""
-        return bool(self.app_id and self.private_key)
+        return bool(self.app_id and self.private_key and self.installation_id)
 
 
 @dataclass

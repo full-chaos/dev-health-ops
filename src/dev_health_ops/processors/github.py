@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
@@ -859,7 +860,7 @@ async def process_github_repo(
     store: GitSyncStore | Any,
     owner: str,
     repo_name: str,
-    token: str,
+    token: str | GitHubCredentials,
     fetch_blame: bool = False,
     blame_only: bool = False,
     max_commits: int | None = None,
@@ -881,7 +882,11 @@ async def process_github_repo(
     loop = asyncio.get_running_loop()
     ingestion_sink = IngestionSink(store)
 
-    connector = GitHubConnector(token=token)
+    connector = (
+        GitHubConnector(credentials=token)
+        if isinstance(token, GitHubCredentials)
+        else GitHubConnector(token=token)
+    )
     try:
         # 1. Fetch Repo Info
         logging.info("Fetching repository information...")
@@ -1086,7 +1091,7 @@ async def process_github_repo(
 
 async def process_github_repos_batch(
     store: Any,
-    token: str,
+    token: str | GitHubCredentials,
     org_name: str = None,
     user_name: str = None,
     pattern: str = None,
@@ -1114,7 +1119,11 @@ async def process_github_repos_batch(
         raise RuntimeError("Connectors unavailable. Install required dependencies.")
 
     logging.info("=== GitHub Batch Repository Processing ===")
-    connector = GitHubConnector(token=token)
+    connector = (
+        GitHubConnector(credentials=token)
+        if isinstance(token, GitHubCredentials)
+        else GitHubConnector(token=token)
+    )
     loop = asyncio.get_running_loop()
     ingestion_sink = IngestionSink(store)
 

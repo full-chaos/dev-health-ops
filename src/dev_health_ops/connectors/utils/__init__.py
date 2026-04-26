@@ -2,6 +2,11 @@
 Utility modules for connectors.
 """
 
+from .github_app import (
+    GitHubAppAuthError,
+    GitHubAppTokenProvider,
+    create_github_app_jwt,
+)
 from .graphql import GitHubGraphQLClient
 from .pagination import AsyncPaginationHandler, PaginationHandler
 from .patterns import match_name_pattern, match_project_pattern, match_repo_pattern
@@ -17,6 +22,9 @@ from .token_pool import TokenPool, create_token_pool
 
 __all__ = [
     "GitHubGraphQLClient",
+    "GitHubAppAuthError",
+    "GitHubAppTokenProvider",
+    "create_github_app_jwt",
     "PaginationHandler",
     "AsyncPaginationHandler",
     "DistributedRateLimitGate",

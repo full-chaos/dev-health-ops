@@ -6,13 +6,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, TypedDict
 
+from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
 from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
 )
+from dev_health_ops.credentials.resolver import (
+    CredentialResolutionError,
+    resolve_credentials_sync,
+)
+from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
-from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +58,25 @@ class ProjectV2ItemNode(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class GitHubAuth:
-    token: str
+    token: str | None = None
+    app_id: str | None = None
+    private_key: str | None = None
+    installation_id: str | None = None
     base_url: str | None = None  # GitHub Enterprise REST base URL (optional)
+
+    @classmethod
+    def from_credentials(cls, credentials: GitHubCredentials) -> GitHubAuth:
+        return cls(
+            token=credentials.token,
+            app_id=credentials.app_id,
+            private_key=credentials.private_key,
+            installation_id=credentials.installation_id,
+            base_url=credentials.base_url,
+        )
+
+    @property
+    def is_app_auth(self) -> bool:
+        return bool(self.app_id and self.private_key and self.installation_id)
 
 
 class GitHubWorkClient:
@@ -76,38 +98,55 @@ class GitHubWorkClient:
         self.auth = auth
         self.per_page = max(1, min(100, int(per_page)))
         self.gate = gate or RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+        self._app_token_provider: GitHubAppTokenProvider | None = None
+
+        token = auth.token
+        if auth.is_app_auth:
+            assert auth.app_id is not None
+            assert auth.private_key is not None
+            assert auth.installation_id is not None
+            self._app_token_provider = GitHubAppTokenProvider(
+                app_id=auth.app_id,
+                private_key=auth.private_key,
+                installation_id=auth.installation_id,
+            )
+            token = self._app_token_provider.get_token()
+        if not token:
+            raise ValueError("GitHubWorkClient requires token or GitHub App auth")
 
         if auth.base_url:
             self.github = Github(
                 base_url=auth.base_url,
-                login_or_token=auth.token,
+                login_or_token=token,
                 per_page=self.per_page,
             )
         else:
             self.github = Github(
-                login_or_token=auth.token,
+                login_or_token=token,
                 per_page=self.per_page,
             )
 
         # GraphQL client (api.github.com only for now).
-        self.graphql = GitHubGraphQLClient(auth.token)
+        token_provider = (
+            self._app_token_provider.get_token
+            if self._app_token_provider is not None
+            else None
+        )
+        self.graphql = GitHubGraphQLClient(token, token_provider=token_provider)
 
     @classmethod
     def from_env(cls) -> GitHubWorkClient:
-        env = read_env_spec(
-            EnvSpec(
-                required={"token": "GITHUB_TOKEN"},
-                optional={"base_url": ("GITHUB_BASE_URL", None)},
-                missing_error="GITHUB_TOKEN environment variable is required",
-            )
-        )
-        base = env["base_url"]
-        return cls(
-            auth=GitHubAuth(
-                token=str(env["token"]),
-                base_url=str(base) if base else None,
-            )
-        )
+        try:
+            credentials = resolve_credentials_sync("github", allow_env_fallback=True)
+        except CredentialResolutionError as exc:
+            raise ValueError(
+                "GITHUB_TOKEN environment variable is required (or configure GitHub App "
+                "credentials via GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY_PATH/"
+                "GITHUB_APP_INSTALLATION_ID, or store credentials in the database)."
+            ) from exc
+        if not isinstance(credentials, GitHubCredentials):
+            raise ValueError("Resolved credentials are not GitHub credentials")
+        return cls(auth=GitHubAuth.from_credentials(credentials))
 
     def get_repo(self, *, owner: str, repo: str) -> Any:
         return self.github.get_repo(f"{owner}/{repo}")

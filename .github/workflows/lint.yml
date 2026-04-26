@@ -35,7 +35,7 @@ jobs:
               - 'pyproject.toml'
               - 'scripts/**'
 
-  lint:
+  lint-job:
     needs: [changes]
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -72,3 +72,28 @@ jobs:
         continue-on-error: true
         run: |
           mypy --install-types --non-interactive .
+
+  # Required-status-check gate. Branch protection requires a check named
+  # exactly "lint". The aggregator always runs and treats skipped (path
+  # filter, e.g. docs-only PRs) as pass so PRs are never blocked waiting
+  # on a status that will never report. Do not remove.
+  lint:
+    name: lint
+    if: always()
+    needs: [lint-job]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate lint result
+        env:
+          LINT_RESULT: ${{ needs.lint-job.result }}
+        run: |
+          echo "lint-job result: ${LINT_RESULT}"
+          case "${LINT_RESULT}" in
+            success|skipped)
+              echo "lint gate passed"
+              ;;
+            failure|cancelled|*)
+              echo "lint gate failed"
+              exit 1
+              ;;
+          esac

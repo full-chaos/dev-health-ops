@@ -35,7 +35,7 @@ jobs:
               - 'Makefile'
               - 'scripts/**'
 
-  test:
+  test-matrix:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04-arm
@@ -125,3 +125,28 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
+
+  # Required-status-check gate. Branch protection requires a check named
+  # exactly "test"; the matrix above produces "test (3.11)"..."test (3.14)"
+  # which never match. This aggregator always runs, treating skipped (path
+  # filter) as pass and failure/cancelled as fail. Do not remove.
+  test:
+    name: test
+    if: always()
+    needs: [test-matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate matrix result
+        env:
+          MATRIX_RESULT: ${{ needs.test-matrix.result }}
+        run: |
+          echo "test-matrix result: ${MATRIX_RESULT}"
+          case "${MATRIX_RESULT}" in
+            success|skipped)
+              echo "test gate passed"
+              ;;
+            failure|cancelled|*)
+              echo "test gate failed"
+              exit 1
+              ;;
+          esac

@@ -111,10 +111,10 @@ def _build_github_cli_or_env_credentials(
 def _resolve_github_sync_credentials(ns: argparse.Namespace) -> GitHubCredentials:
     """Resolve GitHub sync auth with precedence CLI > env > DB."""
     cli_credentials = _build_github_cli_or_env_credentials(
-        token=ns.auth,
-        app_id=ns.github_app_id,
-        private_key_path=ns.github_app_key_path,
-        installation_id=ns.github_app_installation_id,
+        token=getattr(ns, "auth", None),
+        app_id=getattr(ns, "github_app_id", None),
+        private_key_path=getattr(ns, "github_app_key_path", None),
+        installation_id=getattr(ns, "github_app_installation_id", None),
         credential_name="cli",
     )
     if cli_credentials is not None:

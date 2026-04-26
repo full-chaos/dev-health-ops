@@ -12,7 +12,10 @@ from dev_health_ops.connectors.utils.rate_limit_queue import (
     RateLimitConfig,
     RateLimitGate,
 )
-from dev_health_ops.credentials.resolver import resolve_credentials_sync
+from dev_health_ops.credentials.resolver import (
+    CredentialResolutionError,
+    resolve_credentials_sync,
+)
 from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.providers._ratelimit import gate_call
 
@@ -133,7 +136,14 @@ class GitHubWorkClient:
 
     @classmethod
     def from_env(cls) -> GitHubWorkClient:
-        credentials = resolve_credentials_sync("github", allow_env_fallback=True)
+        try:
+            credentials = resolve_credentials_sync("github", allow_env_fallback=True)
+        except CredentialResolutionError as exc:
+            raise ValueError(
+                "GITHUB_TOKEN environment variable is required (or configure GitHub App "
+                "credentials via GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY_PATH/"
+                "GITHUB_APP_INSTALLATION_ID, or store credentials in the database)."
+            ) from exc
         if not isinstance(credentials, GitHubCredentials):
             raise ValueError("Resolved credentials are not GitHub credentials")
         return cls(auth=GitHubAuth.from_credentials(credentials))

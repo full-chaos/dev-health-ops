@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [ "**" ]
     types: [ opened, edited, synchronize, reopened, ready_for_review ]
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

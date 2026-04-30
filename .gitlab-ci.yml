@@ -1,26 +1,31 @@
 workflow:
   rules:
     - if: $CI_COMMIT_TAG
-      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
 
 stages:
   - lint
   - test
+  - integration
+  - e2e
   - security
+  - build
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PIP_ROOT_USER_ACTION: "ignore"
   PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  TEST_RESULTS_DIR: "$CI_PROJECT_DIR/test-results"
 
-default:
+.python_job:
   cache:
-    key: "pip-$CI_PROJECT_NAME"
+    key: "pip-$CI_JOB_IMAGE"
     paths:
       - .cache/pip
   before_script:
@@ -28,84 +33,16 @@ default:
     - python -m pip install --upgrade pip
     - pip install -r requirements.txt
 
-lint:black:
-  stage: lint
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "web"
+.wait_test_services:
   script:
-    - black --check .
-  allow_failure: true
-
-lint:isort:
-  stage: lint
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "web"
-  script:
-    - isort --check-only .
-  allow_failure: true
-
-lint:flake8:
-  stage: lint
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "web"
-  script:
-    - flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-    - flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-
-lint:mypy:
-  stage: lint
-  image: python:3.11
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "web"
-  script:
-    - mypy --install-types --non-interactive .
-  allow_failure: true
-
-tests:
-  stage: test
-  image: python:${PYTHON_VERSION}
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-  before_script:
-    - python -V
-    - apt-get update -y
-    - apt-get install -y --no-install-recommends build-essential git curl
-    - python -m pip install --upgrade pip
-    - pip install -r requirements.txt
-  parallel:
-    matrix:
-      - PYTHON_VERSION: [ "3.10", "3.11", "3.12", "3.13", "3.14" ]
-  services:
-    - name: postgres:15
-      alias: postgres
-    - name: mongo:7
-      alias: mongo
-  variables:
-    POSTGRES_USER: postgres
-    POSTGRES_PASSWORD: postgres
-    POSTGRES_DB: test_db
-    DATABASE_URI: "postgresql+asyncpg://postgres:postgres@postgres:5432/test_db"
-    SECONDARY_DATABASE_URI: "mongodb://mongo:27017"
-  script:
-    - |
+    - &wait_test_services |
       python - <<'PY'
       import asyncio
       import os
+      import urllib.error
+      import urllib.request
       from sqlalchemy import text
       from sqlalchemy.ext.asyncio import create_async_engine
-      from motor.motor_asyncio import AsyncIOMotorClient
 
 
       async def wait_postgres(url: str) -> None:
@@ -124,63 +61,353 @@ tests:
               await engine.dispose()
 
 
-      async def wait_mongo(url: str) -> None:
-          client = AsyncIOMotorClient(url, serverSelectionTimeoutMS=1000)
-          try:
-              for attempt in range(30):
-                  try:
-                      await client.admin.command("ping")
-                      return
-                  except Exception:
-                      if attempt == 29:
-                          raise
-                      await asyncio.sleep(1)
-          finally:
-              client.close()
+      def wait_clickhouse(url: str) -> None:
+          request = urllib.request.Request(url)
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(request, timeout=2) as response:
+                      if response.status == 200:
+                          return
+              except (OSError, urllib.error.URLError):
+                  if attempt == 29:
+                      raise
+              import time
+
+              time.sleep(1)
 
 
       async def main() -> None:
-          await wait_postgres(os.environ["DATABASE_URI"])
-          await wait_mongo(os.environ["SECONDARY_DATABASE_URI"])
+          await wait_postgres(os.environ["POSTGRES_URI"])
+          wait_clickhouse(os.environ["CLICKHOUSE_HEALTH_URL"])
 
 
       asyncio.run(main())
       PY
-    - pytest tests/ -v --tb=short --junitxml=pytest-junit.xml --cov=. --cov-report=term --cov-report=xml
+
+pipeline:validate:
+  stage: lint
+  image: python:3.11
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_TAG
+  script:
     - |
-      if [ "$PYTHON_VERSION" = "3.11" ] && [ -n "${CODECOV_TOKEN:-}" ]; then
-        curl -Os https://uploader.codecov.io/latest/linux/codecov
-        chmod +x codecov
-        ./codecov -t "$CODECOV_TOKEN" -f coverage.xml || true
+      python - <<'PY'
+      from pathlib import Path
+
+      required_jobs = {
+          "lint",
+          "typecheck:mypy",
+          "test",
+          "integration",
+          "live-e2e",
+          "security:pip-audit",
+          "security:semgrep",
+          "security:gitleaks",
+          "docker:build",
+      }
+      content = Path(".gitlab-ci.yml").read_text()
+      missing = [job for job in sorted(required_jobs) if f"\n{job}:\n" not in content]
+      if missing:
+          raise SystemExit(f"Missing expected GitLab parity jobs: {', '.join(missing)}")
+      print("GitLab pipeline parity jobs are present.")
+      PY
+
+lint:
+  extends: .python_job
+  stage: lint
+  image: python:3.11
+  rules: &code_rules
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: &code_changes
+        - src/**/*
+        - tests/**/*
+        - ci/**/*
+        - migrations/**/*
+        - requirements.txt
+        - pyproject.toml
+        - pytest.ini
+        - alembic.ini
+        - Makefile
+        - scripts/**/*
+        - .gitlab-ci.yml
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+      changes: *code_changes
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: *code_changes
+  script:
+    - pip install ruff
+    - ruff format --check .
+    - ruff check .
+
+typecheck:mypy:
+  extends: .python_job
+  stage: lint
+  image: python:3.11
+  rules: *code_rules
+  script:
+    - mypy --install-types --non-interactive .
+  allow_failure: true
+
+test:
+  extends: .python_job
+  stage: test
+  image: python:${PYTHON_VERSION}
+  rules: *code_rules
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.11", "3.12", "3.13", "3.14"]
+  services:
+    - name: postgres:17.4
+      alias: postgres
+    - name: clickhouse/clickhouse-server:25.1
+      alias: clickhouse
+  variables:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: test_db
+    CLICKHOUSE_DB: default
+    CLICKHOUSE_USER: ch
+    CLICKHOUSE_PASSWORD: ch
+    DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    CLICKHOUSE_HEALTH_URL: http://ch:ch@clickhouse:8123/?query=SELECT%201
+    POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    SECONDARY_DATABASE_URI: mongodb://localhost:27017
+    COVERAGE_THRESHOLD: "70"
+  script:
+    - apt-get update -y
+    - apt-get install -y --no-install-recommends curl git build-essential
+    - pip install ruff
+    - *wait_test_services
+    - chmod +x ci/run_tests.sh
+    - mkdir -p test-results/logs
+    - |
+      set -o pipefail
+      if [ "$PYTHON_VERSION" = "3.11" ]; then
+        ./ci/run_tests.sh ci 2>&1 | tee "test-results/logs/ci-${PYTHON_VERSION}.log"
       else
-        echo "Skipping Codecov upload (PYTHON_VERSION=$PYTHON_VERSION)"
+        ./ci/run_tests.sh unit 2>&1 | tee "test-results/logs/unit-${PYTHON_VERSION}.log"
       fi
   artifacts:
     when: always
-    expire_in: 1 week
+    expire_in: 14 days
     paths:
+      - test-results/junit/*.xml
+      - test-results/logs/*.log
       - coverage.xml
-      - pytest-junit.xml
     reports:
-      junit: pytest-junit.xml
-  coverage: '/^TOTAL.*\s(\d+\%)$/'
+      junit: test-results/junit/*.xml
+  coverage: '/^TOTAL.*\s(\d+%)$/'
 
-security:bandit:
-  stage: security
-  image: python:3.11
+integration:
+  extends: .python_job
+  stage: integration
+  image: python:3.14
   rules:
-    - if: $CI_PIPELINE_SOURCE == "push"
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    GITHUB_TOKEN: $GH_TOKEN
+    GITLAB_TOKEN: $GL_TOKEN
+    GITLAB_URL: $GITLAB_URL
+    SKIP_INTEGRATION_TESTS: $SKIP_INTEGRATION_TESTS
+  script:
+    - chmod +x ci/run_tests.sh
+    - mkdir -p test-results/logs
+    - set -o pipefail
+    - ./ci/run_tests.sh integration 2>&1 | tee test-results/logs/integration.log
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - test-results/junit/integration.xml
+      - test-results/logs/integration.log
+    reports:
+      junit: test-results/junit/integration.xml
+
+live-e2e:
+  extends: .python_job
+  stage: e2e
+  image: python:3.14
+  rules: *code_rules
+  services:
+    - name: postgres:17.4
+      alias: postgres
+    - name: clickhouse/clickhouse-server:25.1
+      alias: clickhouse
+  variables:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: test_db
+    CLICKHOUSE_DB: default
+    CLICKHOUSE_USER: ch
+    CLICKHOUSE_PASSWORD: ch
+    DISABLE_DOTENV: "1"
+    DATABASE_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+    CLICKHOUSE_HEALTH_URL: http://ch:ch@clickhouse:8123/?query=SELECT%201
+    POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/test_db
+    LIVE_E2E_FIXTURE_SEED: "20260219"
+    LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
+  script:
+    - apt-get update -y
+    - apt-get install -y --no-install-recommends curl git build-essential
+    - *wait_test_services
+    - chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh
+    - ./ci/run_tests.sh live-e2e
+  artifacts:
+    when: on_failure
+    expire_in: 14 days
+    paths:
+      - live-e2e-api.log
+
+security:pip-audit:
+  stage: security
+  image: python:3.12
+  rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *code_changes
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+      changes: *code_changes
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: *code_changes
   before_script:
     - python -V
     - python -m pip install --upgrade pip
-    - pip install bandit
+    - pip install "pip-audit>=2.7.0"
   script:
-    - bandit -r . -x .venv,tests,benchmark_repo --exit-zero -f json -o bandit.json
+    - |
+      IGNORE_ARGS=""
+      if [ -f .pip-audit-ignore ]; then
+        while IFS= read -r line; do
+          CVE=$(printf '%s\n' "$line" | awk '{$1=$1; print $1}')
+          case "$CVE" in
+            ''|'#'*) continue ;;
+          esac
+          IGNORE_ARGS="$IGNORE_ARGS --ignore-vuln $CVE"
+        done < .pip-audit-ignore
+      fi
+      # shellcheck disable=SC2086
+      pip-audit \
+        --requirement requirements.txt \
+        --vulnerability-service pypi \
+        --format markdown \
+        --output pip-audit-report.md \
+        $IGNORE_ARGS
   artifacts:
     when: always
-    expire_in: 1 week
+    expire_in: 30 days
     paths:
-      - bandit.json
+      - pip-audit-report.md
+
+security:semgrep:
+  stage: security
+  image: semgrep/semgrep:latest
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *code_changes
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+      changes: *code_changes
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: *code_changes
+  script:
+    - semgrep scan --config auto --sarif --output semgrep.sarif
+  allow_failure: true
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - semgrep.sarif
+
+security:gitleaks:
+  stage: security
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *code_changes
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+      changes: *code_changes
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: *code_changes
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif
+  allow_failure: true
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - gitleaks.sarif
+
+docker:build:
+  stage: build
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: &docker_changes
+        - src/**/*
+        - requirements.txt
+        - pyproject.toml
+        - docker/**/*
+        - compose.yml
+        - .dockerignore
+        - deploy/**/*
+        - Makefile
+        - .gitlab-ci.yml
+    - if: $CI_PIPELINE_SOURCE == "merge_train"
+      changes: *docker_changes
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: *docker_changes
+  parallel:
+    matrix:
+      - DOCKER_TARGET: ["runner", "api"]
+        DOCKER_PLATFORM: ["linux/amd64", "linux/arm64"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    IMAGE_REGISTRY: $CI_REGISTRY_IMAGE
+    SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0.dev0+$CI_COMMIT_SHORT_SHA"
+  before_script:
+    - docker version
+    - docker buildx version
+    - docker buildx create --use --name dev-health-builder || docker buildx use dev-health-builder
+  script:
+    - |
+      PLATFORM_TAG=$(printf '%s' "$DOCKER_PLATFORM" | tr '/:' '--')
+      IMAGE_NAME="${IMAGE_REGISTRY}/dev-hops-${DOCKER_TARGET}:${CI_COMMIT_SHORT_SHA}-${PLATFORM_TAG}"
+      PUSH_FLAG="--load"
+      if [ "${PUSH_IMAGES:-false}" = "true" ] && [ -n "${CI_REGISTRY_USER:-}" ]; then
+        docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+        PUSH_FLAG="--push"
+      fi
+      docker buildx build \
+        --platform "$DOCKER_PLATFORM" \
+        --file docker/Dockerfile \
+        --target "$DOCKER_TARGET" \
+        --build-arg "SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}" \
+        --tag "$IMAGE_NAME" \
+        $PUSH_FLAG \
+        .
+      if [ "$PUSH_FLAG" = "--load" ]; then
+        echo "Built $IMAGE_NAME locally. Set PUSH_IMAGES=true on a registry-backed pipeline to publish."
+      fi

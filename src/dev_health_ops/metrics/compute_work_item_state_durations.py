@@ -69,7 +69,9 @@ def _segment_statuses(
     segments: list[tuple[WorkItemStatusCategory, datetime, datetime]] = []
 
     first = ordered[0]
-    current_status: WorkItemStatusCategory = first.from_status or item.status  # type: ignore[assignment]
+    current_status: WorkItemStatusCategory = (
+        first.from_status if first.from_status else item.status
+    )
     current_start = created_at
 
     for tr in ordered:
@@ -115,8 +117,12 @@ def compute_work_item_state_durations_daily(
     for tr in transitions:
         transitions_by_id[tr.work_item_id].append(tr)
 
-    totals: dict[tuple[str, str, str, str], float] = defaultdict(float)
-    items_seen: dict[tuple[str, str, str, str], set] = defaultdict(set)
+    totals: dict[tuple[str, str, str, WorkItemStatusCategory], float] = defaultdict(
+        float
+    )
+    items_seen: dict[tuple[str, str, str, WorkItemStatusCategory], set[str]] = (
+        defaultdict(set)
+    )
     team_name_by_key: dict[tuple[str, str, str], str] = {}
 
     for item in work_items:
@@ -142,7 +148,7 @@ def compute_work_item_state_durations_daily(
             if overlap_end <= overlap_start:
                 continue
             hours = (overlap_end - overlap_start).total_seconds() / 3600.0
-            key = (item.provider, work_scope_id, team_id, str(status))
+            key = (item.provider, work_scope_id, team_id, status)
             totals[key] += float(hours)
             items_seen[key].add(item.work_item_id)
 

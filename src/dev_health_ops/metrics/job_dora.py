@@ -100,6 +100,7 @@ def run_dora_metrics_job(
         raise ValueError("GitLab token required (set GITLAB_TOKEN or pass --auth).")
 
     gitlab_url = gitlab_url or os.getenv("GITLAB_URL", "https://gitlab.com")
+    resolved_org_id = org_id or ""
 
     days = _date_range(day, backfill_days)
     start_date = min(days).isoformat()
@@ -113,7 +114,7 @@ def run_dora_metrics_job(
 
     sinks: list[Any] = [primary_sink]
     for s in sinks:
-        s.org_id = org_id  # type: ignore[attr-defined]
+        setattr(s, "org_id", resolved_org_id)
 
     connector = GitLabConnector(url=gitlab_url, private_token=token)
 
@@ -129,7 +130,7 @@ def run_dora_metrics_job(
             primary_sink=primary_sink,
             repo_id=repo_id,
             repo_name=repo_name,
-            org_id=org_id,
+            org_id=resolved_org_id,
             provider="gitlab",
         )
 

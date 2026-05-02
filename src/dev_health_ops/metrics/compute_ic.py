@@ -3,8 +3,9 @@ from __future__ import annotations
 import math
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import TypedDict
 
 from dev_health_ops.metrics.schemas import (
     ICLandscapeRollingRecord,
@@ -12,6 +13,42 @@ from dev_health_ops.metrics.schemas import (
     WorkItemUserMetricsDailyRecord,
 )
 from dev_health_ops.utils.datetime import utc_today
+
+
+class RollingStats(TypedDict):
+    churn_loc_30d: float
+    delivery_units_30d: float
+    cycle_p50_30d_hours: float
+    wip_max_30d: float
+
+
+class MapVectors(TypedDict):
+    x: list[float]
+    y: list[float]
+
+
+class EnrichedRollingStat(TypedDict):
+    identity_id: str
+    team_id: str
+    stats: RollingStats
+    maps: dict[str, tuple[float, float]]
+
+
+def _string_value(value: object, default: str = "") -> str:
+    return str(value) if isinstance(value, str) else default
+
+
+def _float_value(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 def _percentile_rank(values: Sequence[float], value: float) -> float:
@@ -55,34 +92,36 @@ def compute_ic_metrics_daily(
     # Currently we rely on identity_mapping.yaml to normalize identities separately
     # for Git (via compute.py) and WorkItems (via compute_work_items.py).
     wi_map: dict[str, WorkItemUserMetricsDailyRecord] = {}
-    for r in wi_metrics:
+    for wi_record in wi_metrics:
         # wi metrics might be per-provider, we aggregate per user
-        identity = r.user_identity
+        identity = wi_record.user_identity
         existing = wi_map.get(identity)
         if existing:
             # Aggregate if multiple providers for same user
             # We need to create a new record summing up
             wi_map[identity] = WorkItemUserMetricsDailyRecord(
-                day=r.day,
+                day=wi_record.day,
                 provider="mixed",
                 work_scope_id="mixed",
                 user_identity=identity,
-                team_id=r.team_id,
-                team_name=r.team_name,
-                items_started=existing.items_started + r.items_started,
-                items_completed=existing.items_completed + r.items_completed,
+                team_id=wi_record.team_id,
+                team_name=wi_record.team_name,
+                items_started=existing.items_started + wi_record.items_started,
+                items_completed=existing.items_completed + wi_record.items_completed,
                 wip_count_end_of_day=existing.wip_count_end_of_day
-                + r.wip_count_end_of_day,
+                + wi_record.wip_count_end_of_day,
                 cycle_time_p50_hours=max(
-                    existing.cycle_time_p50_hours or 0, r.cycle_time_p50_hours or 0
+                    existing.cycle_time_p50_hours or 0,
+                    wi_record.cycle_time_p50_hours or 0,
                 ),  # Crude aggregation
                 cycle_time_p90_hours=max(
-                    existing.cycle_time_p90_hours or 0, r.cycle_time_p90_hours or 0
+                    existing.cycle_time_p90_hours or 0,
+                    wi_record.cycle_time_p90_hours or 0,
                 ),
-                computed_at=r.computed_at,
+                computed_at=wi_record.computed_at,
             )
         else:
-            wi_map[identity] = r
+            wi_map[identity] = wi_record
 
     all_identities = set(git_map.keys()) | set(wi_map.keys())
 
@@ -129,8 +168,6 @@ def compute_ic_metrics_daily(
         # We assume the schema change allows passing these to __init__ or we use replace()
         # Since dataclasses are frozen, we use __init__ with all fields.
         # But standard dataclasses don't support .replace() easily unless we use dataclasses.replace
-        from dataclasses import replace
-
         new_record = replace(
             base,
             identity_id=identity,
@@ -151,7 +188,7 @@ def compute_ic_metrics_daily(
 
 def compute_ic_landscape_rolling(
     as_of_day: date,
-    rolling_stats: list[dict[str, Any]],
+    rolling_stats: list[dict[str, object]],
     team_map: dict[str, str],
 ) -> list[ICLandscapeRollingRecord]:
     """
@@ -173,19 +210,21 @@ def compute_ic_landscape_rolling(
     records: list[ICLandscapeRollingRecord] = []
 
     # Enrich stats with team_id from map if missing
-    enriched_stats = []
+    enriched_stats: list[EnrichedRollingStat] = []
     for row in rolling_stats:
-        identity = row.get("identity_id") or ""
-        team_id = row.get("team_id")
+        identity = _string_value(row.get("identity_id"), "")
+        team_id = _string_value(row.get("team_id"), "")
         if not team_id:
             if identity and identity != "unknown":
                 team_id = team_map.get(identity, "unassigned")
+            else:
+                team_id = ""
 
         # Ensure numeric types
-        churn = float(row.get("churn_loc_30d") or 0)
-        delivery = float(row.get("delivery_units_30d") or 0)
-        cycle = float(row.get("cycle_p50_30d_hours") or 0)
-        wip = float(row.get("wip_max_30d") or 0)
+        churn = _float_value(row.get("churn_loc_30d"))
+        delivery = _float_value(row.get("delivery_units_30d"))
+        cycle = _float_value(row.get("cycle_p50_30d_hours"))
+        wip = _float_value(row.get("wip_max_30d"))
 
         # Map 1: Churn vs Throughput
         x1 = math.log1p(churn)
@@ -218,14 +257,14 @@ def compute_ic_landscape_rolling(
         )
 
     # 2. Group by team for normalization
-    by_team: dict[str, list[Any]] = {}
+    by_team: dict[str, list[EnrichedRollingStat]] = {}
     for item in enriched_stats:
         by_team.setdefault(item["team_id"], []).append(item)
 
     # 3. Compute norms and build records
     for team_id, items in by_team.items():
         # Collect vectors for each map
-        vectors = {
+        vectors: dict[str, MapVectors] = {
             "churn_throughput": {"x": [], "y": []},
             "cycle_throughput": {"x": [], "y": []},
             "wip_throughput": {"x": [], "y": []},

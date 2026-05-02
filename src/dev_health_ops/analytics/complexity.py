@@ -1,13 +1,14 @@
 import fnmatch
+import importlib
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
 from radon.complexity import cc_visit
 
 logger = logging.getLogger(__name__)
+yaml = importlib.import_module("yaml")
 
 
 @dataclass

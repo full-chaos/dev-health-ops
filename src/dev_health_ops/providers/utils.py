@@ -75,11 +75,11 @@ def read_env_spec(spec: EnvSpec) -> dict[str, object]:
     """
     result: dict[str, object] = {}
     for key, env_name in spec.required.items():
-        value = os.getenv(env_name) or ""
-        if not value:
+        required_value = os.getenv(env_name) or ""
+        if not required_value:
             raise ValueError(spec.missing_error)
-        result[key] = value
+        result[key] = required_value
     for key, (env_name, default) in spec.optional.items():
-        value = os.getenv(env_name)
-        result[key] = value if value else default
+        optional_value = os.getenv(env_name)
+        result[key] = optional_value if optional_value else default
     return result

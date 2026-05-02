@@ -112,7 +112,7 @@ def run_work_items_sync_job(
     primary_sink = ClickHouseMetricsSink(db_url)
     sinks: list[Any] = [primary_sink]
     for s in sinks:
-        s.org_id = org_id  # type: ignore[attr-defined]
+        setattr(s, "org_id", org_id)
 
     try:
         for s in sinks:
@@ -475,8 +475,13 @@ def run_work_items_sync_job(
                     completed = _to_utc(item.completed_at)
                     if not (start_dt <= completed < end_dt):
                         continue
-                    team_id = _normalize_investment_team_id(_get_team(item))
-                    key = (r_id, team_id, cls.investment_area, cls.project_stream or "")
+                    team_id_value = _normalize_investment_team_id(_get_team(item)) or ""
+                    key = (
+                        r_id,
+                        team_id_value,
+                        cls.investment_area,
+                        cls.project_stream or "",
+                    )
                     if key not in inv_metrics_map:
                         inv_metrics_map[key] = {
                             "units": 0,

@@ -7,9 +7,10 @@ from dev_health_ops.models.atlassian_ops import (
     AtlassianOpsIncidentModel,
     AtlassianOpsScheduleModel,
 )
+from dev_health_ops.storage.mixins.base import SQLAlchemyStoreMixinProtocol
 
 
-class AtlassianOpsMixin:
+class AtlassianOpsMixin(SQLAlchemyStoreMixinProtocol):
     async def insert_atlassian_ops_incidents(self, incidents: list[Any]) -> None:
         if not incidents:
             return

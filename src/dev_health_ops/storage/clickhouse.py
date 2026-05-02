@@ -57,16 +57,18 @@ class ClickHouseStore:
         if not conn_string:
             raise ValueError("ClickHouse connection string is required")
         self.conn_string = conn_string
-        self.client = None
+        self.client: Any | None = None
+        self.org_id: str | None = None
         self._lock = asyncio.Lock()
         self._settings = settings or {}
 
     async def __aenter__(self) -> ClickHouseStore:
         import clickhouse_connect
 
-        self.client = await asyncio.to_thread(
+        client = await asyncio.to_thread(
             clickhouse_connect.get_client, dsn=self.conn_string
         )
+        self.client = client
         await self._ensure_tables()
         return self
 
@@ -97,6 +99,16 @@ class ClickHouseStore:
         if value is None:
             return None
         return json.dumps(value, default=str)
+
+    @staticmethod
+    def _item_getter(item: Any):
+        if isinstance(item, dict):
+            return item.get
+
+        def _get(key: str, default: Any = None) -> Any:
+            return getattr(item, key, default)
+
+        return _get
 
     async def _ensure_tables(self) -> None:
         assert self.client is not None
@@ -1361,7 +1373,7 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_teams(self, teams: list[Team]) -> None:
+    async def insert_teams(self, teams: list[Any]) -> None:
         if not teams:
             return
         # Note: Imports inside method to avoid circular deps if models imports storage
@@ -1630,12 +1642,7 @@ class ClickHouseStore:
         rows: list[dict[str, Any]] = []
 
         for item in work_items:
-            is_dict = isinstance(item, dict)
-            get = (
-                item.get
-                if is_dict
-                else lambda k, default=None: getattr(item, k, default)
-            )
+            get = self._item_getter(item)
 
             repo_id_val = get("repo_id")
             if repo_id_val:
@@ -1663,7 +1670,7 @@ class ClickHouseStore:
                     "completed_at": self._normalize_datetime(get("completed_at")),
                     "closed_at": self._normalize_datetime(get("closed_at")),
                     "labels": get("labels") or [],
-                    "story_points": float(get("story_points"))  # type: ignore[arg-type]
+                    "story_points": float(get("story_points"))
                     if get("story_points") is not None
                     else None,
                     "sprint_id": str(get("sprint_id") or ""),
@@ -1723,12 +1730,7 @@ class ClickHouseStore:
         rows: list[dict[str, Any]] = []
 
         for item in transitions:
-            is_dict = isinstance(item, dict)
-            get = (
-                item.get
-                if is_dict
-                else lambda k, default=None: getattr(item, k, default)
-            )
+            get = self._item_getter(item)
 
             repo_id_val = get("repo_id")
             if repo_id_val:
@@ -1778,12 +1780,7 @@ class ClickHouseStore:
         rows: list[dict[str, Any]] = []
 
         for item in dependencies:
-            is_dict = isinstance(item, dict)
-            get = (
-                item.get
-                if is_dict
-                else lambda k, default=None: getattr(item, k, default)
-            )
+            get = self._item_getter(item)
 
             rows.append(
                 {

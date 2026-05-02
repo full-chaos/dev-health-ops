@@ -66,6 +66,7 @@ class SQLAlchemyStore(
             self.engine, expire_on_commit=False, class_=AsyncSession
         )
         self.session: AsyncSession | None = None
+        self.org_id: str | None = None
         self._work_item_metadata = MetaData()
         self._work_items_table = Table(
             "work_items",
@@ -149,7 +150,7 @@ class SQLAlchemyStore(
             Column("org_id", String, nullable=False, server_default=""),
             Column("last_synced", DateTime(timezone=True)),
         )
-        self._ci_pipeline_runs_table = Base.metadata.tables["ci_pipeline_runs"]
+        self._ci_pipeline_runs_table: Table = Base.metadata.tables["ci_pipeline_runs"]
         for column in (
             Column("pipeline_name", String),
             Column("provider", String, nullable=False, server_default=""),

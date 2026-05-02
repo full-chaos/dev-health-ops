@@ -20,7 +20,7 @@ def build_snapshot_id(run_id: str, report_format: str | None) -> str:
 
 
 def _coverage_pct(covered: int | None, total: int | None) -> float | None:
-    if covered is None or total in (None, 0):
+    if covered is None or total is None or total == 0:
         return None
     return (covered / total) * 100
 

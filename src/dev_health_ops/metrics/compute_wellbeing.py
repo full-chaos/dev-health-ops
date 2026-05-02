@@ -3,12 +3,20 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
+from typing import TypedDict
 from zoneinfo import ZoneInfo
 
 from dev_health_ops.metrics.schemas import CommitStatRow, TeamMetricsDailyRecord
 from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
 from dev_health_ops.providers.teams import RepoPatternTeamResolver, TeamResolver
 from dev_health_ops.utils.datetime import to_utc
+
+
+class TeamBucket(TypedDict):
+    team_name: str
+    commits: int
+    after_hours: int
+    weekend: int
 
 
 def _utc_day_window(day: date) -> tuple[datetime, datetime]:
@@ -67,7 +75,7 @@ def compute_team_wellbeing_metrics_daily(
         )
 
     # Aggregate by team.
-    by_team: dict[str, dict[str, object]] = {}
+    by_team: dict[str, TeamBucket] = {}
     for _key, (identity, committed_at) in commits.items():
         if not (start <= committed_at < end):
             continue
@@ -83,13 +91,14 @@ def compute_team_wellbeing_metrics_daily(
             team_name = unknown_team_name
         bucket = by_team.get(team_id)
         if bucket is None:
-            bucket = {
-                "team_name": team_name,
+            new_bucket: TeamBucket = {
+                "team_name": team_name or team_id,
                 "commits": 0,
                 "after_hours": 0,
                 "weekend": 0,
             }
-            by_team[team_id] = bucket
+            by_team[team_id] = new_bucket
+            bucket = new_bucket
 
         bucket["commits"] = int(bucket["commits"]) + 1
 
@@ -115,7 +124,7 @@ def compute_team_wellbeing_metrics_daily(
             TeamMetricsDailyRecord(
                 day=day,
                 team_id=team_id,
-                team_name=str(bucket.get("team_name") or team_id),
+                team_name=bucket["team_name"] or team_id,
                 commits_count=commits_count,
                 after_hours_commits_count=after_hours_count,
                 weekend_commits_count=weekend_count,

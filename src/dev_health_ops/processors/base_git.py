@@ -23,10 +23,18 @@ from dev_health_ops.processors.fetch_utils import AsyncBatchCollector
 from dev_health_ops.utils import CONNECTORS_AVAILABLE
 
 if CONNECTORS_AVAILABLE:
-    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+    from dev_health_ops.connectors.utils import (
+        RateLimitConfig as _RateLimitConfig,
+    )
+    from dev_health_ops.connectors.utils import (
+        RateLimitGate as _RateLimitGate,
+    )
 else:
-    RateLimitConfig = None  # type: ignore
-    RateLimitGate = None  # type: ignore
+    _RateLimitConfig = None
+    _RateLimitGate = None
+
+RateLimitConfig = _RateLimitConfig
+RateLimitGate = _RateLimitGate
 
 logger = logging.getLogger(__name__)
 

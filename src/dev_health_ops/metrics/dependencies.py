@@ -113,7 +113,7 @@ class GitHubClientProtocol(Protocol):
         project_number: int,
         first: int = 50,
         max_items: int | None = None,
-    ) -> Iterable[dict[str, Any]]: ...
+    ) -> Iterable[Any]: ...
 
 
 class GitHubClientFactory(Protocol):

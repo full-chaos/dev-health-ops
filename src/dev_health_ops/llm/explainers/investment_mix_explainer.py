@@ -134,9 +134,28 @@ def _parse_action_item(raw: Any) -> ActionItem | None:
     action = raw.get("action")
     why = raw.get("why")
     where = raw.get("where")
-    if not all(isinstance(x, str) and x.strip() for x in (action, why, where)):
+    if not isinstance(action, str) or not action.strip():
         return None
-    return {"action": action.strip(), "why": why.strip(), "where": where.strip()}
+    if not isinstance(why, str) or not why.strip():
+        return None
+    if not isinstance(where, str) or not where.strip():
+        return None
+    action_text = action.strip()
+    why_text = why.strip()
+    where_text = where.strip()
+    return {"action": action_text, "why": why_text, "where": where_text}
+
+
+def _parse_band_mix(raw: Any, fallback: dict[str, int]) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return fallback
+    parsed: dict[str, int] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            parsed[key] = value
+    return parsed or fallback
 
 
 def _parse_confidence(
@@ -154,8 +173,11 @@ def _parse_confidence(
             "band_mix": fallback_band_mix,
             "drivers": fallback_drivers,
         }
-    level = raw.get("level")
-    if level not in ("high", "moderate", "low", "unknown"):
+    raw_level = raw.get("level")
+    level: Literal["high", "moderate", "low", "unknown"]
+    if raw_level in ("high", "moderate", "low", "unknown"):
+        level = raw_level
+    else:
         level = "unknown"
     return {
         "level": level,
@@ -165,9 +187,7 @@ def _parse_confidence(
         "quality_stddev": float(raw["quality_stddev"])
         if isinstance(raw.get("quality_stddev"), (int, float))
         else fallback_stddev,
-        "band_mix": raw.get("band_mix")
-        if isinstance(raw.get("band_mix"), dict)
-        else fallback_band_mix,
+        "band_mix": _parse_band_mix(raw.get("band_mix"), fallback_band_mix),
         "drivers": _as_string_list(raw.get("drivers")) or fallback_drivers,
     }
 

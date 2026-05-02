@@ -25,6 +25,7 @@ from dev_health_ops.work_graph.investment.categorize import (
 )
 from dev_health_ops.work_graph.investment.constants import MIN_EVIDENCE_CHARS
 from dev_health_ops.work_graph.investment.evidence import (
+    TimeBounds,
     build_text_bundle,
     compute_evidence_quality,
     compute_time_bounds,
@@ -48,6 +49,31 @@ from dev_health_ops.work_graph.investment.utils import (
 logger = logging.getLogger(__name__)
 
 NodeKey = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class PreprocessedComponent:
+    unit_id: str
+    unit_nodes: list[NodeKey]
+    issue_node_ids: list[str]
+    pr_node_ids: list[str]
+    commit_node_ids: list[str]
+    bounds: TimeBounds
+    bundle: Any
+    component_edges: list[dict[str, object]]
+
+
+def _float_value(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 @dataclass(frozen=True)
@@ -164,8 +190,8 @@ def _pr_churn_map(prs: Iterable[dict[str, object]]) -> dict[str, float]:
         if not repo_id or number is None:
             continue
         pr_id = f"{repo_id}#pr{number}"
-        additions = float(pr.get("additions") or 0.0)
-        deletions = float(pr.get("deletions") or 0.0)
+        additions = _float_value(pr.get("additions"))
+        deletions = _float_value(pr.get("deletions"))
         churn[pr_id] = additions + deletions
     return churn
 
@@ -377,9 +403,9 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
         )
 
         # Pre-process all components: build bundles and separate into LLM vs fallback
-        pending_llm: list[tuple[int, Any]] = []  # (index, preprocessed_data)
+        pending_llm: list[tuple[int, Any]] = []
         fallback_results: list[tuple[int, Any]] = []
-        preprocessed: dict[int, dict[str, Any]] = {}
+        preprocessed: dict[int, PreprocessedComponent] = {}
 
         for idx, (nodes, component_edges) in enumerate(components):
             unit_nodes = list(dict.fromkeys(nodes))
@@ -412,16 +438,16 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                 work_unit_id=unit_id,
             )
 
-            data = {
-                "unit_id": unit_id,
-                "unit_nodes": unit_nodes,
-                "issue_node_ids": issue_node_ids,
-                "pr_node_ids": pr_node_ids,
-                "commit_node_ids": commit_node_ids,
-                "bounds": bounds,
-                "bundle": bundle,
-                "component_edges": component_edges,
-            }
+            data = PreprocessedComponent(
+                unit_id=unit_id,
+                unit_nodes=unit_nodes,
+                issue_node_ids=issue_node_ids,
+                pr_node_ids=pr_node_ids,
+                commit_node_ids=commit_node_ids,
+                bounds=bounds,
+                bundle=bundle,
+                component_edges=component_edges,
+            )
             preprocessed[idx] = data
 
             if bundle.text_char_count < MIN_EVIDENCE_CHARS:
@@ -466,6 +492,9 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                 if isinstance(result, Exception):
                     logger.warning("LLM task failed: %s", result)
                     continue
+                if not isinstance(result, tuple) or len(result) != 2:
+                    logger.warning("Unexpected LLM task result: %r", result)
+                    continue
                 idx, outcome = result
                 llm_results[idx] = outcome
             logger.info("Completed %d LLM categorizations", len(llm_results))
@@ -480,14 +509,14 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             if outcome is None:
                 outcome = fallback_outcome("llm_task_failed")
 
-            unit_id = data["unit_id"]
-            unit_nodes = data["unit_nodes"]
-            issue_node_ids = data["issue_node_ids"]
-            pr_node_ids = data["pr_node_ids"]
-            commit_node_ids = data["commit_node_ids"]
-            bounds = data["bounds"]
-            bundle = data["bundle"]
-            component_edges = data["component_edges"]
+            unit_id = data.unit_id
+            unit_nodes = data.unit_nodes
+            issue_node_ids = data.issue_node_ids
+            pr_node_ids = data.pr_node_ids
+            commit_node_ids = data.commit_node_ids
+            bounds = data.bounds
+            bundle = data.bundle
+            component_edges = data.component_edges
 
             theme_distribution = rollup_subcategories_to_themes(outcome.subcategories)
             evidence_quality_value = compute_evidence_quality(

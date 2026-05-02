@@ -15,6 +15,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 )
 from dev_health_ops.metrics.job_daily import run_daily_metrics_job
 from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
+from dev_health_ops.models.teams import Team
 from dev_health_ops.providers.teams import load_team_resolver
 from dev_health_ops.storage import SQLAlchemyStore, resolve_db_type, run_with_store
 from dev_health_ops.utils import BATCH_SIZE, MAX_WORKERS
@@ -62,8 +63,8 @@ def _build_repo_team_assignments(all_teams, repo_count: int, seed: int | None):
     if not owned_repos:
         owned_repos = [repo_indices[0]]
 
-    repo_to_teams = {idx: [] for idx in range(repo_count)}
-    team_to_repos = {team.id: [] for team in all_teams}
+    repo_to_teams: dict[int, list[Team]] = {idx: [] for idx in range(repo_count)}
+    team_to_repos: dict[str, list[int]] = {team.id: [] for team in all_teams}
 
     teams_shuffled = list(all_teams)
     rng.shuffle(teams_shuffled)
@@ -306,11 +307,12 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         # Seed users/orgs/memberships/licenses into PostgreSQL (auth layer).
         # This must happen regardless of which analytics sink is used.
         user_generator = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
-        user_data = user_generator.generate_users()
+        user_data: dict[str, Any] | None = user_generator.generate_users()
 
         if isinstance(store, SQLAlchemyStore) and db_type == "postgres":
             async with store.session_factory() as session:
-                await _seed_auth_data(session, user_data)
+                if user_data is not None:
+                    await _seed_auth_data(session, user_data)
         elif not isinstance(store, SQLAlchemyStore):
             # Analytics sink is not SQLAlchemy (e.g. ClickHouse) — connect
             # to PostgreSQL separately via DATABASE_URI / POSTGRES_URI
@@ -329,7 +331,8 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     _pg_engine, class_=AsyncSession, expire_on_commit=False
                 )
                 async with _pg_sf() as session:
-                    await _seed_auth_data(session, user_data)
+                    if user_data is not None:
+                        await _seed_auth_data(session, user_data)
                 await _pg_engine.dispose()
             else:
                 logging.warning(
@@ -441,18 +444,24 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             # Reopen events (derived from transitions)
             reopen_events = generator.generate_work_item_reopen_events(transitions)
-            if hasattr(store, "insert_work_item_reopen_events"):
+            insert_work_item_reopen_events = getattr(
+                store, "insert_work_item_reopen_events", None
+            )
+            if insert_work_item_reopen_events is not None:
                 await _insert_batches(
-                    store.insert_work_item_reopen_events,
+                    insert_work_item_reopen_events,
                     reopen_events,
                     allow_parallel=allow_parallel_inserts,
                 )
 
             # Interactions
             interactions = generator.generate_work_item_interactions(work_items)
-            if hasattr(store, "insert_work_item_interactions"):
+            insert_work_item_interactions = getattr(
+                store, "insert_work_item_interactions", None
+            )
+            if insert_work_item_interactions is not None:
                 await _insert_batches(
-                    store.insert_work_item_interactions,
+                    insert_work_item_interactions,
                     interactions,
                     allow_parallel=allow_parallel_inserts,
                 )
@@ -567,10 +576,11 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 )
 
             # 6b. TestOps raw data (ci_job_runs, test results, coverage)
-            if hasattr(store, "insert_ci_job_runs"):
+            insert_ci_job_runs = getattr(store, "insert_ci_job_runs", None)
+            if insert_ci_job_runs is not None:
                 job_runs = generator.generate_ci_job_runs(pipeline_runs, org_id=org_id)
                 await _insert_batches(
-                    store.insert_ci_job_runs,
+                    insert_ci_job_runs,
                     job_runs,
                     allow_parallel=allow_parallel_inserts,
                 )
@@ -1010,7 +1020,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     impact_seen: set[tuple[str, str, str]] = set()
                     for impact in release_impact:
                         release_ref = str(getattr(impact, "release_ref", "") or "")
-                        release_id = release_ids.get(release_ref)
+                        release_id = release_ids.get(release_ref) or ""
                         if not release_id:
                             continue
                         for (

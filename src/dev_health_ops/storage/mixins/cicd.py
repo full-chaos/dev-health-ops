@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from dev_health_ops.models.git import CiPipelineRun, Deployment, Incident, SecurityAlert
+from dev_health_ops.storage.mixins.base import SQLAlchemyStoreMixinProtocol
 
 
-class CicdMixin:
+class CicdMixin(SQLAlchemyStoreMixinProtocol):
     async def insert_ci_pipeline_runs(self, runs: list[CiPipelineRun]) -> None:
         if not runs:
             return

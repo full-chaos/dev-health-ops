@@ -44,8 +44,10 @@ def configure_logging(level: str | None = None) -> None:
 
     Safe to call multiple times (idempotent).
     """
-    log_level = _resolve_log_level((level or os.getenv("LOG_LEVEL", "INFO")).upper())
-    use_json = os.getenv("LOG_JSON", "true").lower() not in ("false", "0", "no")
+    raw_level = level or os.getenv("LOG_LEVEL") or "INFO"
+    raw_log_json = os.getenv("LOG_JSON") or "true"
+    log_level = _resolve_log_level(raw_level.upper())
+    use_json = raw_log_json.lower() not in ("false", "0", "no")
 
     if use_json:
         try:
@@ -80,8 +82,10 @@ def uvicorn_log_config(level: str | None = None) -> dict[str, Any]:
 
     Pass to ``uvicorn.Config(log_config=uvicorn_log_config())``.
     """
-    log_level = (level or os.getenv("LOG_LEVEL", "info")).lower()
-    use_json = os.getenv("LOG_JSON", "true").lower() not in ("false", "0", "no")
+    raw_level = level or os.getenv("LOG_LEVEL") or "info"
+    raw_log_json = os.getenv("LOG_JSON") or "true"
+    log_level = raw_level.lower()
+    use_json = raw_log_json.lower() not in ("false", "0", "no")
 
     if use_json:
         formatter_class = "pythonjsonlogger.json.JsonFormatter"

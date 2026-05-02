@@ -60,7 +60,7 @@ def fetch_work_items(
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return []
-    params = {"work_item_ids": ids}
+    params: dict[str, object] = {"work_item_ids": ids}
     if org_id:
         params["org_id"] = org_id
     # Build WHERE with optional org_id filter
@@ -96,7 +96,7 @@ def fetch_parent_titles(
     ids = list(dict.fromkeys(work_item_ids))
     if not ids:
         return {}
-    params = {"work_item_ids": ids}
+    params: dict[str, object] = {"work_item_ids": ids}
     if org_id:
         params["org_id"] = org_id
     where_sql = "WHERE work_item_id IN %(work_item_ids)s"

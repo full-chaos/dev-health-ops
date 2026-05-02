@@ -1022,8 +1022,9 @@ class TestSignPayload:
         result = validator.validate(license_str)
 
         assert result.valid is True
-        assert result.payload.sub == "custom-org"
-        assert result.payload.tier == LicenseTier.ENTERPRISE
+        payload = assert_license_payload(result)
+        assert payload.sub == "custom-org"
+        assert payload.tier == LicenseTier.ENTERPRISE
 
 
 class TestTestKeypairAndGenerateTestLicense:
@@ -1071,8 +1072,9 @@ class TestTestKeypairAndGenerateTestLicense:
         result = validator.validate(license_str)
 
         assert result.valid is True
-        assert result.payload.sub == "custom-org"
-        assert result.payload.org_name == "Custom Org"
+        payload = assert_license_payload(result)
+        assert payload.sub == "custom-org"
+        assert payload.org_name == "Custom Org"
 
     def test_generate_test_license_custom_tier(self):
         from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license

@@ -8,6 +8,7 @@ import pytest
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
+from dev_health_ops.metrics.schemas import DeploymentRow, IncidentRow, PipelineRunRow
 
 
 def test_compute_cicd_metrics_daily_groups_by_repo_and_filters_day():
@@ -15,7 +16,7 @@ def test_compute_cicd_metrics_daily_groups_by_repo_and_filters_day():
     repo_a = uuid4()
     repo_b = uuid4()
 
-    rows = [
+    rows: list[PipelineRunRow] = [
         {
             "repo_id": repo_a,
             "run_id": "1",
@@ -78,7 +79,7 @@ def test_compute_deploy_metrics_daily_handles_fallbacks_and_negatives():
     repo_a = uuid4()
     repo_b = uuid4()
 
-    deployments = [
+    deployments: list[DeploymentRow] = [
         {
             "repo_id": repo_a,
             "deployment_id": "d1",
@@ -138,7 +139,7 @@ def test_compute_incident_metrics_daily_counts_incidents_and_mttr_distribution()
     repo_a = uuid4()
     repo_b = uuid4()
 
-    incidents = [
+    incidents: list[IncidentRow] = [
         {
             "repo_id": repo_a,
             "incident_id": "i1",

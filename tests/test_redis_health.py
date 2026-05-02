@@ -11,6 +11,7 @@ from dev_health_ops.api.services.cache import (  # noqa: E402
     RedisBackend,
     TTLCache,
 )
+from dev_health_ops.api.models.schemas import HealthResponse  # noqa: E402
 
 
 class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
@@ -57,6 +58,8 @@ class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
 
         # Call health endpoint
         response = await health()
+        self.assertIsInstance(response, HealthResponse)
+        assert isinstance(response, HealthResponse)
 
         # Verify services are in the response
         self.assertEqual(response.services["postgres"], "ok")

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from dev_health_ops.db import get_postgres_session_sync
 from dev_health_ops.models.settings import TeamMapping
+from dev_health_ops.models.teams import Team
 from dev_health_ops.storage.clickhouse import ClickHouseStore
 
 
@@ -43,7 +44,7 @@ def _clickhouse_uri() -> str:
 
 
 def bridge_teams_to_clickhouse(org_id: str | None = None) -> int:
-    teams_payload: list[dict[str, Any]] = []
+    teams_payload: list[Team] = []
 
     with get_postgres_session_sync() as session:
         mappings = (
@@ -62,20 +63,20 @@ def bridge_teams_to_clickhouse(org_id: str | None = None) -> int:
             if not team_id:
                 continue
             teams_payload.append(
-                {
-                    "id": team_id,
-                    "team_uuid": uuid.uuid5(
+                Team(
+                    id=team_id,
+                    team_uuid=uuid.uuid5(
                         uuid.NAMESPACE_URL, f"team:{org_id}:{team_id}"
                     ),
-                    "name": str(mapping.name or team_id),
-                    "description": mapping.description,
-                    "project_keys": _parse_json_array(mapping.project_keys),
-                    "repo_patterns": _parse_json_array(mapping.repo_patterns),
-                    "members": [],
-                    "is_active": 1,
-                    "org_id": org_id,
-                    "updated_at": mapping.updated_at,
-                }
+                    name=str(mapping.name or team_id),
+                    description=mapping.description,
+                    project_keys=_parse_json_array(mapping.project_keys),
+                    repo_patterns=_parse_json_array(mapping.repo_patterns),
+                    members=[],
+                    is_active=True,
+                    org_id=org_id,
+                    updated_at=mapping.updated_at,
+                )
             )
 
     async def _run() -> None:

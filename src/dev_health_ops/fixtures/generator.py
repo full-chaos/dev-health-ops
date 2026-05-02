@@ -925,7 +925,9 @@ class SyntheticDataGenerator:
                 started_at = current_date + timedelta(
                     minutes=random.randint(0, 60 * 20)
                 )
-                resolved_at = started_at + timedelta(hours=random.randint(1, 12))
+                resolved_at: datetime | None = started_at + timedelta(
+                    hours=random.randint(1, 12)
+                )
                 status = random.choices(["resolved", "open"], weights=[0.8, 0.2], k=1)[
                     0
                 ]
@@ -1279,7 +1281,7 @@ class SyntheticDataGenerator:
         # We need to import GitBlame inside the method or file level
         from dev_health_ops.models.git import GitBlame
 
-        blame_records = []
+        blame_records: list[GitBlame] = []
         if not commits:
             return blame_records
 
@@ -1430,17 +1432,22 @@ class SyntheticDataGenerator:
             teams_to_use=teams_to_use,
         )
 
-        for item_index, (
-            work_item_id,
-            provider,
-            item_type,
-            assignee,
-            created_at,
-            started_at,
-            completed_at,
-        ) in enumerate(items_to_process):
-            if started_at is None or completed_at is None:
+        for item_index, item_data in enumerate(items_to_process):
+            (
+                work_item_id,
+                provider,
+                item_type,
+                assignee,
+                created_at_value,
+                started_at_value,
+                completed_at_value,
+            ) = item_data
+            if started_at_value is None or completed_at_value is None:
                 continue
+
+            created_at = created_at_value
+            started_at = started_at_value
+            completed_at = completed_at_value
 
             cycle_time = (completed_at - started_at).total_seconds() / 3600
             if cycle_time <= 0:
@@ -1809,7 +1816,7 @@ class SyntheticDataGenerator:
         weights = list(normalized_weights.values())
 
         # Generate Epics per project (Long running)
-        project_epics = {}
+        project_epics: dict[str, list[WorkItem]] = {}
         for proj in projects:
             project_epics[proj] = []
             # Create 1-3 active epics per project

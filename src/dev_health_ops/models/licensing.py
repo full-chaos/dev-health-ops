@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -25,7 +25,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # Back-compat re-exports: callers that imported these from `models.licensing`
 # pre-refactor should keep working. Canonical homes are licensing/{types,registry}.py.
@@ -37,6 +37,9 @@ from dev_health_ops.licensing.types import (
 )
 from dev_health_ops.licensing.types import LicenseTier
 from dev_health_ops.models.git import GUID, Base
+
+if TYPE_CHECKING:
+    from .users import Organization, User
 
 
 class FeatureFlag(Base):
@@ -54,59 +57,61 @@ class FeatureFlag(Base):
 
     __tablename__ = "feature_flags"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    key = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         unique=True,
         index=True,
         comment="Unique feature identifier (e.g., 'capacity_forecast', 'sso_saml')",
     )
-    name = Column(Text, nullable=False, comment="Human-readable feature name")
-    description = Column(Text, nullable=True)
-    category = Column(
+    name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Human-readable feature name"
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default=FeatureCategory.CORE.value,
         index=True,
     )
 
-    min_tier = Column(
+    min_tier: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default=LicenseTier.COMMUNITY.value,
         comment="Minimum tier required to access this feature",
     )
-    is_enabled = Column(
+    is_enabled: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=True,
         comment="Global kill switch for this feature",
     )
-    is_beta = Column(
+    is_beta: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
         comment="Whether this feature is in beta",
     )
-    is_deprecated = Column(
+    is_deprecated: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
         comment="Whether this feature is deprecated",
     )
-    config_schema = Column(
+    config_schema: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         comment="JSON Schema for feature-specific configuration",
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -123,8 +128,8 @@ class FeatureFlag(Base):
         is_enabled: bool = True,
         is_beta: bool = False,
         is_deprecated: bool = False,
-        config_schema: dict | None = None,
-    ):
+        config_schema: dict[str, Any] | None = None,
+    ) -> None:
         self.id = uuid.uuid4()
         self.key = key
         self.name = name
@@ -156,69 +161,69 @@ class OrgFeatureOverride(Base):
 
     __tablename__ = "org_feature_overrides"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    org_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    feature_id = Column(
+    feature_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("feature_flags.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    is_enabled = Column(
+    is_enabled: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=True,
         comment="Override: True=force enable, False=force disable",
     )
-    expires_at = Column(
+    expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="When this override expires (null = never)",
     )
-    config = Column(
+    config: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
         comment="Feature-specific configuration for this org",
     )
-    reason = Column(
+    reason: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Why this override was created (support ticket, promotion, etc.)",
     )
-    created_by = Column(
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    updated_by = Column(
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    organization = relationship("Organization")
-    feature = relationship("FeatureFlag")
-    creator = relationship("User", foreign_keys=[created_by])
-    updater = relationship("User", foreign_keys=[updated_by])
+    organization: Mapped[Organization] = relationship("Organization")
+    feature: Mapped[FeatureFlag] = relationship("FeatureFlag")
+    creator: Mapped[User | None] = relationship("User", foreign_keys=[created_by])
+    updater: Mapped[User | None] = relationship("User", foreign_keys=[updated_by])
 
     __table_args__ = (
         UniqueConstraint("org_id", "feature_id", name="uq_org_feature_override"),
@@ -232,11 +237,11 @@ class OrgFeatureOverride(Base):
         feature_id: uuid.UUID,
         is_enabled: bool = True,
         expires_at: datetime | None = None,
-        config: dict | None = None,
+        config: dict[str, Any] | None = None,
         reason: str | None = None,
         created_by: uuid.UUID | None = None,
         updated_by: uuid.UUID | None = None,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
         self.org_id = org_id
         self.feature_id = feature_id
@@ -265,8 +270,8 @@ class OrgLicense(Base):
 
     __tablename__ = "org_licenses"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    org_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
@@ -274,90 +279,90 @@ class OrgLicense(Base):
         index=True,
     )
 
-    license_key = Column(
+    license_key: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Encrypted license key (JWT)",
     )
-    tier = Column(
+    tier: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default=LicenseTier.COMMUNITY.value,
         comment="Decoded tier from license",
     )
-    licensed_users = Column(
+    licensed_users: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
         comment="Max users allowed (null = unlimited)",
     )
-    licensed_repos = Column(
+    licensed_repos: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
         comment="Max repos allowed (null = unlimited)",
     )
-    issued_at = Column(
+    issued_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="When the license was issued",
     )
-    expires_at = Column(
+    expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="When the license expires (null = never)",
     )
-    is_valid = Column(
+    is_valid: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=True,
         comment="Whether the license passed validation",
     )
-    validation_error = Column(
+    validation_error: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Error message if validation failed",
     )
-    last_validated_at = Column(
+    last_validated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="When the license was last validated",
     )
-    license_type = Column(
+    license_type: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="saas",
         comment="License type: saas, self-hosted, trial, evaluation",
     )
-    customer_id = Column(
+    customer_id: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="External customer ID (Stripe, etc.)",
     )
-    features_override = Column(
+    features_override: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
         comment="Feature overrides encoded in license",
     )
-    limits_override = Column(
+    limits_override: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
         comment="Limit overrides encoded in license",
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    organization = relationship("Organization")
+    organization: Mapped[Organization] = relationship("Organization")
 
     def __init__(
         self,
@@ -370,9 +375,9 @@ class OrgLicense(Base):
         expires_at: datetime | None = None,
         license_type: str = "saas",
         customer_id: str | None = None,
-        features_override: dict | None = None,
-        limits_override: dict | None = None,
-    ):
+        features_override: dict[str, Any] | None = None,
+        limits_override: dict[str, Any] | None = None,
+    ) -> None:
         self.id = uuid.uuid4()
         self.org_id = org_id
         self.tier = tier
@@ -406,35 +411,35 @@ class TierLimit(Base):
 
     __tablename__ = "tier_limits"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    tier = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    tier: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         index=True,
         comment="Tier this limit applies to (community, team, enterprise)",
     )
-    limit_key = Column(
+    limit_key: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment="Limit identifier (e.g. max_repos, backfill_days)",
     )
-    limit_value = Column(
+    limit_value: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Limit value as text (null = unlimited). Cast to int/float at read time.",
     )
-    description = Column(
+    description: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Human-readable explanation of this limit",
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -449,7 +454,7 @@ class TierLimit(Base):
         limit_key: str,
         limit_value: str | None = None,
         description: str | None = None,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
         self.tier = tier
         self.limit_key = limit_key

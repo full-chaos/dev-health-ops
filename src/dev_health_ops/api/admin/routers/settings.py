@@ -18,6 +18,13 @@ from .common import get_session
 router = APIRouter()
 
 
+def _setting_response(setting: object) -> SettingResponse:
+    response = SettingResponse.model_validate(setting)
+    if response.is_encrypted:
+        return response.model_copy(update={"value": "[ENCRYPTED]"})
+    return response
+
+
 @router.get("/settings/categories")
 async def list_setting_categories() -> list[str]:
     return [c.value for c in SettingCategory]
@@ -69,13 +76,7 @@ async def set_setting(
         encrypt=payload.encrypt or False,
         description=payload.description,
     )
-    return SettingResponse(
-        key=setting.key,
-        value=setting.value if not setting.is_encrypted else "[ENCRYPTED]",
-        category=setting.category,
-        is_encrypted=setting.is_encrypted,
-        description=setting.description,
-    )
+    return _setting_response(setting)
 
 
 @router.post("/settings", response_model=SettingResponse)
@@ -92,13 +93,7 @@ async def create_setting(
         encrypt=payload.encrypt,
         description=payload.description,
     )
-    return SettingResponse(
-        key=setting.key,
-        value=setting.value if not setting.is_encrypted else "[ENCRYPTED]",
-        category=setting.category,
-        is_encrypted=setting.is_encrypted,
-        description=setting.description,
-    )
+    return _setting_response(setting)
 
 
 @router.delete("/settings/{category}/{key}")

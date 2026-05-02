@@ -418,15 +418,17 @@ class SubscriptionService:
             if customer_id:
                 assign_attr(org_license, "customer_id", customer_id)
 
-        # Sanitize tier to a known literal allow-list before logging to avoid
-        # any taint-propagation concerns (CodeQL py/clear-text-logging-sensitive-data).
-        safe_tier = (
-            tier_str if tier_str in {"community", "team", "enterprise"} else "unknown"
-        )
+        # Static literal labels keyed by tier string to break the taint chain
+        # entirely (CodeQL py/clear-text-logging-sensitive-data).
+        tier_label = {
+            "community": "community",
+            "team": "team",
+            "enterprise": "enterprise",
+        }.get(tier_str, "unknown")
         logger.info(
             "OrgLicense synced: org_id=%s tier=%s features=%d cancelled=%s",
             org_id,
-            safe_tier,
+            tier_label,
             len(feature_keys),
             is_cancelled,
         )

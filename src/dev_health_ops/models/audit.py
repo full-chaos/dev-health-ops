@@ -16,19 +16,21 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Text,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
+
+if TYPE_CHECKING:
+    from .users import Organization, User
 
 
 class AuditAction(str, Enum):
@@ -150,8 +152,8 @@ class AuditLog(Base):
 
     __tablename__ = "audit_logs"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    org_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
@@ -160,7 +162,7 @@ class AuditLog(Base):
     )
 
     # Who performed the action (null for system-triggered actions)
-    user_id = Column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -169,7 +171,7 @@ class AuditLog(Base):
     )
 
     # What action was performed
-    action = Column(
+    action: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         index=True,
@@ -177,13 +179,13 @@ class AuditLog(Base):
     )
 
     # What resource was affected
-    resource_type = Column(
+    resource_type: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         index=True,
         comment="Type of resource (user, credential, setting, etc.)",
     )
-    resource_id = Column(
+    resource_id: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         index=True,
@@ -191,18 +193,18 @@ class AuditLog(Base):
     )
 
     # Context and details
-    description = Column(
+    description: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Human-readable description of the action",
     )
-    changes = Column(
+    changes: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
         comment="Before/after values for updates, or created values",
     )
-    request_metadata = Column(
+    request_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
@@ -210,20 +212,20 @@ class AuditLog(Base):
     )
 
     # Status tracking
-    status = Column(
+    status: Mapped[str | None] = mapped_column(
         Text,
         nullable=False,
         default="success",
         comment="Action status: success or failure",
     )
-    error_message = Column(
+    error_message: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Error message if status is failure",
     )
 
     # Timestamp (immutable - no updated_at for audit logs)
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -232,8 +234,8 @@ class AuditLog(Base):
     )
 
     # Relationships
-    organization = relationship("Organization")
-    user = relationship("User")
+    organization: Mapped[Organization] = relationship("Organization")
+    user: Mapped[User | None] = relationship("User")
 
     # Indexes for common query patterns
     __table_args__ = (

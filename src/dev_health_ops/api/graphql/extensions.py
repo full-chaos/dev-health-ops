@@ -36,7 +36,7 @@ class OrgIdAuthExtension(SchemaExtension):
         )
     """
 
-    def on_executing_start(self) -> None:  # type: ignore[override]
+    def on_executing_start(self) -> None:
         """Called by Strawberry before field resolution begins.
 
         Resolves org_id from the operation's variable map or inline argument

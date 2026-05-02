@@ -224,11 +224,9 @@ async def call_with_retry(
         except LLMError as exc:
             last_exc = exc
             if is_retryable(exc) and attempt < max_retries:
-                delay = (
-                    exc.retry_after  # type: ignore[attr-defined]
-                    if isinstance(exc, LLMRateLimitError) and exc.retry_after
-                    else retry_delay(attempt)
-                )
+                delay = retry_delay(attempt)
+                if isinstance(exc, LLMRateLimitError) and exc.retry_after:
+                    delay = exc.retry_after
                 logger.warning(
                     "LLM %s error on attempt %d/%d; retrying in %.1fs — %r",
                     provider_name,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -22,29 +23,76 @@ from .common import get_session
 router = APIRouter()
 
 
+class _MutableFeatureFlag(Protocol):
+    is_enabled: bool
+    is_beta: bool
+    is_deprecated: bool
+
+
+class _MutableFeatureOverride(Protocol):
+    is_enabled: bool
+    expires_at: object | None
+    config: dict[str, Any] | None
+    reason: str | None
+    updated_by: uuid.UUID | None
+
+
+def _feature_flag_response(flag: object) -> FeatureFlagResponse:
+    return FeatureFlagResponse.model_validate(
+        {
+            "id": str(getattr(flag, "id")),
+            "key": str(getattr(flag, "key")),
+            "name": str(getattr(flag, "name")),
+            "description": getattr(flag, "description"),
+            "category": str(getattr(flag, "category")),
+            "min_tier": str(getattr(flag, "min_tier")),
+            "is_enabled": getattr(flag, "is_enabled"),
+            "is_beta": getattr(flag, "is_beta"),
+            "is_deprecated": getattr(flag, "is_deprecated"),
+            "created_at": getattr(flag, "created_at"),
+        }
+    )
+
+
+def _feature_override_response(
+    override: object,
+    feature_key: str,
+) -> FeatureOverrideResponse:
+    return FeatureOverrideResponse.model_validate(
+        {
+            "id": str(getattr(override, "id")),
+            "org_id": str(getattr(override, "org_id")),
+            "feature_id": str(getattr(override, "feature_id")),
+            "feature_key": feature_key,
+            "is_enabled": getattr(override, "is_enabled"),
+            "expires_at": getattr(override, "expires_at"),
+            "config": getattr(override, "config"),
+            "reason": getattr(override, "reason"),
+            "created_by": (
+                str(getattr(override, "created_by"))
+                if getattr(override, "created_by") is not None
+                else None
+            ),
+            "updated_by": (
+                str(getattr(override, "updated_by"))
+                if getattr(override, "updated_by") is not None
+                else None
+            ),
+            "created_at": getattr(override, "created_at"),
+        }
+    )
+
+
 @router.get("/feature-flags", response_model=list[FeatureFlagResponse])
 async def list_feature_flags(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> list[FeatureFlagResponse]:
-    stmt = select(FeatureFlag).order_by(FeatureFlag.key.asc())
+    feature_flag_key = getattr(FeatureFlag, "key")
+    stmt = select(FeatureFlag).order_by(feature_flag_key.asc())
     result = await session.execute(stmt)
     flags = result.scalars().all()
-    return [
-        FeatureFlagResponse(
-            id=str(flag.id),
-            key=flag.key,
-            name=flag.name,
-            description=flag.description,
-            category=flag.category,
-            min_tier=flag.min_tier,
-            is_enabled=bool(flag.is_enabled),
-            is_beta=bool(flag.is_beta),
-            is_deprecated=bool(flag.is_deprecated),
-            created_at=flag.created_at,
-        )
-        for flag in flags
-    ]
+    return [_feature_flag_response(flag) for flag in flags]
 
 
 @router.get(
@@ -56,28 +104,20 @@ async def list_feature_overrides(
     current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> list[FeatureOverrideResponse]:
     org_uuid = uuid.UUID(org_id)
+    feature_flag_id = getattr(FeatureFlag, "id")
+    override_feature_id = getattr(OrgFeatureOverride, "feature_id")
+    override_org_id = getattr(OrgFeatureOverride, "org_id")
+    override_created_at = getattr(OrgFeatureOverride, "created_at")
     stmt = (
         select(OrgFeatureOverride, FeatureFlag)
-        .join(FeatureFlag, OrgFeatureOverride.feature_id == FeatureFlag.id)
-        .where(OrgFeatureOverride.org_id == org_uuid)
-        .order_by(OrgFeatureOverride.created_at.desc())
+        .join(FeatureFlag, override_feature_id == feature_flag_id)
+        .where(override_org_id == org_uuid)
+        .order_by(override_created_at.desc())
     )
     result = await session.execute(stmt)
     rows = result.all()
     return [
-        FeatureOverrideResponse(
-            id=str(override.id),
-            org_id=str(override.org_id),
-            feature_id=str(override.feature_id),
-            feature_key=feature.key,
-            is_enabled=bool(override.is_enabled),
-            expires_at=override.expires_at,
-            config=override.config,
-            reason=override.reason,
-            created_by=str(override.created_by) if override.created_by else None,
-            updated_by=str(override.updated_by) if override.updated_by else None,
-            created_at=override.created_at,
-        )
+        _feature_override_response(override, str(getattr(feature, "key")))
         for override, feature in rows
     ]
 
@@ -96,17 +136,20 @@ async def create_feature_override(
     org_uuid = uuid.UUID(org_id)
     feature_uuid = uuid.UUID(payload.feature_id)
 
+    feature_flag_id = getattr(FeatureFlag, "id")
     feature_result = await session.execute(
-        select(FeatureFlag).where(FeatureFlag.id == feature_uuid)
+        select(FeatureFlag).where(feature_flag_id == feature_uuid)
     )
     feature = feature_result.scalar_one_or_none()
     if feature is None:
         raise HTTPException(status_code=404, detail="Feature flag not found")
 
+    override_org_id = getattr(OrgFeatureOverride, "org_id")
+    override_feature_id = getattr(OrgFeatureOverride, "feature_id")
     existing_result = await session.execute(
         select(OrgFeatureOverride).where(
-            OrgFeatureOverride.org_id == org_uuid,
-            OrgFeatureOverride.feature_id == feature_uuid,
+            override_org_id == org_uuid,
+            override_feature_id == feature_uuid,
         )
     )
     existing = existing_result.scalar_one_or_none()
@@ -125,19 +168,7 @@ async def create_feature_override(
     session.add(override)
     await session.flush()
 
-    return FeatureOverrideResponse(
-        id=str(override.id),
-        org_id=str(override.org_id),
-        feature_id=str(override.feature_id),
-        feature_key=feature.key,
-        is_enabled=bool(override.is_enabled),
-        expires_at=override.expires_at,
-        config=override.config,
-        reason=override.reason,
-        created_by=str(override.created_by) if override.created_by else None,
-        updated_by=str(override.updated_by) if override.updated_by else None,
-        created_at=override.created_at,
-    )
+    return _feature_override_response(override, str(getattr(feature, "key")))
 
 
 @router.patch(
@@ -151,12 +182,16 @@ async def update_feature_override(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> FeatureOverrideResponse:
+    override_id_col = getattr(OrgFeatureOverride, "id")
+    override_org_id = getattr(OrgFeatureOverride, "org_id")
+    override_feature_id = getattr(OrgFeatureOverride, "feature_id")
+    feature_flag_id = getattr(FeatureFlag, "id")
     result = await session.execute(
         select(OrgFeatureOverride, FeatureFlag)
-        .join(FeatureFlag, OrgFeatureOverride.feature_id == FeatureFlag.id)
+        .join(FeatureFlag, override_feature_id == feature_flag_id)
         .where(
-            OrgFeatureOverride.id == uuid.UUID(override_id),
-            OrgFeatureOverride.org_id == uuid.UUID(org_id),
+            override_id_col == uuid.UUID(override_id),
+            override_org_id == uuid.UUID(org_id),
         )
     )
     row = result.one_or_none()
@@ -164,31 +199,20 @@ async def update_feature_override(
         raise HTTPException(status_code=404, detail="Feature override not found")
 
     override, feature = row
+    mutable_override = cast(_MutableFeatureOverride, override)
     if payload.is_enabled is not None:
-        override.is_enabled = payload.is_enabled
+        mutable_override.is_enabled = payload.is_enabled
     if payload.expires_at is not None:
-        override.expires_at = payload.expires_at
+        mutable_override.expires_at = payload.expires_at
     if payload.config is not None:
-        override.config = payload.config
+        mutable_override.config = payload.config
     if payload.reason is not None:
-        override.reason = payload.reason
+        mutable_override.reason = payload.reason
 
-    override.updated_by = uuid.UUID(current_user.user_id)
+    mutable_override.updated_by = uuid.UUID(current_user.user_id)
     await session.flush()
 
-    return FeatureOverrideResponse(
-        id=str(override.id),
-        org_id=str(override.org_id),
-        feature_id=str(override.feature_id),
-        feature_key=feature.key,
-        is_enabled=bool(override.is_enabled),
-        expires_at=override.expires_at,
-        config=override.config,
-        reason=override.reason,
-        created_by=str(override.created_by) if override.created_by else None,
-        updated_by=str(override.updated_by) if override.updated_by else None,
-        created_at=override.created_at,
-    )
+    return _feature_override_response(override, str(getattr(feature, "key")))
 
 
 @router.delete("/orgs/{org_id}/feature-overrides/{override_id}", status_code=204)
@@ -198,10 +222,12 @@ async def delete_feature_override(
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(require_superuser),
 ) -> None:
+    override_id_col = getattr(OrgFeatureOverride, "id")
+    override_org_id = getattr(OrgFeatureOverride, "org_id")
     result = await session.execute(
         select(OrgFeatureOverride).where(
-            OrgFeatureOverride.id == uuid.UUID(override_id),
-            OrgFeatureOverride.org_id == uuid.UUID(org_id),
+            override_id_col == uuid.UUID(override_id),
+            override_org_id == uuid.UUID(org_id),
         )
     )
     override = result.scalar_one_or_none()
@@ -225,31 +251,22 @@ async def update_feature_flag(
     name, key, min_tier, and category are immutable via this endpoint.
     """
     flag_uuid = uuid.UUID(flag_id)
+    feature_flag_id = getattr(FeatureFlag, "id")
     result = await session.execute(
-        select(FeatureFlag).where(FeatureFlag.id == flag_uuid)
+        select(FeatureFlag).where(feature_flag_id == flag_uuid)
     )
     flag = result.scalar_one_or_none()
     if flag is None:
         raise HTTPException(status_code=404, detail="Feature flag not found")
 
+    mutable_flag = cast(_MutableFeatureFlag, flag)
     if payload.is_enabled is not None:
-        flag.is_enabled = payload.is_enabled
+        mutable_flag.is_enabled = payload.is_enabled
     if payload.is_beta is not None:
-        flag.is_beta = payload.is_beta
+        mutable_flag.is_beta = payload.is_beta
     if payload.is_deprecated is not None:
-        flag.is_deprecated = payload.is_deprecated
+        mutable_flag.is_deprecated = payload.is_deprecated
 
     await session.flush()
 
-    return FeatureFlagResponse(
-        id=str(flag.id),
-        key=flag.key,
-        name=flag.name,
-        description=flag.description,
-        category=flag.category,
-        min_tier=flag.min_tier,
-        is_enabled=bool(flag.is_enabled),
-        is_beta=bool(flag.is_beta),
-        is_deprecated=bool(flag.is_deprecated),
-        created_at=flag.created_at,
-    )
+    return _feature_flag_response(flag)

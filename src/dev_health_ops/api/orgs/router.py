@@ -22,6 +22,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/orgs", tags=["orgs"])
 
 
+def _build_org_profile_response(org: object) -> OrgProfileResponse:
+    return OrgProfileResponse(
+        id=str(getattr(org, "id")),
+        slug=str(getattr(org, "slug")),
+        name=str(getattr(org, "name")),
+        description=getattr(org, "description"),
+        tier=str(getattr(org, "tier")),
+        is_active=bool(getattr(org, "is_active")),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -63,14 +74,7 @@ async def get_own_org(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    return OrgProfileResponse(
-        id=str(org.id),
-        slug=org.slug,
-        name=org.name,
-        description=org.description,
-        tier=org.tier,
-        is_active=org.is_active,
-    )
+    return _build_org_profile_response(org)
 
 
 @router.patch("/me", response_model=OrgProfileResponse)
@@ -108,11 +112,4 @@ async def update_own_org(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    return OrgProfileResponse(
-        id=str(org.id),
-        slug=org.slug,
-        name=org.name,
-        description=org.description,
-        tier=org.tier,
-        is_active=org.is_active,
-    )
+    return _build_org_profile_response(org)

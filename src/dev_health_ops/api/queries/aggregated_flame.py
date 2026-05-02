@@ -110,7 +110,7 @@ async def fetch_repo_names(
     if not repo_ids:
         return {}
 
-    params = {"repo_ids": repo_ids}
+    params: dict[str, Any] = {"repo_ids": repo_ids}
     params["org_id"] = org_id
     query = """
         SELECT

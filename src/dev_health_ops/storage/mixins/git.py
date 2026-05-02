@@ -11,9 +11,10 @@ from dev_health_ops.models.git import (
     GitCommitStat,
     GitFile,
 )
+from dev_health_ops.storage.mixins.base import SQLAlchemyStoreMixinProtocol
 
 
-class GitDataMixin:
+class GitDataMixin(SQLAlchemyStoreMixinProtocol):
     async def has_any_git_files(self, repo_id) -> bool:
         assert self.session is not None
         result = await self.session.execute(

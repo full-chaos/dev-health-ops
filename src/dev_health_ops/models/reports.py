@@ -9,20 +9,23 @@ import copy
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     Float,
     ForeignKey,
     Index,
     Text,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
+
+if TYPE_CHECKING:
+    from .settings import ScheduledJob
 
 
 class ReportRunStatus(str, Enum):
@@ -35,65 +38,77 @@ class ReportRunStatus(str, Enum):
 class SavedReport(Base):
     __tablename__ = "saved_reports"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, index=True, server_default="")
-    name = Column(Text, nullable=False, comment="Display name for this report")
-    description = Column(Text, nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
+    name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Display name for this report"
+    )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    report_plan = Column(
+    report_plan: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
         comment="Serialized ReportPlan dataclass as JSON",
     )
 
-    is_template = Column(Boolean, nullable=False, default=False)
-    template_source_id = Column(
+    is_template: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    template_source_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID,
         ForeignKey("saved_reports.id", ondelete="SET NULL"),
         nullable=True,
         comment="ID of the report this was cloned from",
     )
 
-    parameters = Column(
+    parameters: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
         comment="Parameterized fields: team, repo, date_range overrides",
     )
 
-    schedule_id = Column(
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID,
         ForeignKey("scheduled_jobs.id", ondelete="SET NULL"),
         nullable=True,
         comment="FK to scheduled_jobs for recurring execution",
     )
-    schedule = relationship("ScheduledJob", foreign_keys=[schedule_id])
+    schedule: Mapped[ScheduledJob | None] = relationship(
+        "ScheduledJob", foreign_keys=[schedule_id]
+    )
 
-    is_active = Column(Boolean, nullable=False, default=True)
-    last_run_at = Column(DateTime(timezone=True), nullable=True)
-    last_run_status = Column(Text, nullable=True, comment="Last execution status")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_run_status: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Last execution status"
+    )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-    created_by = Column(Text, nullable=True, comment="User or system that created this")
+    created_by: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="User or system that created this"
+    )
 
-    runs = relationship(
+    runs: Mapped[list[ReportRun]] = relationship(
         "ReportRun",
         back_populates="report",
         cascade="all, delete-orphan",
         lazy="raise",
     )
-    template_source = relationship(
+    template_source: Mapped[SavedReport | None] = relationship(
         "SavedReport",
         remote_side="SavedReport.id",
         foreign_keys=[template_source_id],
@@ -135,11 +150,11 @@ class SavedReport(Base):
     def clone(
         self,
         new_name: str | None = None,
-        parameter_overrides: dict | None = None,
+        parameter_overrides: dict[str, Any] | None = None,
     ) -> SavedReport:
         """Deep copy this report with a new ID. Sets template_source_id to self.id."""
         cloned_plan = copy.deepcopy(self.report_plan)
-        cloned_params = copy.deepcopy(self.parameters or {})
+        cloned_params: dict[str, Any] = copy.deepcopy(self.parameters or {})
         if parameter_overrides:
             cloned_params.update(parameter_overrides)
 
@@ -159,49 +174,55 @@ class SavedReport(Base):
 class ReportRun(Base):
     __tablename__ = "report_runs"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    report_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    report_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("saved_reports.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    report = relationship("SavedReport", back_populates="runs")
+    report: Mapped[SavedReport] = relationship("SavedReport", back_populates="runs")
 
-    status = Column(
+    status: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default=ReportRunStatus.PENDING.value,
     )
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    duration_seconds = Column(Float, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    rendered_markdown = Column(Text, nullable=True, comment="Rendered report markdown")
-    artifact_url = Column(
+    rendered_markdown: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Rendered report markdown"
+    )
+    artifact_url: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="URL to externally stored artifact (future use)",
     )
 
-    provenance_records = Column(
+    provenance_records: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON,
         nullable=True,
         default=list,
         comment="List of provenance records for this run",
     )
 
-    error = Column(Text, nullable=True)
-    error_traceback = Column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_traceback: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    triggered_by = Column(
+    triggered_by: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="manual",
         comment="What triggered this run: scheduler, manual, api",
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),

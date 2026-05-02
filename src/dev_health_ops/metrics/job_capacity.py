@@ -177,7 +177,7 @@ async def run_capacity_forecast(
 ) -> list[ForecastResult]:
     sink = create_sink(db_url)
     try:
-        sink.org_id = org_id  # type: ignore[attr-defined]
+        setattr(sink, "org_id", org_id)
         logger.info("Running capacity forecast for org_id=%s", org_id)
         results: list[ForecastResult] = []
 
@@ -272,6 +272,8 @@ async def _run_cli(args: argparse.Namespace) -> int:
     if args.target_date:
         target_date = date.fromisoformat(args.target_date)
 
+    org_id = getattr(args, "org", None) or ""
+
     results = await run_capacity_forecast(
         db_url=args.db,
         team_id=args.team_id,
@@ -282,7 +284,7 @@ async def _run_cli(args: argparse.Namespace) -> int:
         simulations=args.simulations,
         all_teams=args.all_teams,
         persist=not args.dry_run,
-        org_id=getattr(args, "org", None),
+        org_id=org_id,
     )
 
     if not results:

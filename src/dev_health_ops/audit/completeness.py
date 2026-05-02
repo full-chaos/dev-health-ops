@@ -4,7 +4,7 @@ import argparse
 import json
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypedDict
 
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
@@ -14,6 +14,11 @@ SOURCE_KEYS = ("github", "gitlab", "unknown")
 REQUIRED_GIT_TABLES = ("git_commits", "git_pull_requests")
 OPTIONAL_GIT_TABLES = ("deployments", "incidents", "ci_pipeline_runs")
 ALL_GIT_TABLES = REQUIRED_GIT_TABLES + OPTIONAL_GIT_TABLES
+
+
+class SourceBucket(TypedDict):
+    count: int
+    last_synced: datetime | None
 
 
 def build_window(days: int, now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -212,7 +217,9 @@ def _aggregate_git_rows_by_source(
     repo_sources: dict[str, str],
     window_start: datetime,
 ) -> dict[str, dict[str, Any]]:
-    buckets = {source: {"count": 0, "last_synced": None} for source in SOURCE_KEYS}
+    buckets: dict[str, SourceBucket] = {
+        source: {"count": 0, "last_synced": None} for source in SOURCE_KEYS
+    }
     for row in rows:
         repo_id = row.get("repo_id")
         if not repo_id:

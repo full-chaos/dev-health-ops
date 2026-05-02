@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.storage.mixins.base import SQLAlchemyStoreMixinProtocol
 
-class WorkItemMixin:
+
+class WorkItemMixin(SQLAlchemyStoreMixinProtocol):
     async def insert_work_item_dependencies(self, dependencies: list[Any]) -> None:
         if not dependencies:
             return

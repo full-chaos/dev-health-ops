@@ -13,11 +13,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -25,7 +25,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
 
@@ -59,30 +59,42 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    email = Column(Text, nullable=False, unique=True, index=True)
-    username = Column(Text, nullable=True, unique=True, index=True)
-    password_hash = Column(Text, nullable=True)  # Null for OAuth users
-    full_name = Column(Text, nullable=True)
-    avatar_url = Column(Text, nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(
+        Text, nullable=True, unique=True, index=True
+    )
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Auth provider info
-    auth_provider = Column(Text, default=AuthProvider.LOCAL.value)
-    auth_provider_id = Column(Text, nullable=True)  # External provider user ID
+    auth_provider: Mapped[str | None] = mapped_column(
+        Text, default=AuthProvider.LOCAL.value
+    )
+    auth_provider_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Account status
-    is_active = Column(Boolean, default=True, nullable=False)
-    is_verified = Column(Boolean, default=False, nullable=False)
-    is_superuser = Column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool | None] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+    is_verified: Mapped[bool | None] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    is_superuser: Mapped[bool | None] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     # Timestamps
-    last_login_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -90,7 +102,7 @@ class User(Base):
     )
 
     # Relationships
-    memberships = relationship(
+    memberships: Mapped[list[Membership]] = relationship(
         "Membership",
         back_populates="user",
         foreign_keys="Membership.user_id",
@@ -108,17 +120,23 @@ class User(Base):
 class LoginAttempt(Base):
     __tablename__ = "login_attempts"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    email = Column(Text, nullable=False, unique=True, index=True)
-    attempt_count = Column(Integer, nullable=False, default=0)
-    first_attempt_at = Column(DateTime(timezone=True), nullable=True)
-    locked_until = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    attempt_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    first_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -140,28 +158,32 @@ class Organization(Base):
 
     __tablename__ = "organizations"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    slug = Column(Text, nullable=False, unique=True, index=True)
-    name = Column(Text, nullable=False)
-    description = Column(Text, nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Organization settings (non-sensitive config)
-    settings = Column(JSON, default=dict, nullable=False)
+    settings: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, default=dict, nullable=False
+    )
 
     # Billing/tier info (for SaaS)
-    tier = Column(Text, default="community", nullable=False)
-    stripe_customer_id = Column(Text, nullable=True)
+    tier: Mapped[str | None] = mapped_column(Text, default="community", nullable=False)
+    stripe_customer_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Status
-    is_active = Column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool | None] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
 
     # Timestamps
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -169,12 +191,12 @@ class Organization(Base):
     )
 
     # Relationships
-    memberships = relationship(
+    memberships: Mapped[list[Membership]] = relationship(
         "Membership",
         back_populates="organization",
         cascade="all, delete-orphan",
     )
-    retention_policies = relationship(
+    retention_policies: Mapped[list[OrgRetentionPolicy]] = relationship(  # noqa: F821
         "OrgRetentionPolicy",
         back_populates="organization",
         cascade="all, delete-orphan",
@@ -194,40 +216,44 @@ class Membership(Base):
 
     __tablename__ = "memberships"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
 
-    user_id = Column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    org_id = Column(
+    org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    role = Column(Text, default=MemberRole.MEMBER.value, nullable=False)
+    role: Mapped[str | None] = mapped_column(
+        Text, default=MemberRole.MEMBER.value, nullable=False
+    )
 
     # Who invited this user (optional)
-    invited_by_id = Column(
+    invited_by_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
     # When the user accepted/joined
-    joined_at = Column(DateTime(timezone=True), nullable=True)
+    joined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Timestamps
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -235,16 +261,16 @@ class Membership(Base):
     )
 
     # Relationships
-    user = relationship(
+    user: Mapped[User] = relationship(
         "User",
         back_populates="memberships",
         foreign_keys=[user_id],
     )
-    organization = relationship(
+    organization: Mapped[Organization] = relationship(
         "Organization",
         back_populates="memberships",
     )
-    invited_by = relationship(
+    invited_by: Mapped[User | None] = relationship(
         "User",
         foreign_keys=[invited_by_id],
     )
@@ -267,13 +293,13 @@ class Permission(Base):
 
     __tablename__ = "permissions"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    name = Column(Text, nullable=False, unique=True, index=True)
-    description = Column(Text, nullable=True)
-    resource = Column(Text, nullable=False, index=True)
-    action = Column(Text, nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resource: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
@@ -297,22 +323,22 @@ class RolePermission(Base):
 
     __tablename__ = "role_permissions"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    role = Column(Text, nullable=False, index=True)
-    permission_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    role: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    permission_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("permissions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 
-    permission = relationship("Permission")
+    permission: Mapped[Permission] = relationship("Permission")
 
     __table_args__ = (
         UniqueConstraint("role", "permission_id", name="uq_role_permission"),

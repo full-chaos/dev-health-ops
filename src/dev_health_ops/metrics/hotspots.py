@@ -3,8 +3,9 @@ from __future__ import annotations
 import math
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import TypedDict
 
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
@@ -12,6 +13,26 @@ from dev_health_ops.metrics.schemas import (
     FileHotspotDaily,
     FileMetricsRecord,
 )
+
+
+class FileStats(TypedDict):
+    churn: int
+    authors: set[str]
+    commits: set[str]
+
+
+class ChurnStats(TypedDict):
+    churn: int
+    commits: int
+
+
+@dataclass(frozen=True)
+class RiskHotspotInput:
+    path: str
+    churn: int
+    commits: int
+    complexity: int
+    complexity_snapshot: FileComplexitySnapshot | None
 
 
 def compute_file_hotspots(
@@ -28,7 +49,7 @@ def compute_file_hotspots(
     hotspot_raw = α*log(1 + churn_f) + β*contributors_f + γ*commit_count_f
     Weights: α=0.4, β=0.3, γ=0.3
     """
-    file_map: dict[str, dict[str, Any]] = {}
+    file_map: dict[str, FileStats] = {}
 
     for row in window_stats:
         if row["repo_id"] != repo_id:
@@ -39,11 +60,7 @@ def compute_file_hotspots(
             continue
 
         if path not in file_map:
-            file_map[path] = {
-                "churn": 0,
-                "authors": set(),
-                "commits": set(),
-            }
+            file_map[path] = {"churn": 0, "authors": set(), "commits": set()}
 
         stats = file_map[path]
         additions = max(0, int(row.get("additions") or 0))
@@ -105,7 +122,7 @@ def compute_file_risk_hotspots(
     Blame concentration can be provided (e.g., derived from git blame data).
     """
     # 1. Aggregate churn per file
-    churn_map: dict[str, dict[str, int]] = {}
+    churn_map: dict[str, ChurnStats] = {}
     for row in window_stats:
         if row["repo_id"] != repo_id:
             continue
@@ -124,7 +141,7 @@ def compute_file_risk_hotspots(
     # 2. Merge keys (union of churned files and complex files)
     all_files = set(churn_map.keys()) | set(complexity_map.keys())
 
-    data = []
+    data: list[RiskHotspotInput] = []
     for f in all_files:
         c_stats = churn_map.get(f, {"churn": 0, "commits": 0})
         comp = complexity_map.get(f)
@@ -133,13 +150,13 @@ def compute_file_risk_hotspots(
         comp_val = comp.cyclomatic_total if comp else 0
 
         data.append(
-            {
-                "path": f,
-                "churn": churn_val,
-                "commits": c_stats["commits"],
-                "complexity": comp_val,
-                "comp_obj": comp,
-            }
+            RiskHotspotInput(
+                path=f,
+                churn=churn_val,
+                commits=c_stats["commits"],
+                complexity=comp_val,
+                complexity_snapshot=comp,
+            )
         )
 
     if not data:
@@ -160,28 +177,28 @@ def compute_file_risk_hotspots(
             return [0.0] * n
         return [(x - mean) / stdev for x in values]
 
-    churns = [float(d["churn"]) for d in data]
-    complexities = [float(d["complexity"]) for d in data]
+    churns = [float(item.churn) for item in data]
+    complexities = [float(item.complexity) for item in data]
 
     z_churn = get_z_scores(churns)
     z_comp = get_z_scores(complexities)
 
-    results = []
-    for i, d in enumerate(data):
+    results: list[FileHotspotDaily] = []
+    for i, item in enumerate(data):
         risk = z_churn[i] + z_comp[i]
 
-        comp_obj = d["comp_obj"]
+        comp_obj = item.complexity_snapshot
         blame_concentration = None
         if blame_map:
-            blame_concentration = blame_map.get(d["path"])
+            blame_concentration = blame_map.get(item.path)
 
         results.append(
             FileHotspotDaily(
                 repo_id=repo_id,
                 day=day,
-                file_path=d["path"],
-                churn_loc_30d=d["churn"],
-                churn_commits_30d=d["commits"],
+                file_path=item.path,
+                churn_loc_30d=item.churn,
+                churn_commits_30d=item.commits,
                 cyclomatic_total=comp_obj.cyclomatic_total if comp_obj else 0,
                 cyclomatic_avg=comp_obj.cyclomatic_avg if comp_obj else 0.0,
                 blame_concentration=blame_concentration,

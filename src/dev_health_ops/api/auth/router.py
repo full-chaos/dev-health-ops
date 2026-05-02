@@ -145,6 +145,22 @@ class UserInfo(BaseModel):
     is_superuser: bool = False
 
 
+def _require_uuid(value: object, field_name: str) -> uuid_mod.UUID:
+    if isinstance(value, uuid_mod.UUID):
+        return value
+    raise TypeError(f"{field_name} must be a UUID")
+
+
+def _optional_uuid(value: object, field_name: str) -> uuid_mod.UUID | None:
+    if value is None:
+        return None
+    return _require_uuid(value, field_name)
+
+
+def _coerce_uuid(value: object) -> uuid_mod.UUID | None:
+    return value if isinstance(value, uuid_mod.UUID) else None
+
+
 class OnboardRequest(BaseModel):
     action: str
     org_name: str | None = None
@@ -376,14 +392,16 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
                 .limit(1)
             )
             existing_org_id = existing_org_result.scalar_one_or_none()
-            if existing_org_id is not None:
+            existing_org_uuid = _coerce_uuid(existing_org_id)
+            if existing_org_uuid is not None:
+                existing_user_id = _require_uuid(existing_user.id, "existing_user.id")
                 emit_audit_log(
                     db,
-                    org_id=existing_org_id,
+                    org_id=existing_org_uuid,
                     action=AuditAction.CREATE,
                     resource_type=AuditResourceType.USER,
-                    resource_id=str(existing_user.id),
-                    user_id=existing_user.id,
+                    resource_id=str(existing_user_id),
+                    user_id=existing_user_id,
                     description="User registration failed: email already registered",
                     changes={"email": email_normalized},
                     request=request,
@@ -409,6 +427,7 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
         )
         db.add(user)
         await db.flush()
+        user_id = _require_uuid(user.id, "user.id")
 
         org_name = payload.org_name or "My Organization"
         org_slug = org_name.lower().replace(" ", "-")[:50]
@@ -422,10 +441,11 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
         )
         db.add(org)
         await db.flush()
+        org_id = _require_uuid(org.id, "org.id")
 
         membership = Membership(
-            user_id=user.id,
-            org_id=org.id,
+            user_id=user_id,
+            org_id=org_id,
             role="owner",
             joined_at=datetime.now(timezone.utc),
         )
@@ -433,17 +453,17 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
 
         emit_audit_log(
             db,
-            org_id=org.id,
+            org_id=org_id,
             action=AuditAction.CREATE,
             resource_type=AuditResourceType.USER,
-            resource_id=str(user.id),
-            user_id=user.id,
+            resource_id=str(user_id),
+            user_id=user_id,
             description="User registered",
-            changes={"email": email_normalized, "organization_id": str(org.id)},
+            changes={"email": email_normalized, "organization_id": str(org_id)},
             request=request,
         )
 
-        verification_token = await create_verification_token(db, user.id)
+        verification_token = await create_verification_token(db, user_id)
 
         await db.commit()
 
@@ -466,8 +486,8 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterRespon
 
         return RegisterResponse(
             message="Registration successful",
-            user_id=str(user.id),
-            org_id=str(org.id),
+            user_id=str(user_id),
+            org_id=str(org_id),
         )
 
 
@@ -640,13 +660,16 @@ async def login(
 
             failure_org_id = await _resolve_login_audit_org_id(db, user, payload.org_id)
             if failure_org_id is not None:
+                failure_user_id = _optional_uuid(
+                    user.id if user is not None else None, "user.id"
+                )
                 emit_audit_log(
                     db,
                     org_id=failure_org_id,
                     action=AuditAction.LOGIN_FAILED,
                     resource_type=AuditResourceType.SESSION,
                     resource_id=email_normalized,
-                    user_id=user.id if user is not None else None,
+                    user_id=failure_user_id,
                     description="Login failed: account locked",
                     changes={"email": email_normalized},
                     request=request,
@@ -667,7 +690,9 @@ async def login(
             primary_org_result = await db.execute(
                 select(Membership.org_id).where(Membership.user_id == user.id).limit(1)
             )
-            primary_org_id = primary_org_result.scalar_one_or_none()
+            primary_org_id = _optional_uuid(
+                primary_org_result.scalar_one_or_none(), "primary_org_id"
+            )
 
         hash_for_timing_check = DUMMY_PASSWORD_HASH
         if (
@@ -696,18 +721,21 @@ async def login(
         elif user.is_active is not True:
             failure_description = "Login failed: account is disabled"
             failure_error_message = "Account is disabled"
-            failure_resource_id = str(user.id)
-            failure_user_id = user.id
+            resolved_user_id = _require_uuid(user.id, "user.id")
+            failure_resource_id = str(resolved_user_id)
+            failure_user_id = resolved_user_id
         elif user.password_hash is None:
             failure_description = "Login failed: password login unavailable"
             failure_error_message = "Password login not available for this account"
-            failure_resource_id = str(user.id)
-            failure_user_id = user.id
+            resolved_user_id = _require_uuid(user.id, "user.id")
+            failure_resource_id = str(resolved_user_id)
+            failure_user_id = resolved_user_id
         elif not password_matches:
             failure_description = "Login failed: invalid credentials"
             failure_error_message = "Invalid credentials"
-            failure_resource_id = str(user.id)
-            failure_user_id = user.id
+            resolved_user_id = _require_uuid(user.id, "user.id")
+            failure_resource_id = str(resolved_user_id)
+            failure_user_id = resolved_user_id
 
         if failure_description:
             await record_failed_attempt(db, email_normalized)
@@ -751,13 +779,14 @@ async def login(
                 payload.org_id,
             )
             if blocked_org_id is not None:
+                user_id = _require_uuid(user.id, "user.id")
                 emit_audit_log(
                     db,
                     org_id=blocked_org_id,
                     action=AuditAction.LOGIN_FAILED,
                     resource_type=AuditResourceType.SESSION,
-                    resource_id=str(user.id),
-                    user_id=user.id,
+                    resource_id=str(user_id),
+                    user_id=user_id,
                     description="Login blocked: email not verified",
                     changes={"email": email_normalized},
                     request=request,
@@ -796,19 +825,25 @@ async def login(
                 )
 
         # Update last login
-        user.last_login_at = datetime.now(timezone.utc)
+        setattr(user, "last_login_at", datetime.now(timezone.utc))
 
+        membership_org_id = (
+            _require_uuid(membership.org_id, "membership.org_id")
+            if membership is not None
+            else None
+        )
         success_org_id = _parse_uuid(payload.org_id) or (
-            membership.org_id if membership else primary_org_id
+            membership_org_id if membership is not None else primary_org_id
         )
         if success_org_id is not None:
+            user_id = _require_uuid(user.id, "user.id")
             emit_audit_log(
                 db,
                 org_id=success_org_id,
                 action=AuditAction.LOGIN,
                 resource_type=AuditResourceType.SESSION,
-                resource_id=str(user.id),
-                user_id=user.id,
+                resource_id=str(user_id),
+                user_id=user_id,
                 description="User logged in",
                 request=request,
             )
@@ -1010,24 +1045,28 @@ async def accept_invite(
             )
 
         try:
-            membership = await accept_org_invite(db, invite, db_user.id)
+            db_user_id = _require_uuid(db_user.id, "db_user.id")
+            membership = await accept_org_invite(db, invite, db_user_id)
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,
                 detail=error_detail(str(exc)),
             ) from exc
 
+        invite_org_id = _require_uuid(invite.org_id, "invite.org_id")
+        membership_id = _require_uuid(membership.id, "membership.id")
+        db_user_id = _require_uuid(db_user.id, "db_user.id")
         emit_audit_log(
             db,
-            org_id=invite.org_id,
+            org_id=invite_org_id,
             action=AuditAction.MEMBER_JOINED,
             resource_type=AuditResourceType.MEMBERSHIP,
-            resource_id=str(membership.id),
-            user_id=db_user.id,
+            resource_id=str(membership_id),
+            user_id=db_user_id,
             description="Invite accepted",
             changes={
                 "invite_id": str(invite.id),
-                "user_id": str(db_user.id),
+                "user_id": str(db_user_id),
                 "role": membership.role,
             },
             request=request,
@@ -1106,24 +1145,28 @@ async def onboard(
                 )
 
             try:
-                membership = await accept_org_invite(db, invite, db_user.id)
+                db_user_id = _require_uuid(db_user.id, "db_user.id")
+                membership = await accept_org_invite(db, invite, db_user_id)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=400,
                     detail=error_detail(str(exc)),
                 ) from exc
 
+            org_id = _require_uuid(org.id, "org.id")
+            membership_id = _require_uuid(membership.id, "membership.id")
+            db_user_id = _require_uuid(db_user.id, "db_user.id")
             emit_audit_log(
                 db,
-                org_id=org.id,
+                org_id=org_id,
                 action=AuditAction.MEMBER_JOINED,
                 resource_type=AuditResourceType.MEMBERSHIP,
-                resource_id=str(membership.id),
-                user_id=db_user.id,
+                resource_id=str(membership_id),
+                user_id=db_user_id,
                 description="Invite accepted during onboarding",
                 changes={
                     "invite_id": str(invite.id),
-                    "user_id": str(db_user.id),
+                    "user_id": str(db_user_id),
                     "role": membership.role,
                 },
                 request=request,
@@ -1161,10 +1204,12 @@ async def onboard(
         )
         db.add(org)
         await db.flush()
+        db_user_id = _require_uuid(db_user.id, "db_user.id")
+        org_id = _require_uuid(org.id, "org.id")
 
         membership = Membership(
-            user_id=db_user.id,
-            org_id=org.id,
+            user_id=db_user_id,
+            org_id=org_id,
             role="owner",
             joined_at=datetime.now(timezone.utc),
         )
@@ -1172,11 +1217,11 @@ async def onboard(
 
         emit_audit_log(
             db,
-            org_id=org.id,
+            org_id=org_id,
             action=AuditAction.CREATE,
             resource_type=AuditResourceType.ORGANIZATION,
-            resource_id=str(org.id),
-            user_id=db_user.id,
+            resource_id=str(org_id),
+            user_id=db_user_id,
             description="Organization created during onboarding",
             changes={"organization_name": org_name},
             request=request,
@@ -1230,16 +1275,18 @@ async def refresh_token(
         payload.refresh_token, token_type="refresh"
     )
     if not refresh_payload:
-        org_id, subject = _extract_unverified_org_and_subject(payload.refresh_token)
-        if org_id is not None:
+        invalid_org_id, subject = _extract_unverified_org_and_subject(
+            payload.refresh_token
+        )
+        if invalid_org_id is not None:
             async with get_postgres_session() as db:
                 org_result = await db.execute(
-                    select(Organization.id).where(Organization.id == org_id)
+                    select(Organization.id).where(Organization.id == invalid_org_id)
                 )
                 if org_result.scalar_one_or_none() is not None:
                     emit_audit_log(
                         db,
-                        org_id=org_id,
+                        org_id=invalid_org_id,
                         action=AuditAction.LOGIN_FAILED,
                         resource_type=AuditResourceType.SESSION,
                         resource_id=subject or "unknown",
@@ -1256,7 +1303,7 @@ async def refresh_token(
         )
 
     user_id = str(refresh_payload["sub"])
-    org_id = str(refresh_payload.get("org_id", ""))
+    refresh_org_id = str(refresh_payload.get("org_id", ""))
     token_jti = refresh_payload.get("jti")
     if not token_jti:
         raise HTTPException(
@@ -1284,7 +1331,7 @@ async def refresh_token(
         )
         user = user_result.scalar_one_or_none()
         if not user:
-            parsed_org_id = _parse_uuid(org_id)
+            parsed_org_id = _parse_uuid(refresh_org_id)
             if parsed_org_id is not None:
                 emit_audit_log(
                     db,
@@ -1304,11 +1351,11 @@ async def refresh_token(
             )
 
         role = "member"
-        if org_id:
+        if refresh_org_id:
             membership_result = await db.execute(
                 select(Membership).where(
                     Membership.user_id == user.id,
-                    Membership.org_id == uuid_mod.UUID(org_id),
+                    Membership.org_id == uuid_mod.UUID(refresh_org_id),
                 )
             )
             membership = membership_result.scalar_one_or_none()
@@ -1317,7 +1364,7 @@ async def refresh_token(
 
         new_refresh_token = auth_service.create_refresh_token(
             user_id=user_id,
-            org_id=org_id,
+            org_id=refresh_org_id,
             family_id=str(token_record.family_id),
         )
         new_refresh_payload = auth_service.validate_token(
@@ -1348,15 +1395,16 @@ async def refresh_token(
                 detail=error_detail("Invalid refresh token"),
             )
 
-        parsed_org_id = _parse_uuid(org_id)
+        parsed_org_id = _parse_uuid(refresh_org_id)
         if parsed_org_id is not None:
+            refreshed_user_id = _require_uuid(user.id, "user.id")
             emit_audit_log(
                 db,
                 org_id=parsed_org_id,
                 action=AuditAction.LOGIN,
                 resource_type=AuditResourceType.SESSION,
                 resource_id=user_id,
-                user_id=user.id,
+                user_id=refreshed_user_id,
                 description="Access token refreshed",
                 request=request,
             )
@@ -1365,7 +1413,7 @@ async def refresh_token(
         new_access_token = auth_service.create_access_token(
             user_id=user_id,
             email=str(user.email),
-            org_id=org_id,
+            org_id=refresh_org_id,
             role=role,
             is_superuser=bool(user.is_superuser),
             username=str(user.username) if user.username is not None else None,
@@ -1380,7 +1428,7 @@ async def refresh_token(
         user=UserInfo(
             id=user_id,
             email=str(user.email),
-            org_id=org_id,
+            org_id=refresh_org_id,
             role=role,
             is_superuser=bool(user.is_superuser),
         ),
@@ -1542,8 +1590,13 @@ async def social_login(
                     pass
                 elif existing_provider == provider_enum.value:
                     # Same social provider — update provider_id if needed
-                    if user.auth_provider_id != user_info.provider_user_id:
-                        user.auth_provider_id = user_info.provider_user_id
+                    current_provider_user_id = getattr(user, "auth_provider_id", None)
+                    if current_provider_user_id != user_info.provider_user_id:
+                        setattr(
+                            user,
+                            "auth_provider_id",
+                            user_info.provider_user_id,
+                        )
                 else:
                     # Different social provider — conflict
                     raise HTTPException(
@@ -1580,7 +1633,7 @@ async def social_login(
         needs_onboarding = membership is None and not bool(user.is_superuser)
 
         # Update last login
-        user.last_login_at = datetime.now(timezone.utc)
+        setattr(user, "last_login_at", datetime.now(timezone.utc))
 
         await db.commit()
 
@@ -1633,13 +1686,17 @@ async def social_login(
 
 
 # --- SSO Endpoints (conditionally loaded from enterprise module) ---
+sso_router: APIRouter | None = None
 try:
-    from .sso import sso_router
-
-    router.include_router(sso_router)
+    sso_module = importlib.import_module("dev_health_ops.api.auth.sso")
 except ImportError as exc:
     # SSO module is optional (e.g., only available in enterprise deployments);
     # if it's not installed, we skip registering SSO routes.
     logger.info(
         "SSO router not loaded because optional 'sso' module is missing: %s", exc
     )
+else:
+    maybe_sso_router = getattr(sso_module, "sso_router", None)
+    if isinstance(maybe_sso_router, APIRouter):
+        sso_router = maybe_sso_router
+        router.include_router(maybe_sso_router)

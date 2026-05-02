@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import TypedDict
+
 from ..models.filters import MetricFilter
 from ..models.schemas import Contributor, ExplainResponse
 from ..queries.client import clickhouse_client
@@ -9,7 +12,19 @@ from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import filter_cache_key, scope_filter_for_metric, time_window
 
-_METRIC_CONFIG = {
+
+class _MetricConfig(TypedDict):
+    label: str
+    unit: str
+    table: str
+    column: str
+    group_by: str
+    scope: str
+    aggregator: str
+    transform: Callable[[float], float]
+
+
+_METRIC_CONFIG: dict[str, _MetricConfig] = {
     "cycle_time": {
         "label": "Cycle Time",
         "unit": "days",

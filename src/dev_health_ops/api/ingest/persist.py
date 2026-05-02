@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from typing import Any
 
 from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.storage.clickhouse import ClickHouseStore
@@ -31,7 +32,7 @@ def _repo_id_from_url(repo_url: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, repo_url)
 
 
-async def persist_items(entity_type: str, items: list[dict]) -> int:
+async def persist_items(entity_type: str, items: list[dict[str, Any]]) -> int:
     """Persist a batch of deserialized ingest items to ClickHouse.
 
     Returns number of items persisted.
@@ -59,8 +60,8 @@ async def persist_items(entity_type: str, items: list[dict]) -> int:
     return len(items)
 
 
-async def _persist_commits(store: ClickHouseStore, items: list[dict]) -> None:
-    rows = []
+async def _persist_commits(store: ClickHouseStore, items: list[dict[str, Any]]) -> None:
+    rows: list[dict[str, Any]] = []
     for item in items:
         repo_url = item.pop("_repo_url", "")
         item.pop("_org_id", None)
@@ -71,8 +72,10 @@ async def _persist_commits(store: ClickHouseStore, items: list[dict]) -> None:
         await store.insert_git_commit_data(rows)
 
 
-async def _persist_pull_requests(store: ClickHouseStore, items: list[dict]) -> None:
-    rows = []
+async def _persist_pull_requests(
+    store: ClickHouseStore, items: list[dict[str, Any]]
+) -> None:
+    rows: list[dict[str, Any]] = []
     for item in items:
         repo_url = item.pop("_repo_url", "")
         item.pop("_org_id", None)
@@ -84,8 +87,10 @@ async def _persist_pull_requests(store: ClickHouseStore, items: list[dict]) -> N
         await store.insert_git_pull_requests(rows)
 
 
-async def _persist_work_items(store: ClickHouseStore, items: list[dict]) -> None:
-    rows = []
+async def _persist_work_items(
+    store: ClickHouseStore, items: list[dict[str, Any]]
+) -> None:
+    rows: list[dict[str, Any]] = []
     for item in items:
         item.pop("_repo_url", None)
         item.pop("_org_id", None)
@@ -95,8 +100,10 @@ async def _persist_work_items(store: ClickHouseStore, items: list[dict]) -> None
         await store.insert_work_items(rows)
 
 
-async def _persist_deployments(store: ClickHouseStore, items: list[dict]) -> None:
-    rows = []
+async def _persist_deployments(
+    store: ClickHouseStore, items: list[dict[str, Any]]
+) -> None:
+    rows: list[dict[str, Any]] = []
     for item in items:
         repo_url = item.pop("_repo_url", "")
         item.pop("_org_id", None)
@@ -114,8 +121,10 @@ async def _persist_deployments(store: ClickHouseStore, items: list[dict]) -> Non
         await store.insert_deployments(rows)
 
 
-async def _persist_incidents(store: ClickHouseStore, items: list[dict]) -> None:
-    rows = []
+async def _persist_incidents(
+    store: ClickHouseStore, items: list[dict[str, Any]]
+) -> None:
+    rows: list[dict[str, Any]] = []
     for item in items:
         repo_url = item.pop("_repo_url", "")
         item.pop("_org_id", None)

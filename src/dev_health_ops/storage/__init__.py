@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any, Protocol
 
 from .clickhouse import ClickHouseStore
 from .mixins.testops_cicd import (
@@ -15,8 +16,21 @@ from .utils import (
     model_to_dict,
 )
 
-ClickHouseStore.insert_testops_pipeline_runs = clickhouse_insert_testops_pipeline_runs
-ClickHouseStore.insert_testops_job_runs = clickhouse_insert_testops_job_runs
+
+class StoreLike(Protocol):
+    org_id: str | None
+
+    async def __aenter__(self) -> StoreLike: ...
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None: ...
+
+
+setattr(
+    ClickHouseStore,
+    "insert_testops_pipeline_runs",
+    clickhouse_insert_testops_pipeline_runs,
+)
+setattr(ClickHouseStore, "insert_testops_job_runs", clickhouse_insert_testops_job_runs)
 
 
 def detect_db_type(conn_string: str) -> str:
@@ -142,8 +156,8 @@ async def run_with_store(
 
     :param org_id: Organisation / tenant identifier propagated from ``--org``.
     """
-    store = create_store(db_url, db_type)
-    store.org_id = org_id  # type: ignore[attr-defined]
+    store: StoreLike = create_store(db_url, db_type)
+    store.org_id = org_id
     async with store:
         await handler(store)
 

@@ -531,7 +531,7 @@ class LinearClient:
                 "first": self.per_page,
                 "after": cursor,
             }
-            data = self._execute(TEAM_MEMBERS_QUERY, variables)  # type: ignore[arg-type]
+            data = self._execute(TEAM_MEMBERS_QUERY, variables)
             team_data = data.get("team", {})
             members_data = team_data.get("members", {})
             nodes = members_data.get("nodes", [])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -38,6 +39,62 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _organization_response(org: object) -> OrganizationResponse:
+    return OrganizationResponse.model_validate(
+        {
+            "id": str(getattr(org, "id")),
+            "slug": getattr(org, "slug"),
+            "name": getattr(org, "name"),
+            "description": getattr(org, "description"),
+            "tier": getattr(org, "tier"),
+            "settings": getattr(org, "settings") or {},
+            "is_active": getattr(org, "is_active"),
+            "created_at": getattr(org, "created_at"),
+            "updated_at": getattr(org, "updated_at"),
+        }
+    )
+
+
+def _membership_response(membership: object) -> MembershipResponse:
+    return MembershipResponse.model_validate(
+        {
+            "id": str(getattr(membership, "id")),
+            "org_id": str(getattr(membership, "org_id")),
+            "user_id": str(getattr(membership, "user_id")),
+            "role": str(getattr(membership, "role")),
+            "invited_by_id": (
+                str(getattr(membership, "invited_by_id"))
+                if getattr(membership, "invited_by_id") is not None
+                else None
+            ),
+            "joined_at": getattr(membership, "joined_at"),
+            "created_at": getattr(membership, "created_at"),
+            "updated_at": getattr(membership, "updated_at"),
+        }
+    )
+
+
+def _org_invite_response(invite: object) -> OrgInviteResponse:
+    return OrgInviteResponse.model_validate(
+        {
+            "id": str(getattr(invite, "id")),
+            "org_id": str(getattr(invite, "org_id")),
+            "email": str(getattr(invite, "email")),
+            "role": str(getattr(invite, "role")),
+            "invited_by_id": (
+                str(getattr(invite, "invited_by_id"))
+                if getattr(invite, "invited_by_id") is not None
+                else None
+            ),
+            "status": str(getattr(invite, "status")),
+            "expires_at": getattr(invite, "expires_at"),
+            "accepted_at": getattr(invite, "accepted_at"),
+            "created_at": getattr(invite, "created_at"),
+            "updated_at": getattr(invite, "updated_at"),
+        }
+    )
+
+
 @router.get("/orgs", response_model=list[OrganizationResponse])
 async def list_organizations(
     limit: int = 100,
@@ -48,20 +105,7 @@ async def list_organizations(
 ) -> list[OrganizationResponse]:
     svc = OrganizationService(session)
     orgs = await svc.list_all(limit=limit, offset=offset, active_only=active_only)
-    return [
-        OrganizationResponse(
-            id=str(o.id),
-            slug=o.slug,
-            name=o.name,
-            description=o.description,
-            tier=o.tier,
-            settings=o.settings or {},
-            is_active=o.is_active,
-            created_at=o.created_at,
-            updated_at=o.updated_at,
-        )
-        for o in orgs
-    ]
+    return [_organization_response(org) for org in orgs]
 
 
 @router.get("/orgs/{org_id}", response_model=OrganizationResponse)
@@ -74,17 +118,7 @@ async def get_organization(
     org = await svc.get_by_id(org_id)
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    return OrganizationResponse(
-        id=str(org.id),
-        slug=org.slug,
-        name=org.name,
-        description=org.description,
-        tier=org.tier,
-        settings=org.settings or {},
-        is_active=org.is_active,
-        created_at=org.created_at,
-        updated_at=org.updated_at,
-    )
+    return _organization_response(org)
 
 
 @router.post("/orgs", response_model=OrganizationResponse, status_code=201)
@@ -102,17 +136,7 @@ async def create_organization(
         tier=payload.tier,
         owner_user_id=payload.owner_user_id,
     )
-    return OrganizationResponse(
-        id=str(org.id),
-        slug=org.slug,
-        name=org.name,
-        description=org.description,
-        tier=org.tier,
-        settings=org.settings or {},
-        is_active=org.is_active,
-        created_at=org.created_at,
-        updated_at=org.updated_at,
-    )
+    return _organization_response(org)
 
 
 @router.patch("/orgs/{org_id}", response_model=OrganizationResponse)
@@ -133,17 +157,7 @@ async def update_organization(
     )
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    return OrganizationResponse(
-        id=str(org.id),
-        slug=org.slug,
-        name=org.name,
-        description=org.description,
-        tier=org.tier,
-        settings=org.settings or {},
-        is_active=org.is_active,
-        created_at=org.created_at,
-        updated_at=org.updated_at,
-    )
+    return _organization_response(org)
 
 
 @router.delete("/orgs/{org_id}")
@@ -169,19 +183,7 @@ async def list_members(
     await _ensure_org_admin_access(session, org_id, current_user)
     svc = MembershipService(session)
     members = await svc.list_members(org_id, role=role)
-    return [
-        MembershipResponse(
-            id=str(m.id),
-            org_id=str(m.org_id),
-            user_id=str(m.user_id),
-            role=m.role,
-            invited_by_id=str(m.invited_by_id) if m.invited_by_id else None,
-            joined_at=m.joined_at,
-            created_at=m.created_at,
-            updated_at=m.updated_at,
-        )
-        for m in members
-    ]
+    return [_membership_response(member) for member in members]
 
 
 @router.post(
@@ -204,18 +206,7 @@ async def add_member(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return MembershipResponse(
-        id=str(membership.id),
-        org_id=str(membership.org_id),
-        user_id=str(membership.user_id),
-        role=membership.role,
-        invited_by_id=str(membership.invited_by_id)
-        if membership.invited_by_id
-        else None,
-        joined_at=membership.joined_at,
-        created_at=membership.created_at,
-        updated_at=membership.updated_at,
-    )
+    return _membership_response(membership)
 
 
 @router.post(
@@ -269,44 +260,36 @@ async def create_org_invite(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    invite_email = str(getattr(invite, "email"))
+    org_name = str(getattr(org_row, "name"))
+    invite_changes: dict[str, Any] = {
+        "email": invite_email,
+        "role": str(getattr(invite, "role")),
+        "status": str(getattr(invite, "status")),
+    }
     emit_audit_log(
         session,
         org_id=org_uuid,
         action=AuditAction.MEMBER_INVITED,
         resource_type=AuditResourceType.MEMBERSHIP,
-        resource_id=str(invite.id),
+        resource_id=str(getattr(invite, "id")),
         user_id=invited_by_id,
         description="Organization invite created",
-        changes={
-            "email": invite.email,
-            "role": invite.role,
-            "status": invite.status,
-        },
+        changes=invite_changes,
         request=request,
     )
 
     try:
         await send_invite_email(
-            to_email=invite.email,
-            org_name=str(org_row.name),
+            to_email=invite_email,
+            org_name=org_name,
             inviter_name=inviter_name,
             token=token,
         )
     except Exception:
-        logger.exception("Failed to send invite email to %s", invite.email)
+        logger.exception("Failed to send invite email to %s", invite_email)
 
-    return OrgInviteResponse(
-        id=str(invite.id),
-        org_id=str(invite.org_id),
-        email=str(invite.email),
-        role=str(invite.role),
-        invited_by_id=str(invite.invited_by_id) if invite.invited_by_id else None,
-        status=str(invite.status),
-        expires_at=invite.expires_at,
-        accepted_at=invite.accepted_at,
-        created_at=invite.created_at,
-        updated_at=invite.updated_at,
-    )
+    return _org_invite_response(invite)
 
 
 @router.patch("/orgs/{org_id}/members/{user_id}", response_model=MembershipResponse)
@@ -325,18 +308,7 @@ async def update_member_role(
         raise HTTPException(status_code=400, detail=str(e))
     if not membership:
         raise HTTPException(status_code=404, detail="Membership not found")
-    return MembershipResponse(
-        id=str(membership.id),
-        org_id=str(membership.org_id),
-        user_id=str(membership.user_id),
-        role=membership.role,
-        invited_by_id=str(membership.invited_by_id)
-        if membership.invited_by_id
-        else None,
-        joined_at=membership.joined_at,
-        created_at=membership.created_at,
-        updated_at=membership.updated_at,
-    )
+    return _membership_response(membership)
 
 
 @router.delete("/orgs/{org_id}/members/{user_id}")

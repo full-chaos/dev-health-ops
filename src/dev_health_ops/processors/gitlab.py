@@ -37,19 +37,34 @@ from dev_health_ops.utils import (
 
 if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
-        BatchResult,
-        ConnectorException,
-        GitLabConnector,
+        BatchResult as _BatchResult,
     )
-    from dev_health_ops.connectors.models import Repository
-    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+    from dev_health_ops.connectors import (
+        ConnectorException,
+    )
+    from dev_health_ops.connectors import (
+        GitLabConnector as _GitLabConnector,
+    )
+    from dev_health_ops.connectors.models import Repository as _Repository
+    from dev_health_ops.connectors.utils import (
+        RateLimitConfig as _RateLimitConfig,
+    )
+    from dev_health_ops.connectors.utils import (
+        RateLimitGate as _RateLimitGate,
+    )
 else:
-    BatchResult = None  # type: ignore
-    GitLabConnector = None  # type: ignore
+    _BatchResult = None
+    _GitLabConnector = None
     ConnectorException = Exception
-    Repository = None  # type: ignore
-    RateLimitConfig = None  # type: ignore
-    RateLimitGate = None  # type: ignore
+    _Repository = None
+    _RateLimitConfig = None
+    _RateLimitGate = None
+
+BatchResult = _BatchResult
+GitLabConnector = _GitLabConnector
+Repository = _Repository
+RateLimitConfig = _RateLimitConfig
+RateLimitGate = _RateLimitGate
 
 
 # --- GitLab Sync Helpers ---
@@ -70,7 +85,7 @@ def _fetch_gitlab_commits_sync(
     since: datetime | None = None,
 ):
     """Sync helper to fetch GitLab commits."""
-    list_params = {"per_page": 100, "get_all": False}
+    list_params: dict[str, object] = {"per_page": 100, "get_all": False}
     if since is not None:
         since_iso = since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         list_params["since"] = since_iso
@@ -356,7 +371,7 @@ def _sync_gitlab_mrs_to_store(
 
 def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
     """Sync helper to fetch GitLab CI/CD pipelines."""
-    pipelines = []
+    pipelines: list[CiPipelineRun] = []
 
     try:
         list_params = {"per_page": 100, "order_by": "updated_at", "sort": "desc"}
@@ -406,7 +421,7 @@ def _fetch_gitlab_deployments_sync(
     connector, project_id, repo_id, max_deployments, since
 ):
     """Sync helper to fetch GitLab deployments."""
-    deployments = []
+    deployments: list[Deployment] = []
     release_objects = []
     try:
         release_objects = connector.rest_client.get_releases(
@@ -478,7 +493,7 @@ def _fetch_gitlab_deployments_sync(
 
 def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, since):
     """Sync helper to fetch GitLab incidents (issues labeled 'incident')."""
-    incidents = []
+    incidents: list[Incident] = []
     try:
         raw_issues = connector.rest_client.get_issues(
             project_id=project_id,
@@ -1118,7 +1133,7 @@ async def process_gitlab_projects_batch(
             if max_commits_per_project is None and since is None:
                 commit_limit = 100
             else:
-                commit_limit = max_commits_per_project
+                commit_limit = max_commits_per_project or 100
             try:
                 if gl_project is None:
                     gl_project = await loop.run_in_executor(

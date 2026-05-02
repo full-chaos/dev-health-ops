@@ -20,6 +20,29 @@ from .common import get_session
 router = APIRouter()
 
 
+def _audit_log_response(log: object) -> AuditLogResponse:
+    return AuditLogResponse.model_validate(
+        {
+            "id": str(getattr(log, "id")),
+            "org_id": str(getattr(log, "org_id")),
+            "user_id": (
+                str(getattr(log, "user_id"))
+                if getattr(log, "user_id") is not None
+                else None
+            ),
+            "action": str(getattr(log, "action")),
+            "resource_type": str(getattr(log, "resource_type")),
+            "resource_id": str(getattr(log, "resource_id")),
+            "description": getattr(log, "description"),
+            "changes": getattr(log, "changes"),
+            "request_metadata": getattr(log, "request_metadata"),
+            "status": str(getattr(log, "status")),
+            "error_message": getattr(log, "error_message"),
+            "created_at": getattr(log, "created_at"),
+        }
+    )
+
+
 @router.get("/audit-logs", response_model=AuditLogListResponse)
 @require_feature("audit_log", required_tier="enterprise")
 async def list_audit_logs(
@@ -61,23 +84,7 @@ async def list_audit_logs(
     )
 
     return AuditLogListResponse(
-        items=[
-            AuditLogResponse(
-                id=str(log.id),
-                org_id=str(log.org_id),
-                user_id=str(log.user_id) if log.user_id else None,
-                action=str(log.action),
-                resource_type=str(log.resource_type),
-                resource_id=str(log.resource_id),
-                description=log.description,
-                changes=log.changes,
-                request_metadata=log.request_metadata,
-                status=str(log.status),
-                error_message=log.error_message,
-                created_at=log.created_at,
-            )
-            for log in logs
-        ],
+        items=[_audit_log_response(log) for log in logs],
         total=total,
         limit=limit,
         offset=offset,
@@ -121,11 +128,9 @@ async def list_platform_audit_logs(
         count_stmt = count_stmt.where(*conditions)
     total = int((await session.execute(count_stmt)).scalar_one())
 
+    created_at_col = getattr(AuditLog, "created_at")
     logs_stmt = (
-        select(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .offset(offset)
+        select(AuditLog).order_by(created_at_col.desc()).limit(limit).offset(offset)
     )
     if conditions:
         logs_stmt = logs_stmt.where(*conditions)
@@ -133,23 +138,7 @@ async def list_platform_audit_logs(
     logs = logs_result.scalars().all()
 
     return AuditLogListResponse(
-        items=[
-            AuditLogResponse(
-                id=str(log.id),
-                org_id=str(log.org_id),
-                user_id=str(log.user_id) if log.user_id else None,
-                action=str(log.action),
-                resource_type=str(log.resource_type),
-                resource_id=str(log.resource_id),
-                description=log.description,
-                changes=log.changes,
-                request_metadata=log.request_metadata,
-                status=str(log.status),
-                error_message=log.error_message,
-                created_at=log.created_at,
-            )
-            for log in logs
-        ],
+        items=[_audit_log_response(log) for log in logs],
         total=total,
         limit=limit,
         offset=offset,
@@ -177,20 +166,7 @@ async def get_audit_log(
     if not log:
         raise HTTPException(status_code=404, detail="Audit log not found")
 
-    return AuditLogResponse(
-        id=str(log.id),
-        org_id=str(log.org_id),
-        user_id=str(log.user_id) if log.user_id else None,
-        action=str(log.action),
-        resource_type=str(log.resource_type),
-        resource_id=str(log.resource_id),
-        description=log.description,
-        changes=log.changes,
-        request_metadata=log.request_metadata,
-        status=str(log.status),
-        error_message=log.error_message,
-        created_at=log.created_at,
-    )
+    return _audit_log_response(log)
 
 
 @router.get(
@@ -218,23 +194,7 @@ async def get_resource_audit_history(
         limit=limit,
     )
 
-    return [
-        AuditLogResponse(
-            id=str(log.id),
-            org_id=str(log.org_id),
-            user_id=str(log.user_id) if log.user_id else None,
-            action=str(log.action),
-            resource_type=str(log.resource_type),
-            resource_id=str(log.resource_id),
-            description=log.description,
-            changes=log.changes,
-            request_metadata=log.request_metadata,
-            status=str(log.status),
-            error_message=log.error_message,
-            created_at=log.created_at,
-        )
-        for log in logs
-    ]
+    return [_audit_log_response(log) for log in logs]
 
 
 @router.get("/audit-logs/user/{user_id}", response_model=list[AuditLogResponse])
@@ -257,20 +217,4 @@ async def get_user_audit_activity(
         limit=limit,
     )
 
-    return [
-        AuditLogResponse(
-            id=str(log.id),
-            org_id=str(log.org_id),
-            user_id=str(log.user_id) if log.user_id else None,
-            action=str(log.action),
-            resource_type=str(log.resource_type),
-            resource_id=str(log.resource_id),
-            description=log.description,
-            changes=log.changes,
-            request_metadata=log.request_metadata,
-            status=str(log.status),
-            error_message=log.error_message,
-            created_at=log.created_at,
-        )
-        for log in logs
-    ]
+    return [_audit_log_response(log) for log in logs]

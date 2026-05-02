@@ -5,6 +5,7 @@ import hmac
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.parse import quote
 
 from sqlalchemy import func, select
@@ -53,7 +54,9 @@ def _validate_signed_token(token: str) -> str | None:
     return token
 
 
-def _as_utc(value: datetime) -> datetime:
+def _as_utc(value: datetime | Any) -> datetime:
+    if not isinstance(value, datetime):
+        return datetime.now(timezone.utc)
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
@@ -106,7 +109,7 @@ async def validate_invite(db: AsyncSession, token: str) -> OrgInvite | None:
     result = await db.execute(
         select(OrgInvite).where(OrgInvite.token_hash == token_hash)
     )
-    invite = result.scalar_one_or_none()
+    invite: Any | None = result.scalar_one_or_none()
     if invite is None:
         return None
     if invite.status != "pending":
@@ -152,9 +155,9 @@ async def accept_invite(
     )
     db.add(membership)
 
-    invite.status = "accepted"
-    invite.accepted_at = now
-    invite.updated_at = now
+    setattr(invite, "status", "accepted")
+    setattr(invite, "accepted_at", now)
+    setattr(invite, "updated_at", now)
 
     await db.flush()
     return membership

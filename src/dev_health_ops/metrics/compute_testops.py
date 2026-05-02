@@ -233,15 +233,18 @@ def compute_test_metrics_daily(
 
     current_cases_by_repo: dict[uuid.UUID, list[TestCaseResultRow]] = defaultdict(list)
     historical_failed_names_by_repo: dict[uuid.UUID, set[str]] = defaultdict(set)
-    for row in case_results:
-        repo_id = row["repo_id"]
-        run_id = str(row["run_id"])
-        normalized_status = _normalize_test_status(row.get("status"))
+    for case_row in case_results:
+        repo_id = case_row["repo_id"]
+        run_id = str(case_row["run_id"])
+        raw_status = case_row.get("status")
+        normalized_status = _normalize_test_status(
+            raw_status if isinstance(raw_status, str) else None
+        )
         if run_id in current_run_ids_by_repo.get(repo_id, set()):
-            current_cases_by_repo[repo_id].append(row)
+            current_cases_by_repo[repo_id].append(case_row)
         elif normalized_status == "failed":
             historical_failed_names_by_repo[repo_id].add(
-                str(row.get("case_name") or "")
+                str(case_row.get("case_name") or "")
             )
 
     records: list[TestMetricsDailyRecord] = []
@@ -273,13 +276,18 @@ def compute_test_metrics_daily(
         case_statuses: dict[str, set[str]] = defaultdict(set)
         retry_attempts_by_case: dict[str, set[int]] = defaultdict(set)
         current_failed_names: set[str] = set()
-        for row in repo_cases:
-            case_name = str(row.get("case_name") or "")
+        for case_row in repo_cases:
+            case_name = str(case_row.get("case_name") or "")
             if not case_name:
                 continue
-            normalized_status = _normalize_test_status(row.get("status"))
+            raw_status = case_row.get("status")
+            normalized_status = _normalize_test_status(
+                raw_status if isinstance(raw_status, str) else None
+            )
             case_statuses[case_name].add(normalized_status)
-            retry_attempts_by_case[case_name].add(int(row.get("retry_attempt") or 0))
+            retry_attempts_by_case[case_name].add(
+                _int_value(case_row.get("retry_attempt"))
+            )
             if normalized_status == "failed":
                 current_failed_names.add(case_name)
 
@@ -423,3 +431,18 @@ def compute_coverage_metrics_daily(
         )
 
     return records
+
+
+def _int_value(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0

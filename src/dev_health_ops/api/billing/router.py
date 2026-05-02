@@ -7,20 +7,18 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
-
-try:
-    from stripe import SignatureVerificationError
-except ModuleNotFoundError:
-
-    class SignatureVerificationError(Exception):
-        """Fallback when Stripe SDK is not installed."""
-
+from stripe.params.billing_portal._session_create_params import (
+    SessionCreateParams as PortalSessionCreateParams,
+)
+from stripe.params.checkout._session_create_params import (
+    SessionCreateParams as CheckoutSessionCreateParams,
+)
 
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.billing.audit_service import BillingAuditService
@@ -34,6 +32,7 @@ from dev_health_ops.licensing import (
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.workers.system_tasks import send_billing_notification
 
+from ._helpers import assign_attr, require_str, require_uuid
 from .invoice_routes import router as invoice_router
 from .invoice_service import InvoiceService
 from .plans import router as plans_router
@@ -48,6 +47,17 @@ from .stripe_client import (
     get_webhook_secret,
 )
 from .subscription_service import has_had_trial
+
+stripe_module: Any | None
+try:
+    import stripe as stripe_module
+except ModuleNotFoundError:
+    stripe_module = None
+
+
+class SignatureVerificationError(Exception):
+    """Fallback export when Stripe SDK is unavailable."""
+
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +99,8 @@ class EntitlementResponse(BaseModel):
 
 
 class BillingAuditLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     org_id: uuid.UUID
     actor_id: uuid.UUID | None
@@ -97,8 +109,8 @@ class BillingAuditLogResponse(BaseModel):
     resource_id: uuid.UUID
     description: str
     stripe_event_id: str | None
-    local_state: dict | None
-    stripe_state: dict | None
+    local_state: dict[str, Any] | None
+    stripe_state: dict[str, Any] | None
     reconciliation_status: str | None
     created_at: datetime | None
 
@@ -206,11 +218,21 @@ async def stripe_webhook(request: Request) -> dict:
     try:
         client = get_stripe_client()
         event = client.construct_event(payload, sig_header, get_webhook_secret())
-    except SignatureVerificationError:
-        raise HTTPException(status_code=400, detail="Invalid Stripe signature")
     except RuntimeError as exc:
         logger.error("Stripe config error: %s", exc)
         raise HTTPException(status_code=500, detail="Billing not configured")
+    except Exception as exc:
+        stripe_signature_error = (
+            getattr(stripe_module, "SignatureVerificationError", None)
+            if stripe_module is not None
+            else None
+        )
+        if isinstance(exc, SignatureVerificationError) or (
+            stripe_signature_error is not None
+            and isinstance(exc, stripe_signature_error)
+        ):
+            raise HTTPException(status_code=400, detail="Invalid Stripe signature")
+        raise
 
     event_type: str = event.type
     data_object = event.data.object
@@ -292,20 +314,25 @@ async def _handle_invoice_webhook(
         }:
             await invoice_service.upsert_line_items(
                 db=db,
-                invoice_id=invoice.id,
+                invoice_id=require_uuid(invoice.id, "invoice.id"),
                 stripe_lines=getattr(invoice_payload, "lines", None),
             )
 
         if event_type == "invoice.paid":
             await invoice_service.mark_paid(
                 db,
-                stripe_invoice_id=invoice.stripe_invoice_id,
+                stripe_invoice_id=require_str(
+                    invoice.stripe_invoice_id, "invoice.stripe_invoice_id"
+                ),
                 payment_intent=getattr(invoice_payload, "payment_intent", None),
             )
         elif event_type == "invoice.payment_failed":
-            invoice.status = "payment_failed"
+            assign_attr(invoice, "status", "payment_failed")
         elif event_type == "invoice.voided":
-            await invoice_service.mark_voided(db, invoice.stripe_invoice_id)
+            await invoice_service.mark_voided(
+                db,
+                require_str(invoice.stripe_invoice_id, "invoice.stripe_invoice_id"),
+            )
 
         await db.commit()
 
@@ -633,7 +660,7 @@ async def _persist_license(
             )
             org = result.scalar_one_or_none()
             if org:
-                org.tier = str(tier.value)
+                assign_attr(org, "tier", str(tier.value))
 
             result = await session.execute(
                 select(OrgLicense).where(OrgLicense.org_id == org_uuid)
@@ -649,8 +676,8 @@ async def _persist_license(
                 )
                 session.add(org_license)
             else:
-                org_license.tier = str(tier.value)
-                org_license.license_key = license_key
+                assign_attr(org_license, "tier", str(tier.value))
+                assign_attr(org_license, "license_key", license_key)
 
             if customer_id:
                 org_license.customer_id = customer_id
@@ -685,15 +712,15 @@ async def _revoke_license(org_id: str) -> None:
             )
             org = result.scalar_one_or_none()
             if org:
-                org.tier = str(LicenseTier.COMMUNITY.value)
+                assign_attr(org, "tier", str(LicenseTier.COMMUNITY.value))
 
             result = await session.execute(
                 select(OrgLicense).where(OrgLicense.org_id == org_uuid)
             )
             org_license = result.scalar_one_or_none()
             if org_license:
-                org_license.is_valid = False
-                org_license.tier = str(LicenseTier.COMMUNITY.value)
+                assign_attr(org_license, "is_valid", False)
+                assign_attr(org_license, "tier", str(LicenseTier.COMMUNITY.value))
 
             await session.commit()
 
@@ -733,7 +760,7 @@ async def create_checkout_session(
         session=session,
     )
 
-    params: dict[str, object] = {
+    params: CheckoutSessionCreateParams = {
         "success_url": success_url,
         "cancel_url": cancel_url,
         "line_items": [{"price": price_id, "quantity": 1}],
@@ -781,12 +808,11 @@ async def create_portal_session(
 
     try:
         client = get_stripe_client()
-        portal_session = client.billing_portal.sessions.create(
-            params={
-                "customer": customer_id,
-                "return_url": return_url or "/",
-            }
-        )
+        portal_params: PortalSessionCreateParams = {
+            "customer": customer_id,
+            "return_url": return_url or "/",
+        }
+        portal_session = client.billing_portal.sessions.create(params=portal_params)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception:
@@ -846,6 +872,8 @@ router.include_router(
 @router.get("/audit", response_model=BillingAuditListResponse)
 async def list_billing_audit(
     org_id: uuid.UUID,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)],
     resource_type: str | None = None,
     resource_id: uuid.UUID | None = None,
     action: str | None = None,
@@ -854,8 +882,6 @@ async def list_billing_audit(
     to_date: datetime | None = None,
     limit: int = 50,
     offset: int = 0,
-    user: Annotated[AuthenticatedUser, Depends(get_current_user)] = None,
-    db: Annotated[AsyncSession, Depends(postgres_session_dependency)] = None,
 ) -> BillingAuditListResponse:
     if not user.is_superuser:
         raise HTTPException(status_code=403, detail="Superadmin access required")
@@ -921,9 +947,9 @@ async def resolve_billing_mismatch(
 
 @router.post("/reconcile")
 async def trigger_reconciliation(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(postgres_session_dependency)],
     org_id: uuid.UUID | None = None,
-    user: Annotated[AuthenticatedUser, Depends(get_current_user)] = None,
-    db: Annotated[AsyncSession, Depends(postgres_session_dependency)] = None,
 ) -> dict:
     if not user.is_superuser:
         raise HTTPException(status_code=403, detail="Superadmin access required")
@@ -937,17 +963,4 @@ async def trigger_reconciliation(
 
 
 def _to_audit_response(entry: BillingAuditLog) -> BillingAuditLogResponse:
-    return BillingAuditLogResponse(
-        id=entry.id,
-        org_id=entry.org_id,
-        actor_id=entry.actor_id,
-        action=entry.action,
-        resource_type=entry.resource_type,
-        resource_id=entry.resource_id,
-        description=entry.description,
-        stripe_event_id=entry.stripe_event_id,
-        local_state=entry.local_state,
-        stripe_state=entry.stripe_state,
-        reconciliation_status=entry.reconciliation_status,
-        created_at=entry.created_at,
-    )
+    return BillingAuditLogResponse.model_validate(entry, from_attributes=True)

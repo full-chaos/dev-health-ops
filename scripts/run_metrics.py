@@ -17,8 +17,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from sqlalchemy import select  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
-from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import Session  # noqa: E402
 
 from dev_health_ops.analytics.metrics import (  # noqa: E402
     compute_commit_metrics,
@@ -199,7 +202,7 @@ async def _run_mongo(db_url: str, limit_commits: int) -> int:
         print(f"MongoDB support unavailable: {exc}")
         return 1
 
-    client = AsyncIOMotorClient(db_url)
+    client: Any = AsyncIOMotorClient(db_url)
     try:
         # Get db name from URI or default to 'mergestat'
         try:
@@ -317,7 +320,7 @@ def _run_clickhouse(db_url: str, limit_commits: int) -> int:
 
 async def _run_async(db_url: str, limit_commits: int) -> int:
     engine = create_async_engine(db_url, echo=False)
-    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     try:
         async with session_factory() as session:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Protocol, cast
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +25,37 @@ from .common import get_session
 router = APIRouter()
 
 
+class _MutableTeamMapping(Protocol):
+    name: str
+    description: str | None
+    repo_patterns: list[str]
+    project_keys: list[str]
+    extra_data: dict[str, Any]
+    managed_fields: list[str]
+    sync_policy: int
+
+
+def _team_mapping_response(team: object) -> TeamMappingResponse:
+    return TeamMappingResponse.model_validate(
+        {
+            "id": str(getattr(team, "id")),
+            "team_id": getattr(team, "team_id"),
+            "name": getattr(team, "name"),
+            "description": getattr(team, "description"),
+            "repo_patterns": list(getattr(team, "repo_patterns") or []),
+            "project_keys": list(getattr(team, "project_keys") or []),
+            "extra_data": dict(getattr(team, "extra_data") or {}),
+            "managed_fields": list(getattr(team, "managed_fields") or []),
+            "sync_policy": int(getattr(team, "sync_policy")),
+            "flagged_changes": getattr(team, "flagged_changes"),
+            "last_drift_sync_at": getattr(team, "last_drift_sync_at"),
+            "is_active": getattr(team, "is_active"),
+            "created_at": getattr(team, "created_at"),
+            "updated_at": getattr(team, "updated_at"),
+        }
+    )
+
+
 @router.get("/teams", response_model=list[TeamMappingResponse])
 async def list_teams(
     active_only: bool = True,
@@ -31,25 +64,7 @@ async def list_teams(
 ) -> list[TeamMappingResponse]:
     svc = TeamMappingService(session, org_id)
     teams = await svc.list_all(active_only=active_only)
-    return [
-        TeamMappingResponse(
-            id=str(t.id),
-            team_id=t.team_id,
-            name=t.name,
-            description=t.description,
-            repo_patterns=t.repo_patterns,
-            project_keys=t.project_keys,
-            extra_data=t.extra_data,
-            managed_fields=t.managed_fields,
-            sync_policy=t.sync_policy,
-            flagged_changes=t.flagged_changes,
-            last_drift_sync_at=t.last_drift_sync_at,
-            is_active=t.is_active,
-            created_at=t.created_at,
-            updated_at=t.updated_at,
-        )
-        for t in teams
-    ]
+    return [_team_mapping_response(team) for team in teams]
 
 
 @router.post("/teams", response_model=TeamMappingResponse)
@@ -70,23 +85,10 @@ async def create_or_update_team(
         extra_data=payload.extra_data,
     )
     await session.commit()
-    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
-    return TeamMappingResponse(
-        id=str(team.id),
-        team_id=team.team_id,
-        name=team.name,
-        description=team.description,
-        repo_patterns=team.repo_patterns,
-        project_keys=team.project_keys,
-        extra_data=team.extra_data,
-        managed_fields=team.managed_fields,
-        sync_policy=team.sync_policy,
-        flagged_changes=team.flagged_changes,
-        last_drift_sync_at=team.last_drift_sync_at,
-        is_active=team.is_active,
-        created_at=team.created_at,
-        updated_at=team.updated_at,
+    getattr(sync_teams_to_analytics, "apply_async")(
+        kwargs={"org_id": org_id}, queue="metrics"
     )
+    return _team_mapping_response(team)
 
 
 @router.delete("/teams/{team_id}")
@@ -117,12 +119,13 @@ async def discover_teams(
             detail=f"No credentials found for provider '{provider}'",
         )
 
-    config = credential.config or {}
+    config: dict[str, Any] = getattr(credential, "config") or {}
     discovery_svc = TeamDiscoveryService(session, org_id)
 
     if provider == "github":
         token = decrypted.get("token")
-        org_name = config.get("org")
+        org_name_value = config.get("org")
+        org_name = org_name_value if isinstance(org_name_value, str) else None
         if not token or not org_name:
             raise HTTPException(
                 status_code=400,
@@ -131,8 +134,10 @@ async def discover_teams(
         teams = await discovery_svc.discover_github(token=token, org_name=org_name)
     elif provider == "gitlab":
         token = decrypted.get("token")
-        group_path = config.get("group")
-        url = config.get("url", "https://gitlab.com")
+        group_path_value = config.get("group")
+        group_path = group_path_value if isinstance(group_path_value, str) else None
+        url_value = config.get("url", "https://gitlab.com")
+        url = url_value if isinstance(url_value, str) else "https://gitlab.com"
         if not token or not group_path:
             raise HTTPException(
                 status_code=400,
@@ -154,7 +159,11 @@ async def discover_teams(
     else:
         email = decrypted.get("email")
         api_token = decrypted.get("api_token") or decrypted.get("token")
-        jira_url = config.get("url") or decrypted.get("url")
+        jira_config_url = config.get("url")
+        jira_url = jira_config_url if isinstance(jira_config_url, str) else None
+        if jira_url is None:
+            decrypted_url = decrypted.get("url")
+            jira_url = decrypted_url if isinstance(decrypted_url, str) else None
         if not email or not api_token or not jira_url:
             raise HTTPException(
                 status_code=400,
@@ -180,7 +189,9 @@ async def import_teams(
     svc = TeamDiscoveryService(session, org_id)
     result = await svc.import_teams(payload.teams, payload.on_conflict)
     await session.commit()
-    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
+    getattr(sync_teams_to_analytics, "apply_async")(
+        kwargs={"org_id": org_id}, queue="metrics"
+    )
     return TeamImportResponse(**result)
 
 
@@ -211,7 +222,9 @@ async def approve_team_changes(
     indices = None if approve_all else change_indices
     result = await svc.approve_changes(team_id, indices)
     await session.commit()
-    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
+    getattr(sync_teams_to_analytics, "apply_async")(
+        kwargs={"org_id": org_id}, queue="metrics"
+    )
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -243,7 +256,7 @@ async def trigger_drift_sync(
 ):
     from dev_health_ops.workers.sync_tasks import sync_team_drift
 
-    sync_team_drift.apply_async(kwargs={"org_id": org_id}, queue="sync")
+    getattr(sync_team_drift, "apply_async")(kwargs={"org_id": org_id}, queue="sync")
     return {"status": "dispatched"}
 
 
@@ -257,22 +270,7 @@ async def get_team(
     team = await svc.get(team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="Team not found")
-    return TeamMappingResponse(
-        id=str(team.id),
-        team_id=team.team_id,
-        name=team.name,
-        description=team.description,
-        repo_patterns=team.repo_patterns,
-        project_keys=team.project_keys,
-        extra_data=team.extra_data,
-        managed_fields=team.managed_fields,
-        sync_policy=team.sync_policy,
-        flagged_changes=team.flagged_changes,
-        last_drift_sync_at=team.last_drift_sync_at,
-        is_active=team.is_active,
-        created_at=team.created_at,
-        updated_at=team.updated_at,
-    )
+    return _team_mapping_response(team)
 
 
 @router.patch("/teams/{team_id}", response_model=TeamMappingResponse)
@@ -287,35 +285,21 @@ async def update_team(
     if existing is None:
         raise HTTPException(status_code=404, detail="Team not found")
 
+    mutable_existing = cast(_MutableTeamMapping, existing)
     if payload.name is not None:
-        existing.name = payload.name
+        mutable_existing.name = payload.name
     if payload.description is not None:
-        existing.description = payload.description
+        mutable_existing.description = payload.description
     if payload.repo_patterns is not None:
-        existing.repo_patterns = payload.repo_patterns
+        mutable_existing.repo_patterns = payload.repo_patterns
     if payload.project_keys is not None:
-        existing.project_keys = payload.project_keys
+        mutable_existing.project_keys = payload.project_keys
     if payload.extra_data is not None:
-        existing.extra_data = payload.extra_data
+        mutable_existing.extra_data = payload.extra_data
     if payload.managed_fields is not None:
-        existing.managed_fields = payload.managed_fields
+        mutable_existing.managed_fields = payload.managed_fields
     if payload.sync_policy is not None:
-        existing.sync_policy = payload.sync_policy
+        mutable_existing.sync_policy = payload.sync_policy
 
     await session.flush()
-    return TeamMappingResponse(
-        id=str(existing.id),
-        team_id=existing.team_id,
-        name=existing.name,
-        description=existing.description,
-        repo_patterns=existing.repo_patterns,
-        project_keys=existing.project_keys,
-        extra_data=existing.extra_data,
-        managed_fields=existing.managed_fields,
-        sync_policy=existing.sync_policy,
-        flagged_changes=existing.flagged_changes,
-        last_drift_sync_at=existing.last_drift_sync_at,
-        is_active=existing.is_active,
-        created_at=existing.created_at,
-        updated_at=existing.updated_at,
-    )
+    return _team_mapping_response(existing)

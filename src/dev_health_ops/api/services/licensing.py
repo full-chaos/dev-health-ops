@@ -32,6 +32,28 @@ LICENSE_JWT_ALGORITHM = "RS256"
 LICENSE_JWT_ALGORITHM_SYMMETRIC = "HS256"
 
 
+def _coerce_uuid(value: object) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
+
+
+def _coerce_limit_map(value: object) -> dict[str, int | float | None]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, int | float | None] = {}
+    for key, raw in value.items():
+        if raw is None or isinstance(raw, (int, float)):
+            result[str(key)] = raw
+    return result
+
+
+def _coerce_bool_map(value: object) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): bool(enabled) for key, enabled in value.items()}
+
+
 def _get_license_public_key() -> str | None:
     return os.getenv("LICENSE_PUBLIC_KEY")
 
@@ -161,7 +183,7 @@ class LicenseService:
             logger.error("Cannot create license: LICENSE_SECRET_KEY not configured")
             return None
 
-        payload = {
+        payload: dict[str, object] = {
             "sub": org_id,
             "tier": tier.value,
             "exp": expires_at,
@@ -190,7 +212,7 @@ class FeatureService:
 
     def __init__(self, session: Session):
         self.session = session
-        self._feature_cache: dict[str, FeatureFlag] = {}
+        self._feature_cache: dict[str, FeatureFlag | None] = {}
         self._override_cache: dict[
             tuple[uuid.UUID, str], OrgFeatureOverride | None
         ] = {}
@@ -250,17 +272,26 @@ class FeatureService:
         if feature.is_deprecated:
             logger.warning("Access to deprecated feature: %s", feature_key)
 
-        override = self._get_override(org_id, feature.id)
+        override = self._get_override(org_id, _coerce_uuid(feature.id))
         if override:
             now = datetime.now(timezone.utc)
+            override_expires_at = (
+                override.expires_at
+                if isinstance(override.expires_at, datetime)
+                else None
+            )
             if override.expires_at and override.expires_at < now:
                 pass
             else:
                 if override.is_enabled:
                     return FeatureAccess(
                         allowed=True,
-                        expires_at=override.expires_at,
-                        config=override.config,
+                        expires_at=override_expires_at,
+                        config=(
+                            dict(override.config)
+                            if isinstance(override.config, dict)
+                            else None
+                        ),
                     )
                 else:
                     return FeatureAccess(
@@ -274,8 +305,9 @@ class FeatureService:
         )
 
         if org_license and org_license.features_override:
-            if feature_key in org_license.features_override:
-                if org_license.features_override[feature_key]:
+            features_override = _coerce_bool_map(org_license.features_override)
+            if feature_key in features_override:
+                if features_override[feature_key]:
                     return FeatureAccess(allowed=True)
                 else:
                     return FeatureAccess(
@@ -329,7 +361,7 @@ class TierLimitService:
         """Read tier limits from the tier_limits table."""
         try:
             rows = self.session.query(TierLimit).filter(TierLimit.tier == tier).all()
-            return {row.limit_key: row.typed_value for row in rows}
+            return {str(row.limit_key): row.typed_value for row in rows}
         except Exception:
             # Table may not exist yet (pre-migration). Fall through to defaults.
             return {}
@@ -338,7 +370,7 @@ class TierLimitService:
         self, org_tier: LicenseTier
     ) -> dict[str, int | float | None]:
         """Merge DB tier limits over hardcoded defaults for a tier."""
-        defaults = dict(
+        defaults = _coerce_limit_map(
             TIER_LIMITS_DEFAULTS.get(
                 org_tier, TIER_LIMITS_DEFAULTS[LicenseTier.COMMUNITY]
             )
@@ -357,8 +389,9 @@ class TierLimitService:
 
         # 1. Per-org override (highest priority)
         if org_license and org_license.limits_override:
-            if limit_key in org_license.limits_override:
-                return org_license.limits_override[limit_key]
+            limits_override = _coerce_limit_map(org_license.limits_override)
+            if limit_key in limits_override:
+                return limits_override[limit_key]
 
         # 2. DB tier defaults → 3. Hardcoded fallback
         tier_limits = self._resolve_tier_limits(org_tier)
@@ -375,7 +408,7 @@ class TierLimitService:
 
         # Per-org overrides win
         if org_license and org_license.limits_override:
-            limits.update(org_license.limits_override)
+            limits.update(_coerce_limit_map(org_license.limits_override))
 
         return limits
 

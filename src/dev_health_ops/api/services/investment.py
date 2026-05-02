@@ -30,7 +30,12 @@ def _split_category_filters(filters: MetricFilter) -> tuple[list[str], list[str]
 
     Delegates to core.taxonomy.split_category_filters for the pure logic.
     """
-    return _split_category_filters_core(filters.why.work_category)
+    work_categories: list[str | None] | None = (
+        [category for category in filters.why.work_category]
+        if filters.why.work_category
+        else None
+    )
+    return _split_category_filters_core(work_categories)
 
 
 async def _tables_present(sink: BaseMetricsSink, tables: list[str]) -> bool:
@@ -164,7 +169,8 @@ async def build_investment_response(
             return InvestmentResponse(
                 theme_distribution={}, subcategory_distribution={}, edges=[]
             )
-        scope_filter, scope_params = "", {}
+        scope_filter = ""
+        scope_params: dict[str, Any] = {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(sink, filters)
             scope_filter, scope_params = build_scope_filter_multi(
@@ -245,7 +251,8 @@ async def build_investment_sunburst(
             ],
         ):
             return []
-        scope_filter, scope_params = "", {}
+        scope_filter = ""
+        scope_params: dict[str, Any] = {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(sink, filters)
             scope_filter, scope_params = build_scope_filter_multi(

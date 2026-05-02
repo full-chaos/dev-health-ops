@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -107,7 +108,7 @@ class IPAllowlistService:
         is_active: bool | None = None,
         expires_at: datetime | None = None,
     ) -> OrgIPAllowlist | None:
-        entry = await self.get_entry(org_id, entry_id)
+        entry: Any | None = await self.get_entry(org_id, entry_id)
         if not entry:
             return None
 
@@ -180,7 +181,13 @@ class IPAllowlistService:
             created_by_id=str(allowlist.created_by_id)
             if allowlist.created_by_id
             else None,
-            created_at=allowlist.created_at,
-            updated_at=allowlist.updated_at,
-            expires_at=allowlist.expires_at,
+            created_at=allowlist.created_at
+            if isinstance(allowlist.created_at, datetime)
+            else datetime.now(timezone.utc),
+            updated_at=allowlist.updated_at
+            if isinstance(allowlist.updated_at, datetime)
+            else datetime.now(timezone.utc),
+            expires_at=allowlist.expires_at
+            if isinstance(allowlist.expires_at, datetime)
+            else None,
         )

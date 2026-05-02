@@ -3,56 +3,61 @@ from __future__ import annotations
 import ipaddress
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
+
+if TYPE_CHECKING:
+    from .users import Organization, User
 
 
 class OrgIPAllowlist(Base):
     __tablename__ = "org_ip_allowlist"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    org_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    ip_range = Column(Text, nullable=False)
-    description = Column(Text, nullable=True)
-    is_active = Column(Boolean, nullable=False, default=True)
+    ip_range: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    created_by_id = Column(
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-    expires_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
-    organization = relationship("Organization")
-    created_by = relationship("User")
+    organization: Mapped[Organization] = relationship("Organization")
+    created_by: Mapped[User | None] = relationship("User")
 
     __table_args__ = (
         UniqueConstraint("org_id", "ip_range", name="uq_org_ip_allowlist_org_range"),

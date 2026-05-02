@@ -256,7 +256,12 @@ def _fetch_clickhouse_schema(
         """,
         {"tables": table_list},
     )
-    present_tables = {row.get("name") for row in rows}
+    present_tables = {
+        str(name)
+        for row in rows
+        for name in [row.get("name")]
+        if isinstance(name, str) and name
+    }
     schema: dict[str, dict[str, str]] = {}
     for table in present_tables:
         col_rows = _query_dicts(
@@ -270,7 +275,10 @@ def _fetch_clickhouse_schema(
             {"table": table},
         )
         schema[table] = {
-            row.get("name"): str(row.get("type") or "") for row in col_rows
+            str(name): str(row.get("type") or "")
+            for row in col_rows
+            for name in [row.get("name")]
+            if isinstance(name, str) and name
         }
     return present_tables, schema
 
@@ -333,8 +341,8 @@ def _build_clickhouse_migration_hints(
             column_hints[f"{table}.{column}"] = migrations.get("columns", {}).get(
                 key, []
             )
-    for table, columns in type_mismatches.items():
-        for column in columns.keys():
+    for table, mismatched_columns in type_mismatches.items():
+        for column in mismatched_columns.keys():
             key = (table, column)
             column_hints.setdefault(
                 f"{table}.{column}",
@@ -360,8 +368,8 @@ def _build_sql_migration_hints(
             column_hints[f"{table}.{column}"] = _find_migration_matches(
                 files, [table, column]
             )
-    for table, columns in type_mismatches.items():
-        for column in columns.keys():
+    for table, mismatched_columns in type_mismatches.items():
+        for column in mismatched_columns.keys():
             column_hints.setdefault(
                 f"{table}.{column}",
                 _find_migration_matches(files, [table, column]),
@@ -405,10 +413,12 @@ def run_schema_audit(*, db_url: str, org_id: str | None = None) -> dict[str, Any
 
         try:
             sink.client.command("SELECT 1")
-            _present, actual = _fetch_clickhouse_schema(sink.client, expected.keys())
+            _present, clickhouse_actual = _fetch_clickhouse_schema(
+                sink.client, expected.keys()
+            )
             missing_tables, missing_columns, type_mismatches = _compare_schema(
                 expected,
-                actual,
+                clickhouse_actual,
                 _normalize_clickhouse_type,
                 _normalize_clickhouse_type,
             )
@@ -455,12 +465,14 @@ def run_schema_audit(*, db_url: str, org_id: str | None = None) -> dict[str, Any
             with engine.connect() as conn:
                 inspector = inspect(conn)
                 table_names = set(inspector.get_table_names())
-                actual: dict[str, dict[str, Any]] = {}
+                sqlalchemy_actual: dict[str, dict[str, Any]] = {}
                 for table in expected.keys():
                     if table not in table_names:
                         continue
                     cols = inspector.get_columns(table)
-                    actual[table] = {col.get("name"): col.get("type") for col in cols}
+                    sqlalchemy_actual[table] = {
+                        str(col.get("name")): col.get("type") for col in cols
+                    }
         except Exception as exc:
             base_report["db_error"] = str(exc)
             return base_report
@@ -473,7 +485,7 @@ def run_schema_audit(*, db_url: str, org_id: str | None = None) -> dict[str, Any
 
         missing_tables, missing_columns, type_mismatches = _compare_schema(
             expected,
-            actual,
+            sqlalchemy_actual,
             lambda t: t,
             lambda t: _normalize_inspected_type(t, backend),
         )

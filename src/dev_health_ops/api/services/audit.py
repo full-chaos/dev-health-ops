@@ -4,7 +4,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import and_, desc, select
@@ -313,10 +313,18 @@ class AuditService:
             action=str(log.action),
             resource_type=str(log.resource_type),
             resource_id=str(log.resource_id),
-            description=log.description,
-            changes=log.changes,
-            request_metadata=log.request_metadata,
+            description=str(log.description) if log.description is not None else None,
+            changes=dict(log.changes) if isinstance(log.changes, dict) else None,
+            request_metadata=(
+                dict(log.request_metadata)
+                if isinstance(log.request_metadata, dict)
+                else None
+            ),
             status=str(log.status),
-            error_message=log.error_message,
-            created_at=log.created_at,
+            error_message=str(log.error_message)
+            if log.error_message is not None
+            else None,
+            created_at=log.created_at
+            if isinstance(log.created_at, datetime)
+            else datetime.now(timezone.utc),
         )

@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from dev_health_ops.models.git import GitPullRequest, GitPullRequestReview
+from dev_health_ops.storage.mixins.base import SQLAlchemyStoreMixinProtocol
 
 
-class PullRequestMixin:
+class PullRequestMixin(SQLAlchemyStoreMixinProtocol):
     async def insert_git_pull_requests(self, pr_data: list[GitPullRequest]) -> None:
         if not pr_data:
             return

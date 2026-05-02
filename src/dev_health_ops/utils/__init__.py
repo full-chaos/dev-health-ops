@@ -15,6 +15,8 @@ _legacy_utils_path = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "utils.py"
 )
 _spec = importlib.util.spec_from_file_location("_legacy_utils", _legacy_utils_path)
+if _spec is None or _spec.loader is None:
+    raise ImportError(f"Unable to load legacy utils module from {_legacy_utils_path}")
 _legacy_utils = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_legacy_utils)
 

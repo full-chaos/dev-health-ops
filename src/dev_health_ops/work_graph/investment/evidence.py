@@ -45,6 +45,25 @@ def _truncate_text(value: str, limit: int) -> str:
     return f"{compact[:limit].rstrip()}..."
 
 
+def _float_value(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
+
+
 def _commit_subject(message: str | None) -> str | None:
     if not message:
         return None
@@ -112,7 +131,7 @@ def _graph_density(node_count: int, edge_count: int) -> float:
 
 
 def _edge_confidence(edges: Iterable[dict[str, object]]) -> float:
-    values = [float(edge.get("confidence") or 0.0) for edge in edges]
+    values = [_float_value(edge.get("confidence")) for edge in edges]
     if not values:
         return 0.0
     return sum(values) / float(len(values))
@@ -169,9 +188,9 @@ def build_text_bundle(
         item_type = str(item.get("type") or "").strip()
         if item_type:
             parts.append(f"Type: {_truncate_text(item_type, MAX_FIELD_CHARS)}")
-        labels = item.get("labels") or []
+        labels = _string_list(item.get("labels"))
         if labels:
-            label_text = ", ".join(str(label) for label in labels if label)
+            label_text = ", ".join(labels)
             if label_text:
                 parts.append(f"Labels: {_truncate_text(label_text, MAX_FIELD_CHARS)}")
         parent_id = str(item.get("parent_id") or "").strip()
@@ -203,7 +222,8 @@ def build_text_bundle(
 
     for commit_id in sorted(commit_ids)[:MAX_COMMITS]:
         commit = commit_map.get(commit_id) or {}
-        subject = _commit_subject(commit.get("message"))
+        raw_message = commit.get("message")
+        subject = _commit_subject(raw_message if isinstance(raw_message, str) else None)
         if subject:
             source_texts["commit"][commit_id] = _truncate_text(
                 str(subject), MAX_SOURCE_CHARS

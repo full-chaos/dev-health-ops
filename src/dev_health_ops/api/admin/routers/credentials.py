@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
+from typing import Any, Protocol, cast
 from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,34 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class _MutableIntegrationCredential(Protocol):
+    config: dict[str, Any] | None
+    is_active: bool
+
+
+def _string_value(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _integration_credential_response(
+    credential: object,
+) -> IntegrationCredentialResponse:
+    return IntegrationCredentialResponse.model_validate(
+        {
+            "id": str(getattr(credential, "id")),
+            "provider": getattr(credential, "provider"),
+            "name": getattr(credential, "name"),
+            "is_active": getattr(credential, "is_active"),
+            "config": getattr(credential, "config") or {},
+            "last_test_at": getattr(credential, "last_test_at"),
+            "last_test_success": getattr(credential, "last_test_success"),
+            "last_test_error": getattr(credential, "last_test_error"),
+            "created_at": getattr(credential, "created_at"),
+            "updated_at": getattr(credential, "updated_at"),
+        }
+    )
+
+
 @router.get("/credentials", response_model=list[IntegrationCredentialResponse])
 async def list_credentials(
     provider: str | None = None,
@@ -39,21 +68,7 @@ async def list_credentials(
         creds = await svc.list_by_provider(provider)
     else:
         creds = await svc.list_all(active_only=active_only)
-    return [
-        IntegrationCredentialResponse(
-            id=str(c.id),
-            provider=c.provider,
-            name=c.name,
-            is_active=c.is_active,
-            config=c.config or {},
-            last_test_at=c.last_test_at,
-            last_test_success=c.last_test_success,
-            last_test_error=c.last_test_error,
-            created_at=c.created_at,
-            updated_at=c.updated_at,
-        )
-        for c in creds
-    ]
+    return [_integration_credential_response(credential) for credential in creds]
 
 
 @router.get(
@@ -77,8 +92,8 @@ async def list_credential_repos(
     if credential is None or decrypted is None:
         raise HTTPException(status_code=404, detail="Credential not found")
 
-    provider = credential.provider
-    config = credential.config or {}
+    provider = str(getattr(credential, "provider"))
+    config: dict[str, Any] = getattr(credential, "config") or {}
 
     from dev_health_ops.connectors.exceptions import (
         AuthenticationException,
@@ -90,44 +105,63 @@ async def list_credential_repos(
         from dev_health_ops.connectors.github import GitHubConnector
 
         token = decrypted.get("token")
-        base_url = decrypted.get("base_url") or config.get("base_url")
+        base_url = _string_value(decrypted.get("base_url")) or _string_value(
+            config.get("base_url")
+        )
         if not token:
             raise HTTPException(
                 status_code=400, detail="GitHub credential missing token"
             )
-        connector = GitHubConnector(token=token, base_url=base_url)
-        effective_owner = owner or config.get("org")
+        github_connector = GitHubConnector(token=token, base_url=base_url)
+        effective_owner = owner or _string_value(config.get("org"))
+        if not effective_owner:
+            return DiscoveredReposResponse(provider=provider, repos=[], total=0)
+        try:
+            repos = github_connector.list_repositories(
+                org_name=effective_owner,
+                search=search,
+                max_repos=max_repos,
+            )
+        except NotFoundException:
+            return DiscoveredReposResponse(provider=provider, repos=[], total=0)
+        except AuthenticationException as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
+        except RateLimitException as exc:
+            raise HTTPException(status_code=429, detail=str(exc))
     elif provider == "gitlab":
         from dev_health_ops.connectors.gitlab import GitLabConnector
 
         token = decrypted.get("token")
-        url = decrypted.get("url") or config.get("url", "https://gitlab.com")
+        url = (
+            _string_value(decrypted.get("url"))
+            or _string_value(config.get("url"))
+            or "https://gitlab.com"
+        )
         if not token:
             raise HTTPException(
                 status_code=400, detail="GitLab credential missing token"
             )
-        connector = GitLabConnector(url=url, private_token=token)
-        effective_owner = owner or config.get("group")
+        gitlab_connector = GitLabConnector(url=url, private_token=token)
+        effective_owner = owner or _string_value(config.get("group"))
+        if not effective_owner:
+            return DiscoveredReposResponse(provider=provider, repos=[], total=0)
+        try:
+            repos = gitlab_connector.list_repositories(
+                org_name=effective_owner,
+                search=search,
+                max_repos=max_repos,
+            )
+        except NotFoundException:
+            return DiscoveredReposResponse(provider=provider, repos=[], total=0)
+        except AuthenticationException as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
+        except RateLimitException as exc:
+            raise HTTPException(status_code=429, detail=str(exc))
     else:
         raise HTTPException(
             status_code=400,
             detail=f"Repo listing not supported for provider: {provider}",
         )
-
-    if not effective_owner:
-        return DiscoveredReposResponse(provider=provider, repos=[], total=0)
-
-    try:
-        repos = connector.list_repositories(
-            org_name=effective_owner, search=search, max_repos=max_repos
-        )
-    except NotFoundException:
-        # Owner/org doesn't exist (or token lacks access) — return empty
-        return DiscoveredReposResponse(provider=provider, repos=[], total=0)
-    except AuthenticationException as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
-    except RateLimitException as exc:
-        raise HTTPException(status_code=429, detail=str(exc))
 
     discovered = [
         DiscoveredRepo(
@@ -156,18 +190,7 @@ async def get_credential(
     cred = await svc.get(provider, name)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    return IntegrationCredentialResponse(
-        id=str(cred.id),
-        provider=cred.provider,
-        name=cred.name,
-        is_active=cred.is_active,
-        config=cred.config or {},
-        last_test_at=cred.last_test_at,
-        last_test_success=cred.last_test_success,
-        last_test_error=cred.last_test_error,
-        created_at=cred.created_at,
-        updated_at=cred.updated_at,
-    )
+    return _integration_credential_response(cred)
 
 
 @router.post("/credentials", response_model=IntegrationCredentialResponse)
@@ -183,18 +206,7 @@ async def create_credential(
         name=payload.name,
         config=payload.config,
     )
-    return IntegrationCredentialResponse(
-        id=str(cred.id),
-        provider=cred.provider,
-        name=cred.name,
-        is_active=cred.is_active,
-        config=cred.config or {},
-        last_test_at=cred.last_test_at,
-        last_test_success=cred.last_test_success,
-        last_test_error=cred.last_test_error,
-        created_at=cred.created_at,
-        updated_at=cred.updated_at,
-    )
+    return _integration_credential_response(cred)
 
 
 @router.patch(
@@ -217,30 +229,22 @@ async def update_credential(
             provider=provider,
             credentials=payload.credentials,
             name=name,
-            config=payload.config if payload.config is not None else existing.config,
+            config=payload.config
+            if payload.config is not None
+            else getattr(existing, "config"),
             is_active=payload.is_active
             if payload.is_active is not None
-            else existing.is_active,
+            else bool(getattr(existing, "is_active")),
         )
     else:
+        mutable_existing = cast(_MutableIntegrationCredential, existing)
         if payload.config is not None:
-            existing.config = payload.config
+            mutable_existing.config = payload.config
         if payload.is_active is not None:
-            existing.is_active = payload.is_active
+            mutable_existing.is_active = payload.is_active
         await session.flush()
 
-    return IntegrationCredentialResponse(
-        id=str(existing.id),
-        provider=existing.provider,
-        name=existing.name,
-        is_active=existing.is_active,
-        config=existing.config or {},
-        last_test_at=existing.last_test_at,
-        last_test_success=existing.last_test_success,
-        last_test_error=existing.last_test_error,
-        created_at=existing.created_at,
-        updated_at=existing.updated_at,
-    )
+    return _integration_credential_response(existing)
 
 
 @router.delete("/credentials/{provider}/{name}")
@@ -280,7 +284,7 @@ async def test_connection(
 
     success = False
     error = None
-    details = {}
+    details: dict[str, Any] = {}
 
     try:
         if payload.provider == "github":
@@ -305,7 +309,12 @@ async def test_connection(
     if stored is None:
         stored = await svc.get(payload.provider, payload.name)
     if stored:
-        await svc.update_test_result(stored.provider, success, error, stored.name)
+        await svc.update_test_result(
+            str(getattr(stored, "provider")),
+            success,
+            error,
+            str(getattr(stored, "name")),
+        )
     return TestConnectionResponse(success=success, error=error, details=details or None)
 
 
@@ -353,14 +362,14 @@ def _build_safe_url(validated_base: str, path: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, safe_path, "", "", ""))
 
 
-async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
+async def _test_github_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
     token = creds.get("token")
     if not token:
         return False, {"error": "No token provided"}
 
-    base_url = creds.get("base_url", "https://api.github.com")
+    base_url = _string_value(creds.get("base_url")) or "https://api.github.com"
     is_valid, error = _validate_external_url(base_url)
     if not is_valid:
         return False, {"error": error}
@@ -380,14 +389,18 @@ async def _test_github_connection(creds: dict) -> tuple[bool, dict]:
         return False, {"status": resp.status_code, "error": resp.text[:200]}
 
 
-async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
+async def _test_gitlab_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
     token = creds.get("token")
     if not token:
         return False, {"error": "No token provided"}
 
-    base_url = creds.get("url") or creds.get("base_url", "https://gitlab.com/api/v4")
+    base_url = (
+        _string_value(creds.get("url"))
+        or _string_value(creds.get("base_url"))
+        or "https://gitlab.com/api/v4"
+    )
     is_valid, error = _validate_external_url(base_url)
     if not is_valid:
         return False, {"error": error}
@@ -404,14 +417,16 @@ async def _test_gitlab_connection(creds: dict) -> tuple[bool, dict]:
         return False, {"status": resp.status_code, "error": resp.text[:200]}
 
 
-async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
+async def _test_jira_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
-    email = creds.get("email")
-    api_token = creds.get("token") or creds.get("api_token")
-    base_url = creds.get("url") or creds.get("base_url")
+    email = _string_value(creds.get("email"))
+    api_token = _string_value(creds.get("token")) or _string_value(
+        creds.get("api_token")
+    )
+    base_url = _string_value(creds.get("url")) or _string_value(creds.get("base_url"))
 
-    if not all([email, api_token, base_url]):
+    if email is None or api_token is None or base_url is None:
         return False, {
             "error": "Missing required credentials (email, api_token, base_url)"
         }
@@ -438,10 +453,10 @@ async def _test_jira_connection(creds: dict) -> tuple[bool, dict]:
         return False, {"status": resp.status_code, "error": resp.text[:200]}
 
 
-async def _test_linear_connection(creds: dict) -> tuple[bool, dict]:
+async def _test_linear_connection(creds: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     import httpx
 
-    api_key = creds.get("apiKey") or creds.get("api_key")
+    api_key = _string_value(creds.get("apiKey")) or _string_value(creds.get("api_key"))
     if not api_key:
         return False, {"error": "No API key provided"}
 
@@ -460,11 +475,13 @@ async def _test_linear_connection(creds: dict) -> tuple[bool, dict]:
         return False, {"status": resp.status_code, "error": resp.text[:200]}
 
 
-async def _test_launchdarkly_connection(creds: dict) -> tuple[bool, dict]:
+async def _test_launchdarkly_connection(
+    creds: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
     from dev_health_ops.connectors.launchdarkly import LaunchDarklyConnector
 
-    api_key = creds.get("api_key")
-    project_key = creds.get("project_key")
+    api_key = _string_value(creds.get("api_key"))
+    project_key = _string_value(creds.get("project_key"))
     if not api_key or not project_key:
         return False, {"error": "Missing required credentials (api_key, project_key)"}
 

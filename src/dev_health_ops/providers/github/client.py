@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, TypeVar
 
 from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
 from dev_health_ops.connectors.utils.graphql import GitHubGraphQLClient
@@ -21,17 +21,68 @@ from dev_health_ops.providers._ratelimit import gate_call
 
 logger = logging.getLogger(__name__)
 
+_TItem = TypeVar("_TItem")
+
+
+class _GitHubLabelLike(Protocol):
+    name: object
+
+
+class _GitHubUserLike(Protocol):
+    email: object
+    login: object
+    name: object
+
+
+class _GitHubEventLike(Protocol):
+    created_at: object
+    event: object
+    label: object
+    actor: object
+
+
+class _GitHubCommentLike(Protocol):
+    id: object
+    created_at: object
+    user: object
+    body: object
+
+
+class _GitHubMilestoneLike(Protocol):
+    id: object
+    number: object
+    title: object
+    created_at: object
+    due_on: object
+    state: object
+
 
 class _GitHubIssueLike(Protocol):
+    number: object
+    title: object
+    body: object
+    state: object
+    created_at: object
+    updated_at: object
+    closed_at: object
+    labels: object
+    assignees: object
+    user: object
+    html_url: object
+    url: object
     pull_request: object
 
-    def get_events(self) -> Iterable[object]: ...
+    def get_events(self) -> Iterable[_GitHubEventLike]: ...
 
-    def get_comments(self) -> Iterable[object]: ...
+    def get_comments(self) -> Iterable[_GitHubCommentLike]: ...
 
 
 class _GitHubPullRequestLike(_GitHubIssueLike, Protocol):
-    def get_review_comments(self) -> Iterable[object]: ...
+    merged: object
+    merged_at: object
+    draft: object
+
+    def get_review_comments(self) -> Iterable[_GitHubCommentLike]: ...
 
 
 class _GitHubRepositoryLike(Protocol):
@@ -43,7 +94,9 @@ class _GitHubRepositoryLike(Protocol):
         self, *args: object, **kwargs: object
     ) -> Iterable[_GitHubPullRequestLike]: ...
 
-    def get_milestones(self, *args: object, **kwargs: object) -> Iterable[object]: ...
+    def get_milestones(
+        self, *args: object, **kwargs: object
+    ) -> Iterable[_GitHubMilestoneLike]: ...
 
 
 class ProjectItemChanges(TypedDict, total=False):
@@ -153,11 +206,11 @@ class GitHubWorkClient:
 
     def _iter_with_limit(
         self,
-        source: Iterable[Any],
+        source: Iterable[_TItem],
         *,
         limit: int | None,
-        skip: Callable[[Any], bool] | None = None,
-    ) -> Iterable[Any]:
+        skip: Callable[[_TItem], bool] | None = None,
+    ) -> Iterable[_TItem]:
         """Yield items from ``source`` respecting ``limit`` and optional skip filter.
 
         ``skip`` receives each item and returns ``True`` when the item should be
@@ -193,7 +246,7 @@ class GitHubWorkClient:
 
     def iter_issue_events(
         self, issue: _GitHubIssueLike, *, limit: int | None = None
-    ) -> Iterable[object]:
+    ) -> Iterable[_GitHubEventLike]:
         """
         Iterate issue events (labeled/unlabeled/closed/reopened/assigned/...) via REST.
         """
@@ -218,7 +271,7 @@ class GitHubWorkClient:
 
     def iter_issue_comments(
         self, issue: _GitHubIssueLike, *, limit: int | None = None
-    ) -> Iterable[object]:
+    ) -> Iterable[_GitHubCommentLike]:
         """
         Iterate comments on an issue via REST.
         """
@@ -226,7 +279,7 @@ class GitHubWorkClient:
 
     def iter_pr_comments(
         self, pr: _GitHubPullRequestLike, *, limit: int | None = None
-    ) -> Iterable[object]:
+    ) -> Iterable[_GitHubCommentLike]:
         """
         Iterate comments on a pull request (issue comments + review comments).
         """
@@ -235,7 +288,7 @@ class GitHubWorkClient:
 
     def iter_pr_review_comments(
         self, pr: _GitHubPullRequestLike, *, limit: int | None = None
-    ) -> Iterable[object]:
+    ) -> Iterable[_GitHubCommentLike]:
         """
         Iterate review comments on a pull request.
         """
@@ -248,7 +301,7 @@ class GitHubWorkClient:
         repo: str,
         state: str = "all",
         limit: int | None = None,
-    ) -> Iterable[object]:
+    ) -> Iterable[_GitHubMilestoneLike]:
         """
         Iterate milestones in a repository via REST.
         """

@@ -13,13 +13,13 @@ from datetime import datetime, timezone
 from enum import IntEnum
 
 from sqlalchemy import (
-    Column,
     DateTime,
     Index,
     Integer,
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.orm import Mapped, mapped_column
 
 from dev_health_ops.models.git import GUID, Base
 
@@ -46,33 +46,39 @@ class MetricCheckpoint(Base):
 
     __tablename__ = "metric_checkpoints"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False)
-    repo_id = Column(GUID, nullable=True)
-    metric_type = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    repo_id: Mapped[uuid.UUID | None] = mapped_column(GUID, nullable=True)
+    metric_type: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment="Computation scope: daily_batch, daily_finalize, rebuild",
     )
-    day = Column(DateTime(timezone=True), nullable=False, comment="Target date")
-    status = Column(
+    day: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="Target date"
+    )
+    status: Mapped[int | None] = mapped_column(
         Integer,
         nullable=False,
         default=CheckpointStatus.PENDING,
         comment="0=pending, 1=running, 2=completed, 3=failed",
     )
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    error = Column(Text, nullable=True)
-    worker_id = Column(
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="Celery task ID for distributed locking"
     )
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),

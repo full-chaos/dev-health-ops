@@ -193,7 +193,7 @@ def run_rolling_aggregates_audit(*, db_url: str, as_of: date) -> dict[str, Any]:
     start_short = _window_start(as_of, short_window)
     start_long = _window_start(as_of, long_window)
 
-    tables = [spec["table"] for spec in ROLLING_TABLE_SPECS]
+    tables = [str(spec["table"]) for spec in ROLLING_TABLE_SPECS]
     report: dict[str, Any] = {
         "as_of": as_of,
         "windows": windows,

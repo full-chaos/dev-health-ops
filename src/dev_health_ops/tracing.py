@@ -51,6 +51,12 @@ def init_tracing() -> bool:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.sampling import (
+            ALWAYS_OFF,
+            ALWAYS_ON,
+            Sampler,
+            TraceIdRatioBased,
+        )
 
         service_name = os.getenv("OTEL_SERVICE_NAME", "dev-health-ops")
         environment = os.getenv("OTEL_ENVIRONMENT", "production")
@@ -58,13 +64,12 @@ def init_tracing() -> bool:
         sample_rate = float(os.getenv("OTEL_SAMPLE_RATE", "0.1"))
 
         # Build head-based sampler
+        sampler: Sampler
         if sample_rate >= 1.0:
-            from opentelemetry.sdk.trace.sampling import ALWAYS_ON as sampler
+            sampler = ALWAYS_ON
         elif sample_rate <= 0.0:
-            from opentelemetry.sdk.trace.sampling import ALWAYS_OFF as sampler
+            sampler = ALWAYS_OFF
         else:
-            from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
-
             sampler = TraceIdRatioBased(sample_rate)
 
         resource = Resource.create(
@@ -151,7 +156,7 @@ def instrument_fastapi_app(app: object) -> None:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
         FastAPIInstrumentor.instrument_app(
-            app,  # type: ignore[arg-type]
+            app,
             excluded_urls="/health,/ready,/metrics",
         )
 

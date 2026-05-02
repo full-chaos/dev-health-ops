@@ -11,6 +11,8 @@ from sqlalchemy.orm import selectinload
 
 from dev_health_ops.models.invoices import Invoice, InvoiceLineItem
 
+from ._helpers import assign_attr
+
 
 def _get_attr(payload: Any, key: str, default: Any = None) -> Any:
     if isinstance(payload, dict):
@@ -128,11 +130,15 @@ class InvoiceService:
             db.add(invoice)
         else:
             subscription_id = _get_attr(stripe_invoice, "subscription")
-            invoice.subscription_id = UUID(subscription_id) if subscription_id else None
+            assign_attr(
+                invoice,
+                "subscription_id",
+                UUID(subscription_id) if subscription_id else None,
+            )
             for key, value in data.items():
                 setattr(invoice, key, value)
 
-        invoice.updated_at = datetime.now(timezone.utc)
+        assign_attr(invoice, "updated_at", datetime.now(timezone.utc))
         await db.flush()
         return invoice
 
@@ -184,15 +190,21 @@ class InvoiceService:
         if invoice is None:
             raise ValueError(f"Invoice not found: {stripe_invoice_id}")
 
-        invoice.status = "paid"
-        invoice.payment_intent_id = _get_attr(payment_intent, "id", payment_intent)
-        invoice.amount_paid = _get_attr(
-            payment_intent, "amount_received", invoice.amount_paid
+        assign_attr(invoice, "status", "paid")
+        assign_attr(
+            invoice,
+            "payment_intent_id",
+            _get_attr(payment_intent, "id", payment_intent),
         )
-        invoice.amount_remaining = 0
+        assign_attr(
+            invoice,
+            "amount_paid",
+            _get_attr(payment_intent, "amount_received", invoice.amount_paid),
+        )
+        assign_attr(invoice, "amount_remaining", 0)
         if invoice.paid_at is None:
-            invoice.paid_at = datetime.now(timezone.utc)
-        invoice.updated_at = datetime.now(timezone.utc)
+            assign_attr(invoice, "paid_at", datetime.now(timezone.utc))
+        assign_attr(invoice, "updated_at", datetime.now(timezone.utc))
         await db.flush()
         return invoice
 
@@ -204,9 +216,9 @@ class InvoiceService:
         if invoice is None:
             raise ValueError(f"Invoice not found: {stripe_invoice_id}")
 
-        invoice.status = "void"
-        invoice.voided_at = datetime.now(timezone.utc)
-        invoice.updated_at = datetime.now(timezone.utc)
+        assign_attr(invoice, "status", "void")
+        assign_attr(invoice, "voided_at", datetime.now(timezone.utc))
+        assign_attr(invoice, "updated_at", datetime.now(timezone.utc))
         await db.flush()
         return invoice
 

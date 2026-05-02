@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from typing import TypedDict
 
 from dev_health_ops.metrics.schemas import CommitStatRow
 from dev_health_ops.providers.identity import IdentityResolver, normalize_git_identity
+
+
+class FileReworkStats(TypedDict):
+    churn: int
+    commits: set[str]
 
 
 def compute_rework_churn_ratio(
@@ -17,7 +23,7 @@ def compute_rework_churn_ratio(
 
     This is a proxy for "rework within 30 days" using commit-level churn.
     """
-    file_stats: dict[str, dict[str, object]] = {}
+    file_stats: dict[str, FileReworkStats] = {}
     for row in window_stats:
         if str(row["repo_id"]) != repo_id:
             continue
@@ -30,17 +36,15 @@ def compute_rework_churn_ratio(
             file_stats[path] = stats
         additions = max(0, int(row.get("additions") or 0))
         deletions = max(0, int(row.get("deletions") or 0))
-        stats["churn"] = int(stats["churn"]) + additions + deletions
+        stats["churn"] += additions + deletions
         stats["commits"].add(str(row.get("commit_hash")))
 
-    total_churn = sum(int(stats["churn"]) for stats in file_stats.values())
+    total_churn = sum(stats["churn"] for stats in file_stats.values())
     if total_churn == 0:
         return 0.0
 
     rework_churn = sum(
-        int(stats["churn"])
-        for stats in file_stats.values()
-        if len(stats["commits"]) > 1
+        stats["churn"] for stats in file_stats.values() if len(stats["commits"]) > 1
     )
     return float(rework_churn) / float(total_churn)
 
@@ -55,7 +59,7 @@ def compute_single_owner_file_ratio(
     """
     Compute ratio of files dominated by a single owner in the window.
     """
-    file_authors: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
+    file_authors: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
 
     for row in window_stats:
         if str(row["repo_id"]) != repo_id:

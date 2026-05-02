@@ -14,6 +14,29 @@ from dev_health_ops.licensing.types import LicenseTier
 router = APIRouter(prefix="/api/v1/licensing", tags=["licensing"])
 
 
+def _coerce_license_tier(value: object) -> LicenseTier:
+    try:
+        return LicenseTier(str(value))
+    except ValueError:
+        return LicenseTier.COMMUNITY
+
+
+def _coerce_bool_map(value: object) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): bool(enabled) for key, enabled in value.items()}
+
+
+def _coerce_limits_map(value: object) -> dict[str, int | float | None]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, int | float | None] = {}
+    for key, raw in value.items():
+        if raw is None or isinstance(raw, (int, float)):
+            result[str(key)] = raw
+    return result
+
+
 class EntitlementsResponse(BaseModel):
     org_id: str
     tier: str
@@ -80,23 +103,18 @@ async def get_entitlements(
         )
         org_overrides = {str(o.feature_id): o for o in overrides_result.scalars().all()}
 
-    try:
-        tier_enum = LicenseTier(org.tier)
-    except ValueError:
-        tier_enum = LicenseTier.COMMUNITY
+    tier = str(org.tier)
+    tier_enum = _coerce_license_tier(tier)
 
     org_rank = TIER_RANK.get(tier_enum, 0)
 
     features: dict[str, bool] = {}
     for flag in all_flags:
-        try:
-            min_tier = LicenseTier(flag.min_tier)
-        except ValueError:
-            min_tier = LicenseTier.COMMUNITY
-        features[flag.key] = org_rank >= TIER_RANK.get(min_tier, 0)
+        min_tier = _coerce_license_tier(flag.min_tier)
+        features[str(flag.key)] = org_rank >= TIER_RANK.get(min_tier, 0)
 
     if org_license and org_license.features_override:
-        for key, enabled in org_license.features_override.items():
+        for key, enabled in _coerce_bool_map(org_license.features_override).items():
             features[key] = enabled
 
     for override in org_overrides.values():
@@ -105,22 +123,40 @@ async def get_entitlements(
                 now = datetime.now().astimezone()
                 if override.expires_at and override.expires_at < now:
                     continue
-                features[flag.key] = override.is_enabled
+                features[str(flag.key)] = bool(override.is_enabled)
                 break
 
-    limits = dict(TIER_LIMITS.get(tier_enum, TIER_LIMITS[LicenseTier.COMMUNITY]))
+    limits = _coerce_limits_map(
+        TIER_LIMITS.get(tier_enum, TIER_LIMITS[LicenseTier.COMMUNITY])
+    )
     if org_license and org_license.limits_override:
-        limits.update(org_license.limits_override)
+        limits.update(_coerce_limits_map(org_license.limits_override))
 
     return EntitlementsResponse(
         org_id=str(org.id),
-        tier=org.tier,
-        licensed_users=org_license.licensed_users if org_license else None,
-        licensed_repos=org_license.licensed_repos if org_license else None,
+        tier=tier,
+        licensed_users=(
+            int(org_license.licensed_users)
+            if org_license and org_license.licensed_users is not None
+            else None
+        ),
+        licensed_repos=(
+            int(org_license.licensed_repos)
+            if org_license and org_license.licensed_repos is not None
+            else None
+        ),
         features=features,
-        features_override=org_license.features_override if org_license else None,
-        limits_override=org_license.limits_override if org_license else None,
+        features_override=(
+            _coerce_bool_map(org_license.features_override)
+            if org_license and org_license.features_override
+            else None
+        ),
+        limits_override=(
+            _coerce_limits_map(org_license.limits_override)
+            if org_license and org_license.limits_override
+            else None
+        ),
         expires_at=org_license.expires_at if org_license else None,
-        is_valid=org_license.is_valid if org_license else True,
+        is_valid=bool(org_license.is_valid) if org_license else True,
         limits=limits,
     )

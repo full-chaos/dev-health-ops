@@ -182,12 +182,13 @@ async def process_local_pull_requests(
     logging.info("Processing local pull/merge requests...")
 
     commit_list = commits or []
+    repo_id = uuid.UUID(str(repo.id))
     merged = infer_merged_pull_requests_from_commits(
         commit_list,
-        repo.id,
+        repo_id,
         since=since,
     )
-    open_refs = infer_open_pull_requests_from_refs(repo_obj, repo.id)
+    open_refs = infer_open_pull_requests_from_refs(repo_obj, repo_id)
 
     pr_objects: list[GitPullRequest] = []
     pr_objects.extend(open_refs)
@@ -481,10 +482,14 @@ async def process_files_and_blame(
     chunk_size = BATCH_SIZE * 2
 
     # Import tqdm for progress bar
+    sys_module: Any = None
+    tqdm_factory: Any = None
     try:
+        import importlib
         import sys
 
-        from tqdm import tqdm
+        sys_module = sys
+        tqdm_factory = importlib.import_module("tqdm").tqdm
 
         use_tqdm = True
     except ImportError:
@@ -494,20 +499,20 @@ async def process_files_and_blame(
 
     # Create progress bar if tqdm is available - use stderr and force refresh
     if use_tqdm and blame_count > 0:
-        pbar = tqdm(
+        pbar = tqdm_factory(
             total=len(all_files),
             desc=f"Processing files ({blame_count} with blame)",
             unit="file",
-            file=sys.stderr,
+            file=sys_module.stderr,
             mininterval=0.1,
             dynamic_ncols=True,
         )
     elif use_tqdm:
-        pbar = tqdm(
+        pbar = tqdm_factory(
             total=len(all_files),
             desc="Processing files",
             unit="file",
-            file=sys.stderr,
+            file=sys_module.stderr,
             mininterval=0.1,
             dynamic_ncols=True,
         )
@@ -526,6 +531,10 @@ async def process_files_and_blame(
             if isinstance(result, Exception):
                 logging.debug(f"Task failed for {original_file}: {result}")
                 failed_files.append((original_file, str(result)))
+                continue
+            if not isinstance(result, tuple) or len(result) != 3:
+                logging.debug(f"Unexpected result for {original_file}: {result!r}")
+                failed_files.append((original_file, "unexpected worker result"))
                 continue
 
             git_file, blame_rows, error = result

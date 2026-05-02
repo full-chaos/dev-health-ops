@@ -3,9 +3,17 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
+from typing import TypedDict
 
 from dev_health_ops.metrics.schemas import DeploymentRow, DeployMetricsDailyRecord
 from dev_health_ops.utils.datetime import to_utc
+
+
+class DeploymentBucket(TypedDict):
+    deployments: int
+    failed: int
+    durations: list[float]
+    lead_times: list[float]
 
 
 def _utc_day_window(day: date) -> tuple[datetime, datetime]:
@@ -43,7 +51,7 @@ def compute_deploy_metrics_daily(
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
 
-    by_repo: dict[str, dict[str, object]] = {}
+    by_repo: dict[str, DeploymentBucket] = {}
     for row in deployments:
         deployed_at = row.get("deployed_at") or row.get("started_at")
         if not isinstance(deployed_at, datetime):
@@ -55,13 +63,14 @@ def compute_deploy_metrics_daily(
         repo_id = str(row["repo_id"])
         bucket = by_repo.get(repo_id)
         if bucket is None:
-            bucket = {
+            new_bucket: DeploymentBucket = {
                 "deployments": 0,
                 "failed": 0,
                 "durations": [],
                 "lead_times": [],
             }
-            by_repo[repo_id] = bucket
+            by_repo[repo_id] = new_bucket
+            bucket = new_bucket
 
         bucket["deployments"] = int(bucket["deployments"]) + 1
         status = (row.get("status") or "").strip().lower()

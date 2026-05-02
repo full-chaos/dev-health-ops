@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from stripe.params._price_create_params import PriceCreateParams
+from stripe.params._product_create_params import ProductCreateParams
 
 from dev_health_ops.api.admin.middleware import require_superuser
 from dev_health_ops.api.auth.router import get_current_user, get_current_user_optional
@@ -21,6 +23,17 @@ from dev_health_ops.models.billing import (
     BillingPrice,
     FeatureBundle,
     PlanFeatureBundle,
+)
+
+from ._helpers import (
+    BillingTier,
+    assign_attr,
+    ensure_dict,
+    ensure_str_list,
+    normalize_billing_tier,
+    require_int,
+    require_str,
+    require_uuid,
 )
 
 router = APIRouter(tags=["billing-plans"])
@@ -38,7 +51,7 @@ class BillingPlanCreate(BaseModel):
     key: str
     name: str
     description: str | None = None
-    tier: str
+    tier: BillingTier
     is_active: bool = True
     display_order: int = 0
     stripe_product_id: str | None = None
@@ -51,7 +64,7 @@ class BillingPlanUpdate(BaseModel):
     key: str | None = None
     name: str | None = None
     description: str | None = None
-    tier: str | None = None
+    tier: BillingTier | None = None
     is_active: bool | None = None
     display_order: int | None = None
     stripe_product_id: str | None = None
@@ -61,6 +74,8 @@ class BillingPlanUpdate(BaseModel):
 
 
 class FeatureBundleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     key: str
     name: str
@@ -69,6 +84,8 @@ class FeatureBundleResponse(BaseModel):
 
 
 class BillingPriceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     plan_id: str
     interval: str
@@ -79,17 +96,19 @@ class BillingPriceResponse(BaseModel):
 
 
 class BillingPlanResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
     id: str
     key: str
     name: str
     description: str | None
-    tier: str
+    tier: BillingTier
     is_active: bool
     display_order: int
     stripe_product_id: str | None
     metadata: dict[str, Any]
-    prices: list[BillingPriceResponse]
-    bundles: list[FeatureBundleResponse]
+    prices: list[BillingPriceResponse] = Field(default_factory=list)
+    bundles: list[FeatureBundleResponse] = Field(default_factory=list)
 
 
 class PullStripeResponse(BaseModel):
@@ -134,23 +153,25 @@ async def _load_bundles(db: AsyncSession, plan_id: uuid.UUID) -> list[FeatureBun
 
 def _price_to_response(price: BillingPrice) -> BillingPriceResponse:
     return BillingPriceResponse(
-        id=str(price.id),
-        plan_id=str(price.plan_id),
-        interval=price.interval,
-        amount=price.amount,
-        currency=price.currency,
-        is_active=price.is_active,
-        stripe_price_id=price.stripe_price_id,
+        id=str(require_uuid(price.id, "price.id")),
+        plan_id=str(require_uuid(price.plan_id, "price.plan_id")),
+        interval=require_str(price.interval, "price.interval"),
+        amount=require_int(price.amount, "price.amount"),
+        currency=require_str(price.currency, "price.currency"),
+        is_active=bool(price.is_active),
+        stripe_price_id=price.stripe_price_id
+        if isinstance(price.stripe_price_id, str)
+        else None,
     )
 
 
 def _bundle_to_response(bundle: FeatureBundle) -> FeatureBundleResponse:
     return FeatureBundleResponse(
-        id=str(bundle.id),
-        key=bundle.key,
-        name=bundle.name,
-        description=bundle.description,
-        features=bundle.features,
+        id=str(require_uuid(bundle.id, "bundle.id")),
+        key=require_str(bundle.key, "bundle.key"),
+        name=require_str(bundle.name, "bundle.name"),
+        description=bundle.description if isinstance(bundle.description, str) else None,
+        features=ensure_str_list(bundle.features),
     )
 
 
@@ -159,18 +180,21 @@ async def _plan_to_response(
     plan: BillingPlan,
     include_inactive_prices: bool,
 ) -> BillingPlanResponse:
-    prices = await _load_prices(db, plan.id, include_inactive=include_inactive_prices)
-    bundles = await _load_bundles(db, plan.id)
+    plan_id = require_uuid(plan.id, "plan.id")
+    prices = await _load_prices(db, plan_id, include_inactive=include_inactive_prices)
+    bundles = await _load_bundles(db, plan_id)
     return BillingPlanResponse(
-        id=str(plan.id),
-        key=plan.key,
-        name=plan.name,
-        description=plan.description,
-        tier=plan.tier,
-        is_active=plan.is_active,
-        display_order=plan.display_order,
-        stripe_product_id=plan.stripe_product_id,
-        metadata=plan.metadata_ if isinstance(plan.metadata_, dict) else {},
+        id=str(plan_id),
+        key=require_str(plan.key, "plan.key"),
+        name=require_str(plan.name, "plan.name"),
+        description=plan.description if isinstance(plan.description, str) else None,
+        tier=normalize_billing_tier(plan.tier),
+        is_active=bool(plan.is_active),
+        display_order=require_int(plan.display_order, "plan.display_order"),
+        stripe_product_id=(
+            plan.stripe_product_id if isinstance(plan.stripe_product_id, str) else None
+        ),
+        metadata=ensure_dict(plan.metadata_),
         prices=[_price_to_response(price) for price in prices],
         bundles=[_bundle_to_response(bundle) for bundle in bundles],
     )
@@ -186,7 +210,11 @@ async def _replace_prices(
     )
     existing_prices = list(existing_result.scalars().all())
     existing_by_key = {
-        (price.interval, price.currency): price for price in existing_prices
+        (
+            require_str(price.interval, "price.interval"),
+            require_str(price.currency, "price.currency"),
+        ): price
+        for price in existing_prices
     }
 
     now = datetime.now(timezone.utc)
@@ -212,11 +240,11 @@ async def _replace_prices(
             )
             continue
 
-        existing.amount = price.amount
-        existing.is_active = price.is_active
+        assign_attr(existing, "amount", price.amount)
+        assign_attr(existing, "is_active", price.is_active)
         if price.stripe_price_id:
-            existing.stripe_price_id = price.stripe_price_id
-        existing.updated_at = now
+            assign_attr(existing, "stripe_price_id", price.stripe_price_id)
+        assign_attr(existing, "updated_at", now)
 
     to_delete_ids = [
         price.id for key, price in existing_by_key.items() if key not in incoming_keys
@@ -296,7 +324,11 @@ async def get_billing_plan(
     plan = result.scalar_one_or_none()
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
-    if not plan.is_active and (user is None or not user.is_superuser):
+    if (
+        isinstance(plan.is_active, bool)
+        and not plan.is_active
+        and (user is None or not user.is_superuser)
+    ):
         raise HTTPException(status_code=404, detail="Plan not found")
     if include_inactive_prices and (user is None or not user.is_superuser):
         raise HTTPException(status_code=403, detail="Superadmin access required")
@@ -327,8 +359,9 @@ async def create_billing_plan(
     )
     db.add(plan)
     await db.flush()
-    await _replace_prices(db, plan.id, payload.prices)
-    await _replace_bundles(db, plan.id, payload.bundle_ids)
+    created_plan_id = require_uuid(plan.id, "plan.id")
+    await _replace_prices(db, created_plan_id, payload.prices)
+    await _replace_bundles(db, created_plan_id, payload.bundle_ids)
     await db.flush()
     return await _plan_to_response(db, plan, include_inactive_prices=True)
 
@@ -347,16 +380,20 @@ async def update_billing_plan(
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
 
-    updates = payload.model_dump(exclude_unset=True)
-    if "metadata" in updates:
-        plan.metadata_ = updates.pop("metadata") or {}
-    if "prices" in updates:
-        await _replace_prices(db, plan.id, updates.pop("prices"))
-    if "bundle_ids" in updates:
-        await _replace_bundles(db, plan.id, updates.pop("bundle_ids"))
+    resolved_plan_id = require_uuid(plan.id, "plan.id")
+    if "metadata" in payload.model_fields_set:
+        assign_attr(plan, "metadata_", payload.metadata or {})
+    if "prices" in payload.model_fields_set and payload.prices is not None:
+        await _replace_prices(db, resolved_plan_id, payload.prices)
+    if "bundle_ids" in payload.model_fields_set and payload.bundle_ids is not None:
+        await _replace_bundles(db, resolved_plan_id, payload.bundle_ids)
+    updates = payload.model_dump(
+        exclude_unset=True,
+        exclude={"metadata", "prices", "bundle_ids"},
+    )
     for field_name, value in updates.items():
         setattr(plan, field_name, value)
-    plan.updated_at = datetime.now(timezone.utc)
+    assign_attr(plan, "updated_at", datetime.now(timezone.utc))
     await db.flush()
     return await _plan_to_response(db, plan, include_inactive_prices=True)
 
@@ -373,8 +410,8 @@ async def delete_billing_plan(
     plan = result.scalar_one_or_none()
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan not found")
-    plan.is_active = False
-    plan.updated_at = datetime.now(timezone.utc)
+    assign_attr(plan, "is_active", False)
+    assign_attr(plan, "updated_at", datetime.now(timezone.utc))
     await db.flush()
     return {"deleted": True}
 
@@ -393,39 +430,47 @@ async def sync_plan_to_stripe(
         raise HTTPException(status_code=404, detail="Plan not found")
 
     client = get_stripe_client()
-    if plan.stripe_product_id:
-        product_id = plan.stripe_product_id
+    if isinstance(plan.stripe_product_id, str) and plan.stripe_product_id:
+        product_id = require_str(plan.stripe_product_id, "plan.stripe_product_id")
     else:
-        product = client.products.create(
-            params={
-                "name": plan.name,
-                "description": plan.description or "",
-                "metadata": {"plan_key": plan.key, "tier": plan.tier},
-            }
-        )
+        plan_description = plan.description if isinstance(plan.description, str) else ""
+        product_params: ProductCreateParams = {
+            "name": require_str(plan.name, "plan.name"),
+            "description": plan_description,
+            "metadata": {
+                "plan_key": require_str(plan.key, "plan.key"),
+                "tier": normalize_billing_tier(plan.tier),
+            },
+        }
+        product = client.products.create(params=product_params)
         product_id = product.id
-        plan.stripe_product_id = product_id
+        assign_attr(plan, "stripe_product_id", product_id)
 
-    prices = await _load_prices(db, plan.id, include_inactive=True)
+    stripe_plan_id = require_uuid(plan.id, "plan.id")
+    prices = await _load_prices(db, stripe_plan_id, include_inactive=True)
     for price in prices:
-        if price.stripe_price_id:
+        if isinstance(price.stripe_price_id, str) and price.stripe_price_id:
             continue
-        stripe_price = client.prices.create(
-            params={
-                "product": product_id,
-                "unit_amount": price.amount,
-                "currency": price.currency,
-                "recurring": {
-                    "interval": "month"
-                    if price.interval == BillingInterval.MONTHLY.value
-                    else "year"
-                },
-                "metadata": {"plan_key": plan.key, "interval": price.interval},
-            }
+        recurring_interval: Literal["month", "year"] = (
+            "month"
+            if require_str(price.interval, "price.interval")
+            == BillingInterval.MONTHLY.value
+            else "year"
         )
-        price.stripe_price_id = stripe_price.id
-        price.updated_at = datetime.now(timezone.utc)
+        price_params: PriceCreateParams = {
+            "product": product_id,
+            "unit_amount": require_int(price.amount, "price.amount"),
+            "currency": require_str(price.currency, "price.currency"),
+            "recurring": {"interval": recurring_interval},
+            "metadata": {
+                "plan_key": require_str(plan.key, "plan.key"),
+                "interval": require_str(price.interval, "price.interval"),
+            },
+        }
+        stripe_price = client.prices.create(params=price_params)
+        assign_attr(price, "stripe_price_id", stripe_price.id)
+        assign_attr(price, "updated_at", datetime.now(timezone.utc))
 
-    plan.updated_at = datetime.now(timezone.utc)
+    assign_attr(plan, "updated_at", datetime.now(timezone.utc))
     await db.flush()
     return await _plan_to_response(db, plan, include_inactive_prices=True)

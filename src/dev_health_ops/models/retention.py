@@ -6,7 +6,6 @@ from enum import Enum
 
 from sqlalchemy import (
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -15,7 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
 
@@ -31,45 +30,53 @@ class RetentionResourceType(str, Enum):
 class OrgRetentionPolicy(Base):
     __tablename__ = "org_retention_policies"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    org_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    resource_type = Column(
+    resource_type: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
     )
-    retention_days = Column(Integer, nullable=False, default=90)
-    description = Column(Text, nullable=True)
-    is_active = Column(Boolean, nullable=False, default=True)
+    retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    last_run_at = Column(DateTime(timezone=True), nullable=True)
-    last_run_deleted_count = Column(Integer, nullable=True)
-    next_run_at = Column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_run_deleted_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
-    created_by_id = Column(
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    organization = relationship("Organization", back_populates="retention_policies")
-    created_by = relationship("User", foreign_keys=[created_by_id])
+    organization: Mapped[Organization] = relationship(  # noqa: F821
+        "Organization", back_populates="retention_policies"
+    )
+    created_by: Mapped[User | None] = relationship(  # noqa: F821
+        "User", foreign_keys=[created_by_id]
+    )
 
     __table_args__ = (
         UniqueConstraint("org_id", "resource_type", name="uq_org_retention_resource"),

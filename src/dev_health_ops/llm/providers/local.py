@@ -155,7 +155,8 @@ class LocalProvider:
                     retry_count += 1
                     continue
 
-                llm_exc = classify_provider_error(e, provider="local", model=self.model)
+                model_name = self.model or "local-model"
+                llm_exc = classify_provider_error(e, provider="local", model=model_name)
                 logger.error("Local LLM API error (%s): %s", self.base_url, llm_exc)
                 raise llm_exc from e
         return ""  # Should not be reachable

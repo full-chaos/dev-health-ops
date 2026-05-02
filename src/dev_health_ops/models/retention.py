@@ -78,9 +78,7 @@ class OrgRetentionPolicy(Base):
     organization: Mapped[Organization] = relationship(
         "Organization", back_populates="retention_policies"
     )
-    created_by: Mapped[User | None] = relationship(
-        "User", foreign_keys=[created_by_id]
-    )
+    created_by: Mapped[User | None] = relationship("User", foreign_keys=[created_by_id])
 
     __table_args__ = (
         UniqueConstraint("org_id", "resource_type", name="uq_org_retention_resource"),

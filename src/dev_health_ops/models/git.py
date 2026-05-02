@@ -3,13 +3,14 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from git import Repo as GitRepo
+from git.objects.commit import Commit
 from sqlalchemy import (
     CHAR,
     JSON,
     Boolean,
-    Column,
     DateTime,
     Float,
     ForeignKey,
@@ -19,12 +20,14 @@ from sqlalchemy import (
     TypeDecorator,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import declarative_base, relationship
-
-Base = declarative_base()
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
-class GUID(TypeDecorator):
+class Base(DeclarativeBase):
+    pass
+
+
+class GUID(TypeDecorator[uuid.UUID]):
     """Platform-independent GUID type.
 
     Uses PostgreSQL's UUID type for PostgreSQL, otherwise uses
@@ -34,13 +37,15 @@ class GUID(TypeDecorator):
     impl = CHAR
     cache_ok = True
 
-    def load_dialect_impl(self, dialect):
+    def load_dialect_impl(self, dialect: Any) -> Any:
         if dialect.name == "postgresql":
             return dialect.type_descriptor(PGUUID())
         else:
             return dialect.type_descriptor(CHAR(32))
 
-    def process_bind_param(self, value, dialect):
+    def process_bind_param(
+        self, value: uuid.UUID | str | None, dialect: Any
+    ) -> str | None:
         if value is None:
             return value
         elif dialect.name == "postgresql":
@@ -52,7 +57,9 @@ class GUID(TypeDecorator):
                 # hex string
                 return value.hex
 
-    def process_result_value(self, value, dialect):
+    def process_result_value(
+        self, value: uuid.UUID | str | None, dialect: Any
+    ) -> uuid.UUID | None:
         if value is None:
             return value
         else:
@@ -153,7 +160,74 @@ def get_repo_uuid(repo_path: str) -> uuid.UUID:
 class Repo(Base, GitRepo):
     __tablename__ = "repos"
 
-    def __init__(self, repo_path: str | None = None, **kwargs):
+    id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        primary_key=True,
+        default=uuid.uuid4,
+        comment="MergeStat identifier for the repo",
+    )
+    repo: Mapped[str] = mapped_column(Text, nullable=False, comment="URL for the repo")
+    ref: Mapped[str | None] = mapped_column(Text, comment="ref for the repo")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        comment="timestamp of when the MergeStat repo entry was created",
+    )
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict, comment="JSON settings for the repo"
+    )
+    provider: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="unknown",
+        comment="sync provider (github, gitlab, local, synthetic)",
+    )
+    repo_tags: Mapped[list[str]] = mapped_column(
+        "tags",
+        JSON,
+        key="repo_tags",
+        nullable=False,
+        default=list,
+        comment="array of tags for the repo",
+    )
+
+    git_refs: Mapped[list["GitRef"]] = relationship("GitRef", back_populates="repo")
+    git_files: Mapped[list["GitFile"]] = relationship("GitFile", back_populates="repo")
+    git_commits: Mapped[list["GitCommit"]] = relationship(
+        "GitCommit", back_populates="repo"
+    )
+    git_commit_stats: Mapped[list["GitCommitStat"]] = relationship(
+        "GitCommitStat", back_populates="repo"
+    )
+    git_blames: Mapped[list["GitBlame"]] = relationship(
+        "GitBlame", back_populates="repo"
+    )
+    git_pull_requests: Mapped[list["GitPullRequest"]] = relationship(
+        "GitPullRequest", back_populates="repo"
+    )
+    ci_pipeline_runs: Mapped[list["CiPipelineRun"]] = relationship(
+        "CiPipelineRun",
+        back_populates="repo",
+        cascade="all, delete-orphan",
+    )
+    deployments: Mapped[list["Deployment"]] = relationship(
+        "Deployment",
+        back_populates="repo",
+        cascade="all, delete-orphan",
+    )
+    incidents: Mapped[list["Incident"]] = relationship(
+        "Incident",
+        back_populates="repo",
+        cascade="all, delete-orphan",
+    )
+    security_alerts: Mapped[list["SecurityAlert"]] = relationship(
+        "SecurityAlert",
+        back_populates="repo",
+        cascade="all, delete-orphan",
+    )
+
+    def __init__(self, repo_path: str | None = None, **kwargs: Any) -> None:
         """
         Initialize the Repo class with the given repository path.
 
@@ -190,213 +264,151 @@ class Repo(Base, GitRepo):
         if repo_path:
             GitRepo.__init__(self, repo_path)  # Initialize GitPython Repo
 
-    id = Column(
-        GUID,
-        primary_key=True,
-        default=uuid.uuid4,
-        comment="MergeStat identifier for the repo",
-    )
-    repo = Column(Text, nullable=False, comment="URL for the repo")
-    ref = Column(Text, comment="ref for the repo")
-    created_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        comment="timestamp of when the MergeStat repo entry was created",
-    )
-    settings = Column(
-        JSON, nullable=False, default=dict, comment="JSON settings for the repo"
-    )
-    provider = Column(
-        Text,
-        nullable=False,
-        default="unknown",
-        comment="sync provider (github, gitlab, local, synthetic)",
-    )
-    repo_tags = Column(
-        "tags",
-        JSON,
-        key="repo_tags",
-        nullable=False,
-        default=list,
-        comment="array of tags for the repo",
-    )
-    # repo_import_id = Column(
-    #     GUID,
-    #     ForeignKey("mergestat.repo_imports.id", ondelete="CASCADE"),
-    #     comment="foreign key for mergestat.repo_imports.id",
-    # )
-    # provider = Column(
-    #     GUID,
-    #     ForeignKey("mergestat.providers.id", ondelete="CASCADE"),
-    #     nullable=False,
-    # )
-
-    # Relationships
-    git_refs = relationship("GitRef", back_populates="repo")
-    git_files = relationship("GitFile", back_populates="repo")
-    git_commits = relationship("GitCommit", back_populates="repo")
-    git_commit_stats = relationship("GitCommitStat", back_populates="repo")
-    git_blames = relationship("GitBlame", back_populates="repo")
-    git_pull_requests = relationship("GitPullRequest", back_populates="repo")
-    ci_pipeline_runs = relationship(
-        "CiPipelineRun",
-        back_populates="repo",
-        cascade="all, delete-orphan",
-    )
-    deployments = relationship(
-        "Deployment",
-        back_populates="repo",
-        cascade="all, delete-orphan",
-    )
-    incidents = relationship(
-        "Incident",
-        back_populates="repo",
-        cascade="all, delete-orphan",
-    )
-    security_alerts = relationship(
-        "SecurityAlert",
-        back_populates="repo",
-        cascade="all, delete-orphan",
-    )
-
 
 class GitRef(Base):
     __tablename__ = "git_refs"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
         comment="foreign key for public.repos.id",
     )
-    full_name = Column(Text, primary_key=True)
-    hash = Column(Text, comment="hash of the commit for refs that are not of type tag")
-    name = Column(Text, comment="name of the ref")
-    remote = Column(Text, comment="remote of the ref")
-    target = Column(Text, comment="target of the ref")
-    type = Column(Text, comment="type of the ref")
-    tag_commit_hash = Column(
+    full_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    hash: Mapped[str | None] = mapped_column(
+        Text, comment="hash of the commit for refs that are not of type tag"
+    )
+    name: Mapped[str | None] = mapped_column(Text, comment="name of the ref")
+    remote: Mapped[str | None] = mapped_column(Text, comment="remote of the ref")
+    target: Mapped[str | None] = mapped_column(Text, comment="target of the ref")
+    type: Mapped[str | None] = mapped_column(Text, comment="type of the ref")
+    tag_commit_hash: Mapped[str | None] = mapped_column(
         Text, comment="hash of the commit for refs that are of type tag"
     )
-    last_synced = Column(
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         comment="timestamp when record was synced into the MergeStat database",
     )
 
-    # Relationships
-    repo = relationship("Repo", back_populates="git_refs")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="git_refs")
 
 
 class GitFile(Base):
     __tablename__ = "git_files"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
         comment="foreign key for public.repos.id",
     )
-    path = Column(Text, primary_key=True, comment="path of the file")
-    executable = Column(
+    path: Mapped[str] = mapped_column(
+        Text, primary_key=True, comment="path of the file"
+    )
+    executable: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         comment="boolean to determine if the file is an executable",
     )
-    contents = Column(Text, comment="contents of the file")
-    last_synced = Column(
+    contents: Mapped[str | None] = mapped_column(Text, comment="contents of the file")
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         comment="timestamp when record was synced into the MergeStat database",
     )
 
-    # Relationships
-    repo = relationship("Repo", back_populates="git_files")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="git_files")
 
 
 class GitCommit(Base):
     __tablename__ = "git_commits"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
         comment="foreign key for public.repos.id",
     )
-    hash = Column(Text, primary_key=True, comment="hash of the commit")
-    message = Column(Text, comment="message of the commit")
-    author_name = Column(Text, comment="name of the author of the modification")
-    author_email = Column(Text, comment="email of the author of the modification")
-    author_when = Column(
+    hash: Mapped[str] = mapped_column(
+        Text, primary_key=True, comment="hash of the commit"
+    )
+    message: Mapped[str | None] = mapped_column(Text, comment="message of the commit")
+    author_name: Mapped[str | None] = mapped_column(
+        Text, comment="name of the author of the modification"
+    )
+    author_email: Mapped[str | None] = mapped_column(
+        Text, comment="email of the author of the modification"
+    )
+    author_when: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         comment="timestamp of when the modification was authored",
     )
-    committer_name = Column(
+    committer_name: Mapped[str | None] = mapped_column(
         Text, comment="name of the author who committed the modification"
     )
-    committer_email = Column(
+    committer_email: Mapped[str | None] = mapped_column(
         Text, comment="email of the author who committed the modification"
     )
-    committer_when = Column(
+    committer_when: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         comment="timestamp of when the commit was made",
     )
-    parents = Column(
+    parents: Mapped[int] = mapped_column(
         Integer, nullable=False, comment="the number of parents of the commit"
     )
-    last_synced = Column(
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         comment="timestamp when record was synced into the MergeStat database",
     )
 
-    # Relationships
-    repo = relationship("Repo", back_populates="git_commits")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="git_commits")
 
 
 class GitCommitStat(Base):
     __tablename__ = "git_commit_stats"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
         comment="foreign key for public.repos.id",
     )
-    commit_hash = Column(Text, primary_key=True, comment="hash of the commit")
-    file_path = Column(
+    commit_hash: Mapped[str] = mapped_column(
+        Text, primary_key=True, comment="hash of the commit"
+    )
+    file_path: Mapped[str] = mapped_column(
         Text, primary_key=True, comment="path of the file the modification was made in"
     )
-    additions = Column(
+    additions: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
         comment="the number of additions in this path of the commit",
     )
-    deletions = Column(
+    deletions: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
         comment="the number of deletions in this path of the commit",
     )
-    old_file_mode = Column(
+    old_file_mode: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="unknown",
         comment="old file mode derived from git mode",
     )
-    new_file_mode = Column(
+    new_file_mode: Mapped[str | None] = mapped_column(
         Text, default="unknown", comment="new file mode derived from git mode"
     )
-    last_synced = Column(
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         comment="timestamp when record was synced into the MergeStat database",
     )
 
-    # Relationships
-    repo = relationship("Repo", back_populates="git_commit_stats")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="git_commit_stats")
 
 
 class GitBlameMixin:
@@ -410,7 +422,7 @@ class GitBlameMixin:
         filepath: str,
         repo_uuid: uuid.UUID,
         repo: GitRepo | None = None,
-    ) -> list[tuple]:
+    ) -> list[tuple[uuid.UUID, str, str, datetime, str, int, str, str]]:
         """
         Fetch blame data for a given file using gitpython.
 
@@ -433,9 +445,22 @@ class GitBlameMixin:
                         continue
                     commit = item[0]
                     lines = item[1]
-                    if commit is None or lines is None:
+                    if (
+                        commit is None
+                        or lines is None
+                        or not isinstance(commit, Commit)
+                        or not isinstance(lines, list)
+                    ):
                         continue
                     for line in lines:
+                        if isinstance(line, bytes):
+                            line_text = line.decode("utf-8", errors="replace").rstrip(
+                                "\n"
+                            )
+                        elif isinstance(line, str):
+                            line_text = line.rstrip("\n")
+                        else:
+                            line_text = str(line).rstrip("\n")
                         author_email = getattr(commit.author, "email", "unknown")
                         author_name = getattr(commit.author, "name", "unknown")
                         committed_datetime = getattr(
@@ -451,7 +476,7 @@ class GitBlameMixin:
                                 committed_datetime,
                                 hexsha,
                                 line_no,
-                                line.rstrip("\n") if line else "",
+                                line_text,
                                 rel_path,
                             )
                         )
@@ -463,40 +488,49 @@ class GitBlameMixin:
 
 class GitBlame(Base, GitBlameMixin):
     __tablename__ = "git_blame"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
         comment="foreign key for public.repos.id",
     )
-    path = Column(
+    path: Mapped[str] = mapped_column(
         Text, primary_key=True, comment="path of the file the modification was made in"
     )
-    line_no = Column(
+    line_no: Mapped[int] = mapped_column(
         Integer, primary_key=True, comment="line number of the modification"
     )
-    author_email = Column(Text, comment="email of the author who modified the line")
-    author_name = Column(Text, comment="name of the author who modified the line")
-    author_when = Column(
+    author_email: Mapped[str | None] = mapped_column(
+        Text, comment="email of the author who modified the line"
+    )
+    author_name: Mapped[str | None] = mapped_column(
+        Text, comment="name of the author who modified the line"
+    )
+    author_when: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         comment="timestamp of when the modification was authored",
     )
-    commit_hash = Column(
+    commit_hash: Mapped[str | None] = mapped_column(
         Text, comment="hash of the commit the modification was made in"
     )
-    line = Column(Text, comment="content of the line")
-    last_synced = Column(
+    line: Mapped[str | None] = mapped_column(Text, comment="content of the line")
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         comment="timestamp when record was synced into the MergeStat database",
     )
 
-    # Relationships
-    repo = relationship("Repo", back_populates="git_blames")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="git_blames")
 
     @classmethod
-    def process_file(cls, repo_path, filepath, repo_uuid, repo=None):
+    def process_file(
+        cls,
+        repo_path: str,
+        filepath: str,
+        repo_uuid: uuid.UUID,
+        repo: GitRepo | None = None,
+    ) -> list["GitBlame"]:
         """
         Process a file to fetch blame data and return it as a list of GitBlame objects.
 
@@ -524,57 +558,80 @@ class GitBlame(Base, GitBlameMixin):
 
 class GitPullRequest(Base):
     __tablename__ = "git_pull_requests"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
         comment="foreign key for public.repos.id",
     )
-    number = Column(Integer, primary_key=True, comment="pull request number")
-    title = Column(Text, comment="title of the pull request")
-    body = Column(Text, comment="description/body of the pull request")
-    state = Column(Text, comment="state of the pull request (open, closed, merged)")
-    author_name = Column(Text, comment="username of the author")
-    author_email = Column(Text, comment="email of the author (if available)")
-    created_at = Column(
+    number: Mapped[int] = mapped_column(
+        Integer, primary_key=True, comment="pull request number"
+    )
+    title: Mapped[str | None] = mapped_column(Text, comment="title of the pull request")
+    body: Mapped[str | None] = mapped_column(
+        Text, comment="description/body of the pull request"
+    )
+    state: Mapped[str | None] = mapped_column(
+        Text, comment="state of the pull request (open, closed, merged)"
+    )
+    author_name: Mapped[str | None] = mapped_column(
+        Text, comment="username of the author"
+    )
+    author_email: Mapped[str | None] = mapped_column(
+        Text, comment="email of the author (if available)"
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         comment="timestamp when PR was created",
     )
-    merged_at = Column(
+    merged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         comment="timestamp when PR was merged",
     )
-    closed_at = Column(
+    closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         comment="timestamp when PR was closed",
     )
-    head_branch = Column(Text, comment="name of the head branch")
-    base_branch = Column(Text, comment="name of the base branch")
-    additions = Column(Integer, comment="total line additions in the PR")
-    deletions = Column(Integer, comment="total line deletions in the PR")
-    changed_files = Column(Integer, comment="total number of files changed in the PR")
-    first_review_at = Column(
+    head_branch: Mapped[str | None] = mapped_column(
+        Text, comment="name of the head branch"
+    )
+    base_branch: Mapped[str | None] = mapped_column(
+        Text, comment="name of the base branch"
+    )
+    additions: Mapped[int | None] = mapped_column(
+        Integer, comment="total line additions in the PR"
+    )
+    deletions: Mapped[int | None] = mapped_column(
+        Integer, comment="total line deletions in the PR"
+    )
+    changed_files: Mapped[int | None] = mapped_column(
+        Integer, comment="total number of files changed in the PR"
+    )
+    first_review_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), comment="timestamp of the first review"
     )
-    first_comment_at = Column(
+    first_comment_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), comment="timestamp of the first comment"
     )
-    changes_requested_count = Column(
+    changes_requested_count: Mapped[int | None] = mapped_column(
         Integer, default=0, comment="number of times changes were requested"
     )
-    reviews_count = Column(Integer, default=0, comment="total number of reviews")
-    comments_count = Column(Integer, default=0, comment="total number of comments")
-    last_synced = Column(
+    reviews_count: Mapped[int | None] = mapped_column(
+        Integer, default=0, comment="total number of reviews"
+    )
+    comments_count: Mapped[int | None] = mapped_column(
+        Integer, default=0, comment="total number of comments"
+    )
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         comment="timestamp when record was synced into the MergeStat database",
     )
 
-    # Relationships
-    repo = relationship("Repo", back_populates="git_pull_requests")
-    reviews = relationship(
+    repo: Mapped[Repo] = relationship("Repo", back_populates="git_pull_requests")
+    reviews: Mapped[list["GitPullRequestReview"]] = relationship(
         "GitPullRequestReview",
         primaryjoin="and_(GitPullRequest.repo_id==GitPullRequestReview.repo_id, GitPullRequest.number==GitPullRequestReview.number)",
         foreign_keys="[GitPullRequestReview.repo_id, GitPullRequestReview.number]",
@@ -585,39 +642,40 @@ class GitPullRequest(Base):
 
 class GitPullRequestReview(Base):
     __tablename__ = "git_pull_request_reviews"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    number = Column(
+    number: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
     )
-    review_id = Column(
+    review_id: Mapped[str] = mapped_column(
         Text,
         primary_key=True,
         comment="unique identifier for the review (e.g. GitHub review ID)",
     )
-    reviewer = Column(Text, nullable=False, comment="identity of the reviewer")
-    state = Column(
+    reviewer: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="identity of the reviewer"
+    )
+    state: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment="state of the review (APPROVED, CHANGES_REQUESTED, etc.)",
     )
-    submitted_at = Column(
+    submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         comment="timestamp when review was submitted",
     )
-    last_synced = Column(
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
-    # Relationships
-    pr = relationship(
+    pr: Mapped[GitPullRequest] = relationship(
         "GitPullRequest",
         primaryjoin="and_(GitPullRequestReview.repo_id==GitPullRequest.repo_id, GitPullRequestReview.number==GitPullRequest.number)",
         foreign_keys="[GitPullRequestReview.repo_id, GitPullRequestReview.number]",
@@ -635,69 +693,75 @@ class GitPullRequestReview(Base):
 
 class CiPipelineRun(Base):
     __tablename__ = "ci_pipeline_runs"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    run_id = Column(Text, primary_key=True)
-    status = Column(Text)
-    queued_at = Column(DateTime(timezone=True))
-    started_at = Column(DateTime(timezone=True), nullable=False)
-    finished_at = Column(DateTime(timezone=True))
-    last_synced = Column(
+    run_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str | None] = mapped_column(Text)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
-    repo = relationship("Repo", back_populates="ci_pipeline_runs")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="ci_pipeline_runs")
 
 
 class Deployment(Base):
     __tablename__ = "deployments"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    deployment_id = Column(Text, primary_key=True)
-    status = Column(Text)
-    environment = Column(Text)
-    started_at = Column(DateTime(timezone=True))
-    finished_at = Column(DateTime(timezone=True))
-    deployed_at = Column(DateTime(timezone=True))
-    merged_at = Column(DateTime(timezone=True))
-    pull_request_number = Column(Integer)
-    release_ref = Column(Text, nullable=False, default="")
-    release_ref_confidence = Column(Float, nullable=False, default=0.0)
-    last_synced = Column(
+    deployment_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str | None] = mapped_column(Text)
+    environment: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pull_request_number: Mapped[int | None] = mapped_column(Integer)
+    release_ref: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    release_ref_confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
-    repo = relationship("Repo", back_populates="deployments")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="deployments")
 
 
 class Incident(Base):
     __tablename__ = "incidents"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    incident_id = Column(Text, primary_key=True)
-    status = Column(Text)
-    started_at = Column(DateTime(timezone=True), nullable=False)
-    resolved_at = Column(DateTime(timezone=True))
-    last_synced = Column(
+    incident_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
-    repo = relationship("Repo", back_populates="incidents")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="incidents")
 
 
 class SecurityAlert(Base):
@@ -708,32 +772,44 @@ class SecurityAlert(Base):
     """
 
     __tablename__ = "security_alerts"
-    repo_id = Column(
+    repo_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("repos.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    alert_id = Column(Text, primary_key=True)
-    source = Column(
+    alert_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         doc="Alert source: dependabot, code_scanning, advisory, "
         "gitlab_vulnerability, gitlab_dependency",
     )
-    severity = Column(Text, doc="low, medium, high, critical, unknown")
-    state = Column(Text, doc="open, fixed, dismissed, detected, confirmed, resolved")
-    package_name = Column(Text, doc="Affected package name (if applicable)")
-    cve_id = Column(Text, doc="CVE identifier (if available)")
-    url = Column(Text, doc="URL to the alert detail page")
-    title = Column(Text, doc="Alert title or summary")
-    description = Column(Text, doc="Alert description or rule description")
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    fixed_at = Column(DateTime(timezone=True))
-    dismissed_at = Column(DateTime(timezone=True))
-    last_synced = Column(
+    severity: Mapped[str | None] = mapped_column(
+        Text, doc="low, medium, high, critical, unknown"
+    )
+    state: Mapped[str | None] = mapped_column(
+        Text, doc="open, fixed, dismissed, detected, confirmed, resolved"
+    )
+    package_name: Mapped[str | None] = mapped_column(
+        Text, doc="Affected package name (if applicable)"
+    )
+    cve_id: Mapped[str | None] = mapped_column(
+        Text, doc="CVE identifier (if available)"
+    )
+    url: Mapped[str | None] = mapped_column(Text, doc="URL to the alert detail page")
+    title: Mapped[str | None] = mapped_column(Text, doc="Alert title or summary")
+    description: Mapped[str | None] = mapped_column(
+        Text, doc="Alert description or rule description"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    fixed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_synced: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
-    repo = relationship("Repo", back_populates="security_alerts")
+    repo: Mapped[Repo] = relationship("Repo", back_populates="security_alerts")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any, Protocol, cast
 
 from croniter import croniter as Croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,6 +26,86 @@ from dev_health_ops.models.settings import JobRun, ScheduledJob, SyncConfigurati
 from .common import get_session
 
 router = APIRouter()
+
+
+class _MutableSyncConfiguration(Protocol):
+    sync_targets: list[str]
+    sync_options: dict[str, Any]
+    is_active: bool
+
+
+def _sync_config_to_response(
+    config: object,
+    children_count: int | None = None,
+) -> SyncConfigResponse:
+    return SyncConfigResponse.model_validate(
+        {
+            "id": str(getattr(config, "id")),
+            "name": getattr(config, "name"),
+            "provider": getattr(config, "provider"),
+            "credential_id": (
+                str(getattr(config, "credential_id"))
+                if getattr(config, "credential_id") is not None
+                else None
+            ),
+            "sync_targets": list(getattr(config, "sync_targets") or []),
+            "sync_options": dict(getattr(config, "sync_options") or {}),
+            "is_active": getattr(config, "is_active"),
+            "parent_id": (
+                str(getattr(config, "parent_id"))
+                if getattr(config, "parent_id") is not None
+                else None
+            ),
+            "children_count": children_count,
+            "last_sync_at": getattr(config, "last_sync_at"),
+            "last_sync_success": getattr(config, "last_sync_success"),
+            "last_sync_error": getattr(config, "last_sync_error"),
+            "created_at": getattr(config, "created_at"),
+            "updated_at": getattr(config, "updated_at"),
+        }
+    )
+
+
+def _job_run_response(run: object) -> JobRunResponse:
+    status_value = int(getattr(run, "status"))
+    return JobRunResponse.model_validate(
+        {
+            "id": str(getattr(run, "id")),
+            "job_id": str(getattr(run, "job_id")),
+            "status": JOB_RUN_STATUS_LABELS.get(status_value, "unknown"),
+            "started_at": getattr(run, "started_at"),
+            "completed_at": getattr(run, "completed_at"),
+            "duration_seconds": getattr(run, "duration_seconds"),
+            "result": getattr(run, "result"),
+            "error": getattr(run, "error"),
+            "triggered_by": getattr(run, "triggered_by"),
+            "created_at": getattr(run, "created_at"),
+        }
+    )
+
+
+def _backfill_job_response(job: object):
+    from dev_health_ops.api.schemas.backfill import BackfillJobResponse
+
+    total_chunks = int(getattr(job, "total_chunks"))
+    completed_chunks = int(getattr(job, "completed_chunks"))
+    progress_pct = (completed_chunks / total_chunks * 100) if total_chunks > 0 else 0.0
+    return BackfillJobResponse(
+        id=str(getattr(job, "id")),
+        sync_config_id=str(getattr(job, "sync_config_id")),
+        status=str(getattr(job, "status")),
+        since_date=getattr(job, "since_date"),
+        before_date=getattr(job, "before_date"),
+        total_chunks=total_chunks,
+        completed_chunks=completed_chunks,
+        failed_chunks=int(getattr(job, "failed_chunks")),
+        progress_pct=progress_pct,
+        error_message=getattr(job, "error_message"),
+        started_at=getattr(job, "started_at"),
+        completed_at=getattr(job, "completed_at"),
+        created_at=getattr(job, "created_at"),
+    )
+
 
 # Canonical mapping of provider → supported sync targets.
 # Jira/Linear only support work-items; Git/CI/CD come from code hosts.
@@ -66,22 +147,25 @@ async def list_sync_configs(
     from sqlalchemy import func, select
 
     children_counts: dict[str, int] = {}
-    parent_ids = [c.id for c in configs if c.parent_id is None]
+    parent_id_col = getattr(SyncConfiguration, "parent_id")
+    sync_configuration_id_col = getattr(SyncConfiguration, "id")
+    parent_ids = [
+        getattr(config, "id")
+        for config in configs
+        if getattr(config, "parent_id") is None
+    ]
     if parent_ids:
         stmt = (
-            select(
-                SyncConfiguration.parent_id,
-                func.count(SyncConfiguration.id),
-            )
-            .where(SyncConfiguration.parent_id.in_(parent_ids))
-            .group_by(SyncConfiguration.parent_id)
+            select(parent_id_col, func.count(sync_configuration_id_col))
+            .where(parent_id_col.in_(parent_ids))
+            .group_by(parent_id_col)
         )
         rows = (await session.execute(stmt)).all()
         children_counts = {str(pid): cnt for pid, cnt in rows}
 
     results = []
     for c in configs:
-        cc = children_counts.get(str(c.id))
+        cc = children_counts.get(str(getattr(c, "id")))
         results.append(_sync_config_to_response(c, children_count=cc))
     return results
 
@@ -157,7 +241,7 @@ async def batch_create_sync_configs(
             sync_targets=payload.sync_targets,
             sync_options=child_options,
             is_active=True,
-            parent_id=parent.id,
+            parent_id=getattr(parent, "id"),
         )
         children.append(child)
 
@@ -270,27 +354,6 @@ async def create_sync_config(
     return _sync_config_to_response(config)
 
 
-def _sync_config_to_response(
-    c, children_count: int | None = None
-) -> SyncConfigResponse:
-    return SyncConfigResponse(
-        id=str(c.id),
-        name=c.name,
-        provider=c.provider,
-        credential_id=str(c.credential_id) if c.credential_id else None,
-        sync_targets=c.sync_targets,
-        sync_options=c.sync_options,
-        is_active=c.is_active,
-        parent_id=str(c.parent_id) if c.parent_id else None,
-        children_count=children_count,
-        last_sync_at=c.last_sync_at,
-        last_sync_success=c.last_sync_success,
-        last_sync_error=c.last_sync_error,
-        created_at=c.created_at,
-        updated_at=c.updated_at,
-    )
-
-
 @router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)
 async def get_sync_config(
     config_id: str,
@@ -361,32 +424,34 @@ async def update_sync_config(
             )
 
     updated = await svc.update(
-        name=config.name,
+        name=str(getattr(config, "name")),
         sync_targets=payload.sync_targets,
         sync_options=payload.sync_options,
         is_active=payload.is_active,
     )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
 
     # Cascade shared settings to children when updating a parent config
-    if updated.parent_id is None:
+    if getattr(updated, "parent_id") is None:
         stmt = select(SyncConfiguration).where(
-            SyncConfiguration.parent_id == updated.id
+            SyncConfiguration.parent_id == getattr(updated, "id")
         )
         result = await session.execute(stmt)
         children = result.scalars().all()
         for child in children:
+            mutable_child = cast(_MutableSyncConfiguration, child)
             if payload.sync_targets is not None:
-                child.sync_targets = payload.sync_targets
+                mutable_child.sync_targets = payload.sync_targets
             if payload.is_active is not None:
-                child.is_active = payload.is_active
+                mutable_child.is_active = payload.is_active
             # Propagate schedule/timezone/depth from sync_options if provided
             if payload.sync_options:
                 for key in ("schedule_cron", "timezone", "initial_sync_depth"):
                     if key in payload.sync_options:
-                        child.sync_options = {
-                            **child.sync_options,
-                            key: payload.sync_options[key],
-                        }
+                        child_sync_options = dict(getattr(child, "sync_options") or {})
+                        child_sync_options[key] = payload.sync_options[key]
+                        mutable_child.sync_options = child_sync_options
         if children:
             await session.flush()
 
@@ -403,7 +468,7 @@ async def delete_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
-    await svc.delete(config.name)
+    await svc.delete(str(getattr(config, "name")))
 
 
 @router.post("/sync-configs/{config_id}/trigger", status_code=202)
@@ -461,7 +526,7 @@ async def trigger_sync_config(
     try:
         from dev_health_ops.workers.sync_tasks import run_sync_config
 
-        result = run_sync_config.delay(
+        result = getattr(run_sync_config, "delay")(
             config_id=str(config.id),
             org_id=org_id,
             triggered_by="manual",
@@ -516,7 +581,7 @@ async def trigger_sync_config_backfill(
     try:
         from dev_health_ops.workers.sync_tasks import run_backfill
 
-        result = run_backfill.delay(
+        result = getattr(run_backfill, "delay")(
             sync_config_id=str(config.id),
             since=payload.since.isoformat(),
             before=payload.before.isoformat(),
@@ -548,10 +613,14 @@ async def list_sync_config_jobs(
     if existing is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
 
-    job_stmt = select(ScheduledJob.id).where(
-        ScheduledJob.org_id == org_id,
-        ScheduledJob.sync_config_id == uuid.UUID(config_id),
-        ScheduledJob.job_type == "sync",
+    scheduled_job_id_col = getattr(ScheduledJob, "id")
+    scheduled_job_org_id = getattr(ScheduledJob, "org_id")
+    scheduled_job_sync_config_id = getattr(ScheduledJob, "sync_config_id")
+    scheduled_job_type = getattr(ScheduledJob, "job_type")
+    job_stmt = select(scheduled_job_id_col).where(
+        scheduled_job_org_id == org_id,
+        scheduled_job_sync_config_id == uuid.UUID(config_id),
+        scheduled_job_type == "sync",
     )
     job_result = await session.execute(job_stmt)
     job_ids = list(job_result.scalars().all())
@@ -559,30 +628,18 @@ async def list_sync_config_jobs(
     if not job_ids:
         return []
 
+    job_run_job_id = getattr(JobRun, "job_id")
+    job_run_created_at = getattr(JobRun, "created_at")
     runs_stmt = (
         select(JobRun)
-        .where(JobRun.job_id.in_(job_ids))
-        .order_by(JobRun.created_at.desc())
+        .where(job_run_job_id.in_(job_ids))
+        .order_by(job_run_created_at.desc())
         .limit(50)
     )
     runs_result = await session.execute(runs_stmt)
     runs = list(runs_result.scalars().all())
 
-    return [
-        JobRunResponse(
-            id=str(run.id),
-            job_id=str(run.job_id),
-            status=JOB_RUN_STATUS_LABELS.get(run.status, "unknown"),
-            started_at=run.started_at,
-            completed_at=run.completed_at,
-            duration_seconds=run.duration_seconds,
-            result=run.result,
-            error=run.error,
-            triggered_by=run.triggered_by,
-            created_at=run.created_at,
-        )
-        for run in runs
-    ]
+    return [_job_run_response(run) for run in runs]
 
 
 @router.get("/backfill-jobs")
@@ -592,35 +649,13 @@ async def list_backfill_jobs(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ):
-    from dev_health_ops.api.schemas.backfill import (
-        BackfillJobListResponse,
-        BackfillJobResponse,
-    )
+    from dev_health_ops.api.schemas.backfill import BackfillJobListResponse
     from dev_health_ops.api.services.backfill import BackfillJobService
 
     svc = BackfillJobService(session, org_id)
     jobs, total = await svc.list_jobs(limit=limit, offset=offset)
     return BackfillJobListResponse(
-        items=[
-            BackfillJobResponse(
-                id=str(j.id),
-                sync_config_id=str(j.sync_config_id),
-                status=j.status,
-                since_date=j.since_date,
-                before_date=j.before_date,
-                total_chunks=j.total_chunks,
-                completed_chunks=j.completed_chunks,
-                failed_chunks=j.failed_chunks,
-                progress_pct=(j.completed_chunks / j.total_chunks * 100)
-                if j.total_chunks > 0
-                else 0.0,
-                error_message=j.error_message,
-                started_at=j.started_at,
-                completed_at=j.completed_at,
-                created_at=j.created_at,
-            )
-            for j in jobs
-        ],
+        items=[_backfill_job_response(job) for job in jobs],
         total=total,
         limit=limit,
         offset=offset,
@@ -633,27 +668,10 @@ async def get_backfill_job(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ):
-    from dev_health_ops.api.schemas.backfill import BackfillJobResponse
     from dev_health_ops.api.services.backfill import BackfillJobService
 
     svc = BackfillJobService(session, org_id)
     job = await svc.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Backfill job not found")
-    return BackfillJobResponse(
-        id=str(job.id),
-        sync_config_id=str(job.sync_config_id),
-        status=job.status,
-        since_date=job.since_date,
-        before_date=job.before_date,
-        total_chunks=job.total_chunks,
-        completed_chunks=job.completed_chunks,
-        failed_chunks=job.failed_chunks,
-        progress_pct=(job.completed_chunks / job.total_chunks * 100)
-        if job.total_chunks > 0
-        else 0.0,
-        error_message=job.error_message,
-        started_at=job.started_at,
-        completed_at=job.completed_at,
-        created_at=job.created_at,
-    )
+    return _backfill_job_response(job)

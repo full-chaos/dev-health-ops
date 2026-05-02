@@ -24,6 +24,7 @@ from dev_health_ops.licensing.types import (
     LicenseLimits,
 )
 from dev_health_ops.licensing.validator import ValidationResult
+from tests._helpers import tables_of
 
 
 def assert_validation_error(result: ValidationResult) -> str:
@@ -1309,14 +1310,7 @@ class TestOrgFeatureOverrideUpdatedBy:
         db_path = tmp_path / "override-updated-by.db"
         engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
 
-        _tables = [
-            User.__table__,
-            Organization.__table__,
-            Membership.__table__,
-            OrgLicense.__table__,
-            FeatureFlag.__table__,
-            OrgFeatureOverride.__table__,
-        ]
+        _tables = tables_of(User, Organization, Membership, OrgLicense, FeatureFlag, OrgFeatureOverride)
 
         async with engine.begin() as conn:
             await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables))

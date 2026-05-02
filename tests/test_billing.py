@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dev_health_ops.api.billing.router import SignatureVerificationError, router
 from dev_health_ops.api.billing.stripe_client import reset_price_tier_map
+from tests._helpers import tables_of
 
 
 @pytest.fixture(autouse=True)
@@ -1004,16 +1005,7 @@ async def bridge_db(tmp_path):
             lambda: datetime.now(timezone.utc).isoformat(sep=" "),
         )
 
-    _tables = [
-        Organization.__table__,
-        BillingPlan.__table__,
-        BillingPrice.__table__,
-        FeatureBundle.__table__,
-        PlanFeatureBundle.__table__,
-        Subscription.__table__,
-        SubscriptionEvent.__table__,
-        OrgLicense.__table__,
-    ]
+    _tables = tables_of(Organization, BillingPlan, BillingPrice, FeatureBundle, PlanFeatureBundle, Subscription, SubscriptionEvent, OrgLicense)
 
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables))
@@ -1489,15 +1481,7 @@ async def billing_cascade_db(tmp_path):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
-    _tables = [
-        Organization.__table__,
-        BillingPlan.__table__,
-        BillingPrice.__table__,
-        FeatureBundle.__table__,
-        PlanFeatureBundle.__table__,
-        Subscription.__table__,
-        SubscriptionEvent.__table__,
-    ]
+    _tables = tables_of(Organization, BillingPlan, BillingPrice, FeatureBundle, PlanFeatureBundle, Subscription, SubscriptionEvent)
 
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables))

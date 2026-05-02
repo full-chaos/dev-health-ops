@@ -17,16 +17,12 @@ from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.models.users import Organization, User
+from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
-_TABLES = [
-    User.__table__,
-    Organization.__table__,
-    SyncConfiguration.__table__,
-    BackfillJob.__table__,
-]
+_TABLES = tables_of(User, Organization, SyncConfiguration, BackfillJob)
 
 
 @pytest_asyncio.fixture

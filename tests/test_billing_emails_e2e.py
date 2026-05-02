@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import MemberRole, Membership, Organization, User
+from tests._helpers import tables_of
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -33,11 +34,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda c: Base.metadata.create_all(
                 c,
-                tables=[
-                    User.__table__,
-                    Organization.__table__,
-                    Membership.__table__,
-                ],
+                tables=tables_of(User, Organization, Membership),
             )
         )
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

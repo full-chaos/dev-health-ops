@@ -20,6 +20,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
 from dev_health_ops.models.users import Membership, Organization, User
+from tests._helpers import tables_of
 
 
 @pytest_asyncio.fixture
@@ -31,13 +32,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    User.__table__,
-                    Organization.__table__,
-                    Membership.__table__,
-                    IntegrationCredential.__table__,
-                    SyncConfiguration.__table__,
-                ],
+                tables=tables_of(User, Organization, Membership, IntegrationCredential, SyncConfiguration),
             )
         )
 

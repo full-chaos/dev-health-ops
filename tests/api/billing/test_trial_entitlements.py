@@ -13,6 +13,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.subscriptions import Subscription
 from dev_health_ops.models.users import Organization
+from tests._helpers import tables_of
 
 
 @pytest_asyncio.fixture
@@ -32,11 +33,7 @@ async def session_maker(tmp_path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    Organization.__table__,
-                    OrgLicense.__table__,
-                    Subscription.__table__,
-                ],
+                tables=tables_of(Organization, OrgLicense, Subscription),
             )
         )
 

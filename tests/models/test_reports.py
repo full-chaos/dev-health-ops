@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
 from dev_health_ops.models.settings import ScheduledJob
+from tests._helpers import tables_of
 
 
 @pytest_asyncio.fixture
@@ -20,11 +21,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    SavedReport.__table__,
-                    ReportRun.__table__,
-                    ScheduledJob.__table__,
-                ],
+                tables=tables_of(SavedReport, ReportRun, ScheduledJob),
             )
         )
 

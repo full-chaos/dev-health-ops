@@ -20,6 +20,7 @@ from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.email_verification_token import EmailVerificationToken
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
+from tests._helpers import tables_of
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
@@ -36,14 +37,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    User.__table__,
-                    Organization.__table__,
-                    Membership.__table__,
-                    AuditLog.__table__,
-                    LoginAttempt.__table__,
-                    EmailVerificationToken.__table__,
-                ],
+                tables=tables_of(User, Organization, Membership, AuditLog, LoginAttempt, EmailVerificationToken),
             )
         )
 

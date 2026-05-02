@@ -16,6 +16,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.retention import OrgRetentionPolicy
 from dev_health_ops.models.users import Organization, User
+from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
@@ -30,12 +31,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    User.__table__,
-                    Organization.__table__,
-                    OrgLicense.__table__,
-                    OrgRetentionPolicy.__table__,
-                ],
+                tables=tables_of(User, Organization, OrgLicense, OrgRetentionPolicy),
             )
         )
 

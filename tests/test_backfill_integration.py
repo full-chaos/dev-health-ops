@@ -30,18 +30,12 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
+from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
-_TABLES = [
-    User.__table__,
-    Organization.__table__,
-    SyncConfiguration.__table__,
-    ScheduledJob.__table__,
-    JobRun.__table__,
-    BackfillJob.__table__,
-]
+_TABLES = tables_of(User, Organization, SyncConfiguration, ScheduledJob, JobRun, BackfillJob)
 
 
 @pytest_asyncio.fixture
@@ -176,12 +170,7 @@ def test_run_backfill_progress_callback_updates_backfill_job_completed_chunks(
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[
-            SyncConfiguration.__table__,
-            ScheduledJob.__table__,
-            JobRun.__table__,
-            BackfillJob.__table__,
-        ],
+        tables=tables_of(SyncConfiguration, ScheduledJob, JobRun, BackfillJob),
     )
 
     org_id = str(uuid.uuid4())
@@ -269,12 +258,7 @@ def test_run_backfill_does_not_create_scheduled_job(
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[
-            SyncConfiguration.__table__,
-            ScheduledJob.__table__,
-            JobRun.__table__,
-            BackfillJob.__table__,
-        ],
+        tables=tables_of(SyncConfiguration, ScheduledJob, JobRun, BackfillJob),
     )
 
     org_id = str(uuid.uuid4())
@@ -361,11 +345,7 @@ def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[
-            SyncConfiguration.__table__,
-            ScheduledJob.__table__,
-            JobRun.__table__,
-        ],
+        tables=tables_of(SyncConfiguration, ScheduledJob, JobRun),
     )
 
     org_id = str(uuid.uuid4())
@@ -482,13 +462,7 @@ def test_run_backfill_resolves_credentials_from_db(
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=[
-            SyncConfiguration.__table__,
-            ScheduledJob.__table__,
-            JobRun.__table__,
-            BackfillJob.__table__,
-            IntegrationCredential.__table__,
-        ],
+        tables=tables_of(SyncConfiguration, ScheduledJob, JobRun, BackfillJob, IntegrationCredential),
     )
 
     org_id = str(uuid.uuid4())

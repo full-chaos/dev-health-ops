@@ -16,6 +16,13 @@ from dev_health_ops.providers.teams import (
 _IDENTITY_RESOLVER = None
 _TEAM_RESOLVER = None
 
+_PROVIDER_MAP: dict[str, WorkItemProvider] = {
+    "jira": "jira",
+    "github": "github",
+    "gitlab": "gitlab",
+    "linear": "linear",
+}
+
 
 def resolve_identity(
     provider: str,
@@ -33,8 +40,7 @@ def resolve_identity(
     if _IDENTITY_RESOLVER is None:
         _IDENTITY_RESOLVER = _load_identity_resolver()
 
-    # Normalize provider string to WorkItemProvider literal if possible, else str
-    prov: WorkItemProvider = provider.lower()  # type: ignore
+    prov = _PROVIDER_MAP.get(provider.lower(), "jira")
 
     return _IDENTITY_RESOLVER.resolve(
         provider=prov,

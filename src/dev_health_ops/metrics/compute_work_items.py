@@ -240,7 +240,7 @@ def compute_work_item_metrics_daily(
         group_key = (item.provider, work_scope_id, team_id_norm)
         bucket = by_group.get(group_key)
         if bucket is None:
-            bucket = {
+            new_bucket: GroupBucket = {
                 "team_name": team_name_norm,
                 "items_started": 0,
                 "items_completed": 0,
@@ -259,7 +259,8 @@ def compute_work_item_metrics_daily(
                 "weekly_throughput": 0,
                 "predictability_score": 0.0,
             }
-            by_group[group_key] = bucket
+            by_group[group_key] = new_bucket
+            bucket = new_bucket
 
         user_identity = assignee or "unassigned"
         # User bucket (primary assignee or 'unassigned').
@@ -267,14 +268,15 @@ def compute_work_item_metrics_daily(
             user_key = (item.provider, work_scope_id, user_identity, team_id_norm)
             ub = by_user.get(user_key)
             if ub is None:
-                ub = {
+                new_user_bucket: UserBucket = {
                     "team_name": team_name_norm,
                     "items_started": 0,
                     "items_completed": 0,
                     "wip_count": 0,
                     "cycle_hours": [],
                 }
-                by_user[user_key] = ub
+                by_user[user_key] = new_user_bucket
+                ub = new_user_bucket
         else:
             user_key = None
             ub = None
@@ -325,19 +327,21 @@ def compute_work_item_metrics_daily(
             lead_hours = (completed_at - created_at).total_seconds() / 3600.0
             bucket["lead_hours"].append(float(lead_hours))
 
-            cycle_hours = None
+            cycle_duration_hours: float | None = None
             active_hours = None
             wait_hours = None
             flow_efficiency = None
 
             if started_at is not None:
-                cycle_hours = (completed_at - started_at).total_seconds() / 3600.0
-                bucket["cycle_hours"].append(float(cycle_hours))
+                cycle_duration_hours = (
+                    completed_at - started_at
+                ).total_seconds() / 3600.0
+                bucket["cycle_hours"].append(float(cycle_duration_hours))
                 if ub is not None:
-                    ub["cycle_hours"].append(float(cycle_hours))
+                    ub["cycle_hours"].append(float(cycle_duration_hours))
 
             # Calculate flow breakdown if cycle_hours is available
-            if cycle_hours is not None and cycle_hours > 0:
+            if cycle_duration_hours is not None and cycle_duration_hours > 0:
                 item_transitions = transitions_by_item.get(item.work_item_id, [])
                 calculated_active_h, calculated_wait_h = _calculate_flow_breakdown(
                     item, item_transitions
@@ -345,7 +349,7 @@ def compute_work_item_metrics_daily(
 
                 # If no transitions recorded between start and complete, assume 100% active.
                 if calculated_active_h + calculated_wait_h == 0:
-                    active_hours = cycle_hours
+                    active_hours = cycle_duration_hours
                     wait_hours = 0.0
                 else:
                     active_hours = calculated_active_h
@@ -361,7 +365,7 @@ def compute_work_item_metrics_daily(
                 WorkItemCycleTimeRecord(
                     work_item_id=item.work_item_id,
                     provider=item.provider,
-                    day=completed_at.date(),  # type: ignore
+                    day=completed_at.date(),
                     work_scope_id=work_scope_id,
                     team_id=normalize_team_id(team_id),
                     team_name=team_name_norm,
@@ -371,8 +375,8 @@ def compute_work_item_metrics_daily(
                     created_at=created_at,
                     started_at=started_at,
                     completed_at=completed_at,
-                    cycle_time_hours=float(cycle_hours)
-                    if cycle_hours is not None
+                    cycle_time_hours=float(cycle_duration_hours)
+                    if cycle_duration_hours is not None
                     else None,
                     lead_time_hours=float(lead_hours),
                     active_time_hours=float(active_hours)
@@ -407,9 +411,9 @@ def compute_work_item_metrics_daily(
         items_completed = bucket["items_completed"]
         bug_completed = bucket["bug_completed"]
         bug_ratio = (bug_completed / items_completed) if items_completed else 0.0
-        cycle_hours = bucket["cycle_hours"]
-        lead_hours = bucket["lead_hours"]
-        wip_ages = bucket["wip_age_hours"]
+        cycle_hour_values: list[float] = bucket["cycle_hours"]
+        lead_hour_values: list[float] = bucket["lead_hours"]
+        wip_age_values: list[float] = bucket["wip_age_hours"]
 
         new_bugs = bucket["new_bugs"]
         new_items = bucket["new_items"]
@@ -442,23 +446,23 @@ def compute_work_item_metrics_daily(
                 items_completed_unassigned=bucket["items_completed_unassigned"],
                 wip_count_end_of_day=bucket["wip_count"],
                 wip_unassigned_end_of_day=bucket["wip_unassigned"],
-                cycle_time_p50_hours=float(_percentile(cycle_hours, 50.0))
-                if cycle_hours
+                cycle_time_p50_hours=float(_percentile(cycle_hour_values, 50.0))
+                if cycle_hour_values
                 else None,
-                cycle_time_p90_hours=float(_percentile(cycle_hours, 90.0))
-                if cycle_hours
+                cycle_time_p90_hours=float(_percentile(cycle_hour_values, 90.0))
+                if cycle_hour_values
                 else None,
-                lead_time_p50_hours=float(_percentile(lead_hours, 50.0))
-                if lead_hours
+                lead_time_p50_hours=float(_percentile(lead_hour_values, 50.0))
+                if lead_hour_values
                 else None,
-                lead_time_p90_hours=float(_percentile(lead_hours, 90.0))
-                if lead_hours
+                lead_time_p90_hours=float(_percentile(lead_hour_values, 90.0))
+                if lead_hour_values
                 else None,
-                wip_age_p50_hours=float(_percentile(wip_ages, 50.0))
-                if wip_ages
+                wip_age_p50_hours=float(_percentile(wip_age_values, 50.0))
+                if wip_age_values
                 else None,
-                wip_age_p90_hours=float(_percentile(wip_ages, 90.0))
-                if wip_ages
+                wip_age_p90_hours=float(_percentile(wip_age_values, 90.0))
+                if wip_age_values
                 else None,
                 bug_completed_ratio=float(bug_ratio),
                 story_points_completed=float(bucket["story_points_completed"]),
@@ -473,11 +477,11 @@ def compute_work_item_metrics_daily(
         )
 
     user_records: list[WorkItemUserMetricsDailyRecord] = []
-    for (provider, work_scope_id, user_identity, team_id), bucket in sorted(
+    for (provider, work_scope_id, user_identity, team_id), user_bucket in sorted(
         by_user.items(),
         key=lambda kv: (kv[0][0], kv[0][1], kv[0][2], str(kv[0][3] or "")),
     ):
-        cycle_hours = bucket["cycle_hours"]
+        user_cycle_hours: list[float] = user_bucket["cycle_hours"]
         user_records.append(
             WorkItemUserMetricsDailyRecord(
                 day=day,
@@ -485,15 +489,15 @@ def compute_work_item_metrics_daily(
                 work_scope_id=work_scope_id,
                 user_identity=user_identity,
                 team_id=normalize_team_id(team_id),
-                team_name=bucket["team_name"],
-                items_started=bucket["items_started"],
-                items_completed=bucket["items_completed"],
-                wip_count_end_of_day=bucket["wip_count"],
-                cycle_time_p50_hours=float(_percentile(cycle_hours, 50.0))
-                if cycle_hours
+                team_name=user_bucket["team_name"],
+                items_started=user_bucket["items_started"],
+                items_completed=user_bucket["items_completed"],
+                wip_count_end_of_day=user_bucket["wip_count"],
+                cycle_time_p50_hours=float(_percentile(user_cycle_hours, 50.0))
+                if user_cycle_hours
                 else None,
-                cycle_time_p90_hours=float(_percentile(cycle_hours, 90.0))
-                if cycle_hours
+                cycle_time_p90_hours=float(_percentile(user_cycle_hours, 90.0))
+                if user_cycle_hours
                 else None,
                 computed_at=computed_at_utc,
             )

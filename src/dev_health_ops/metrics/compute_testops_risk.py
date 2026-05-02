@@ -34,15 +34,15 @@ def compute_release_confidence(
     test_by_repo: dict[uuid.UUID, TestMetricsDailyRecord] = {}
     cov_by_repo: dict[uuid.UUID, CoverageMetricsDailyRecord] = {}
 
-    for m in pipeline_metrics:
-        pipe_by_repo[m.repo_id] = m
-        repo_ids.add(m.repo_id)
-    for m in test_metrics:
-        test_by_repo[m.repo_id] = m
-        repo_ids.add(m.repo_id)
-    for m in coverage_metrics:
-        cov_by_repo[m.repo_id] = m
-        repo_ids.add(m.repo_id)
+    for pipeline_metric in pipeline_metrics:
+        pipe_by_repo[pipeline_metric.repo_id] = pipeline_metric
+        repo_ids.add(pipeline_metric.repo_id)
+    for test_metric in test_metrics:
+        test_by_repo[test_metric.repo_id] = test_metric
+        repo_ids.add(test_metric.repo_id)
+    for coverage_metric in coverage_metrics:
+        cov_by_repo[coverage_metric.repo_id] = coverage_metric
+        repo_ids.add(coverage_metric.repo_id)
 
     results: list[ReleaseConfidenceRecord] = []
     for repo_id in sorted(repo_ids, key=str):
@@ -118,12 +118,12 @@ def compute_quality_drag(
     pipe_by_repo: dict[uuid.UUID, PipelineMetricsDailyRecord] = {}
     test_by_repo: dict[uuid.UUID, TestMetricsDailyRecord] = {}
 
-    for m in pipeline_metrics:
-        pipe_by_repo[m.repo_id] = m
-        repo_ids.add(m.repo_id)
-    for m in test_metrics:
-        test_by_repo[m.repo_id] = m
-        repo_ids.add(m.repo_id)
+    for pipeline_metric in pipeline_metrics:
+        pipe_by_repo[pipeline_metric.repo_id] = pipeline_metric
+        repo_ids.add(pipeline_metric.repo_id)
+    for test_metric in test_metrics:
+        test_by_repo[test_metric.repo_id] = test_metric
+        repo_ids.add(test_metric.repo_id)
 
     results: list[QualityDragRecord] = []
     for repo_id in sorted(repo_ids, key=str):

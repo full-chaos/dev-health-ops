@@ -14,8 +14,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import clickhouse_connect
     import sqlalchemy.ext.asyncio
+    from clickhouse_connect.driver import Client as ClickHouseClient
 
 
 @dataclass(frozen=True)
@@ -363,7 +363,7 @@ def forecast_capacity(
 
 
 async def load_throughput_history_clickhouse(
-    client: clickhouse_connect.driver.Client,
+    client: ClickHouseClient,
     team_id: str | None = None,
     work_scope_id: str | None = None,
     history_days: int = 90,
@@ -440,54 +440,31 @@ async def load_throughput_history_sqlalchemy(
     from datetime import date as date_type
     from datetime import timedelta
 
-    from sqlalchemy import func, select, text
+    from sqlalchemy import text
 
-    try:
-        from dev_health_ops.models.metrics import WorkItemMetricsDaily
+    start_date = date_type.today() - timedelta(days=history_days)
+    conditions = ["day >= :start_date"]
+    params: dict[str, object] = {"start_date": start_date}
 
-        start_date = date_type.today() - timedelta(days=history_days)
+    if team_id:
+        conditions.append("team_id = :team_id")
+        params["team_id"] = team_id
+    if work_scope_id:
+        conditions.append("work_scope_id = :work_scope_id")
+        params["work_scope_id"] = work_scope_id
 
-        stmt = (
-            select(
-                WorkItemMetricsDaily.day,
-                func.sum(WorkItemMetricsDaily.items_completed).label("items_completed"),
-            )
-            .where(WorkItemMetricsDaily.day >= start_date)
-            .group_by(WorkItemMetricsDaily.day)
-            .order_by(WorkItemMetricsDaily.day)
-        )
-
-        if team_id:
-            stmt = stmt.where(WorkItemMetricsDaily.team_id == team_id)
-        if work_scope_id:
-            stmt = stmt.where(WorkItemMetricsDaily.work_scope_id == work_scope_id)
-
-        result = await session.execute(stmt)
-        rows = result.all()
-    except ImportError:
-        start_date = date_type.today() - timedelta(days=history_days)
-        conditions = ["day >= :start_date"]
-        params = {"start_date": start_date}
-
-        if team_id:
-            conditions.append("team_id = :team_id")
-            params["team_id"] = team_id
-        if work_scope_id:
-            conditions.append("work_scope_id = :work_scope_id")
-            params["work_scope_id"] = work_scope_id
-
-        where_clause = " AND ".join(conditions)
-        query = text(
-            f"""
-            SELECT day, SUM(items_completed) as items_completed
-            FROM work_item_metrics_daily
-            WHERE {where_clause}
-            GROUP BY day
-            ORDER BY day
-        """
-        )
-        result = await session.execute(query, params)
-        rows = result.all()
+    where_clause = " AND ".join(conditions)
+    query = text(
+        f"""
+        SELECT day, SUM(items_completed) as items_completed
+        FROM work_item_metrics_daily
+        WHERE {where_clause}
+        GROUP BY day
+        ORDER BY day
+    """
+    )
+    result = await session.execute(query, params)
+    rows = result.all()
 
     samples = [
         ThroughputSample(
@@ -503,7 +480,7 @@ async def load_throughput_history_sqlalchemy(
 
 
 async def get_backlog_size_clickhouse(
-    client: clickhouse_connect.driver.Client,
+    client: ClickHouseClient,
     team_id: str | None = None,
     work_scope_id: str | None = None,
     org_id: str = "",
@@ -562,41 +539,25 @@ async def get_backlog_size_sqlalchemy(
     Returns:
         Number of open items.
     """
-    from sqlalchemy import func, select, text
+    from sqlalchemy import text
 
-    try:
-        from dev_health_ops.models.work_items import WorkItem
+    conditions = ["status NOT IN ('done', 'closed', 'cancelled', 'resolved')"]
+    params: dict[str, object] = {}
 
-        stmt = select(func.count(WorkItem.id)).where(
-            ~WorkItem.status.in_(["done", "closed", "cancelled", "resolved"])
-        )
+    if team_id:
+        conditions.append("team_id = :team_id")
+        params["team_id"] = team_id
+    if work_scope_id:
+        conditions.append("work_scope_id = :work_scope_id")
+        params["work_scope_id"] = work_scope_id
 
-        if team_id:
-            stmt = stmt.where(WorkItem.team_id == team_id)
-        if work_scope_id:
-            stmt = stmt.where(WorkItem.work_scope_id == work_scope_id)
-
-        result = await session.execute(stmt)
-        count = result.scalar()
-        return count or 0
-    except ImportError:
-        conditions = ["status NOT IN ('done', 'closed', 'cancelled', 'resolved')"]
-        params = {}
-
-        if team_id:
-            conditions.append("team_id = :team_id")
-            params["team_id"] = team_id
-        if work_scope_id:
-            conditions.append("work_scope_id = :work_scope_id")
-            params["work_scope_id"] = work_scope_id
-
-        where_clause = " AND ".join(conditions)
-        query = text(
-            f"""
-            SELECT COUNT(*) FROM work_items
-            WHERE {where_clause}
-        """
-        )
-        result = await session.execute(query, params)
-        count = result.scalar()
-        return count or 0
+    where_clause = " AND ".join(conditions)
+    query = text(
+        f"""
+        SELECT COUNT(*) FROM work_items
+        WHERE {where_clause}
+    """
+    )
+    result = await session.execute(query, params)
+    count = result.scalar()
+    return count or 0

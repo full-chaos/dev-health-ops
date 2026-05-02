@@ -3,9 +3,17 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
+from typing import TypedDict
 
 from dev_health_ops.metrics.schemas import CICDMetricsDailyRecord, PipelineRunRow
 from dev_health_ops.utils.datetime import to_utc
+
+
+class PipelineBucket(TypedDict):
+    pipelines: int
+    success: int
+    durations: list[float]
+    queues: list[float]
 
 
 def _utc_day_window(day: date) -> tuple[datetime, datetime]:
@@ -43,7 +51,7 @@ def compute_cicd_metrics_daily(
     start, end = _utc_day_window(day)
     computed_at_utc = to_utc(computed_at)
 
-    by_repo: dict[str, dict[str, object]] = {}
+    by_repo: dict[str, PipelineBucket] = {}
     for row in pipeline_runs:
         started_at = to_utc(row["started_at"])
         if not (start <= started_at < end):
@@ -51,13 +59,14 @@ def compute_cicd_metrics_daily(
         repo_id = str(row["repo_id"])
         bucket = by_repo.get(repo_id)
         if bucket is None:
-            bucket = {
+            new_bucket: PipelineBucket = {
                 "pipelines": 0,
                 "success": 0,
                 "durations": [],
                 "queues": [],
             }
-            by_repo[repo_id] = bucket
+            by_repo[repo_id] = new_bucket
+            bucket = new_bucket
 
         bucket["pipelines"] = int(bucket["pipelines"]) + 1
         status = (row.get("status") or "").strip().lower()

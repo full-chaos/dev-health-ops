@@ -3,18 +3,35 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from typing import TypedDict
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.db import resolve_db_uri
 
 logger = logging.getLogger(__name__)
 
 
+class _PlanPrice(TypedDict):
+    interval: str
+    amount: int
+    currency: str
+
+
+class _StandardPlan(TypedDict):
+    key: str
+    name: str
+    description: str
+    tier: str
+    display_order: int
+    prices: list[_PlanPrice]
+
+
 async def _get_session(ns: argparse.Namespace) -> AsyncSession:
     engine = create_async_engine(resolve_db_uri(ns), pool_pre_ping=True)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async_session = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     return async_session()
 
 
@@ -102,9 +119,11 @@ async def _list_users_async(ns: argparse.Namespace) -> int:
         )
         print("-" * 108)
         for u in users:
+            is_superuser = bool(getattr(u, "is_superuser"))
+            is_active = bool(getattr(u, "is_active"))
             print(
                 f"{str(u.id):<40} {u.email:<30} {(u.username or ''):<20} "
-                f"{'Yes' if u.is_superuser else 'No':<10} {'Yes' if u.is_active else 'No':<8}"
+                f"{'Yes' if is_superuser else 'No':<10} {'Yes' if is_active else 'No':<8}"
             )
         return 0
     finally:
@@ -128,9 +147,10 @@ async def _list_orgs_async(ns: argparse.Namespace) -> int:
         print(f"{'ID':<40} {'Slug':<20} {'Name':<30} {'Tier':<10} {'Active':<8}")
         print("-" * 108)
         for o in orgs:
+            is_active = bool(getattr(o, "is_active"))
             print(
                 f"{str(o.id):<40} {o.slug:<20} {o.name:<30} "
-                f"{o.tier:<10} {'Yes' if o.is_active else 'No':<8}"
+                f"{o.tier:<10} {'Yes' if is_active else 'No':<8}"
             )
         return 0
     finally:
@@ -147,7 +167,7 @@ async def _seed_features_async(ns: argparse.Namespace) -> int:
     session = await _get_session(ns)
     try:
         created = await seed_feature_flags_async(session)
-        if created:
+        if created > 0:
             print(f"Seeded {created} feature flags.")
         else:
             print("All feature flags already exist.")
@@ -168,7 +188,7 @@ async def _seed_billing_plans_async(ns: argparse.Namespace) -> int:
 
     from dev_health_ops.models.billing import BillingPlan, BillingPrice
 
-    STANDARD_PLANS = [
+    STANDARD_PLANS: list[_StandardPlan] = [
         {
             "key": "community",
             "name": "Community",
@@ -281,7 +301,7 @@ async def _billing_list_async(ns: argparse.Namespace) -> int:
                 else "none"
             )
             stripe_id = plan.stripe_product_id or "-"
-            active = "Yes" if plan.is_active else "No"
+            active = "Yes" if bool(getattr(plan, "is_active")) else "No"
             print(
                 f"{plan.key:<15} {plan.name:<15} {plan.tier:<12} {active:<8} {stripe_id:<30} {prices_summary}"
             )
@@ -408,7 +428,8 @@ async def _bundles_list_async(ns: argparse.Namespace) -> int:
                 .where(PlanFeatureBundle.bundle_id == bundle.id)
             )
             plan_keys = [row[0] for row in pfb_result.all()]
-            features_str = ", ".join(bundle.features) if bundle.features else "none"
+            bundle_features = list(getattr(bundle, "features") or [])
+            features_str = ", ".join(bundle_features) if bundle_features else "none"
             plans_str = ", ".join(plan_keys) if plan_keys else "none"
             print(f"{bundle.key} ({bundle.name})")
             print(f"  Features: {features_str}")
@@ -491,7 +512,7 @@ async def _bundles_assign_org_async(ns: argparse.Namespace) -> int:
 
         override = OrgFeatureOverride(
             org_id=ns.org_id,
-            feature_id=flag.id,
+            feature_id=getattr(flag, "id"),
             reason=ns.reason,
             expires_at=expires_at,
         )

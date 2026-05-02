@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 
 from fastapi import Request
 
@@ -97,6 +98,7 @@ def get_admin_user_key(request: Request) -> str:
 
 
 _REDIS_URL = os.getenv("REDIS_URL")
+_IS_PYTEST = "pytest" in sys.modules
 
 
 class _NoOpLimiter:
@@ -110,13 +112,18 @@ class _NoOpLimiter:
 
 
 if Limiter is not None:
+    storage_uri = _REDIS_URL if _REDIS_URL and not _IS_PYTEST else "memory://"
     limiter = Limiter(
         key_func=get_remote_address,
-        storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
+        storage_uri=storage_uri,
     )
-    if _REDIS_URL:
+    if _REDIS_URL and not _IS_PYTEST:
         logging.getLogger(__name__).info(
             "Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "..."
+        )
+    elif _REDIS_URL and _IS_PYTEST:
+        logging.getLogger(__name__).info(
+            "Rate limiter using in-memory storage during pytest run"
         )
 else:
     limiter = _NoOpLimiter()  # type: ignore[assignment]

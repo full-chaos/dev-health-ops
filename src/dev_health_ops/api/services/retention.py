@@ -4,6 +4,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,7 +119,7 @@ class RetentionService:
         description: str | None = None,
         is_active: bool | None = None,
     ) -> OrgRetentionPolicy | None:
-        policy = await self.get_policy(org_id, policy_id)
+        policy: Any | None = await self.get_policy(org_id, policy_id)
         if not policy:
             return None
 
@@ -138,7 +139,7 @@ class RetentionService:
         return policy
 
     async def delete_policy(self, org_id: uuid.UUID, policy_id: uuid.UUID) -> bool:
-        policy = await self.get_policy(org_id, policy_id)
+        policy: Any | None = await self.get_policy(org_id, policy_id)
         if not policy:
             return False
 
@@ -151,7 +152,7 @@ class RetentionService:
     async def execute_policy(
         self, org_id: uuid.UUID, policy_id: uuid.UUID
     ) -> tuple[int, str | None]:
-        policy = await self.get_policy(org_id, policy_id)
+        policy: Any | None = await self.get_policy(org_id, policy_id)
         if not policy:
             return 0, "Policy not found"
 
@@ -201,7 +202,7 @@ class RetentionService:
             )
         )
         result = await self.session.execute(stmt)
-        return result.rowcount
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def get_policies_due_for_execution(
         self, limit: int = 100

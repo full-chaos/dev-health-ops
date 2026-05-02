@@ -2,12 +2,13 @@ import uuid
 from datetime import date, datetime, timezone
 
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
+from dev_health_ops.metrics.schemas import PullRequestReviewRow, PullRequestRow
 
 
 def test_review_edges_daily():
     repo_id = uuid.uuid4()
     day = date(2025, 2, 1)
-    pr_rows = [
+    pr_rows: list[PullRequestRow] = [
         {
             "repo_id": repo_id,
             "number": 1,
@@ -17,7 +18,7 @@ def test_review_edges_daily():
             "merged_at": datetime(2025, 2, 1, tzinfo=timezone.utc),
         }
     ]
-    review_rows = [
+    review_rows: list[PullRequestReviewRow] = [
         {
             "repo_id": repo_id,
             "number": 1,

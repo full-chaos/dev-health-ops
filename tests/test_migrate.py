@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -63,7 +62,9 @@ class TestMakeAlembicConfig:
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.setenv("DATABASE_URI", "postgresql+asyncpg://env@host/db")
         cfg = _make_alembic_config(db_url=None)
-        assert "env@host" in cfg.get_main_option("sqlalchemy.url")
+        url = cfg.get_main_option("sqlalchemy.url")
+        assert url is not None
+        assert "env@host" in url
 
     def test_no_url_leaves_option_unset(self, monkeypatch):
         monkeypatch.delenv("DATABASE_URI", raising=False)
@@ -118,7 +119,7 @@ class TestCommandDispatch:
 
     @patch("dev_health_ops.migrate.command")
     def test_run_upgrade(self, mock_cmd):
-        ns = SimpleNamespace(db="sqlite:///x.db", revision="head")
+        ns = argparse.Namespace(db="sqlite:///x.db", revision="head")
         assert _run_upgrade(ns) == 0
         mock_cmd.upgrade.assert_called_once()
         _cfg, rev = mock_cmd.upgrade.call_args[0]
@@ -126,7 +127,7 @@ class TestCommandDispatch:
 
     @patch("dev_health_ops.migrate.command")
     def test_run_downgrade(self, mock_cmd):
-        ns = SimpleNamespace(db="sqlite:///x.db", revision="-1")
+        ns = argparse.Namespace(db="sqlite:///x.db", revision="-1")
         assert _run_downgrade(ns) == 0
         mock_cmd.downgrade.assert_called_once()
         _cfg, rev = mock_cmd.downgrade.call_args[0]
@@ -134,25 +135,25 @@ class TestCommandDispatch:
 
     @patch("dev_health_ops.migrate.command")
     def test_run_current(self, mock_cmd):
-        ns = SimpleNamespace(db="sqlite:///x.db", verbose=True)
+        ns = argparse.Namespace(db="sqlite:///x.db", verbose=True)
         assert _run_current(ns) == 0
         mock_cmd.current.assert_called_once()
 
     @patch("dev_health_ops.migrate.command")
     def test_run_history(self, mock_cmd):
-        ns = SimpleNamespace(db="sqlite:///x.db", verbose=False)
+        ns = argparse.Namespace(db="sqlite:///x.db", verbose=False)
         assert _run_history(ns) == 0
         mock_cmd.history.assert_called_once()
 
     @patch("dev_health_ops.migrate.command")
     def test_run_heads(self, mock_cmd):
-        ns = SimpleNamespace(db="sqlite:///x.db", verbose=False)
+        ns = argparse.Namespace(db="sqlite:///x.db", verbose=False)
         assert _run_heads(ns) == 0
         mock_cmd.heads.assert_called_once()
 
     @patch("dev_health_ops.migrate.command")
     def test_upgrade_uses_db_from_namespace(self, mock_cmd):
-        ns = SimpleNamespace(
+        ns = argparse.Namespace(
             db="postgresql+asyncpg://custom@host/mydb", revision="abc123"
         )
         _run_upgrade(ns)
@@ -167,7 +168,9 @@ class TestCommandDispatch:
         monkeypatch.delenv("POSTGRES_URI", raising=False)
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.setenv("DATABASE_URI", "postgresql+asyncpg://env@host/db")
-        ns = SimpleNamespace(db=None, revision="head")
+        ns = argparse.Namespace(db=None, revision="head")
         _run_upgrade(ns)
         cfg = mock_cmd.upgrade.call_args[0][0]
-        assert "env@host" in cfg.get_main_option("sqlalchemy.url")
+        url = cfg.get_main_option("sqlalchemy.url")
+        assert url is not None
+        assert "env@host" in url

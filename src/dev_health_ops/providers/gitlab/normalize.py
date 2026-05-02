@@ -216,6 +216,7 @@ def gitlab_mr_to_work_item(
 
     # MRs use state-based status
     status_raw = str(state) if state else "unknown"
+    normalized_status: WorkItemStatusCategory
     if status_raw == "merged":
         normalized_status = "done"
     elif status_raw == "closed":

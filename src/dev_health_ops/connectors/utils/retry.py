@@ -8,7 +8,7 @@ import logging
 import time
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,7 @@ def retry_with_backoff(
             last_exception: Exception | None = None
             for attempt in range(max_retries):
                 try:
-                    result = await func(*args, **kwargs)
+                    result = await func(*args, **kwargs)  # type: ignore[misc]
                     rate_limiter.reset()  # Reset on success
                     return result
                 except exceptions as e:
@@ -190,10 +190,8 @@ def retry_with_backoff(
                 raise last_exception
             raise RuntimeError("Max retries exceeded with no exception captured")
 
-        # Return appropriate wrapper based on function type
         if inspect.iscoroutinefunction(func):
-            return async_wrapper
-        else:
-            return sync_wrapper
+            return cast(Callable[..., T], async_wrapper)
+        return sync_wrapper
 
     return decorator

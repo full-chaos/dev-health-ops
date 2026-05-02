@@ -423,7 +423,9 @@ def _process_file_and_blame_sync(
         if do_blame:
             # Optimization: We already have repo_root.
             # GitBlame.fetch_blame is static and handles logic
-            blame_data = GitBlame.fetch_blame(repo_root, filepath, repo_id, repo=None)
+            blame_data = GitBlame.fetch_blame(
+                str(repo_root), str(filepath), repo_id, repo=None
+            )
             blame_results = [
                 GitBlame(
                     repo_id=row[0],

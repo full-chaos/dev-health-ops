@@ -99,7 +99,7 @@ def run_dora_metrics_job(
     if not token:
         raise ValueError("GitLab token required (set GITLAB_TOKEN or pass --auth).")
 
-    gitlab_url = gitlab_url or os.getenv("GITLAB_URL", "https://gitlab.com")
+    gitlab_url = gitlab_url or os.getenv("GITLAB_URL") or "https://gitlab.com"
     resolved_org_id = org_id or ""
 
     days = _date_range(day, backfill_days)

@@ -31,6 +31,7 @@ from dev_health_ops.metrics.work_items import (
     fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
 )
+from dev_health_ops.models.work_items import WorkItemType
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.status_mapping import load_status_mapping
 from dev_health_ops.providers.teams import (
@@ -348,7 +349,9 @@ def run_work_items_sync_job(
             )
 
             # --- Issue Type Metrics ---
-            issue_type_stats: dict[tuple[uuid.UUID, str, str, str], dict[str, Any]] = {}
+            issue_type_stats: dict[
+                tuple[uuid.UUID, Any, str, WorkItemType], dict[str, Any]
+            ] = {}
 
             def _get_team(wi: Any) -> str:
                 if pk_resolver:
@@ -434,7 +437,7 @@ def run_work_items_sync_job(
 
             # --- Investment areas ---
             investment_classifications: list[InvestmentClassificationRecord] = []
-            inv_metrics_map: dict[tuple[uuid.UUID, str, str, str], dict[str, Any]] = {}
+            inv_metrics_map: dict[tuple[Any, str, str, str], dict[str, Any]] = {}
 
             for item in work_items:
                 r_id = getattr(item, "repo_id", None) or uuid.UUID(int=0)
@@ -476,27 +479,27 @@ def run_work_items_sync_job(
                     if not (start_dt <= completed < end_dt):
                         continue
                     team_id_value = _normalize_investment_team_id(_get_team(item)) or ""
-                    key = (
+                    inv_key = (
                         r_id,
                         team_id_value,
                         cls.investment_area,
                         cls.project_stream or "",
                     )
-                    if key not in inv_metrics_map:
-                        inv_metrics_map[key] = {
+                    if inv_key not in inv_metrics_map:
+                        inv_metrics_map[inv_key] = {
                             "units": 0,
                             "completed": 0,
                             "churn": 0,
                             "cycles": [],
                         }
-                    inv_metrics_map[key]["completed"] += 1
+                    inv_metrics_map[inv_key]["completed"] += 1
                     points = getattr(item, "story_points", 1) or 1
-                    inv_metrics_map[key]["units"] += int(points)
+                    inv_metrics_map[inv_key]["units"] += int(points)
                     if item.started_at:
                         started = _to_utc(item.started_at)
                         h = (completed - started).total_seconds() / 3600.0
                         if h >= 0:
-                            inv_metrics_map[key]["cycles"].append(h)
+                            inv_metrics_map[inv_key]["cycles"].append(h)
 
             investment_metrics_rows: list[InvestmentMetricsRecord] = []
             for (r_id, team_id, area, stream), data in inv_metrics_map.items():

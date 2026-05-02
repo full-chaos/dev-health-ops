@@ -192,5 +192,7 @@ module = [
   "yaml.*",
   "requests",
   "requests.*",
+  "tabulate",
+  "tabulate.*",
 ]
 ignore_missing_imports = true

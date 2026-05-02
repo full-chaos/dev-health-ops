@@ -173,12 +173,12 @@ def test_gitlab_private_project():
         # Test 2: Get project statistics
         print("\n2. Fetching project statistics...")
         try:
-            stats = connector.get_repo_stats(
+            stats = connector.get_repo_stats_by_project(
                 project_name=project_identifier, max_commits=10
             )
         except Exception:
             if str(private_project).isdigit():
-                stats = connector.get_repo_stats(
+                stats = connector.get_repo_stats_by_project(
                     project_id=int(private_project), max_commits=10
                 )
             else:
@@ -192,12 +192,12 @@ def test_gitlab_private_project():
         # Test 3: Get contributors
         print("\n3. Fetching contributors...")
         try:
-            contributors = connector.get_contributors(
+            contributors = connector.get_contributors_by_project(
                 project_name=project_identifier, max_contributors=5
             )
         except Exception:
             if str(private_project).isdigit():
-                contributors = connector.get_contributors(
+                contributors = connector.get_contributors_by_project(
                     project_id=int(private_project), max_contributors=5
                 )
             else:

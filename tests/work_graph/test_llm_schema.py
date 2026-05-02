@@ -7,7 +7,7 @@ from dev_health_ops.work_graph.investment.llm_schema import (
 from dev_health_ops.work_graph.investment.taxonomy import SUBCATEGORIES
 
 
-def _source_texts():
+def _source_texts() -> dict[str, dict[str, str]]:
     return {
         "issue": {"jira:ABC-1": "Fix login outage for auth service"},
         "pr": {"repo#pr1": "Add auth retry handling"},
@@ -16,7 +16,7 @@ def _source_texts():
 
 
 def test_rejects_unknown_keys_and_extra_keys():
-    payload = {
+    payload: dict[str, object] = {
         "subcategories": {"unknown.category": 1.0},
         "evidence_quotes": [
             {
@@ -40,7 +40,7 @@ def test_probabilities_normalize_to_one():
     subcategories = {key: 0.0 for key in SUBCATEGORIES}
     subcategories["feature_delivery.roadmap"] = 0.5
     subcategories["quality.bugfix"] = 0.5
-    payload = {
+    payload: dict[str, object] = {
         "subcategories": subcategories,
         "evidence_quotes": [
             {"quote": "Fix login outage", "source": "issue", "id": "jira:ABC-1"}
@@ -54,7 +54,7 @@ def test_probabilities_normalize_to_one():
 
 
 def test_evidence_quote_must_be_substring():
-    payload = {
+    payload: dict[str, object] = {
         "subcategories": {"feature_delivery.roadmap": 1.0},
         "evidence_quotes": [
             {"quote": "Not in text", "source": "issue", "id": "jira:ABC-1"}

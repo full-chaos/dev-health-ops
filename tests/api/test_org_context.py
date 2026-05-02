@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextvars
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -113,7 +113,7 @@ async def test_query_dicts_with_none_params():
         sink = FakeSink()
         set_current_org_id("org-abc")
 
-        await query_dicts(sink, "SELECT * FROM table", None)
+        await query_dicts(sink, "SELECT * FROM table", cast(dict[str, Any], None))
 
         # Verify org_id was injected even with None params
         assert sink.last_params is not None

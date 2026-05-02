@@ -4,6 +4,7 @@ import importlib
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -15,6 +16,10 @@ engine = importlib.import_module("dev_health_ops.reports.engine")
 insights_module = importlib.import_module("dev_health_ops.reports.insights")
 narrative_module = importlib.import_module("dev_health_ops.reports.narrative")
 renderer_module = importlib.import_module("dev_health_ops.reports.renderer")
+
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.testops_schemas import ChartSpec as ChartSpecType
+    from dev_health_ops.metrics.testops_schemas import ReportPlan as ReportPlanType
 
 ChartSpec = schemas.ChartSpec
 ReportPlan = schemas.ReportPlan
@@ -40,7 +45,7 @@ class FakeClient:
         self.closed = True
 
 
-def _plan() -> ReportPlan:
+def _plan() -> ReportPlanType:
     return ReportPlan(
         plan_id="plan-1",
         report_type="weekly_health",
@@ -60,7 +65,7 @@ def _plan() -> ReportPlan:
 
 def _chart_spec(
     metric: str, *, chart_id: str, group_by: str | None = "day"
-) -> ChartSpec:
+) -> ChartSpecType:
     return ChartSpec(
         chart_id=chart_id,
         plan_id="plan-1",

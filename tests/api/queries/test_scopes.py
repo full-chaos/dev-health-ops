@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 import dev_health_ops.api.queries.scopes as scopes
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 @pytest.mark.asyncio
@@ -18,7 +21,9 @@ async def test_resolve_repo_id_uuid_returns_none_when_org_does_not_own_repo(
 
     monkeypatch.setattr(scopes, "query_dicts", _fake_query_dicts)
 
-    resolved = await scopes.resolve_repo_id(object(), repo_id, org_id="org-b")
+    resolved = await scopes.resolve_repo_id(
+        cast(BaseMetricsSink, object()), repo_id, org_id="org-b"
+    )
 
     assert resolved is None
 
@@ -34,7 +39,9 @@ async def test_resolve_repo_id_uuid_returns_id_when_org_owns_repo(monkeypatch):
 
     monkeypatch.setattr(scopes, "query_dicts", _fake_query_dicts)
 
-    resolved = await scopes.resolve_repo_id(object(), repo_id, org_id="org-a")
+    resolved = await scopes.resolve_repo_id(
+        cast(BaseMetricsSink, object()), repo_id, org_id="org-a"
+    )
 
     assert resolved == repo_id
 
@@ -43,7 +50,7 @@ async def test_resolve_repo_id_uuid_returns_id_when_org_owns_repo(monkeypatch):
 async def test_resolve_repo_ids_mixed_refs_are_org_scoped(monkeypatch):
     owned_uuid = "33333333-3333-3333-3333-333333333333"
     foreign_uuid = "44444444-4444-4444-4444-444444444444"
-    calls = []
+    calls: list[dict[str, str | dict[str, object]]] = []
 
     async def _fake_query_dicts(_sink, query: str, params):
         calls.append({"query": query, "params": params})
@@ -60,10 +67,13 @@ async def test_resolve_repo_ids_mixed_refs_are_org_scoped(monkeypatch):
     monkeypatch.setattr(scopes, "query_dicts", _fake_query_dicts)
 
     resolved = await scopes.resolve_repo_ids(
-        object(),
+        cast(BaseMetricsSink, object()),
         [owned_uuid, foreign_uuid, "org-a/repo-1", "org-b/repo-2"],
         org_id="org-a",
     )
 
     assert resolved == [owned_uuid, "repo-name-id"]
-    assert all(call["params"]["org_id"] == "org-a" for call in calls)
+    assert all(
+        isinstance(call["params"], dict) and call["params"]["org_id"] == "org-a"
+        for call in calls
+    )

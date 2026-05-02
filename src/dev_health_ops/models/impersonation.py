@@ -3,7 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from dev_health_ops.models.git import GUID, Base
 
@@ -16,10 +17,10 @@ class ImpersonationSession(Base):
 
     __tablename__ = "impersonation_sessions"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
 
     # Admin initiating the impersonation
-    admin_user_id = Column(
+    admin_user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
@@ -27,7 +28,7 @@ class ImpersonationSession(Base):
     )
 
     # Target user being impersonated
-    target_user_id = Column(
+    target_user_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
@@ -35,7 +36,7 @@ class ImpersonationSession(Base):
     )
 
     # Organization within which impersonation occurs
-    target_org_id = Column(
+    target_org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="RESTRICT"),
         nullable=False,
@@ -43,20 +44,24 @@ class ImpersonationSession(Base):
     )
 
     # Role type for the impersonated session
-    target_role = Column(String(50), nullable=False)
+    target_role: Mapped[str] = mapped_column(String(50), nullable=False)
 
     # Timestamps
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    expires_at = Column(DateTime(timezone=True), nullable=False)
-    ended_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Optional client data for auditing
-    ip_address = Column(String(45), nullable=True)
-    user_agent = Column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Data integrity: admin cannot impersonate themselves
     __table_args__ = (

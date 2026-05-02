@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Text
+from sqlalchemy import DateTime, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from dev_health_ops.models.git import Base
 
@@ -44,15 +45,17 @@ class AtlassianOpsSchedule:
 class AtlassianOpsIncidentModel(Base):
     __tablename__ = "atlassian_ops_incidents"
 
-    id = Column(Text, primary_key=True)
-    url = Column(Text, nullable=True)
-    summary = Column(Text, nullable=False)
-    description = Column(Text, nullable=True)
-    status = Column(Text, nullable=False)
-    severity = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    provider_id = Column(Text, nullable=True)
-    last_synced = Column(
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    provider_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_synced: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -62,14 +65,22 @@ class AtlassianOpsIncidentModel(Base):
 class AtlassianOpsAlertModel(Base):
     __tablename__ = "atlassian_ops_alerts"
 
-    id = Column(Text, primary_key=True)
-    status = Column(Text, nullable=False)
-    priority = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
-    snoozed_at = Column(DateTime(timezone=True), nullable=True)
-    closed_at = Column(DateTime(timezone=True), nullable=True)
-    last_synced = Column(
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    snoozed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_synced: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -79,10 +90,10 @@ class AtlassianOpsAlertModel(Base):
 class AtlassianOpsScheduleModel(Base):
     __tablename__ = "atlassian_ops_schedules"
 
-    id = Column(Text, primary_key=True)
-    name = Column(Text, nullable=False)
-    timezone = Column(Text, nullable=True)
-    last_synced = Column(
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    timezone: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_synced: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),

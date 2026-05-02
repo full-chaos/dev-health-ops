@@ -130,7 +130,9 @@ def test_impersonation_contextvar_isolation_between_contexts():
             target_role="member",
             real_user_id="admin-main",
         )
-        assert get_impersonation_context().target_user_id == "user-main"
+        ctx_main = get_impersonation_context()
+        assert ctx_main is not None
+        assert ctx_main.target_user_id == "user-main"
 
         def run_in_child():
             set_impersonation_context(
@@ -147,7 +149,9 @@ def test_impersonation_contextvar_isolation_between_contexts():
         # Child context has child value
         assert child_result.target_user_id == "user-child"
         # Main context unchanged
-        assert get_impersonation_context().target_user_id == "user-main"
+        ctx_after = get_impersonation_context()
+        assert ctx_after is not None
+        assert ctx_after.target_user_id == "user-main"
     finally:
         _impersonation_ctx.set(None)
 

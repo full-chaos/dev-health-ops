@@ -226,7 +226,7 @@ class TestSSOServiceOIDC:
             await service.process_oidc_callback(
                 provider=provider,
                 code="auth-code",
-                state=None,
+                state=None,  # type: ignore[arg-type]
                 code_verifier=None,
             )
 

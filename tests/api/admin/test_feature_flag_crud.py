@@ -21,8 +21,9 @@ from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag
+from tests._helpers import tables_of
 
-_TABLES = [FeatureFlag.__table__]
+_TABLES = tables_of(FeatureFlag)
 
 # Import the actual module (not the re-exported router object)
 _features_router_module = importlib.import_module(

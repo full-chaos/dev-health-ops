@@ -87,7 +87,7 @@ async def test_upsert_from_stripe_persists_trial_dates(session_maker):
         resolved_plan_id = uuid.uuid4()
 
         service = SubscriptionService(session)
-        service._lookup_billing_price = AsyncMock(
+        service._lookup_billing_price = AsyncMock(  # type: ignore[method-assign]
             return_value=SimpleNamespace(id=resolved_price_id, plan_id=resolved_plan_id)
         )
         saved = await service.upsert_from_stripe(stripe_sub=stripe_sub, org_id=org_id)

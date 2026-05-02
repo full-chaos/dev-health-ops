@@ -18,7 +18,7 @@ def mock_ch_client():
     client = MagicMock()
     # Mock query_df to return empty dataframe
     try:
-        import pandas as pd
+        import pandas as pd  # type: ignore[import-untyped]
 
         client.query_df.return_value = pd.DataFrame()
     except ImportError:

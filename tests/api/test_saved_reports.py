@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
@@ -161,7 +162,7 @@ async def test_create_and_delete_saved_report(
         input=reports_mod.CreateSavedReportInput(
             name="New Report",
             description="Test creation",
-            report_plan={"report_type": "custom"},
+            report_plan=cast(Any, {"report_type": "custom"}),
         ),
     )
     assert created.name == "New Report"
@@ -194,7 +195,7 @@ async def test_clone_saved_report(monkeypatch, session_maker, seeded_reports):
         input=reports_mod.CloneSavedReportInput(
             source_report_id=seeded_reports["report1_id"],
             new_name="Cloned Weekly",
-            parameter_overrides={"team": "frontend"},
+            parameter_overrides=cast(Any, {"team": "frontend"}),
         ),
     )
     assert cloned is not None

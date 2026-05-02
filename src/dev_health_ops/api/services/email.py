@@ -144,7 +144,7 @@ class ResendEmailProvider(EmailProvider):
         text_content: str | None,
     ) -> None:
         resend = importlib.import_module("resend")
-        resend.api_key = self.api_key
+        setattr(resend, "api_key", self.api_key)
         payload: dict[str, object] = {
             "from": from_address,
             "to": [to_address],

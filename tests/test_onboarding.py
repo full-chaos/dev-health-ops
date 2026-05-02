@@ -46,7 +46,7 @@ class FakeSession:
     async def flush(self):
         for obj in self.added:
             if getattr(obj, "id", None) is None:
-                obj.id = uuid.uuid4()
+                obj.id = uuid.uuid4()  # type: ignore[attr-defined]
 
     async def commit(self):
         self.commit_count += 1

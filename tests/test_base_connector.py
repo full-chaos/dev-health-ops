@@ -60,7 +60,7 @@ class TestGitConnectorInterface:
     def test_cannot_instantiate_base_class(self):
         """Test that the base class cannot be instantiated directly."""
         with pytest.raises(TypeError, match="Can't instantiate abstract class"):
-            GitConnector()
+            GitConnector()  # type: ignore[abstract]
 
     def test_concrete_class_must_implement_abstract_methods(self):
         """Test that concrete class must implement all abstract methods."""
@@ -71,7 +71,7 @@ class TestGitConnectorInterface:
             pass
 
         with pytest.raises(TypeError, match="Can't instantiate abstract class"):
-            IncompleteConnector()
+            IncompleteConnector()  # type: ignore[abstract]
 
     def test_concrete_class_with_all_methods(self):
         """Test that a concrete class can be instantiated when all methods are implemented."""

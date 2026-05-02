@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -827,7 +828,7 @@ def test_github_project_v2_item_with_transitions(mock_status_mapping, mock_ident
     }
 
     wi, transitions = github_project_v2_item_to_work_item(
-        item_node=item_node,
+        item_node=cast(Any, item_node),
         project_scope_id="test-project",
         status_mapping=mock_status_mapping,
         identity=mock_identity,
@@ -881,7 +882,7 @@ def test_github_project_v2_item_no_transitions(mock_status_mapping, mock_identit
     }
 
     wi, transitions = github_project_v2_item_to_work_item(
-        item_node=item_node,
+        item_node=cast(Any, item_node),
         project_scope_id="test-project",
         status_mapping=mock_status_mapping,
         identity=mock_identity,

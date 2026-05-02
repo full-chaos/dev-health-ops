@@ -6,6 +6,7 @@ path) and falls back to per-org OrgLicense checks for async endpoints.
 
 import inspect
 import uuid
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -97,7 +98,8 @@ class TestRequireFeatureJwtOnly:
         with pytest.raises(HTTPException) as exc_info:
             my_endpoint()
         assert exc_info.value.status_code == 402
-        assert exc_info.value.detail["feature"] == "sso"
+        detail = cast(dict[str, Any], exc_info.value.detail)
+        assert detail["feature"] == "sso"
 
     @pytest.mark.asyncio
     async def test_async_allows_community_feature(self):
@@ -299,7 +301,8 @@ class TestRequireFeatureOrgFallback:
             with pytest.raises(HTTPException) as exc_info:
                 await my_endpoint(session="mock", org_id="some-org")
             assert exc_info.value.status_code == 402
-            assert exc_info.value.detail["feature"] == "ip_allowlist"
+            detail = cast(dict[str, Any], exc_info.value.detail)
+            assert detail["feature"] == "ip_allowlist"
 
     def test_sync_does_not_check_org(self):
         LicenseManager.initialize()

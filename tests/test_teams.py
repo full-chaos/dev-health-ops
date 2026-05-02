@@ -22,7 +22,7 @@ async def test_team_model():
     )
     assert str(getattr(team, "id")) == "team-a"
     assert str(getattr(team, "name")) == "Team Alpha"
-    assert "alice@example.com" in team.members
+    assert "alice@example.com" in (team.members or [])
     assert isinstance(team.updated_at, datetime)
 
 

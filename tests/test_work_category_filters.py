@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import pytest
 
@@ -154,7 +155,7 @@ async def test_sankey_investment_flow_query_avoids_maptoarray(monkeypatch):
     monkeypatch.setattr(sankey_queries, "query_dicts", _fake_query_dicts)
 
     await sankey_queries.fetch_investment_flow_items(
-        object(),
+        cast(Any, object()),
         start_ts=datetime(2025, 1, 1, tzinfo=timezone.utc),
         end_ts=datetime(2025, 1, 2, tzinfo=timezone.utc),
         scope_filter="",

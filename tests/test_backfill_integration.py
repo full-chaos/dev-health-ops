@@ -5,7 +5,7 @@ import json
 import os
 import uuid
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -361,7 +361,7 @@ def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
             is_active=True,
         )
         config.id = sync_config_id
-        config.last_sync_at = date(2026, 1, 1)
+        config.last_sync_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
         sync_job = ScheduledJob(
             name="sync-job",

@@ -296,4 +296,4 @@ class TestForecastResultDataclass:
         )
 
         with pytest.raises(AttributeError):
-            result.forecast_id = "new-id"
+            result.forecast_id = "new-id"  # type: ignore[misc]

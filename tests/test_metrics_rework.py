@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from typing import Any, cast
 
 from dev_health_ops.metrics.compute import compute_daily_metrics
 
@@ -59,7 +60,7 @@ def test_pr_rework_ratio():
     result = compute_daily_metrics(
         day=day,
         commit_stat_rows=[],
-        pull_request_rows=pull_request_rows,
+        pull_request_rows=cast(Any, pull_request_rows),
         computed_at=computed_at,
         include_commit_metrics=False,
     )

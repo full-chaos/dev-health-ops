@@ -508,7 +508,7 @@ def _setup_croniter_mock():
     mock_cron_instance = MagicMock()
     mock_cron_instance.get_next.return_value = datetime(2000, 1, 1, tzinfo=timezone.utc)
     mock_cron_cls = MagicMock(return_value=mock_cron_instance)
-    sys.modules["croniter"].croniter = mock_cron_cls
+    sys.modules["croniter"].croniter = mock_cron_cls  # type: ignore[attr-defined]
     return mock_cron_cls
 
 

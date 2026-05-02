@@ -143,7 +143,7 @@ class TestEnsureFullSubcategoryVector:
         assert abs(result["b"] - 0.4) < 0.001
 
     def test_empty_input(self):
-        subcategories = {}
+        subcategories: dict[str, float] = {}
         all_subcategories = ["a", "b"]
         result = ensure_full_subcategory_vector(subcategories, all_subcategories)
         assert result["a"] == 0.5

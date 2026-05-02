@@ -19,7 +19,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 
 admin_router_module = import_module("dev_health_ops.api.admin.routers.credentials")
 
-HEADERS = {}
+HEADERS: dict[str, str] = {}
 
 
 def _call_validate_external_url(url: str):

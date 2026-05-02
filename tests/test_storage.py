@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime, timezone
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -334,7 +335,7 @@ async def test_sqlalchemy_store_get_complexity_snapshots_latest_for_all_repos(
         await store.session.commit()
 
         snaps = await store.get_complexity_snapshots(as_of_day=date(2025, 1, 5))
-        by_repo = {}
+        by_repo: dict[Any, list[Any]] = {}
         for s in snaps:
             by_repo.setdefault(s.repo_id, []).append(s)
 

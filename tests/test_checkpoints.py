@@ -171,4 +171,5 @@ def test_reset_stale_running_ignores_recent(db_session):
 
     assert count == 0
     refreshed = get_checkpoint(db_session, ORG_ID, repo_id, METRIC_TYPE, DAY)
+    assert refreshed is not None
     assert refreshed.status == CheckpointStatus.RUNNING

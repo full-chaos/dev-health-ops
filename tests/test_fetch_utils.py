@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from collections.abc import Coroutine
 
 import pytest
 
@@ -23,6 +24,11 @@ class _ExcWithHeaders(Exception):
     def __init__(self, headers):
         super().__init__("rate limited")
         self.headers = headers
+
+
+def _flush_threadsafe(coro: Coroutine[object, object, object], _loop: object):
+    asyncio.run(coro)
+    return _CompletedFuture()
 
 
 class TestSafeParseDateTime:
@@ -101,16 +107,16 @@ class TestSyncBatchCollector:
         async def flush_fn(items):
             calls.append(items)
 
-        def _run_threadsafe(coro, _loop):
-            asyncio.run(coro)
-            return _CompletedFuture()
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _flush_threadsafe)
 
-        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _run_threadsafe)
-
-        collector = SyncBatchCollector(flush_fn, loop=object(), batch_size=2)
-        collector.add(1)
-        assert calls == []
-        collector.add(2)
+        loop = asyncio.new_event_loop()
+        try:
+            collector = SyncBatchCollector(flush_fn, loop=loop, batch_size=2)
+            collector.add(1)
+            assert calls == []
+            collector.add(2)
+        finally:
+            loop.close()
 
         assert calls == [[1, 2]]
 
@@ -120,15 +126,15 @@ class TestSyncBatchCollector:
         async def flush_fn(items):
             calls.append(items)
 
-        def _run_threadsafe(coro, _loop):
-            asyncio.run(coro)
-            return _CompletedFuture()
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _flush_threadsafe)
 
-        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _run_threadsafe)
-
-        with SyncBatchCollector(flush_fn, loop=object(), batch_size=3) as collector:
-            collector.add("a")
-            collector.add("b")
+        loop = asyncio.new_event_loop()
+        try:
+            with SyncBatchCollector(flush_fn, loop=loop, batch_size=3) as collector:
+                collector.add("a")
+                collector.add("b")
+        finally:
+            loop.close()
 
         assert calls == [["a", "b"]]
 
@@ -136,18 +142,18 @@ class TestSyncBatchCollector:
         async def flush_fn(_items):
             return None
 
-        def _run_threadsafe(coro, _loop):
-            asyncio.run(coro)
-            return _CompletedFuture()
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _flush_threadsafe)
 
-        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _run_threadsafe)
-
-        collector = SyncBatchCollector(flush_fn, loop=object(), batch_size=2)
-        collector.add(1)
-        collector.add(2)
-        collector.add(3)
-        collector.flush()
-        assert collector.total == 3
+        loop = asyncio.new_event_loop()
+        try:
+            collector = SyncBatchCollector(flush_fn, loop=loop, batch_size=2)
+            collector.add(1)
+            collector.add(2)
+            collector.add(3)
+            collector.flush()
+            assert collector.total == 3
+        finally:
+            loop.close()
 
     def test_empty_flush_is_noop(self, monkeypatch):
         called = False
@@ -156,14 +162,14 @@ class TestSyncBatchCollector:
             nonlocal called
             called = True
 
-        def _run_threadsafe(coro, _loop):
-            asyncio.run(coro)
-            return _CompletedFuture()
+        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _flush_threadsafe)
 
-        monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _run_threadsafe)
-
-        collector = SyncBatchCollector(flush_fn, loop=object(), batch_size=2)
-        collector.flush()
+        loop = asyncio.new_event_loop()
+        try:
+            collector = SyncBatchCollector(flush_fn, loop=loop, batch_size=2)
+            collector.flush()
+        finally:
+            loop.close()
         assert called is False
 
 

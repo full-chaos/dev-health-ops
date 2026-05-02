@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import threading
 
 import pytest
@@ -10,8 +11,13 @@ from dev_health_ops.processors.base import BaseProcessor
 
 
 class _TestProcessor(BaseProcessor[str, str]):
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        *,
+        max_concurrent: int = 4,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        super().__init__(max_concurrent=max_concurrent, logger=logger)
         self.processed_items: list[str] = []
         self.stored_results: list[str] = []
 
@@ -23,10 +29,22 @@ class _TestProcessor(BaseProcessor[str, str]):
         self.stored_results.append(result)
 
 
+class _IntProcessor(BaseProcessor[str, int]):
+    async def process_single(self, item: str) -> int:
+        return len(item)
+
+    async def store_result(self, result: int) -> None:
+        return None
+
+
+def _instantiate(cls, **kwargs):
+    return cls(**kwargs)
+
+
 class TestBaseProcessorContract:
     def test_cannot_instantiate_abc(self) -> None:
         with pytest.raises(TypeError):
-            BaseProcessor(max_concurrent=1)
+            _instantiate(BaseProcessor, max_concurrent=1)
 
     def test_subclass_must_implement_process_single(self) -> None:
         class MissingProcessSingle(BaseProcessor[str, str]):
@@ -34,7 +52,7 @@ class TestBaseProcessorContract:
                 return None
 
         with pytest.raises(TypeError):
-            MissingProcessSingle()
+            _instantiate(MissingProcessSingle)
 
     def test_subclass_must_implement_store_result(self) -> None:
         class MissingStoreResult(BaseProcessor[str, str]):
@@ -42,7 +60,7 @@ class TestBaseProcessorContract:
                 return item
 
         with pytest.raises(TypeError):
-            MissingStoreResult()
+            _instantiate(MissingStoreResult)
 
 
 class TestProcessBatch:
@@ -76,8 +94,13 @@ class TestProcessBatch:
     @pytest.mark.asyncio
     async def test_respects_max_concurrent(self) -> None:
         class ConcurrencyProcessor(_TestProcessor):
-            def __init__(self, **kwargs: object) -> None:
-                super().__init__(**kwargs)
+            def __init__(
+                self,
+                *,
+                max_concurrent: int = 4,
+                logger: logging.Logger | None = None,
+            ) -> None:
+                super().__init__(max_concurrent=max_concurrent, logger=logger)
                 self.lock = asyncio.Lock()
                 self.in_flight = 0
                 self.max_seen = 0
@@ -136,7 +159,7 @@ class TestProcessBatch:
 class TestRunSyncInExecutor:
     @pytest.mark.asyncio
     async def test_runs_sync_func(self) -> None:
-        processor = _TestProcessor()
+        processor = _IntProcessor()
         main_thread_id = threading.get_ident()
 
         def blocking_thread_id() -> int:
@@ -147,7 +170,7 @@ class TestRunSyncInExecutor:
 
     @pytest.mark.asyncio
     async def test_returns_result(self) -> None:
-        processor = _TestProcessor()
+        processor = _IntProcessor()
 
         def add(a: int, b: int) -> int:
             return a + b

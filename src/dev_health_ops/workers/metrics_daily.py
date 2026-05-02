@@ -3,11 +3,18 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime, timezone
+from typing import Any
 
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import _get_db_url, _invalidate_metrics_cache
+from dev_health_ops.workers.task_utils import (
+    _as_datetime,
+    _as_dict,
+    _as_str,
+    _get_db_url,
+    _invalidate_metrics_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +52,17 @@ def dispatch_scheduled_metrics(self) -> dict:
                     skipped += 1
                     continue
 
-                cron_expr = job.schedule_cron or "0 1 * * *"
-                last_run = job.last_run_at or job.created_at
+                cron_expr = _as_str(job.schedule_cron) or "0 1 * * *"
+                last_run = (
+                    job.last_run_at
+                    if isinstance(job.last_run_at, datetime)
+                    else _as_datetime(job.created_at)
+                )
                 cron = croniter(cron_expr, last_run)
                 next_run = cron.get_next(datetime)
 
                 if next_run <= now:
-                    job_config = job.job_config or {}
+                    job_config: dict[str, Any] = _as_dict(job.job_config)
                     run_daily_metrics.apply_async(
                         kwargs={
                             "db_url": job_config.get("db_url"),

@@ -21,6 +21,29 @@ from .common import get_session, get_user_id
 router = APIRouter()
 
 
+def _retention_policy_response(policy: object) -> RetentionPolicyResponse:
+    return RetentionPolicyResponse.model_validate(
+        {
+            "id": str(getattr(policy, "id")),
+            "org_id": str(getattr(policy, "org_id")),
+            "resource_type": str(getattr(policy, "resource_type")),
+            "retention_days": int(getattr(policy, "retention_days")),
+            "description": getattr(policy, "description"),
+            "is_active": getattr(policy, "is_active"),
+            "last_run_at": getattr(policy, "last_run_at"),
+            "last_run_deleted_count": getattr(policy, "last_run_deleted_count"),
+            "next_run_at": getattr(policy, "next_run_at"),
+            "created_by_id": (
+                str(getattr(policy, "created_by_id"))
+                if getattr(policy, "created_by_id") is not None
+                else None
+            ),
+            "created_at": getattr(policy, "created_at"),
+            "updated_at": getattr(policy, "updated_at"),
+        }
+    )
+
+
 @router.get("/retention-policies", response_model=RetentionPolicyListResponse)
 @require_feature("retention_policies", required_tier="enterprise")
 async def list_retention_policies(
@@ -38,23 +61,7 @@ async def list_retention_policies(
         offset=offset,
     )
     return RetentionPolicyListResponse(
-        items=[
-            RetentionPolicyResponse(
-                id=str(p.id),
-                org_id=str(p.org_id),
-                resource_type=str(p.resource_type),
-                retention_days=int(p.retention_days),
-                description=p.description,
-                is_active=bool(p.is_active),
-                last_run_at=p.last_run_at,
-                last_run_deleted_count=p.last_run_deleted_count,
-                next_run_at=p.next_run_at,
-                created_by_id=str(p.created_by_id) if p.created_by_id else None,
-                created_at=p.created_at,
-                updated_at=p.updated_at,
-            )
-            for p in policies
-        ],
+        items=[_retention_policy_response(policy) for policy in policies],
         total=total,
         limit=limit,
         offset=offset,
@@ -88,20 +95,7 @@ async def create_retention_policy(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return RetentionPolicyResponse(
-        id=str(policy.id),
-        org_id=str(policy.org_id),
-        resource_type=str(policy.resource_type),
-        retention_days=int(policy.retention_days),
-        description=policy.description,
-        is_active=bool(policy.is_active),
-        last_run_at=policy.last_run_at,
-        last_run_deleted_count=policy.last_run_deleted_count,
-        next_run_at=policy.next_run_at,
-        created_by_id=str(policy.created_by_id) if policy.created_by_id else None,
-        created_at=policy.created_at,
-        updated_at=policy.updated_at,
-    )
+    return _retention_policy_response(policy)
 
 
 @router.get("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
@@ -118,20 +112,7 @@ async def get_retention_policy(
     )
     if not policy:
         raise HTTPException(status_code=404, detail="Retention policy not found")
-    return RetentionPolicyResponse(
-        id=str(policy.id),
-        org_id=str(policy.org_id),
-        resource_type=str(policy.resource_type),
-        retention_days=int(policy.retention_days),
-        description=policy.description,
-        is_active=bool(policy.is_active),
-        last_run_at=policy.last_run_at,
-        last_run_deleted_count=policy.last_run_deleted_count,
-        next_run_at=policy.next_run_at,
-        created_by_id=str(policy.created_by_id) if policy.created_by_id else None,
-        created_at=policy.created_at,
-        updated_at=policy.updated_at,
-    )
+    return _retention_policy_response(policy)
 
 
 @router.patch("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
@@ -155,20 +136,7 @@ async def update_retention_policy(
         raise HTTPException(status_code=400, detail=str(e))
     if not policy:
         raise HTTPException(status_code=404, detail="Retention policy not found")
-    return RetentionPolicyResponse(
-        id=str(policy.id),
-        org_id=str(policy.org_id),
-        resource_type=str(policy.resource_type),
-        retention_days=int(policy.retention_days),
-        description=policy.description,
-        is_active=bool(policy.is_active),
-        last_run_at=policy.last_run_at,
-        last_run_deleted_count=policy.last_run_deleted_count,
-        next_run_at=policy.next_run_at,
-        created_by_id=str(policy.created_by_id) if policy.created_by_id else None,
-        created_at=policy.created_at,
-        updated_at=policy.updated_at,
-    )
+    return _retention_policy_response(policy)
 
 
 @router.delete("/retention-policies/{policy_id}")

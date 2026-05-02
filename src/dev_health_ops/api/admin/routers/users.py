@@ -33,6 +33,25 @@ from .common import (
 router = APIRouter()
 
 
+def _user_response(user: object) -> UserResponse:
+    return UserResponse.model_validate(
+        {
+            "id": str(getattr(user, "id")),
+            "email": getattr(user, "email"),
+            "username": getattr(user, "username"),
+            "full_name": getattr(user, "full_name"),
+            "avatar_url": getattr(user, "avatar_url"),
+            "auth_provider": getattr(user, "auth_provider"),
+            "is_active": getattr(user, "is_active"),
+            "is_verified": getattr(user, "is_verified"),
+            "is_superuser": getattr(user, "is_superuser"),
+            "last_login_at": getattr(user, "last_login_at"),
+            "created_at": getattr(user, "created_at"),
+            "updated_at": getattr(user, "updated_at"),
+        }
+    )
+
+
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
     limit: int = 100,
@@ -72,23 +91,7 @@ async def list_users(
             active_only=active_only,
             search=search,
         )
-    return [
-        UserResponse(
-            id=str(u.id),
-            email=u.email,
-            username=u.username,
-            full_name=u.full_name,
-            avatar_url=u.avatar_url,
-            auth_provider=u.auth_provider,
-            is_active=u.is_active,
-            is_verified=u.is_verified,
-            is_superuser=u.is_superuser,
-            last_login_at=u.last_login_at,
-            created_at=u.created_at,
-            updated_at=u.updated_at,
-        )
-        for u in users
-    ]
+    return [_user_response(user) for user in users]
 
 
 @router.get("/users/{user_id}", response_model=UserResponse)
@@ -103,20 +106,7 @@ async def get_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     await _ensure_user_in_scope(session, user, org_id, current_user)
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        username=user.username,
-        full_name=user.full_name,
-        avatar_url=user.avatar_url,
-        auth_provider=user.auth_provider,
-        is_active=user.is_active,
-        is_verified=user.is_verified,
-        is_superuser=user.is_superuser,
-        last_login_at=user.last_login_at,
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
+    return _user_response(user)
 
 
 @router.post("/users", response_model=UserResponse, status_code=201)
@@ -138,20 +128,7 @@ async def create_user(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        username=user.username,
-        full_name=user.full_name,
-        avatar_url=user.avatar_url,
-        auth_provider=user.auth_provider,
-        is_active=user.is_active,
-        is_verified=user.is_verified,
-        is_superuser=user.is_superuser,
-        last_login_at=user.last_login_at,
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
+    return _user_response(user)
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
@@ -182,20 +159,7 @@ async def update_user(
         raise HTTPException(status_code=400, detail=str(e))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        username=user.username,
-        full_name=user.full_name,
-        avatar_url=user.avatar_url,
-        auth_provider=user.auth_provider,
-        is_active=user.is_active,
-        is_verified=user.is_verified,
-        is_superuser=user.is_superuser,
-        last_login_at=user.last_login_at,
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-    )
+    return _user_response(user)
 
 
 @router.post("/users/{user_id}/password")
@@ -221,7 +185,10 @@ async def set_user_password(
     await _ensure_user_in_scope(session, user, org_id, current_user)
 
     admin_user = await svc.get_by_id(current_user.user_id)
-    if not admin_user or not admin_user.password_hash:
+    admin_password_hash = (
+        getattr(admin_user, "password_hash") if admin_user is not None else None
+    )
+    if admin_user is None or admin_password_hash is None:
         raise HTTPException(
             status_code=403,
             detail="Admin password verification failed",
@@ -229,7 +196,7 @@ async def set_user_password(
 
     if not bcrypt.checkpw(
         payload.admin_password.encode("utf-8"),
-        str(admin_user.password_hash).encode("utf-8"),
+        str(admin_password_hash).encode("utf-8"),
     ):
         raise HTTPException(
             status_code=403,

@@ -126,6 +126,39 @@ include-package-data = true
   "**/*.txt",
 ]
 
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests", "scripts"]
+plugins = ["pydantic.mypy"]
+mypy_path = ["src"]
+namespace_packages = true
+explicit_package_bases = true
+show_error_codes = true
+pretty = true
+follow_imports = "silent"
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+  "celery",
+  "celery.*",
+  "atlassian",
+  "atlassian.*",
+  "radon",
+  "radon.*",
+  "defusedxml",
+  "defusedxml.*",
+  "signxml",
+  "signxml.*",
+]
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"

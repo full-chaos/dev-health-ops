@@ -22,6 +22,26 @@ from .common import get_session, get_user_id
 router = APIRouter()
 
 
+def _ip_allowlist_response(entry: object) -> IPAllowlistResponse:
+    return IPAllowlistResponse.model_validate(
+        {
+            "id": str(getattr(entry, "id")),
+            "org_id": str(getattr(entry, "org_id")),
+            "ip_range": str(getattr(entry, "ip_range")),
+            "description": getattr(entry, "description"),
+            "is_active": getattr(entry, "is_active"),
+            "created_by_id": (
+                str(getattr(entry, "created_by_id"))
+                if getattr(entry, "created_by_id") is not None
+                else None
+            ),
+            "created_at": getattr(entry, "created_at"),
+            "updated_at": getattr(entry, "updated_at"),
+            "expires_at": getattr(entry, "expires_at"),
+        }
+    )
+
+
 @router.get("/ip-allowlist", response_model=IPAllowlistListResponse)
 @require_feature("ip_allowlist", required_tier="enterprise")
 async def list_ip_allowlist_entries(
@@ -39,20 +59,7 @@ async def list_ip_allowlist_entries(
         offset=offset,
     )
     return IPAllowlistListResponse(
-        items=[
-            IPAllowlistResponse(
-                id=str(e.id),
-                org_id=str(e.org_id),
-                ip_range=str(e.ip_range),
-                description=e.description,
-                is_active=bool(e.is_active),
-                created_by_id=str(e.created_by_id) if e.created_by_id else None,
-                created_at=e.created_at,
-                updated_at=e.updated_at,
-                expires_at=e.expires_at,
-            )
-            for e in entries
-        ],
+        items=[_ip_allowlist_response(entry) for entry in entries],
         total=total,
         limit=limit,
         offset=offset,
@@ -78,17 +85,7 @@ async def create_ip_allowlist_entry(
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return IPAllowlistResponse(
-        id=str(entry.id),
-        org_id=str(entry.org_id),
-        ip_range=str(entry.ip_range),
-        description=entry.description,
-        is_active=bool(entry.is_active),
-        created_by_id=str(entry.created_by_id) if entry.created_by_id else None,
-        created_at=entry.created_at,
-        updated_at=entry.updated_at,
-        expires_at=entry.expires_at,
-    )
+    return _ip_allowlist_response(entry)
 
 
 @router.get("/ip-allowlist/{entry_id}", response_model=IPAllowlistResponse)
@@ -105,17 +102,7 @@ async def get_ip_allowlist_entry(
     )
     if not entry:
         raise HTTPException(status_code=404, detail="IP allowlist entry not found")
-    return IPAllowlistResponse(
-        id=str(entry.id),
-        org_id=str(entry.org_id),
-        ip_range=str(entry.ip_range),
-        description=entry.description,
-        is_active=bool(entry.is_active),
-        created_by_id=str(entry.created_by_id) if entry.created_by_id else None,
-        created_at=entry.created_at,
-        updated_at=entry.updated_at,
-        expires_at=entry.expires_at,
-    )
+    return _ip_allowlist_response(entry)
 
 
 @router.patch("/ip-allowlist/{entry_id}", response_model=IPAllowlistResponse)
@@ -140,17 +127,7 @@ async def update_ip_allowlist_entry(
         raise HTTPException(status_code=400, detail=str(e))
     if not entry:
         raise HTTPException(status_code=404, detail="IP allowlist entry not found")
-    return IPAllowlistResponse(
-        id=str(entry.id),
-        org_id=str(entry.org_id),
-        ip_range=str(entry.ip_range),
-        description=entry.description,
-        is_active=bool(entry.is_active),
-        created_by_id=str(entry.created_by_id) if entry.created_by_id else None,
-        created_at=entry.created_at,
-        updated_at=entry.updated_at,
-        expires_at=entry.expires_at,
-    )
+    return _ip_allowlist_response(entry)
 
 
 @router.delete("/ip-allowlist/{entry_id}")

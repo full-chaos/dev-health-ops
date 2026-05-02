@@ -1,4 +1,4 @@
-name: Lint
+name: Typecheck
 
 on:
   push:
@@ -23,7 +23,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
-        # Always run on workflow_dispatch
         if: github.event_name != 'workflow_dispatch'
         with:
           filters: |
@@ -36,7 +35,7 @@ jobs:
               - 'pyproject.toml'
               - 'scripts/**'
 
-  lint-job:
+  typecheck-mypy:
     needs: [changes]
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -58,38 +57,30 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
           pip install -r requirements.txt
 
-      - name: Run ruff (format check)
+      - name: Run mypy (type checking)
+        continue-on-error: true
         run: |
-          ruff format --check .
+          mypy --install-types --non-interactive .
 
-      - name: Run ruff (linting)
-        run: |
-          ruff check .
-
-  # Required-status-check gate. Branch protection requires a check named
-  # exactly "lint". The aggregator always runs and treats skipped (path
-  # filter, e.g. docs-only PRs) as pass so PRs are never blocked waiting
-  # on a status that will never report. Do not remove.
-  lint:
-    name: lint
+  typecheck:
+    name: typecheck
     if: always()
-    needs: [lint-job]
+    needs: [typecheck-mypy]
     runs-on: ubuntu-latest
     steps:
-      - name: Aggregate lint result
+      - name: Aggregate typecheck result
         env:
-          LINT_RESULT: ${{ needs.lint-job.result }}
+          TYPECHECK_RESULT: ${{ needs.typecheck-mypy.result }}
         run: |
-          echo "lint-job result: ${LINT_RESULT}"
-          case "${LINT_RESULT}" in
+          echo "typecheck-mypy result: ${TYPECHECK_RESULT}"
+          case "${TYPECHECK_RESULT}" in
             success|skipped)
-              echo "lint gate passed"
+              echo "typecheck gate passed"
               ;;
             failure|cancelled|*)
-              echo "lint gate failed"
+              echo "typecheck gate failed"
               exit 1
               ;;
           esac

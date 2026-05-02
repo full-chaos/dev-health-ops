@@ -57,31 +57,32 @@ if TYPE_CHECKING:
         ConfirmMemberLink,
         DiscoveredMember,
         DiscoveredTeam,
+        IdentityMappingResponse,
         InferredMember,
         MemberMatchResult,
     )
 
 
-def _get_discovered_team_cls() -> type:
+def _get_discovered_team_cls() -> type[DiscoveredTeam]:
     """Lazy import to avoid circular dependency with admin.schemas."""
     from dev_health_ops.api.admin.schemas import DiscoveredTeam as _DT
 
     return _DT
 
 
-def _get_discovered_member_cls() -> type:
+def _get_discovered_member_cls() -> type[DiscoveredMember]:
     from dev_health_ops.api.admin.schemas import DiscoveredMember as _DM
 
     return _DM
 
 
-def _get_member_match_result_cls() -> type:
+def _get_member_match_result_cls() -> type[MemberMatchResult]:
     from dev_health_ops.api.admin.schemas import MemberMatchResult as _MMR
 
     return _MMR
 
 
-def _get_identity_mapping_response_cls() -> type:
+def _get_identity_mapping_response_cls() -> type[IdentityMappingResponse]:
     from dev_health_ops.api.admin.schemas import IdentityMappingResponse as _IMR
 
     return _IMR
@@ -122,7 +123,7 @@ class SettingsService:
             Setting.key == key,
         )
         result = await self.session.execute(stmt)
-        setting = result.scalar_one_or_none()
+        setting: Any | None = result.scalar_one_or_none()
 
         if setting is None:
             return default
@@ -146,7 +147,7 @@ class SettingsService:
             Setting.key == key,
         )
         result = await self.session.execute(stmt)
-        setting = result.scalar_one_or_none()
+        setting: Any | None = result.scalar_one_or_none()
 
         stored_value = value
         if encrypt and value:
@@ -181,7 +182,7 @@ class SettingsService:
             Setting.key == key,
         )
         result = await self.session.execute(stmt)
-        setting = result.scalar_one_or_none()
+        setting: Any | None = result.scalar_one_or_none()
 
         if setting is None:
             return False
@@ -197,7 +198,7 @@ class SettingsService:
             Setting.category == category,
         )
         result = await self.session.execute(stmt)
-        settings = result.scalars().all()
+        settings: list[Any] = list(result.scalars().all())
 
         items = []
         for s in settings:
@@ -268,7 +269,7 @@ class IntegrationCredentialsService:
 
         Returns (decrypted_dict, credential_record) tuple.
         """
-        cred = await self.get_by_id(credential_id)
+        cred: Any | None = await self.get_by_id(credential_id)
         if cred is None or not cred.credentials_encrypted:
             return None, cred
 
@@ -288,7 +289,7 @@ class IntegrationCredentialsService:
         name: str = "default",
     ) -> dict[str, Any] | None:
         """Get credentials as a decrypted dictionary."""
-        cred = await self.get(provider, name)
+        cred: Any | None = await self.get(provider, name)
         if cred is None or not cred.credentials_encrypted:
             return None
 
@@ -318,7 +319,7 @@ class IntegrationCredentialsService:
             IntegrationCredential.name == name,
         )
         result = await self.session.execute(stmt)
-        cred = result.scalar_one_or_none()
+        cred: Any | None = result.scalar_one_or_none()
 
         credentials = _normalize_credential_keys(provider, credentials)
 
@@ -353,7 +354,7 @@ class IntegrationCredentialsService:
         """Update the test connection result."""
         from datetime import datetime, timezone
 
-        cred = await self.get(provider, name)
+        cred: Any | None = await self.get(provider, name)
         if cred:
             cred.last_test_at = datetime.now(timezone.utc)
             cred.last_test_success = success
@@ -452,7 +453,7 @@ class SyncConfigurationService:
         is_active: bool | None = None,
     ) -> SyncConfiguration | None:
         """Update a sync configuration."""
-        config = await self.get(name)
+        config: Any | None = await self.get(name)
         if config is None:
             return None
 
@@ -513,7 +514,7 @@ class IdentityMappingService:
             IdentityMapping.org_id == self.org_id,
         )
         result = await self.session.execute(stmt)
-        mappings = result.scalars().all()
+        mappings: list[Any] = list(result.scalars().all())
 
         for mapping in mappings:
             identities = mapping.provider_identities.get(provider, [])
@@ -530,7 +531,7 @@ class IdentityMappingService:
         team_ids: list[str] | None = None,
     ) -> IdentityMapping:
         """Create or update an identity mapping."""
-        mapping = await self.get(canonical_id)
+        mapping: Any | None = await self.get(canonical_id)
 
         if mapping is None:
             mapping = IdentityMapping(
@@ -562,7 +563,7 @@ class IdentityMappingService:
         identity: str,
     ) -> IdentityMapping | None:
         """Add a provider identity to an existing mapping."""
-        mapping = await self.get(canonical_id)
+        mapping: Any | None = await self.get(canonical_id)
         if mapping is None:
             return None
 
@@ -614,7 +615,7 @@ class TeamMappingService:
         extra_data: dict[str, Any] | None = None,
     ) -> TeamMapping:
         """Create or update a team mapping."""
-        mapping = await self.get(team_id)
+        mapping: Any | None = await self.get(team_id)
 
         if mapping is None:
             mapping = TeamMapping(
@@ -680,7 +681,7 @@ class TeamDiscoveryService:
             gh = Github(auth=auth, per_page=100)
             try:
                 org = gh.get_organization(org_name)
-                teams: list[DiscoveredTeam] = []
+                teams: list[Any] = []
                 for gh_team in org.get_teams():
                     repos = [f"{org_name}/{repo.name}" for repo in gh_team.get_repos()]
                     teams.append(
@@ -711,7 +712,7 @@ class TeamDiscoveryService:
             DiscoveredTeam = _get_discovered_team_cls()
             client = LinearClient(auth=LinearAuth(api_key=api_key))
             try:
-                teams: list[DiscoveredTeam] = []
+                teams: list[Any] = []
                 for team in client.iter_teams():
                     teams.append(
                         DiscoveredTeam(
@@ -746,7 +747,7 @@ class TeamDiscoveryService:
             for subgroup in root_group.subgroups.list(per_page=100, get_all=True):
                 groups.append(gl.groups.get(subgroup.id))
 
-            teams: list[DiscoveredTeam] = []
+            teams: list[Any] = []
             for group in groups:
                 projects = group.projects.list(per_page=100, get_all=True)
                 repo_patterns = [p.path_with_namespace for p in projects]
@@ -787,7 +788,7 @@ class TeamDiscoveryService:
             response.raise_for_status()
             payload = response.json()
 
-            teams: list[DiscoveredTeam] = []
+            teams: list[Any] = []
             for project in payload.get("values", []):
                 project_key = project.get("key")
                 project_name = project.get("name") or project_key
@@ -905,11 +906,11 @@ class TeamDriftSyncService:
         discovered_teams: list[DiscoveredTeam],
     ) -> dict[str, Any]:
         team_svc = TeamMappingService(self.session, self.org_id)
-        existing_teams = await team_svc.list_all(active_only=True)
+        existing_teams: list[Any] = await team_svc.list_all(active_only=True)
 
-        provider_lookup: dict[str, TeamMapping] = {}
+        provider_lookup: dict[str, Any] = {}
         for team in existing_teams:
-            ed = team.extra_data or {}
+            ed: dict[str, Any] = dict(team.extra_data or {})
             if ed.get("provider_type") == provider:
                 provider_lookup[ed.get("provider_team_id", "")] = team
 
@@ -978,7 +979,7 @@ class TeamDriftSyncService:
         discovered: DiscoveredTeam,
     ) -> list[dict[str, Any]]:
         changes: list[dict[str, Any]] = []
-        managed = existing.managed_fields or []
+        managed: list[str] = list(existing.managed_fields or [])
         associations = discovered.associations or {}
 
         field_map = {
@@ -1021,10 +1022,10 @@ class TeamDriftSyncService:
             field = change.get("field")
             if field and hasattr(existing, field):
                 setattr(existing, field, change["new_value"])
-        existing.last_drift_sync_at = now
+        setattr(existing, "last_drift_sync_at", now)
         ed = dict(existing.extra_data or {})
         ed["last_discovered_at"] = now.isoformat()
-        existing.extra_data = ed
+        setattr(existing, "extra_data", ed)
 
     async def approve_changes(
         self,
@@ -1032,12 +1033,12 @@ class TeamDriftSyncService:
         change_indices: list[int] | None = None,
     ) -> dict[str, Any]:
         team_svc = TeamMappingService(self.session, self.org_id)
-        team = await team_svc.get(team_id)
+        team: Any | None = await team_svc.get(team_id)
         if team is None:
             return {"error": "Team not found"}
 
-        flagged = dict(team.flagged_changes or {})
-        pending = flagged.get("pending", [])
+        flagged: dict[str, Any] = dict(team.flagged_changes or {})
+        pending: list[dict[str, Any]] = list(flagged.get("pending", []))
 
         if not pending:
             return {"approved": 0}
@@ -1081,12 +1082,12 @@ class TeamDriftSyncService:
         change_indices: list[int] | None = None,
     ) -> dict[str, Any]:
         team_svc = TeamMappingService(self.session, self.org_id)
-        team = await team_svc.get(team_id)
+        team: Any | None = await team_svc.get(team_id)
         if team is None:
             return {"error": "Team not found"}
 
-        flagged = dict(team.flagged_changes or {})
-        pending = flagged.get("pending", [])
+        flagged: dict[str, Any] = dict(team.flagged_changes or {})
+        pending: list[dict[str, Any]] = list(flagged.get("pending", []))
 
         if not pending:
             return {"dismissed": 0}
@@ -1111,12 +1112,12 @@ class TeamDriftSyncService:
 
     async def get_all_pending_changes(self) -> list[dict[str, Any]]:
         team_svc = TeamMappingService(self.session, self.org_id)
-        teams = await team_svc.list_all(active_only=True)
+        teams: list[Any] = await team_svc.list_all(active_only=True)
 
         all_changes: list[dict[str, Any]] = []
         for team in teams:
-            flagged = team.flagged_changes or {}
-            pending = flagged.get("pending", [])
+            flagged: dict[str, Any] = dict(team.flagged_changes or {})
+            pending: list[dict[str, Any]] = list(flagged.get("pending", []))
             for change in pending:
                 all_changes.append(
                     {
@@ -1149,7 +1150,7 @@ class TeamMembershipService:
             try:
                 org = gh.get_organization(org_name)
                 team = org.get_team_by_slug(team_slug)
-                members: list[DiscoveredMember] = []
+                members: list[Any] = []
                 for member in team.get_members():
                     members.append(
                         DiscoveredMember(
@@ -1178,7 +1179,7 @@ class TeamMembershipService:
             DiscoveredMember = _get_discovered_member_cls()
             gl = gl_lib.Gitlab(url=url, private_token=token)
             group = gl.groups.get(group_path)
-            members: list[DiscoveredMember] = []
+            members: list[Any] = []
             for member in group.members.list(per_page=100, get_all=True):
                 members.append(
                     DiscoveredMember(
@@ -1265,11 +1266,11 @@ class TeamMembershipService:
     async def match_members(
         self,
         members: list[DiscoveredMember],
-    ) -> list[MemberMatchResult]:
+    ) -> list[Any]:
         IdentityMappingResponse = _get_identity_mapping_response_cls()
-        MemberMatchResult = _get_member_match_result_cls()
+        member_match_result_cls = _get_member_match_result_cls()
         identity_svc = IdentityMappingService(self.session, self.org_id)
-        matched: list[MemberMatchResult] = []
+        matched: list[Any] = []
 
         for member in members:
             mapping = await identity_svc.find_by_provider_identity(
@@ -1278,7 +1279,7 @@ class TeamMembershipService:
             )
             if mapping is not None:
                 matched.append(
-                    MemberMatchResult(
+                    member_match_result_cls(
                         discovered=member,
                         match_status="matched",
                         matched_identity=IdentityMappingResponse.model_validate(
@@ -1299,7 +1300,7 @@ class TeamMembershipService:
                 email_match = email_result.scalar_one_or_none()
                 if email_match is not None:
                     matched.append(
-                        MemberMatchResult(
+                        member_match_result_cls(
                             discovered=member,
                             match_status="suggested",
                             matched_identity=IdentityMappingResponse.model_validate(
@@ -1333,7 +1334,7 @@ class TeamMembershipService:
 
                 if best_match is not None and best_score >= 0.8:
                     matched.append(
-                        MemberMatchResult(
+                        member_match_result_cls(
                             discovered=member,
                             match_status="suggested",
                             matched_identity=IdentityMappingResponse.model_validate(
@@ -1346,7 +1347,7 @@ class TeamMembershipService:
                     continue
 
             matched.append(
-                MemberMatchResult(
+                member_match_result_cls(
                     discovered=member,
                     match_status="unmatched",
                     matched_identity=None,
@@ -1373,7 +1374,7 @@ class TeamMembershipService:
                 continue
 
             if link.action == "link":
-                mapping = await identity_svc.get(link.canonical_id)
+                mapping: Any | None = await identity_svc.get(link.canonical_id)
                 if mapping is None:
                     skipped += 1
                     continue
@@ -1381,7 +1382,7 @@ class TeamMembershipService:
                 team_ids = list(mapping.team_ids or [])
                 if team_id not in team_ids:
                     team_ids.append(team_id)
-                    mapping.team_ids = team_ids
+                    setattr(mapping, "team_ids", team_ids)
                 await identity_svc.add_provider_identity(
                     canonical_id=link.canonical_id,
                     provider=link.provider,
@@ -1565,7 +1566,7 @@ class JiraActivityInferenceService:
                 )
 
             if canonical_id:
-                mapping = await identity_svc.get(canonical_id)
+                mapping: Any | None = await identity_svc.get(canonical_id)
                 if mapping is None:
                     raise ValueError(f"Identity '{canonical_id}' not found")
                 if (
@@ -1586,11 +1587,22 @@ class JiraActivityInferenceService:
                 if team_id not in team_ids:
                     team_ids.append(team_id)
 
+                mapped_display_name = (
+                    str(mapping.display_name)
+                    if getattr(mapping, "display_name", None) is not None
+                    else None
+                )
+                mapped_email = (
+                    str(mapping.email)
+                    if getattr(mapping, "email", None) is not None
+                    else None
+                )
+
                 await identity_svc.create_or_update(
                     canonical_id=canonical_id,
                     display_name=getattr(member, "display_name", None)
-                    or mapping.display_name,
-                    email=getattr(member, "email", None) or mapping.email,
+                    or mapped_display_name,
+                    email=getattr(member, "email", None) or mapped_email,
                     provider_identities=provider_identities,
                     team_ids=team_ids,
                 )

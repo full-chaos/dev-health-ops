@@ -56,7 +56,7 @@ def emit_audit_log(
         user_agent=metadata.get("user_agent"),
         request_id=metadata.get("request_id"),
     )
-    entry.status = status
-    entry.error_message = error_message
+    setattr(entry, "status", status)
+    setattr(entry, "error_message", error_message)
     db.add(entry)
     return entry

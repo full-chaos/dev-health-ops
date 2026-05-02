@@ -59,8 +59,8 @@ async def rotate_token(
     new_hash = _hash_token(new_token_hash)
     now = datetime.now(timezone.utc)
 
-    old_record.replaced_by_hash = new_hash
-    old_record.revoked_at = now
+    setattr(old_record, "replaced_by_hash", new_hash)
+    setattr(old_record, "revoked_at", now)
 
     new_record = RefreshToken(
         user_id=old_record.user_id,
@@ -87,7 +87,7 @@ async def revoke_token(db: AsyncSession, token_hash: str) -> bool:
         .values(revoked_at=now)
     )
     result = await db.execute(stmt)
-    return bool(result.rowcount)
+    return bool(getattr(result, "rowcount", 0))
 
 
 async def revoke_all_for_user(db: AsyncSession, user_id: str) -> int:
@@ -100,7 +100,7 @@ async def revoke_all_for_user(db: AsyncSession, user_id: str) -> int:
         .values(revoked_at=datetime.now(timezone.utc))
     )
     result = await db.execute(stmt)
-    return int(result.rowcount or 0)
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def revoke_family(db: AsyncSession, family_id: str) -> int:
@@ -113,11 +113,11 @@ async def revoke_family(db: AsyncSession, family_id: str) -> int:
         .values(revoked_at=datetime.now(timezone.utc))
     )
     result = await db.execute(stmt)
-    return int(result.rowcount or 0)
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 async def cleanup_expired(db: AsyncSession) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     stmt = delete(RefreshToken).where(RefreshToken.expires_at < cutoff)
     result = await db.execute(stmt)
-    return int(result.rowcount or 0)
+    return int(getattr(result, "rowcount", 0) or 0)

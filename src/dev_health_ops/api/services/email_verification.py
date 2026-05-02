@@ -6,6 +6,7 @@ import importlib
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from urllib.parse import quote
 
 from sqlalchemy import delete, select
@@ -101,7 +102,7 @@ async def verify_email_token(db: AsyncSession, token: str) -> User | None:
         return None
 
     user_result = await db.execute(select(User).where(User.id == token_record.user_id))
-    user = user_result.scalar_one_or_none()
+    user: Any | None = user_result.scalar_one_or_none()
     if user is None:
         await db.delete(token_record)
         await db.flush()

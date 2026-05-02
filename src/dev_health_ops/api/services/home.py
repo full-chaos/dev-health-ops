@@ -425,17 +425,23 @@ async def build_home_response(
 
 
 def _metric_table(metric: str) -> str:
-    return next(
-        (cfg["table"] for cfg in _METRICS if cfg["metric"] == metric),
-        "repo_metrics_daily",
-    )
+    for cfg in _METRICS:
+        if cfg.get("metric") != metric:
+            continue
+        table = cfg.get("table")
+        if isinstance(table, str):
+            return table
+    return "repo_metrics_daily"
 
 
 def _metric_column(metric: str) -> str:
-    return next(
-        (cfg["column"] for cfg in _METRICS if cfg["metric"] == metric),
-        "pr_first_review_p50_hours",
-    )
+    for cfg in _METRICS:
+        if cfg.get("metric") != metric:
+            continue
+        column = cfg.get("column")
+        if isinstance(column, str):
+            return column
+    return "pr_first_review_p50_hours"
 
 
 def _metric_group(metric: str) -> str:

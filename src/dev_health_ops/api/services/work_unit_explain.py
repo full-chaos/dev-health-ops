@@ -74,13 +74,19 @@ async def explain_work_unit(
         )
 
     # 1. Extract only allowed inputs
+    evidence_quality_value = investment.evidence_quality.value
+    if evidence_quality_value is None:
+        evidence_quality_value = 0.0
+
+    evidence_quality_band = investment.evidence_quality.band or "unknown"
+
     inputs = extract_allowed_inputs(
         work_unit_id=investment.work_unit_id,
         time_range_start=investment.time_range.start,
         time_range_end=investment.time_range.end,
         categories=investment.investment.themes,
-        evidence_quality_value=investment.evidence_quality.value,
-        evidence_quality_band=investment.evidence_quality.band,
+        evidence_quality_value=evidence_quality_value,
+        evidence_quality_band=evidence_quality_band,
         evidence={
             "structural": investment.evidence.structural,
             "contextual": investment.evidence.contextual,
@@ -147,7 +153,7 @@ def _parse_llm_response(
 
     # 5. Extract uncertainty disclosure
     uncertainty = uncertainty_text or _extract_uncertainty(
-        raw_response, investment.evidence_quality.band
+        raw_response, investment.evidence_quality.band or "unknown"
     )
 
     # 6. Extract evidence quality limits (usually part of UNCERTAINTY or bottom of text)

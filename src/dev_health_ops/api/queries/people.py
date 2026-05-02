@@ -234,6 +234,7 @@ async def fetch_person_pull_requests(
     end_day: date,
     limit: int,
     cursor: datetime | None = None,
+    org_id: str = "",
 ) -> list[dict[str, Any]]:
     template = load_sql("people/person_drilldown_prs.sql")
     cursor_filter = ""
@@ -245,6 +246,7 @@ async def fetch_person_pull_requests(
         "end_ts": end_day,
         "identities": _sql_params(identities),
         "limit": limit,
+        "org_id": org_id,
     }
     if cursor is not None:
         params["cursor"] = cursor

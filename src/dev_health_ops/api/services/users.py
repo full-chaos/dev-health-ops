@@ -170,7 +170,7 @@ class UserService:
         is_verified: bool | None = None,
         is_superuser: bool | None = None,
     ) -> User | None:
-        user = await self.get_by_id(user_id)
+        user: Any | None = await self.get_by_id(user_id)
         if not user:
             return None
 
@@ -203,7 +203,7 @@ class UserService:
         return user
 
     async def set_password(self, user_id: str, password: str) -> bool:
-        user = await self.get_by_id(user_id)
+        user: Any | None = await self.get_by_id(user_id)
         if not user:
             return False
         if len(password) < PASSWORD_MIN_LENGTH:
@@ -217,13 +217,13 @@ class UserService:
         return True
 
     async def verify_password(self, user_id: str, password: str) -> bool:
-        user = await self.get_by_id(user_id)
+        user: Any | None = await self.get_by_id(user_id)
         if not user or not user.password_hash:
             return False
         return _verify_password(password, user.password_hash)
 
     async def authenticate(self, email: str, password: str) -> User | None:
-        user = await self.get_by_email(email)
+        user: Any | None = await self.get_by_email(email)
         if not user or not user.is_active:
             return None
         if not user.password_hash or not _verify_password(password, user.password_hash):
@@ -326,7 +326,7 @@ class OrganizationService:
         tier: str | None = None,
         is_active: bool | None = None,
     ) -> Organization | None:
-        org = await self.get_by_id(org_id)
+        org: Any | None = await self.get_by_id(org_id)
         if not org:
             return None
 
@@ -413,7 +413,7 @@ class MembershipService:
     async def update_role(
         self, org_id: str, user_id: str, role: str
     ) -> Membership | None:
-        membership = await self.get_membership(org_id, user_id)
+        membership: Any | None = await self.get_membership(org_id, user_id)
         if not membership:
             return None
 
@@ -426,12 +426,14 @@ class MembershipService:
         return membership
 
     async def remove_member(self, org_id: str, user_id: str) -> bool:
-        membership = await self.get_membership(org_id, user_id)
+        membership: Any | None = await self.get_membership(org_id, user_id)
         if not membership:
             return False
 
         if membership.role == MemberRole.OWNER.value:
-            owners = await self.list_members(org_id, role=MemberRole.OWNER.value)
+            owners: list[Any] = await self.list_members(
+                org_id, role=MemberRole.OWNER.value
+            )
             if len(owners) <= 1:
                 raise ValueError("Cannot remove the last owner of an organization")
 
@@ -440,8 +442,8 @@ class MembershipService:
         return True
 
     async def get_user_role(self, org_id: str, user_id: str) -> str | None:
-        membership = await self.get_membership(org_id, user_id)
-        return membership.role if membership else None
+        membership: Any | None = await self.get_membership(org_id, user_id)
+        return str(membership.role) if membership else None
 
     async def is_admin(self, org_id: str, user_id: str) -> bool:
         role = await self.get_user_role(org_id, user_id)
@@ -450,8 +452,8 @@ class MembershipService:
     async def transfer_ownership(
         self, org_id: str, from_user_id: str, to_user_id: str
     ) -> bool:
-        from_membership = await self.get_membership(org_id, from_user_id)
-        to_membership = await self.get_membership(org_id, to_user_id)
+        from_membership: Any | None = await self.get_membership(org_id, from_user_id)
+        to_membership: Any | None = await self.get_membership(org_id, to_user_id)
 
         if not from_membership or from_membership.role != MemberRole.OWNER.value:
             raise ValueError("Source user is not an owner")

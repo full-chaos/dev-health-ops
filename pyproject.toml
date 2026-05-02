@@ -159,18 +159,19 @@ indent-style = "space"
 [tool.mypy]
 python_version = "3.13"
 files = ["src", "tests", "scripts"]
+mypy_path = "src"
 plugins = ["pydantic.mypy"]
-mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
 namespace_packages = true
 explicit_package_bases = true
 show_error_codes = true
-pretty = true
-follow_imports = "silent"
+pretty = false
 warn_unused_configs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
 check_untyped_defs = true
+error_summary = false
+follow_imports = "silent"
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
@@ -182,11 +183,9 @@ module = [
   "atlassian.*",
   "radon",
   "radon.*",
-  "croniter",
-  "croniter.*",
-  "defusedxml",
-  "defusedxml.*",
-  "signxml",
-  "signxml.*",
+  "requests",
+  "requests.*",
+  "yaml",
+  "yaml.*",
 ]
 ignore_missing_imports = true

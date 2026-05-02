@@ -28,6 +28,7 @@ from ..queries.investment import (
     fetch_investment_unassigned_counts,
 )
 from ..queries.scopes import build_scope_filter_multi
+from ..utils import safe_float
 from .filtering import resolve_repo_filter_ids, time_window
 from .investment import _columns_present, _split_category_filters, _tables_present
 
@@ -38,6 +39,10 @@ UNASSIGNED_REPO_LABEL = "Unassigned repo"
 OTHER_REPOS_LABEL = "Other repos"
 
 
+def _row_value(row: dict[str, object]) -> float:
+    return safe_float(row.get("value"))
+
+
 def _get_repo_rollup_map(
     rows: list[dict[str, object]], top_n_repos: int
 ) -> dict[str, str]:
@@ -46,7 +51,7 @@ def _get_repo_rollup_map(
         repo = str(row.get("repo") or UNASSIGNED_REPO)
         if repo == UNASSIGNED_REPO:
             continue
-        value = float(row.get("value") or 0.0)
+        value = _row_value(row)
         if value <= 0:
             continue
         repo_totals[repo] = repo_totals.get(repo, 0.0) + value
@@ -85,7 +90,7 @@ def _build_team_burden_sankey(
         team_label = UNASSIGNED_TEAM_LABEL if team_raw == UNASSIGNED_TEAM else team_raw
         category_raw = str(row.get(category_key) or "")
         repo_raw = str(row.get("repo") or UNASSIGNED_REPO)
-        value = float(row.get("value") or 0.0)
+        value = _row_value(row)
         if not category_raw or value <= 0:
             continue
 
@@ -144,7 +149,7 @@ def _build_team_theme_subcategory_repo_sankey(
         team_label = UNASSIGNED_TEAM_LABEL if team_raw == UNASSIGNED_TEAM else team_raw
         subcategory_raw = str(row.get("subcategory") or "")
         repo_raw = str(row.get("repo") or UNASSIGNED_REPO)
-        value = float(row.get("value") or 0.0)
+        value = _row_value(row)
 
         if not subcategory_raw or value <= 0:
             continue
@@ -244,7 +249,8 @@ async def build_investment_flow_response(
             if not await _columns_present(sink, "work_unit_investments", required_cols):
                 return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
-            scope_filter, scope_params = "", {}
+            scope_filter = ""
+            scope_params: dict[str, object] = {}
             if filters.scope.level in {"team", "repo"}:
                 repo_ids = await resolve_repo_filter_ids(sink, filters)
                 scope_filter, scope_params = build_scope_filter_multi(
@@ -443,7 +449,7 @@ async def build_investment_flow_response(
         rows_to_use = repo_rows  # Use repo rows to get source distribution
 
     nodes_by_name: dict[str, SankeyNode] = {}
-    links: list[SankeyLink] = []
+    result_links: list[SankeyLink] = []
 
     for row in rows_to_use:
         source_key = str(row.get("source") or "")
@@ -468,7 +474,9 @@ async def build_investment_flow_response(
                     name=target, group=target_group, value=0.0
                 )
             nodes_by_name[target].value = (nodes_by_name[target].value or 0.0) + value
-            links.append(SankeyLink(source=source_label, target=target, value=value))
+            result_links.append(
+                SankeyLink(source=source_label, target=target, value=value)
+            )
 
     label = "Investment allocation"
     if chosen_mode == "team":
@@ -479,7 +487,7 @@ async def build_investment_flow_response(
     return SankeyResponse(
         mode="investment",
         nodes=list(nodes_by_name.values()),
-        links=links,
+        links=result_links,
         unit=None,
         label=label,
         description="Dynamic allocation target based on coverage metrics.",
@@ -522,7 +530,8 @@ async def build_investment_repo_team_flow_response(
         if not await _columns_present(sink, "work_unit_investments", required_cols):
             return SankeyResponse(mode="investment", nodes=[], links=[], unit=None)
 
-        scope_filter, scope_params = "", {}
+        scope_filter = ""
+        scope_params: dict[str, object] = {}
         if filters.scope.level in {"team", "repo"}:
             repo_ids = await resolve_repo_filter_ids(sink, filters)
             scope_filter, scope_params = build_scope_filter_multi(

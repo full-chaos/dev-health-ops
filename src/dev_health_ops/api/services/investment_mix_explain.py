@@ -230,6 +230,7 @@ async def explain_investment_mix(
     if quality_values and len(quality_values) > 1:
         import math
 
+        assert quality_mean is not None
         variance = sum((v - quality_mean) ** 2 for v in quality_values) / len(
             quality_values
         )

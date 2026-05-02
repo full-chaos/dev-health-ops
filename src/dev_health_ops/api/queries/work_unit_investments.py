@@ -80,7 +80,7 @@ async def fetch_repo_scopes(
         WHERE id IN %(repo_ids)s
           AND org_id = %(org_id)s
     """
-    params = {"repo_ids": ids}
+    params: dict[str, Any] = {"repo_ids": ids}
     params["org_id"] = org_id
     rows = await query_dicts(sink, query, params)
     return {
@@ -109,7 +109,7 @@ async def fetch_work_item_team_assignments(
           AND org_id = %(org_id)s
         GROUP BY work_item_id
     """
-    params = {"work_item_ids": ids}
+    params: dict[str, Any] = {"work_item_ids": ids}
     params["org_id"] = org_id
     rows = await query_dicts(sink, query, params)
     result: dict[str, dict[str, str]] = {}
@@ -143,6 +143,6 @@ async def fetch_work_unit_investment_quotes(
         WHERE (work_unit_id, categorization_run_id) IN %(pairs)s
           AND org_id = %(org_id)s
     """
-    params = {"pairs": pairs}
+    params: dict[str, Any] = {"pairs": pairs}
     params["org_id"] = org_id
     return await query_dicts(sink, query, params)

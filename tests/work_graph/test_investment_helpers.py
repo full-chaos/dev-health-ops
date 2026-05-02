@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import cast
 
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 from dev_health_ops.work_graph.investment import queries as q
 from dev_health_ops.work_graph.investment.constants import MIN_EVIDENCE_CHARS
 from dev_health_ops.work_graph.investment.evidence import (
@@ -103,7 +105,7 @@ def test_queries_fetch_work_items_empty_short_circuit():
         def query_dicts(self, *_args, **_kwargs):
             raise AssertionError("query_dicts should not be called")
 
-    assert q.fetch_work_items(_Sink(), work_item_ids=[]) == []
+    assert q.fetch_work_items(cast(BaseMetricsSink, _Sink()), work_item_ids=[]) == []
 
 
 def test_queries_helpers_build_expected_params(monkeypatch):
@@ -128,16 +130,18 @@ def test_queries_helpers_build_expected_params(monkeypatch):
 
     monkeypatch.setattr(q, "query_dicts", fake_query_dicts)
 
-    parents = q.fetch_parent_titles(object(), work_item_ids=["W1", "W2"])
+    sink = cast(BaseMetricsSink, object())
+
+    parents = q.fetch_parent_titles(sink, work_item_ids=["W1", "W2"])
     assert parents == {"W1": "Title 1"}
 
-    churn = q.fetch_commit_churn(object(), repo_commits={"repo-1": ["h1"]})
+    churn = q.fetch_commit_churn(sink, repo_commits={"repo-1": ["h1"]})
     assert churn == {"repo-1@h1": 42.0}
 
-    rows = q.fetch_pull_requests(object(), repo_numbers={"repo-1": [1]})
+    rows = q.fetch_pull_requests(sink, repo_numbers={"repo-1": [1]})
     assert rows == [{"repo_id": "repo-1", "number": 1}]
 
-    repo_ids = q.resolve_repo_ids_for_teams(object(), team_ids=["team-a"])
+    repo_ids = q.resolve_repo_ids_for_teams(sink, team_ids=["team-a"])
     assert repo_ids == ["repo-1", "repo-2"]
 
     assert len(calls) >= 4

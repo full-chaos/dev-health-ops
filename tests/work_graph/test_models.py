@@ -125,7 +125,7 @@ class TestWorkGraphEdge:
             evidence="test",
         )
         with pytest.raises(Exception):  # FrozenInstanceError
-            edge.confidence = 0.9
+            setattr(edge, "confidence", 0.9)
 
 
 class TestWorkGraphIssuePR:
@@ -158,7 +158,7 @@ class TestWorkGraphIssuePR:
             evidence="test",
         )
         with pytest.raises(Exception):  # FrozenInstanceError
-            link.pr_number = 789
+            setattr(link, "pr_number", 789)
 
 
 class TestWorkGraphPRCommit:
@@ -191,4 +191,4 @@ class TestWorkGraphPRCommit:
             evidence="test",
         )
         with pytest.raises(Exception):  # FrozenInstanceError
-            link.commit_hash = "def456"
+            setattr(link, "commit_hash", "def456")

@@ -49,6 +49,7 @@ async def test_saved_report_creation(session_maker):
         assert report.id is not None
         assert report.name == "Weekly Health"
         assert report.org_id == "org-1"
+        assert isinstance(report.report_plan, dict)
         assert report.report_plan["report_type"] == "weekly_health"
         assert report.is_active is True
         assert report.is_template is False
@@ -77,6 +78,8 @@ async def test_saved_report_clone(session_maker):
         assert cloned.name == "Monthly Review (Q1)"
         assert cloned.template_source_id == original.id
         assert cloned.is_template is False
+        assert isinstance(cloned.parameters, dict)
+        assert isinstance(cloned.report_plan, dict)
         assert cloned.parameters["team"] == "frontend"
         assert cloned.parameters["date_range"] == "last_month"
         assert cloned.report_plan["report_type"] == "monthly_review"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import httpx
@@ -29,6 +29,10 @@ PipelineSyncBatch = _testops_base_module.PipelineSyncBatch
 TestOpsPipelineProcessor = _testops_processor_module.TestOpsPipelineProcessor
 PipelineProcessor = TestOpsPipelineProcessor
 PipelineProcessor.__test__ = False
+
+if TYPE_CHECKING:
+    from dev_health_ops.connectors.testops.base import PipelineSyncBatch as PipelineSyncBatchType
+    from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 
 
 def _dt(value: str) -> datetime:
@@ -186,8 +190,8 @@ async def test_gitlab_ci_adapter_handles_pagination_and_incremental_sync() -> No
 
 class _FakeStore:
     def __init__(self) -> None:
-        self.pipeline_runs = []
-        self.job_runs = []
+        self.pipeline_runs: list[PipelineRunExtendedRow] = []
+        self.job_runs: list[JobRunRow] = []
 
     async def insert_testops_pipeline_runs(self, runs):
         self.pipeline_runs.extend(runs)
@@ -197,7 +201,7 @@ class _FakeStore:
 
 
 class _FakeAdapter:
-    def __init__(self, batch: PipelineSyncBatch) -> None:
+    def __init__(self, batch: PipelineSyncBatchType) -> None:
         self.batch = batch
         self.received_kwargs: dict[str, object] | None = None
 

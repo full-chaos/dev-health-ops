@@ -1,5 +1,7 @@
 """Tests for work graph text parser."""
 
+from typing import cast
+
 import pytest
 
 from dev_health_ops.work_graph.extractors.text_parser import (
@@ -73,7 +75,7 @@ class TestExtractJiraKeys:
 
     def test_none_text(self):
         """None text returns empty list."""
-        result = extract_jira_keys(None)
+        result = extract_jira_keys(cast(str, None))
         assert result == []
 
 
@@ -192,4 +194,4 @@ class TestParsedIssueRef:
             ref_type=RefType.REFERENCES,
         )
         with pytest.raises(Exception):  # FrozenInstanceError
-            ref.issue_key = "DEF-456"
+            setattr(ref, "issue_key", "DEF-456")

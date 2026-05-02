@@ -67,6 +67,20 @@ _MAX_SEARCH_LIMIT = 50
 _MAX_DRILLDOWN_LIMIT = 200
 
 
+def _coerce_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            normalized = value.replace(" ", "T")
+            return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
 _PERSON_METRICS: list[dict[str, Any]] = [
     {
         "metric": "cycle_time",
@@ -664,7 +678,11 @@ async def build_person_metric_response(
             for row in series_rows
         ]
 
-        breakdowns = {"by_repo": [], "by_work_type": [], "by_stage": []}
+        breakdowns: dict[str, list[MetricBreakdownItem]] = {
+            "by_repo": [],
+            "by_work_type": [],
+            "by_stage": [],
+        }
         for key in breakdowns:
             detail = config.get("breakdowns", {}).get(key)
             if not detail:
@@ -749,15 +767,18 @@ async def build_person_drilldown_prs_response(
 
     items: list[PullRequestRow] = []
     for row in rows:
+        created_at = _coerce_datetime(row.get("created_at"))
+        if created_at is None:
+            continue
         items.append(
             PullRequestRow(
                 repo_id=str(row.get("repo_id") or ""),
                 number=int(row.get("number") or 0),
                 title=row.get("title"),
                 author=row.get("author") or row.get("author_name"),
-                created_at=row.get("created_at"),
-                merged_at=row.get("merged_at"),
-                first_review_at=row.get("first_review_at"),
+                created_at=created_at,
+                merged_at=_coerce_datetime(row.get("merged_at")),
+                first_review_at=_coerce_datetime(row.get("first_review_at")),
                 review_latency_hours=safe_optional_float(
                     row.get("review_latency_hours")
                 ),

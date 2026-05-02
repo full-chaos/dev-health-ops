@@ -662,10 +662,10 @@ async def _persist_license(
             if org:
                 assign_attr(org, "tier", str(tier.value))
 
-            result = await session.execute(
+            license_result = await session.execute(
                 select(OrgLicense).where(OrgLicense.org_id == org_uuid)
             )
-            org_license = result.scalar_one_or_none()
+            org_license = license_result.scalar_one_or_none()
 
             if org_license is None:
                 org_license = OrgLicense(

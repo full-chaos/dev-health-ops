@@ -10,6 +10,7 @@ from dev_health_ops.metrics.compute_testops import (
     compute_pipeline_metrics_daily,
     compute_test_metrics_daily,
 )
+from dev_health_ops.metrics.testops_schemas import TestCaseResultRow, TestSuiteResultRow
 
 
 def test_compute_pipeline_metrics_daily_groups_by_repo_and_team_service():
@@ -107,7 +108,7 @@ def test_compute_test_metrics_daily_detects_flakes_and_failure_recurrence():
     repo_a = uuid4()
     repo_b = uuid4()
 
-    suite_results = [
+    suite_results: list[TestSuiteResultRow] = [
         {
             "repo_id": repo_a,
             "run_id": "run-a-current",
@@ -170,7 +171,7 @@ def test_compute_test_metrics_daily_detects_flakes_and_failure_recurrence():
         },
     ]
 
-    case_results = [
+    case_results: list[TestCaseResultRow] = [
         {
             "repo_id": repo_a,
             "run_id": "run-a-current",
@@ -401,6 +402,8 @@ def test_compute_testops_metrics_resolve_team_via_repo_resolver_when_row_team_id
             {
                 "repo_id": repo_a,
                 "run_id": "r1",
+                "suite_id": "suite-r1",
+                "suite_name": "suite-r1",
                 "started_at": datetime(2026, 2, 18, 10, 0, tzinfo=timezone.utc),
                 "finished_at": datetime(2026, 2, 18, 10, 1, tzinfo=timezone.utc),
                 "total_count": 1,

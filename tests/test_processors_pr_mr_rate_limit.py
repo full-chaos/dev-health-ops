@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from typing import Any, cast
 
 import pytest
 
@@ -120,7 +121,7 @@ async def test_github_pr_sync_retries_on_retry_after_and_persists():
 
     total = await loop.run_in_executor(
         None,
-        _sync_github_prs_to_store,
+        cast(Any, _sync_github_prs_to_store),
         connector,
         "o",
         "r",
@@ -194,7 +195,7 @@ async def test_gitlab_mr_sync_retries_on_retry_after_and_persists():
 
     total = await loop.run_in_executor(
         None,
-        _sync_gitlab_mrs_to_store,
+        cast(Any, _sync_gitlab_mrs_to_store),
         connector,
         123,
         repo_id,

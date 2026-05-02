@@ -97,6 +97,7 @@ def test_compute_day_single_release():
     assert rec.coverage_ratio == pytest.approx(0.5)
     assert rec.data_completeness == pytest.approx(20 / 24.0)
     assert rec.concurrent_deploy_count == 1
+    assert rec.release_impact_confidence_score is not None
     assert rec.release_impact_confidence_score > 0.0
     assert rec.release_impact_confidence_score <= 1.0
 

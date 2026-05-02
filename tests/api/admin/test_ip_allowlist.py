@@ -15,17 +15,12 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.ip_allowlist import OrgIPAllowlist
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.users import Membership, Organization, User
+from tests._helpers import tables_of
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
-_TABLES = [
-    User.__table__,
-    Organization.__table__,
-    Membership.__table__,
-    OrgIPAllowlist.__table__,
-    OrgLicense.__table__,
-]
+_TABLES = tables_of(User, Organization, Membership, OrgIPAllowlist, OrgLicense)
 
 
 @pytest_asyncio.fixture

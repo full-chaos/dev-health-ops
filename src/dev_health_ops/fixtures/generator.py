@@ -3,7 +3,7 @@ import json
 import random
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from dev_health_ops.metrics.schemas import (
     FeatureFlagEventRecord,
@@ -36,7 +36,9 @@ from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemDependency,
     WorkItemInteractionEvent,
+    WorkItemProvider,
     WorkItemReopenEvent,
+    WorkItemStatusCategory,
     WorkItemStatusTransition,
     WorkItemType,
     Worklog,
@@ -1514,7 +1516,7 @@ class SyntheticDataGenerator:
         if self.assigned_teams:
             member_map: dict[str, tuple[str, str]] = {}
             for team in self.assigned_teams:
-                for member in team.members:
+                for member in team.members or []:
                     member_map[str(member).strip().lower()] = (team.id, team.name)
             return member_map
         return self.get_team_assignment().get("member_map", {})
@@ -1850,7 +1852,7 @@ class SyntheticDataGenerator:
                 # Create the Epic item
                 epic = WorkItem(
                     work_item_id=epic_id,
-                    provider=provider_value,
+                    provider=cast(WorkItemProvider, provider_value),
                     title=f"Epic: {category.title()} - {sub_category.title()} Initiative {i + 1}",
                     type="epic",
                     status="in_progress",  # Epics often stay open
@@ -1968,10 +1970,10 @@ class SyntheticDataGenerator:
             items.append(
                 WorkItem(
                     work_item_id=work_item_id,
-                    provider=provider_value,
+                    provider=cast(WorkItemProvider, provider_value),
                     title=f"[{project}] {category.title()}/{sub_category.title()} {item_type} {i}",
                     type=item_type,
-                    status=status,
+                    status=cast(WorkItemStatusCategory, status),
                     status_raw=status,
                     description=description,
                     repo_id=self.repo_id,
@@ -3062,7 +3064,7 @@ class SyntheticDataGenerator:
 
             sprints.append(
                 Sprint(
-                    provider=self.provider,
+                    provider=cast(WorkItemProvider, self.provider),
                     sprint_id=f"sprint-{sprint_index}",
                     name=f"Sprint {sprint_index}",
                     state=state,

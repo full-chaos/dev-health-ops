@@ -84,7 +84,7 @@ def _print_table(
         return
 
     try:
-        from tabulate import tabulate  # type: ignore
+        from tabulate import tabulate
 
         print(tabulate(rows_list, headers=headers, tablefmt="github"))
         return
@@ -239,19 +239,19 @@ async def _run_mongo(db_url: str, limit_commits: int) -> int:
         }
 
         async for doc in db["git_commits"].find({}, commit_projection):
-            obj = _commit_from_row(doc)
-            if obj is not None:
-                commits.append(obj)
+            commit_obj = _commit_from_row(doc)
+            if commit_obj is not None:
+                commits.append(commit_obj)
 
         async for doc in db["git_commit_stats"].find({}, stat_projection):
-            obj = _commit_stat_from_row(doc)
-            if obj is not None:
-                stats.append(obj)
+            stat_obj = _commit_stat_from_row(doc)
+            if stat_obj is not None:
+                stats.append(stat_obj)
 
         async for doc in db["git_pull_requests"].find({}, pr_projection):
-            obj = _pr_from_row(doc)
-            if obj is not None:
-                prs.append(obj)
+            pr_obj = _pr_from_row(doc)
+            if pr_obj is not None:
+                prs.append(pr_obj)
 
     finally:
         client.close()
@@ -324,9 +324,9 @@ async def _run_async(db_url: str, limit_commits: int) -> int:
 
     try:
         async with session_factory() as session:
-            commits = (await session.execute(select(GitCommit))).scalars().all()
-            stats = (await session.execute(select(GitCommitStat))).scalars().all()
-            prs = (await session.execute(select(GitPullRequest))).scalars().all()
+            commits = list((await session.execute(select(GitCommit))).scalars().all())
+            stats = list((await session.execute(select(GitCommitStat))).scalars().all())
+            prs = list((await session.execute(select(GitPullRequest))).scalars().all())
     finally:
         await engine.dispose()
 

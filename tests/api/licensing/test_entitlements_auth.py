@@ -23,6 +23,7 @@ from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride, OrgLicense
 from dev_health_ops.models.users import Organization
+from tests._helpers import tables_of
 
 # Use importlib to get the actual module (not the re-exported router object)
 _licensing_router_module = importlib.import_module(
@@ -31,12 +32,7 @@ _licensing_router_module = importlib.import_module(
 licensing_router = _licensing_router_module.router
 
 
-_TABLES = [
-    Organization.__table__,
-    OrgLicense.__table__,
-    FeatureFlag.__table__,
-    OrgFeatureOverride.__table__,
-]
+_TABLES = tables_of(Organization, OrgLicense, FeatureFlag, OrgFeatureOverride)
 
 
 @pytest_asyncio.fixture

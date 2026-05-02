@@ -19,6 +19,7 @@ from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.org_invite import OrgInvite
 from dev_health_ops.models.users import Membership, Organization, User
+from tests._helpers import tables_of
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 admin_router_module = importlib.import_module("dev_health_ops.api.admin.routers.orgs")
@@ -33,13 +34,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    User.__table__,
-                    Organization.__table__,
-                    Membership.__table__,
-                    OrgInvite.__table__,
-                    AuditLog.__table__,
-                ],
+                tables=tables_of(User, Organization, Membership, OrgInvite, AuditLog),
             )
         )
 

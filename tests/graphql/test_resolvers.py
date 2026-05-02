@@ -23,11 +23,11 @@ from dev_health_ops.api.graphql.resolvers.catalog import resolve_catalog
 class MockClient:
     """Mock ClickHouse client for testing."""
 
-    def __init__(self, rows: list[dict[str, Any]] = None):
+    def __init__(self, rows: list[dict[str, Any]] | None = None):
         self.rows = rows or []
         self.queries_executed: list[str] = []
 
-    def query(self, sql: str, parameters: dict[str, Any] = None):
+    def query(self, sql: str, parameters: dict[str, Any] | None = None):
         """Mock query method that returns configured row data."""
         self.queries_executed.append(sql)
         return MockQueryResult(self.rows)

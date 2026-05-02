@@ -42,36 +42,6 @@ from dev_health_ops.utils import (
 
 _unused_BATCH_COLLECTOR_TYPES = (SyncBatchCollector, AsyncBatchCollector)
 
-if CONNECTORS_AVAILABLE:
-    import github as _github_module
-
-    import dev_health_ops.connectors as _connectors_module
-    import dev_health_ops.connectors.models as _connector_models_module
-    import dev_health_ops.connectors.utils as _connector_utils_module
-
-    RuntimeBatchResult = _connectors_module.BatchResult
-    RuntimeConnectorExceptionType = _connectors_module.ConnectorException
-    RuntimeGitHubConnector = _connectors_module.GitHubConnector
-    RuntimeRepository = _connector_models_module.Repository
-    RuntimeRateLimitConfig = _connector_utils_module.RateLimitConfig
-    RuntimeRateLimitGate = _connector_utils_module.RateLimitGate
-    RuntimeRateLimitExceededExceptionType = _github_module.RateLimitExceededException
-else:
-    RuntimeBatchResult = Any
-    RuntimeGitHubConnector = Any
-    RuntimeRepository = Any
-    RuntimeRateLimitConfig = Any
-    RuntimeRateLimitGate = Any
-
-    class _RuntimeConnectorException(Exception):
-        pass
-
-    class _RuntimeRateLimitExceededException(Exception):
-        pass
-
-    RuntimeConnectorExceptionType = _RuntimeConnectorException
-    RuntimeRateLimitExceededExceptionType = _RuntimeRateLimitExceededException
-
 if TYPE_CHECKING:
     from github import RateLimitExceededException
 
@@ -82,14 +52,28 @@ if TYPE_CHECKING:
     )
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+elif CONNECTORS_AVAILABLE:
+    from github import RateLimitExceededException
+
+    from dev_health_ops.connectors import (
+        BatchResult,
+        ConnectorException,
+        GitHubConnector,
+    )
+    from dev_health_ops.connectors.models import Repository
+    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
 else:
-    BatchResult = RuntimeBatchResult
-    GitHubConnector = RuntimeGitHubConnector
-    Repository = RuntimeRepository
-    RateLimitConfig = RuntimeRateLimitConfig
-    RateLimitGate = RuntimeRateLimitGate
-    ConnectorException = RuntimeConnectorExceptionType
-    RateLimitExceededException = RuntimeRateLimitExceededExceptionType
+    BatchResult = None
+    GitHubConnector = None
+    Repository = None
+    RateLimitConfig = None
+    RateLimitGate = None
+
+    class ConnectorException(Exception):
+        pass
+
+    class RateLimitExceededException(Exception):
+        pass
 
 
 # --- GitHub Sync Helpers ---

@@ -152,7 +152,7 @@ typecheck:mypy:
   rules: *code_rules
   script:
     - mypy --install-types --non-interactive .
-  allow_failure: true
+  allow_failure: false
 
 test:
   extends: .python_job

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
@@ -35,36 +35,26 @@ from dev_health_ops.utils import (
     is_skippable,
 )
 
-if CONNECTORS_AVAILABLE:
+if TYPE_CHECKING:
     from dev_health_ops.connectors import (
-        BatchResult as _BatchResult,
-    )
-    from dev_health_ops.connectors import (
+        BatchResult,
         ConnectorException,
+        GitLabConnector,
     )
+    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+elif CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
-        GitLabConnector as _GitLabConnector,
+        BatchResult,
+        ConnectorException,
+        GitLabConnector,
     )
-    from dev_health_ops.connectors.models import Repository as _Repository
-    from dev_health_ops.connectors.utils import (
-        RateLimitConfig as _RateLimitConfig,
-    )
-    from dev_health_ops.connectors.utils import (
-        RateLimitGate as _RateLimitGate,
-    )
+    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
 else:
-    _BatchResult = None
-    _GitLabConnector = None
+    BatchResult = None
+    GitLabConnector = None
     ConnectorException = Exception
-    _Repository = None
-    _RateLimitConfig = None
-    _RateLimitGate = None
-
-BatchResult = _BatchResult
-GitLabConnector = _GitLabConnector
-Repository = _Repository
-RateLimitConfig = _RateLimitConfig
-RateLimitGate = _RateLimitGate
+    RateLimitConfig = None
+    RateLimitGate = None
 
 
 # --- GitLab Sync Helpers ---

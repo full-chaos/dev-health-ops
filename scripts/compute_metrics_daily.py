@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 import uuid
@@ -71,14 +72,17 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        run_daily_metrics_job(
-            db_url=args.db,
-            day=args.date,
-            backfill_days=max(1, int(args.backfill)),
-            repo_id=args.repo_id,
-            include_commit_metrics=True,
-            sink=args.sink,
-            provider=args.provider,
+        asyncio.run(
+            run_daily_metrics_job(
+                db_url=args.db,
+                day=args.date,
+                backfill_days=max(1, int(args.backfill)),
+                repo_id=args.repo_id,
+                include_commit_metrics=True,
+                sink=args.sink,
+                provider=args.provider,
+                org_id="",
+            )
         )
         return 0
     except Exception as exc:

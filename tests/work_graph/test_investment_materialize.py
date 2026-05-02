@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from dev_health_ops.metrics.schemas import (
+    WorkUnitInvestmentEvidenceQuoteRecord,
+    WorkUnitInvestmentRecord,
+)
 from dev_health_ops.work_graph.investment.categorize import CategorizationOutcome
 from dev_health_ops.work_graph.investment.materialize import (
     MaterializeConfig,
@@ -19,8 +23,8 @@ class FakeSink:
 
     def __init__(self) -> None:
         self.client = object()
-        self.investment_rows = []
-        self.quote_rows = []
+        self.investment_rows: list[WorkUnitInvestmentRecord] = []
+        self.quote_rows: list[WorkUnitInvestmentEvidenceQuoteRecord] = []
 
     def ensure_schema(self) -> None:
         return None

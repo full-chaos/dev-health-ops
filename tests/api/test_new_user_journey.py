@@ -28,28 +28,29 @@ from dev_health_ops.models.settings import (
     TeamMapping,
 )
 from dev_health_ops.models.users import LoginAttempt, Membership, Organization, User
+from tests._helpers import tables_of
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
 VALID_PASSWORD = "SecurePass123!"
 
-_TABLES = [
-    User.__table__,
-    Organization.__table__,
-    Membership.__table__,
-    AuditLog.__table__,
-    LoginAttempt.__table__,
-    EmailVerificationToken.__table__,
-    IntegrationCredential.__table__,
-    SyncConfiguration.__table__,
-    ScheduledJob.__table__,
-    JobRun.__table__,
-    IdentityMapping.__table__,
-    TeamMapping.__table__,
-    OrgLicense.__table__,
-    TierLimit.__table__,
-]
+_TABLES = tables_of(
+    User,
+    Organization,
+    Membership,
+    AuditLog,
+    LoginAttempt,
+    EmailVerificationToken,
+    IntegrationCredential,
+    SyncConfiguration,
+    ScheduledJob,
+    JobRun,
+    IdentityMapping,
+    TeamMapping,
+    OrgLicense,
+    TierLimit,
+)
 
 
 @pytest_asyncio.fixture

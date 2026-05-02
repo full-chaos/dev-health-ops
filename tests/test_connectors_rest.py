@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,18 +42,24 @@ class _FakeResponse:
 
 def test_parse_retry_after_seconds():
     assert (
-        _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "3"}))
+        _parse_retry_after_seconds(
+            cast(Any, _FakeResponse(429, headers={"Retry-After": "3"}))
+        )
         == 3.0
     )
     assert (
-        _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "-2"}))
+        _parse_retry_after_seconds(
+            cast(Any, _FakeResponse(429, headers={"Retry-After": "-2"}))
+        )
         == 0.0
     )
     assert (
-        _parse_retry_after_seconds(_FakeResponse(429, headers={"Retry-After": "bad"}))
+        _parse_retry_after_seconds(
+            cast(Any, _FakeResponse(429, headers={"Retry-After": "bad"}))
+        )
         is None
     )
-    assert _parse_retry_after_seconds(_FakeResponse(429, headers={})) is None
+    assert _parse_retry_after_seconds(cast(Any, _FakeResponse(429, headers={}))) is None
 
 
 def test_restclient_get_success(monkeypatch):

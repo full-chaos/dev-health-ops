@@ -19,7 +19,7 @@ from dev_health_ops.connectors import BatchResult, GitHubConnector  # noqa: E402
 
 def on_repo_processed(result: BatchResult) -> None:
     """Callback function called when each repository is processed."""
-    if result.success:
+    if result.success and result.stats is not None:
         print(
             f"  ✓ {result.repository.full_name}: {result.stats.total_commits} commits"
         )
@@ -90,7 +90,7 @@ def main():
         )
 
         for result in results:
-            if result.success:
+            if result.success and result.stats is not None:
                 print(f"  {result.repository.full_name}:")
                 print(f"    Total commits: {result.stats.total_commits}")
                 print(f"    Additions: {result.stats.additions}")

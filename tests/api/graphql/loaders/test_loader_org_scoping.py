@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 import pytest
 
 from dev_health_ops.api.graphql.loaders.repo_loader import RepoByNameLoader, RepoLoader
 from dev_health_ops.api.graphql.loaders.team_loader import TeamByNameLoader, TeamLoader
 
 
+class _CapturedQuery(TypedDict):
+    sql: str
+    params: dict[str, object]
+
+
 @pytest.mark.asyncio
 async def test_repo_loader_scopes_query_by_org_id(monkeypatch):
-    captured: dict[str, object] = {}
+    captured: _CapturedQuery = {"sql": "", "params": {}}
 
     async def fake_query_dicts(_client, sql, params):
         captured["sql"] = sql
@@ -28,7 +35,7 @@ async def test_repo_loader_scopes_query_by_org_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_repo_by_name_loader_scopes_query_by_org_id(monkeypatch):
-    captured: dict[str, object] = {}
+    captured: _CapturedQuery = {"sql": "", "params": {}}
 
     async def fake_query_dicts(_client, sql, params):
         captured["sql"] = sql
@@ -48,7 +55,7 @@ async def test_repo_by_name_loader_scopes_query_by_org_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_team_loader_scopes_query_by_org_id(monkeypatch):
-    captured: dict[str, object] = {}
+    captured: _CapturedQuery = {"sql": "", "params": {}}
 
     async def fake_query_dicts(_client, sql, params):
         captured["sql"] = sql
@@ -68,7 +75,7 @@ async def test_team_loader_scopes_query_by_org_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_team_by_name_loader_scopes_query_by_org_id(monkeypatch):
-    captured: dict[str, object] = {}
+    captured: _CapturedQuery = {"sql": "", "params": {}}
 
     async def fake_query_dicts(_client, sql, params):
         captured["sql"] = sql

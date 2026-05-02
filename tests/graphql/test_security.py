@@ -452,6 +452,7 @@ class TestResolveSecurityOverview:
             assert result.kpis.open_total == 20
             assert result.kpis.critical == 5
             assert result.kpis.high == 8
+            assert result.kpis.mean_days_to_fix_30d is not None
             assert abs(result.kpis.mean_days_to_fix_30d - 3.7) < 0.01
             assert result.kpis.open_delta_30d == -2
 

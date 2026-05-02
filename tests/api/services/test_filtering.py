@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import cast
 
 import pytest
 
 from dev_health_ops.api.models.filters import MetricFilter
 from dev_health_ops.api.services import filtering as filtering_mod
+from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 
 def test_filter_cache_key_is_stable_for_equivalent_filters():
@@ -53,7 +55,9 @@ def test_time_window_clamps_invalid_start_date():
 
 def test_work_category_filter_strips_empty_values():
     filters = MetricFilter()
-    filters.why.work_category = ["", " Feature Delivery ", None, "Maintenance"]
+    filters.why.work_category = cast(
+        list[str], ["", " Feature Delivery ", None, "Maintenance"]
+    )
 
     sql, params = filtering_mod.work_category_filter(filters)
 
@@ -79,7 +83,7 @@ async def test_scope_filter_for_metric_team(monkeypatch):
     )
 
     sql, params = await filtering_mod.scope_filter_for_metric(
-        sink=object(),
+        sink=cast(BaseMetricsSink, object()),
         metric_scope="team",
         filters=filters,
         team_column="team",
@@ -110,7 +114,7 @@ async def test_scope_filter_for_metric_repo_uses_resolved_repo_ids(monkeypatch):
     )
 
     sql, params = await filtering_mod.scope_filter_for_metric(
-        sink=object(),
+        sink=cast(BaseMetricsSink, object()),
         metric_scope="repo",
         filters=filters,
     )

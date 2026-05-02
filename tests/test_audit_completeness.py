@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import pytest
 
@@ -84,8 +85,8 @@ def test_compile_report_aggregates_and_flags_ok():
         window_days=31,
         work_item_rows=work_item_rows,
         transition_rows=transition_rows,
-        repo_rows=repo_rows,
-        git_rows_by_table=git_rows_by_table,
+        repo_rows=cast(list[dict[str, Any]], repo_rows),
+        git_rows_by_table=cast(dict[str, Any], git_rows_by_table),
         present_tables=present_tables,
     )
 

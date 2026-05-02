@@ -190,7 +190,7 @@ async def stop_impersonation(
         raise HTTPException(status_code=400, detail="No active impersonation session")
 
     # End the session
-    active_session.ended_at = now  # type: ignore[assignment]
+    active_session.ended_at = now
     await session.flush()
 
     # Invalidate cache

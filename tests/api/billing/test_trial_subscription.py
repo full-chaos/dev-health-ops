@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +14,7 @@ from dev_health_ops.api.billing.subscription_service import SubscriptionService
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.subscriptions import Subscription
 from dev_health_ops.models.users import Organization
+from tests._helpers import tables_of
 
 
 @pytest_asyncio.fixture
@@ -34,10 +34,7 @@ async def session_maker(tmp_path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    Organization.__table__,
-                    Subscription.__table__,
-                ],
+                tables=tables_of(Organization, Subscription),
             )
         )
 
@@ -85,12 +82,12 @@ async def test_upsert_from_stripe_persists_trial_dates(session_maker):
     async with session_maker() as session:
         org = await _seed_org(session)
         stripe_sub = _stripe_subscription_payload()
-        org_id = cast(uuid.UUID, org.id)
+        org_id = org.id
         resolved_price_id = uuid.uuid4()
         resolved_plan_id = uuid.uuid4()
 
         service = SubscriptionService(session)
-        service._lookup_billing_price = AsyncMock(
+        service._lookup_billing_price = AsyncMock(  # type: ignore[method-assign]
             return_value=SimpleNamespace(id=resolved_price_id, plan_id=resolved_plan_id)
         )
         saved = await service.upsert_from_stripe(stripe_sub=stripe_sub, org_id=org_id)
@@ -122,7 +119,7 @@ async def test_has_had_trial_returns_true_when_trial_exists(session_maker):
         session.add(sub)
         await session.commit()
 
-        assert await _has_had_trial(cast(uuid.UUID, org.id), session) is True
+        assert await _has_had_trial(org.id, session) is True
 
 
 @pytest.mark.asyncio
@@ -144,7 +141,7 @@ async def test_has_had_trial_returns_false_when_no_trial(session_maker):
         session.add(sub)
         await session.commit()
 
-        assert await _has_had_trial(cast(uuid.UUID, org.id), session) is False
+        assert await _has_had_trial(org.id, session) is False
 
 
 @pytest.mark.asyncio
@@ -152,4 +149,4 @@ async def test_has_had_trial_returns_false_when_no_subscription(session_maker):
     async with session_maker() as session:
         org = await _seed_org(session)
 
-        assert await _has_had_trial(cast(uuid.UUID, org.id), session) is False
+        assert await _has_had_trial(org.id, session) is False

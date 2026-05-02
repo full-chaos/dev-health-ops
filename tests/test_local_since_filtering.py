@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
@@ -61,7 +62,7 @@ async def test_process_git_commits_respects_since(monkeypatch):
 
     await process_git_commits(
         repo,
-        DummyStore(),
+        cast(Any, DummyStore()),
         commits=[recent, old],
         since=now - timedelta(days=1),
     )

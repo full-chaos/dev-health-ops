@@ -30,7 +30,7 @@ def _service_with_provider(provider):
     session.add = MagicMock()
     session.flush = AsyncMock()
     svc = SSOService(session)
-    svc.get_provider = AsyncMock(return_value=provider)
+    svc.get_provider = AsyncMock(return_value=provider)  # type: ignore[method-assign]
     return svc
 
 

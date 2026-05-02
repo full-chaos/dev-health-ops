@@ -20,7 +20,7 @@ def discover_repos_for_config(
 
 def discover_github_repos(
     sync_options: dict[str, Any], token: str
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, ...]]:
     from github import Github
 
     search = sync_options.get("search", "")
@@ -47,7 +47,7 @@ def discover_github_repos(
         except Exception:
             return []
 
-    result: list[tuple[str, str]] = []
+    result: list[tuple[str, ...]] = []
     for repo in repos:
         if fnmatch.fnmatch(repo.name, repo_pattern):
             result.append((owner, repo.name))
@@ -55,7 +55,9 @@ def discover_github_repos(
     return result
 
 
-def discover_gitlab_repos(sync_options: dict[str, Any], token: str) -> list[tuple[str]]:
+def discover_gitlab_repos(
+    sync_options: dict[str, Any], token: str
+) -> list[tuple[str, ...]]:
     import gitlab as gitlab_lib
 
     gitlab_url = str(sync_options.get("gitlab_url", "https://gitlab.com"))
@@ -79,7 +81,7 @@ def discover_gitlab_repos(sync_options: dict[str, Any], token: str) -> list[tupl
     except Exception:
         return []
 
-    result: list[tuple[str]] = []
+    result: list[tuple[str, ...]] = []
     for project in projects:
         name = getattr(project, "name", "") or ""
         project_id = getattr(project, "id", None)

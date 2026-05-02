@@ -9,6 +9,7 @@ import asyncio
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,7 +66,7 @@ async def github_to_storage_example():
 
             # For demo purposes, we'll use PyGithub to get commits
             gh_repo = connector.github.get_repo(repo.full_name)
-            commits = list(gh_repo.get_commits()[:5])  # Get first 5 commits
+            commits: list[Any] = list(gh_repo.get_commits()[:5])  # Get first 5 commits
 
             commit_objects = []
             for commit in commits:

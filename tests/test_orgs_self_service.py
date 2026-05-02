@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -49,7 +50,7 @@ class FakeOrg:
         self.description = description
         self.tier = tier
         self.is_active = is_active
-        self.settings = {}
+        self.settings: dict[str, Any] = {}
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = datetime.now(timezone.utc)
 

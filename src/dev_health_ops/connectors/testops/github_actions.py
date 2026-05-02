@@ -52,7 +52,7 @@ class GitHubActionsAdapter(BasePipelineAdapter):
             return "hosted"
         return None
 
-    async def fetch_pipeline_data(
+    async def fetch_pipeline_data(  # type: ignore[override]
         self,
         *,
         owner: str,

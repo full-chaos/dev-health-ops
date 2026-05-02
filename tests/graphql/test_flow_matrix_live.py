@@ -57,6 +57,7 @@ async def _run_flow_matrix(dimension: str, days: int = 90):
         use_investment=False,
     )
     nodes_queries, edges_queries = compile_flow_matrix(req, org_id=TEST_ORG_ID)
+    assert CLICKHOUSE_URI is not None
     client = await get_global_client(CLICKHOUSE_URI)
     return await _execute_sankey_inner(client, nodes_queries, edges_queries)
 

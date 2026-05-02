@@ -67,7 +67,7 @@ def test_assignee_resolution_wins_over_fallback_distribution() -> None:
         assigned_teams=teams,
     )
     completed_at = datetime(2026, 4, 21, 15, 0, tzinfo=timezone.utc)
-    explicit_member = str(teams[0].members[0])
+    explicit_member = str((teams[0].members or [""])[0])
     work_items = [
         _build_work_item(
             index=1, completed_at=completed_at, assignees=[explicit_member]

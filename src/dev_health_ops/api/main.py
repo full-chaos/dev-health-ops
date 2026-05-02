@@ -390,7 +390,7 @@ app.add_exception_handler(
     RateLimitExceeded,
     _rate_limit_handler,
 )
-app.add_exception_handler(RequestValidationError, _validation_error_handler)
+app.add_exception_handler(RequestValidationError, _validation_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, _generic_exception_handler)
 
 _cors_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")

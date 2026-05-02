@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from types import SimpleNamespace
+from typing import TypedDict, Unpack
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,16 +13,30 @@ import pytest
 from dev_health_ops.api.services.auth import AuthenticatedUser, AuthService
 
 
-def _make_token(auth_service: AuthService, **overrides) -> str:
-    defaults = dict(
-        user_id=str(uuid.uuid4()),
-        email="ghost@example.com",
-        org_id=str(uuid.uuid4()),
-        role="member",
-        is_superuser=False,
+class _TokenOverrides(TypedDict, total=False):
+    user_id: str
+    email: str
+    org_id: str
+    role: str
+    is_superuser: bool
+    username: str | None
+    full_name: str | None
+    impersonating_user_id: str | None
+    expires_delta: timedelta | None
+
+
+def _make_token(auth_service: AuthService, **overrides: Unpack[_TokenOverrides]) -> str:
+    return auth_service.create_access_token(
+        user_id=overrides.get("user_id", str(uuid.uuid4())),
+        email=overrides.get("email", "ghost@example.com"),
+        org_id=overrides.get("org_id", str(uuid.uuid4())),
+        role=overrides.get("role", "member"),
+        is_superuser=overrides.get("is_superuser", False),
+        username=overrides.get("username"),
+        full_name=overrides.get("full_name"),
+        impersonating_user_id=overrides.get("impersonating_user_id"),
+        expires_delta=overrides.get("expires_delta"),
     )
-    defaults.update(overrides)
-    return auth_service.create_access_token(**defaults)
 
 
 @pytest.fixture
@@ -42,6 +58,13 @@ def _mock_session(execute_returns):
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
     return session
+
+
+def _detail_message(detail: object) -> str:
+    assert isinstance(detail, dict)
+    message = detail["message"]
+    assert isinstance(message, str)
+    return message
 
 
 @pytest.mark.asyncio
@@ -70,7 +93,7 @@ async def test_get_current_user_rejects_nonexistent_user(auth_service):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(authorization=header)
         assert exc_info.value.status_code == 401
-        assert "no longer exists" in exc_info.value.detail["message"]
+        assert "no longer exists" in _detail_message(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -101,7 +124,7 @@ async def test_get_current_user_rejects_inactive_user(auth_service):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(authorization=header)
         assert exc_info.value.status_code == 401
-        assert "disabled" in exc_info.value.detail["message"]
+        assert "disabled" in _detail_message(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

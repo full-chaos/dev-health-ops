@@ -236,13 +236,13 @@ class TestGitLabPrivateProjectAccess:
             # Test 3: Get project statistics
             print("\nTest 3: Fetching stats for private project...")
             try:
-                stats = connector.get_repo_stats(
+                stats = connector.get_repo_stats_by_project(
                     project_name=project_identifier, max_commits=10
                 )
             except APIException:
                 # Fallback to project_id if project_name doesn't work
                 if str(private_project).isdigit():
-                    stats = connector.get_repo_stats(
+                    stats = connector.get_repo_stats_by_project(
                         project_id=int(private_project), max_commits=10
                     )
                 else:
@@ -254,12 +254,12 @@ class TestGitLabPrivateProjectAccess:
             # Test 4: Get contributors
             print("\nTest 4: Fetching contributors for private project...")
             try:
-                contributors = connector.get_contributors(
+                contributors = connector.get_contributors_by_project(
                     project_name=project_identifier, max_contributors=5
                 )
             except APIException:
                 if str(private_project).isdigit():
-                    contributors = connector.get_contributors(
+                    contributors = connector.get_contributors_by_project(
                         project_id=int(private_project), max_contributors=5
                     )
                 else:

@@ -6,11 +6,16 @@ from dev_health_ops.metrics.quality import (
     compute_rework_churn_ratio,
     compute_single_owner_file_ratio,
 )
+from dev_health_ops.metrics.schemas import (
+    CommitStatRow,
+    PullRequestReviewRow,
+    PullRequestRow,
+)
 
 
 def test_rework_churn_ratio_proxy():
     repo_id = uuid.uuid4()
-    rows = [
+    rows: list[CommitStatRow] = [
         {
             "repo_id": repo_id,
             "commit_hash": "a1",
@@ -49,7 +54,7 @@ def test_rework_churn_ratio_proxy():
 
 def test_single_owner_file_ratio():
     repo_id = uuid.uuid4()
-    rows = [
+    rows: list[CommitStatRow] = [
         {
             "repo_id": repo_id,
             "commit_hash": "a1",
@@ -89,7 +94,7 @@ def test_single_owner_file_ratio():
 def test_review_load_top_reviewer_ratio():
     repo_id = uuid.uuid4()
     day = date(2025, 2, 1)
-    pr_rows = [
+    pr_rows: list[PullRequestRow] = [
         {
             "repo_id": repo_id,
             "number": 1,
@@ -99,7 +104,7 @@ def test_review_load_top_reviewer_ratio():
             "merged_at": datetime(2025, 2, 1, tzinfo=timezone.utc),
         }
     ]
-    review_rows = [
+    review_rows: list[PullRequestReviewRow] = [
         {
             "repo_id": repo_id,
             "number": 1,

@@ -271,7 +271,7 @@ class TestBackwardCompatibility:
         ]
 
         for model, column_name in models_and_columns:
-            column = model.__table__.columns[column_name]
+            column = model.__table__.columns[column_name]  # type: ignore[attr-defined]
             # Check that the column type has timezone=True
             assert column.type.timezone is True, (
                 f"{model.__name__}.{column_name} should have timezone=True"
@@ -289,7 +289,7 @@ class TestBackwardCompatibility:
         ]
 
         for model, column_name in models_and_columns:
-            column = model.__table__.columns[column_name]
+            column = model.__table__.columns[column_name]  # type: ignore[attr-defined]
             assert column.default is not None, (
                 f"{model.__name__}.{column_name} should have a default"
             )

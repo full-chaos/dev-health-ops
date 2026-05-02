@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def init_tracing() -> bool:
         return False
 
 
-def instrument_fastapi_app(app: object) -> None:
+def instrument_fastapi_app(app: Any) -> None:
     """Instrument a FastAPI app instance with OpenTelemetry.
 
     Must be called after init_tracing() and after the FastAPI app object

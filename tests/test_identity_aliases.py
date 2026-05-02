@@ -1,7 +1,7 @@
-from dev_health_ops.api.utils.identity_aliases import (
-    build_reverse_alias_map,
-    normalize_alias,
-)
+from dev_health_ops.api.utils import identity_aliases
+
+build_reverse_alias_map = identity_aliases.build_reverse_alias_map
+normalize_alias = identity_aliases.normalize_alias
 
 
 def test_normalize_alias_strips_whitespace():
@@ -17,7 +17,8 @@ def test_normalize_alias_handles_empty_string():
 
 
 def test_normalize_alias_handles_none():
-    assert normalize_alias(None) == ""
+    dynamic_normalize = getattr(identity_aliases, "normalize_alias")
+    assert dynamic_normalize(None) == ""
 
 
 def test_normalize_alias_combined():
@@ -47,7 +48,7 @@ def test_build_reverse_alias_map_normalizes_keys():
 
 
 def test_build_reverse_alias_map_empty():
-    aliases = {}
+    aliases: dict[str, list[str]] = {}
     reverse = build_reverse_alias_map(aliases)
     assert reverse == {}
 
@@ -56,7 +57,10 @@ def test_build_reverse_alias_map_skips_empty_aliases():
     aliases = {
         "john.doe@example.com": ["jdoe", "", "  ", None],
     }
-    reverse = build_reverse_alias_map(aliases)
+    dynamic_build_reverse_alias_map = getattr(
+        identity_aliases, "build_reverse_alias_map"
+    )
+    reverse = dynamic_build_reverse_alias_map(aliases)
 
     assert reverse["jdoe"] == "john.doe@example.com"
     assert "" not in reverse

@@ -34,20 +34,21 @@ from dev_health_ops.models.settings import (
     SyncConfiguration,
 )
 from dev_health_ops.models.users import Organization, User
+from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
-_TABLES = [
-    User.__table__,
-    Organization.__table__,
-    OrgLicense.__table__,
-    TierLimit.__table__,
-    IntegrationCredential.__table__,
-    SyncConfiguration.__table__,
-    ScheduledJob.__table__,
-    JobRun.__table__,
-]
+_TABLES = tables_of(
+    User,
+    Organization,
+    OrgLicense,
+    TierLimit,
+    IntegrationCredential,
+    SyncConfiguration,
+    ScheduledJob,
+    JobRun,
+)
 
 
 # ---------------------------------------------------------------------------

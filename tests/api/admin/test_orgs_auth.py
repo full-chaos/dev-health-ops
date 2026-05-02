@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization
+from tests._helpers import tables_of
 
 orgs_router_module = importlib.import_module("dev_health_ops.api.admin.routers.orgs")
 admin_common = importlib.import_module("dev_health_ops.api.admin.routers.common")
@@ -28,7 +29,7 @@ async def session_maker(tmp_path: Path):
     async with engine.begin() as conn:
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
-                sync_conn, tables=[Organization.__table__]
+                sync_conn, tables=tables_of(Organization)
             )
         )
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

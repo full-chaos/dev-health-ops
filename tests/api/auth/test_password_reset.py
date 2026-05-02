@@ -22,6 +22,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.password_reset_token import PasswordResetToken
 from dev_health_ops.models.refresh_token import RefreshToken
 from dev_health_ops.models.users import Membership, Organization, User
+from tests._helpers import tables_of
 
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 password_reset_module = importlib.import_module(
@@ -43,14 +44,14 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    User.__table__,
-                    Organization.__table__,
-                    Membership.__table__,
-                    AuditLog.__table__,
-                    RefreshToken.__table__,
-                    PasswordResetToken.__table__,
-                ],
+                tables=tables_of(
+                    User,
+                    Organization,
+                    Membership,
+                    AuditLog,
+                    RefreshToken,
+                    PasswordResetToken,
+                ),
             )
         )
 

@@ -241,7 +241,7 @@ class GitConnector(ABC):
             data = self.cache.get(key)
             if data:
                 logger.debug(f"Cache hit: {key}")
-                raw_data = json.loads(data)
+                raw_data = json.loads(data)  # type: ignore[arg-type]
                 if isinstance(raw_data, list):
                     return [model_class(**item) for item in raw_data]
                 return model_class(**raw_data)

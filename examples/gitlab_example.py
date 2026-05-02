@@ -69,7 +69,7 @@ def main():
         project_name = "gitlab-org/gitlab-foss"
         print(f"Getting contributors for project {project_name}...")
         try:
-            contributors = connector.get_contributors(
+            contributors = connector.get_contributors_by_project(
                 project_name=project_name, max_contributors=10
             )
             for contributor in contributors:
@@ -79,7 +79,7 @@ def main():
             # Fallback to project ID
             project_id = 278964
             print(f"  Trying with project ID {project_id}...")
-            contributors = connector.get_contributors(
+            contributors = connector.get_contributors_by_project(
                 project_id=project_id, max_contributors=10
             )
             for contributor in contributors:
@@ -89,9 +89,13 @@ def main():
         print("\n=== Example 4: Get Project Statistics ===")
         print(f"Getting stats for project {project_name}...")
         try:
-            stats = connector.get_repo_stats(project_name=project_name, max_commits=100)
+            stats = connector.get_repo_stats_by_project(
+                project_name=project_name, max_commits=100
+            )
         except Exception:
-            stats = connector.get_repo_stats(project_id=278964, max_commits=100)
+            stats = connector.get_repo_stats_by_project(
+                project_id=278964, max_commits=100
+            )
         print(f"  Total commits: {stats.total_commits}")
         print(f"  Additions: {stats.additions}")
         print(f"  Deletions: {stats.deletions}")
@@ -121,11 +125,11 @@ def main():
         file_path = "README.md"
         print(f"Getting blame for project {project_name}:{file_path}...")
         try:
-            blame = connector.get_file_blame(
+            blame = connector.get_file_blame_by_project(
                 project_name=project_name, file_path=file_path, ref="master"
             )
         except Exception:
-            blame = connector.get_file_blame(
+            blame = connector.get_file_blame_by_project(
                 project_id=278964, file_path=file_path, ref="master"
             )
         print(f"  File: {blame.file_path}")

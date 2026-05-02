@@ -20,6 +20,7 @@ from dev_health_ops.db import postgres_session_dependency
 from dev_health_ops.models.billing_audit import BillingAuditLog
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.users import Organization, User
+from tests._helpers import tables_of
 
 
 def _make_stripe_event(event_type: str, event_id: str = "evt_123") -> SimpleNamespace:
@@ -35,11 +36,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    User.__table__,
-                    Organization.__table__,
-                    BillingAuditLog.__table__,
-                ],
+                tables=tables_of(User, Organization, BillingAuditLog),
             )
         )
 

@@ -76,6 +76,7 @@ class TestParseJiraDatetime:
     def test_parse_naive_datetime_adds_utc(self):
         dt = datetime(2024, 1, 15, 10, 30, 0)
         result = parse_jira_datetime(dt)
+        assert result is not None
         assert result.tzinfo == timezone.utc
 
 

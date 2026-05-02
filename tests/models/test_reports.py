@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
 from dev_health_ops.models.settings import ScheduledJob
+from tests._helpers import tables_of
 
 
 @pytest_asyncio.fixture
@@ -20,11 +21,7 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    SavedReport.__table__,
-                    ReportRun.__table__,
-                    ScheduledJob.__table__,
-                ],
+                tables=tables_of(SavedReport, ReportRun, ScheduledJob),
             )
         )
 
@@ -52,6 +49,7 @@ async def test_saved_report_creation(session_maker):
         assert report.id is not None
         assert report.name == "Weekly Health"
         assert report.org_id == "org-1"
+        assert isinstance(report.report_plan, dict)
         assert report.report_plan["report_type"] == "weekly_health"
         assert report.is_active is True
         assert report.is_template is False
@@ -80,6 +78,8 @@ async def test_saved_report_clone(session_maker):
         assert cloned.name == "Monthly Review (Q1)"
         assert cloned.template_source_id == original.id
         assert cloned.is_template is False
+        assert isinstance(cloned.parameters, dict)
+        assert isinstance(cloned.report_plan, dict)
         assert cloned.parameters["team"] == "frontend"
         assert cloned.parameters["date_range"] == "last_month"
         assert cloned.report_plan["report_type"] == "monthly_review"

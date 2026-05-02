@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.modules["valkey"] = MagicMock()
 
 from dev_health_ops.api.main import health  # noqa: E402
+from dev_health_ops.api.models.schemas import HealthResponse  # noqa: E402
 from dev_health_ops.api.services.cache import (  # noqa: E402
     MemoryBackend,
     RedisBackend,
@@ -57,6 +58,8 @@ class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):
 
         # Call health endpoint
         response = await health()
+        self.assertIsInstance(response, HealthResponse)
+        assert isinstance(response, HealthResponse)
 
         # Verify services are in the response
         self.assertEqual(response.services["postgres"], "ok")

@@ -72,7 +72,7 @@ class GitLabCIAdapter(BasePipelineAdapter):
             return "hosted"
         return None
 
-    async def fetch_pipeline_data(
+    async def fetch_pipeline_data(  # type: ignore[override]
         self,
         *,
         project_id: int | str,

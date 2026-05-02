@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import cast
 
 import pytest
 import pytest_asyncio
@@ -14,6 +13,7 @@ from dev_health_ops.models.git import Base
 from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.subscriptions import Subscription
 from dev_health_ops.models.users import Organization
+from tests._helpers import tables_of
 
 
 @pytest_asyncio.fixture
@@ -33,11 +33,7 @@ async def session_maker(tmp_path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=[
-                    Organization.__table__,
-                    OrgLicense.__table__,
-                    Subscription.__table__,
-                ],
+                tables=tables_of(Organization, OrgLicense, Subscription),
             )
         )
 
@@ -88,11 +84,11 @@ async def test_trialing_org_gets_team_entitlements(session_maker):
         org = await _seed_org(session, tier="team", slug="trial-team")
         await _seed_trial_subscription(
             session,
-            org_id=cast(uuid.UUID, org.id),
+            org_id=org.id,
             trial_end=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
 
-        entitlements = await _get_entitlements(cast(uuid.UUID, org.id), session)
+        entitlements = await _get_entitlements(org.id, session)
 
     assert entitlements["tier"] == "team"
     assert entitlements["features"]["investment_view"] is True
@@ -103,7 +99,7 @@ async def test_trialing_org_gets_team_entitlements(session_maker):
 async def test_community_org_gets_community_entitlements(session_maker):
     async with session_maker() as session:
         org = await _seed_org(session, tier="community", slug="community-org")
-        entitlements = await _get_entitlements(cast(uuid.UUID, org.id), session)
+        entitlements = await _get_entitlements(org.id, session)
 
     assert entitlements["tier"] == "community"
     assert entitlements["features"]["investment_view"] is False
@@ -116,11 +112,11 @@ async def test_entitlements_include_is_trialing_true(session_maker):
         org = await _seed_org(session, tier="team", slug="trialing-flag")
         await _seed_trial_subscription(
             session,
-            org_id=cast(uuid.UUID, org.id),
+            org_id=org.id,
             trial_end=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
 
-        entitlements = await _get_entitlements(cast(uuid.UUID, org.id), session)
+        entitlements = await _get_entitlements(org.id, session)
 
     assert entitlements["is_trialing"] is True
 
@@ -133,10 +129,10 @@ async def test_entitlements_include_trial_ends_at(session_maker):
         org = await _seed_org(session, tier="team", slug="trial-end-date")
         await _seed_trial_subscription(
             session,
-            org_id=cast(uuid.UUID, org.id),
+            org_id=org.id,
             trial_end=trial_end,
         )
 
-        entitlements = await _get_entitlements(cast(uuid.UUID, org.id), session)
+        entitlements = await _get_entitlements(org.id, session)
 
     assert entitlements["trial_ends_at"] == trial_end.replace(tzinfo=None).isoformat()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,15 +42,15 @@ def test_github_reset_delay_seconds_parses_header(monkeypatch):
         "dev_health_ops.connectors.utils.graphql.time.time", lambda: 100
     )
 
-    assert _github_reset_delay_seconds(response) == pytest.approx(10.0)
+    assert _github_reset_delay_seconds(cast(Any, response)) == pytest.approx(10.0)
 
 
 def test_github_reset_delay_seconds_invalid_or_missing_header():
     missing = _FakeResponse(status_code=403)
     invalid = _FakeResponse(status_code=403, headers={"X-RateLimit-Reset": "abc"})
 
-    assert _github_reset_delay_seconds(missing) is None
-    assert _github_reset_delay_seconds(invalid) is None
+    assert _github_reset_delay_seconds(cast(Any, missing)) is None
+    assert _github_reset_delay_seconds(cast(Any, invalid)) is None
 
 
 def test_query_success(monkeypatch):

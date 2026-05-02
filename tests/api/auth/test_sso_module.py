@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 
+from fastapi.routing import APIRoute
+
 
 class TestSSOModuleStructure:
     """Verify the SSO sub-package is importable and exposes the right API."""
@@ -30,7 +32,9 @@ class TestSSOModuleStructure:
     def test_sso_endpoints_registered(self):
         from dev_health_ops.api.auth.sso import sso_router
 
-        paths = {route.path for route in sso_router.routes}
+        paths = {
+            route.path for route in sso_router.routes if isinstance(route, APIRoute)
+        }
         # SAML
         assert "/saml/{provider_id}/initiate" in paths
         assert "/saml/{provider_id}/acs" in paths
@@ -49,7 +53,7 @@ class TestSSOModuleStructure:
         """The main auth router should include SSO routes via include_router."""
         from dev_health_ops.api.auth.router import router
 
-        paths = {route.path for route in router.routes}
+        paths = {route.path for route in router.routes if isinstance(route, APIRoute)}
         # SSO routes should appear under the parent prefix
         assert "/api/v1/auth/sso/providers" in paths
         assert "/api/v1/auth/saml/{provider_id}/acs" in paths
@@ -58,7 +62,7 @@ class TestSSOModuleStructure:
         """Core auth endpoints (login, register, etc.) remain on the parent router."""
         from dev_health_ops.api.auth.router import router
 
-        paths = {route.path for route in router.routes}
+        paths = {route.path for route in router.routes if isinstance(route, APIRoute)}
         assert "/api/v1/auth/login" in paths
         assert "/api/v1/auth/register" in paths
         assert "/api/v1/auth/me" in paths

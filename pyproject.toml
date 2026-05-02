@@ -190,9 +190,11 @@ module = [
   "signxml.*",
   "yaml",
   "yaml.*",
-  "requests",
-  "requests.*",
   "tabulate",
   "tabulate.*",
+  "clickhouse_connect",
+  "clickhouse_connect.*",
+  "motor",
+  "motor.*",
 ]
 ignore_missing_imports = true

@@ -127,7 +127,7 @@ class WorkItemMixin(SQLAlchemyStoreMixinProtocol):
                     "completed_at": get("completed_at"),
                     "closed_at": get("closed_at"),
                     "labels": get("labels") or [],
-                    "story_points": float(get("story_points"))  # type: ignore[arg-type]
+                    "story_points": float(get("story_points"))  # type: ignore[arg-type,unused-ignore]
                     if get("story_points") is not None
                     else None,
                     "sprint_id": str(get("sprint_id") or ""),

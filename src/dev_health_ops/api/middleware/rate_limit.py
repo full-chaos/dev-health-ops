@@ -119,4 +119,4 @@ if Limiter is not None:
             "Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "..."
         )
 else:
-    limiter = _NoOpLimiter()
+    limiter = _NoOpLimiter()  # type: ignore[assignment,unused-ignore]

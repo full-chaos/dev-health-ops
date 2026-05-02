@@ -3,21 +3,23 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
+
+if TYPE_CHECKING:
+    from .users import Organization
 
 
 class SSOProtocol(str, Enum):
@@ -38,39 +40,39 @@ class SSOProviderStatus(str, Enum):
 class SSOProvider(Base):
     __tablename__ = "sso_providers"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    org_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    name = Column(Text, nullable=False)
-    protocol = Column(Text, nullable=False, index=True)
-    status = Column(
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    protocol: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    status: Mapped[str | None] = mapped_column(
         Text,
         nullable=False,
         default=SSOProviderStatus.PENDING_SETUP.value,
     )
 
     # Common SSO settings
-    is_default = Column(
+    is_default: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
     )
-    allow_idp_initiated = Column(
+    allow_idp_initiated: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
     )
-    auto_provision_users = Column(
+    auto_provision_users: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=True,
     )
-    default_role = Column(
+    default_role: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="member",
@@ -97,43 +99,49 @@ class SSOProvider(Base):
     # - scopes: Requested scopes
     # - claim_mapping: Map OIDC claims to user fields
 
-    config = Column(
+    config: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
     )
-    encrypted_secrets = Column(
+    encrypted_secrets: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
     )
 
     # Domain restrictions for this provider
-    allowed_domains = Column(
+    allowed_domains: Mapped[list[str] | None] = mapped_column(
         JSON,
         nullable=True,
         default=list,
     )
 
     # Last sync/validation timestamps
-    last_metadata_sync_at = Column(DateTime(timezone=True), nullable=True)
-    last_login_at = Column(DateTime(timezone=True), nullable=True)
-    last_error = Column(Text, nullable=True)
-    last_error_at = Column(DateTime(timezone=True), nullable=True)
+    last_metadata_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    organization = relationship("Organization")
+    organization: Mapped[Organization] = relationship("Organization")
 
     __table_args__ = (
         UniqueConstraint("org_id", "name", name="uq_sso_provider_org_name"),

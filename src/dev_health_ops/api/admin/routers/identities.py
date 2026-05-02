@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +29,22 @@ from .common import get_session
 router = APIRouter()
 
 
+def _identity_mapping_response(mapping: object) -> IdentityMappingResponse:
+    return IdentityMappingResponse.model_validate(
+        {
+            "id": str(getattr(mapping, "id")),
+            "canonical_id": getattr(mapping, "canonical_id"),
+            "display_name": getattr(mapping, "display_name"),
+            "email": getattr(mapping, "email"),
+            "provider_identities": getattr(mapping, "provider_identities") or {},
+            "team_ids": list(getattr(mapping, "team_ids") or []),
+            "is_active": getattr(mapping, "is_active"),
+            "created_at": getattr(mapping, "created_at"),
+            "updated_at": getattr(mapping, "updated_at"),
+        }
+    )
+
+
 @router.get("/identities", response_model=list[IdentityMappingResponse])
 async def list_identities(
     active_only: bool = True,
@@ -35,20 +53,7 @@ async def list_identities(
 ) -> list[IdentityMappingResponse]:
     svc = IdentityMappingService(session, org_id)
     mappings = await svc.list_all(active_only=active_only)
-    return [
-        IdentityMappingResponse(
-            id=str(m.id),
-            canonical_id=m.canonical_id,
-            display_name=m.display_name,
-            email=m.email,
-            provider_identities=m.provider_identities,
-            team_ids=m.team_ids,
-            is_active=m.is_active,
-            created_at=m.created_at,
-            updated_at=m.updated_at,
-        )
-        for m in mappings
-    ]
+    return [_identity_mapping_response(mapping) for mapping in mappings]
 
 
 @router.post("/identities", response_model=IdentityMappingResponse)
@@ -65,17 +70,7 @@ async def create_or_update_identity(
         provider_identities=payload.provider_identities,
         team_ids=payload.team_ids,
     )
-    return IdentityMappingResponse(
-        id=str(mapping.id),
-        canonical_id=mapping.canonical_id,
-        display_name=mapping.display_name,
-        email=mapping.email,
-        provider_identities=mapping.provider_identities,
-        team_ids=mapping.team_ids,
-        is_active=mapping.is_active,
-        created_at=mapping.created_at,
-        updated_at=mapping.updated_at,
-    )
+    return _identity_mapping_response(mapping)
 
 
 @router.get(
@@ -102,13 +97,15 @@ async def discover_team_members(
             detail=f"No credentials found for provider '{provider}'",
         )
 
-    config = credential.config or {}
+    config: dict[str, Any] = getattr(credential, "config") or {}
     membership_svc = TeamMembershipService(session, org_id)
-    provider_team_id = str((team.extra_data or {}).get("provider_team_id") or team_id)
+    team_extra_data: dict[str, Any] = dict(getattr(team, "extra_data") or {})
+    provider_team_id = str(team_extra_data.get("provider_team_id") or team_id)
 
     if provider == "github":
         token = decrypted.get("token")
-        org_name = config.get("org")
+        org_name_value = config.get("org")
+        org_name = org_name_value if isinstance(org_name_value, str) else None
         team_slug = provider_team_id.removeprefix("gh:")
         if not token or not org_name:
             raise HTTPException(
@@ -123,7 +120,8 @@ async def discover_team_members(
     elif provider == "gitlab":
         token = decrypted.get("token")
         group_path = provider_team_id.removeprefix("gl:")
-        url = config.get("url", "https://gitlab.com")
+        url_value = config.get("url", "https://gitlab.com")
+        url = url_value if isinstance(url_value, str) else "https://gitlab.com"
         if not token or not group_path:
             raise HTTPException(
                 status_code=400,
@@ -137,12 +135,17 @@ async def discover_team_members(
     else:
         email = decrypted.get("email")
         api_token = decrypted.get("api_token") or decrypted.get("token")
-        jira_url = config.get("url") or decrypted.get("url")
+        jira_config_url = config.get("url")
+        jira_url = jira_config_url if isinstance(jira_config_url, str) else None
+        if jira_url is None:
+            decrypted_url = decrypted.get("url")
+            jira_url = decrypted_url if isinstance(decrypted_url, str) else None
         project_key = provider_team_id
         if ":" in project_key:
             project_key = project_key.split(":", 1)[1]
-        if not project_key and team.project_keys:
-            project_key = team.project_keys[0]
+        team_project_keys = list(getattr(team, "project_keys") or [])
+        if not project_key and team_project_keys:
+            project_key = str(team_project_keys[0])
         if not email or not api_token or not jira_url or not project_key:
             raise HTTPException(
                 status_code=400,
@@ -189,7 +192,9 @@ async def confirm_team_members(
     membership_svc = TeamMembershipService(session, org_id)
     result = await membership_svc.confirm_links(team_id=team_id, links=payload.links)
     await session.commit()
-    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
+    getattr(sync_teams_to_analytics, "apply_async")(
+        kwargs={"org_id": org_id}, queue="metrics"
+    )
     return ConfirmMembersResponse(**result)
 
 
@@ -208,10 +213,12 @@ async def infer_team_members_from_jira_activity(
     if team is None:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    extra_data = team.extra_data or {}
-    project_key = next(iter(team.project_keys or []), None)
+    extra_data: dict[str, Any] = dict(getattr(team, "extra_data") or {})
+    team_project_keys = list(getattr(team, "project_keys") or [])
+    project_key = str(team_project_keys[0]) if team_project_keys else None
     if not project_key and extra_data.get("provider_type") == "jira":
-        project_key = extra_data.get("provider_team_id")
+        provider_team_id = extra_data.get("provider_team_id")
+        project_key = provider_team_id if isinstance(provider_team_id, str) else None
     if not project_key:
         raise HTTPException(
             status_code=400,
@@ -227,10 +234,14 @@ async def infer_team_members_from_jira_activity(
             detail="No credentials found for provider 'jira'",
         )
 
-    config = credential.config or {}
+    config: dict[str, Any] = getattr(credential, "config") or {}
     email = decrypted.get("email")
     api_token = decrypted.get("api_token") or decrypted.get("token")
-    jira_url = config.get("url") or decrypted.get("url")
+    jira_config_url = config.get("url")
+    jira_url = jira_config_url if isinstance(jira_config_url, str) else None
+    if jira_url is None:
+        decrypted_url = decrypted.get("url")
+        jira_url = decrypted_url if isinstance(decrypted_url, str) else None
     if not email or not api_token or not jira_url:
         raise HTTPException(
             status_code=400,
@@ -252,10 +263,12 @@ async def infer_team_members_from_jira_activity(
             "jira", member.account_id
         )
         if matched is not None:
-            if not member.display_name and matched.display_name:
-                member.display_name = matched.display_name
-            if not member.email and matched.email:
-                member.email = matched.email
+            matched_display_name = getattr(matched, "display_name")
+            if not member.display_name and matched_display_name:
+                member.display_name = str(matched_display_name)
+            matched_email = getattr(matched, "email")
+            if not member.email and matched_email:
+                member.email = str(matched_email)
 
     return JiraActivityInferenceResponse(
         team_id=team_id,
@@ -288,5 +301,7 @@ async def confirm_inferred_team_members(
         raise HTTPException(status_code=400, detail=str(exc))
 
     await session.commit()
-    sync_teams_to_analytics.apply_async(kwargs={"org_id": org_id}, queue="metrics")
+    getattr(sync_teams_to_analytics, "apply_async")(
+        kwargs={"org_id": org_id}, queue="metrics"
+    )
     return ConfirmInferredMembersResponse(**result)

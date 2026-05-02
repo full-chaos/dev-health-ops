@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dev_health_ops.credentials.types import GitHubCredentials
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
@@ -43,6 +43,36 @@ from dev_health_ops.utils import (
 _unused_BATCH_COLLECTOR_TYPES = (SyncBatchCollector, AsyncBatchCollector)
 
 if CONNECTORS_AVAILABLE:
+    import github as _github_module
+
+    import dev_health_ops.connectors as _connectors_module
+    import dev_health_ops.connectors.models as _connector_models_module
+    import dev_health_ops.connectors.utils as _connector_utils_module
+
+    RuntimeBatchResult = _connectors_module.BatchResult
+    RuntimeConnectorExceptionType = _connectors_module.ConnectorException
+    RuntimeGitHubConnector = _connectors_module.GitHubConnector
+    RuntimeRepository = _connector_models_module.Repository
+    RuntimeRateLimitConfig = _connector_utils_module.RateLimitConfig
+    RuntimeRateLimitGate = _connector_utils_module.RateLimitGate
+    RuntimeRateLimitExceededExceptionType = _github_module.RateLimitExceededException
+else:
+    RuntimeBatchResult = Any
+    RuntimeGitHubConnector = Any
+    RuntimeRepository = Any
+    RuntimeRateLimitConfig = Any
+    RuntimeRateLimitGate = Any
+
+    class _RuntimeConnectorException(Exception):
+        pass
+
+    class _RuntimeRateLimitExceededException(Exception):
+        pass
+
+    RuntimeConnectorExceptionType = _RuntimeConnectorException
+    RuntimeRateLimitExceededExceptionType = _RuntimeRateLimitExceededException
+
+if TYPE_CHECKING:
     from github import RateLimitExceededException
 
     from dev_health_ops.connectors import (
@@ -53,13 +83,13 @@ if CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
 else:
-    BatchResult = None  # type: ignore
-    GitHubConnector = None  # type: ignore
-    ConnectorException = Exception
-    Repository = None  # type: ignore
-    RateLimitConfig = None  # type: ignore
-    RateLimitGate = None  # type: ignore
-    RateLimitExceededException = Exception
+    BatchResult = RuntimeBatchResult
+    GitHubConnector = RuntimeGitHubConnector
+    Repository = RuntimeRepository
+    RateLimitConfig = RuntimeRateLimitConfig
+    RateLimitGate = RuntimeRateLimitGate
+    ConnectorException = RuntimeConnectorExceptionType
+    RateLimitExceededException = RuntimeRateLimitExceededExceptionType
 
 
 # --- GitHub Sync Helpers ---
@@ -252,7 +282,7 @@ def _fetch_github_prs_sync(connector, owner, repo_name, repo_id, max_prs):
 
 
 def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
-    runs = []
+    runs: list[CiPipelineRun] = []
     if not hasattr(gh_repo, "get_workflow_runs"):
         if not hasattr(gh_repo, "get_workflows"):
             return runs
@@ -299,7 +329,7 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
 
 
 def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
-    deployments = []
+    deployments: list[Deployment] = []
     if not hasattr(gh_repo, "get_deployments"):
         return deployments
     release_objects = []
@@ -344,7 +374,7 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
 
 
 def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
-    incidents = []
+    incidents: list[Incident] = []
     if not hasattr(gh_repo, "get_issues"):
         return incidents
     try:
@@ -547,12 +577,16 @@ def _enrich_prs_with_reviews_batch(
         if not reviews:
             continue
 
-        first_review_at = None
+        first_review_at: datetime | None = None
         reviews_count = 0
         changes_requested_count = 0
 
         for r in reviews:
-            review_at = r.submitted_at or pr_obj.created_at
+            review_at = _coerce_datetime(r.submitted_at) or _coerce_datetime(
+                pr_obj.created_at
+            )
+            if review_at is None:
+                review_at = datetime.now(timezone.utc)
             if first_review_at is None or review_at < first_review_at:
                 first_review_at = review_at
             if r.state == "CHANGES_REQUESTED":
@@ -569,15 +603,15 @@ def _enrich_prs_with_reviews_batch(
                 )
             )
 
-        # Mutate the pr_obj fields that require review data
-        object.__setattr__(pr_obj, "first_review_at", first_review_at) if hasattr(
-            type(pr_obj), "__dataclass_fields__"
-        ) else None
         try:
-            pr_obj.first_review_at = first_review_at  # type: ignore[misc]
-            pr_obj.reviews_count = reviews_count  # type: ignore[misc]
-            pr_obj.changes_requested_count = changes_requested_count  # type: ignore[misc]
-        except AttributeError:
+            object.__setattr__(pr_obj, "first_review_at", first_review_at)
+            object.__setattr__(pr_obj, "reviews_count", reviews_count)
+            object.__setattr__(
+                pr_obj,
+                "changes_requested_count",
+                changes_requested_count,
+            )
+        except (AttributeError, TypeError):
             pass  # frozen dataclass; fields stay at default
 
     return all_review_objects
@@ -609,6 +643,8 @@ def _sync_github_prs_to_store(
     gh_repo = connector.github.get_repo(f"{owner}/{repo_name}")
 
     gate = BaseGitProcessor.ensure_gate(gate)
+    if gate is None:
+        raise RuntimeError("Rate limit gate unavailable")
 
     # Phase 1: collect all PR objects without per-PR review/comment API calls
     pr_objects, raw_gh_prs = _collect_github_pr_objects(
@@ -751,6 +787,7 @@ async def _backfill_github_missing_data(
             )
 
     if needs.commit_stats:
+        commit_count = 0
         try:
             logging.info(
                 "Backfilling commit stats for %s...",
@@ -760,7 +797,6 @@ async def _backfill_github_missing_data(
             async with AsyncBatchCollector(
                 ingestion_sink.insert_git_commit_stats
             ) as stats_collector:
-                commit_count = 0
                 for commit in commits_iter:
                     if max_commits and commit_count >= max_commits:
                         break
@@ -802,6 +838,7 @@ async def _backfill_github_missing_data(
             )
 
     if needs.blame and file_paths:
+        processed_files = 0
         try:
             logging.info(
                 "Backfilling blame for %d files in %s...",
@@ -811,7 +848,6 @@ async def _backfill_github_missing_data(
             async with AsyncBatchCollector(
                 ingestion_sink.insert_blame_data
             ) as blame_collector:
-                processed_files = 0
                 for path in file_paths:
                     try:
                         blame = connector.get_file_blame(
@@ -936,7 +972,7 @@ async def process_github_repo(
                 ingestion_sink=ingestion_sink,
                 connector=connector,
                 db_repo=db_repo,
-                repo_full_name=db_repo.repo,
+                repo_full_name=repo_info.full_name,
                 default_branch=repo_info.default_branch,
                 max_commits=max_commits,
                 blame_only=True,
@@ -1092,14 +1128,14 @@ async def process_github_repo(
 async def process_github_repos_batch(
     store: Any,
     token: str | GitHubCredentials,
-    org_name: str = None,
-    user_name: str = None,
-    pattern: str = None,
+    org_name: str | None = None,
+    user_name: str | None = None,
+    pattern: str | None = None,
     batch_size: int = 10,
     max_concurrent: int = 4,
     rate_limit_delay: float = 1.0,
-    max_commits_per_repo: int = None,
-    max_repos: int = None,
+    max_commits_per_repo: int | None = None,
+    max_repos: int | None = None,
     use_async: bool = False,
     sync_git: bool = True,
     sync_prs: bool = True,
@@ -1195,6 +1231,7 @@ async def process_github_repos_batch(
         gh_repo = None
         if sync_git:
             # Fetch commits and stats to populate git_commits/git_commit_stats.
+            commit_limit: int | None
             if max_commits_per_repo is None and since is None:
                 commit_limit = 100
             else:
@@ -1235,7 +1272,10 @@ async def process_github_repos_batch(
             # Fetch ALL PRs for batch-processed repos, storing in batches.
             try:
                 owner, repo_name = _split_full_name(repo_info.full_name)
-                async with pr_semaphore:
+                pr_semaphore_active = pr_semaphore
+                if pr_semaphore_active is None:
+                    raise RuntimeError("PR semaphore unavailable")
+                async with pr_semaphore_active:
                     await loop.run_in_executor(
                         None,
                         _sync_github_prs_to_store,

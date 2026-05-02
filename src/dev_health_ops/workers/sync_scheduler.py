@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.sync_batch import _is_batch_eligible, dispatch_batch_sync
 from dev_health_ops.workers.sync_runtime import run_sync_config
+from dev_health_ops.workers.task_utils import _as_datetime, _as_str
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,12 @@ def dispatch_scheduled_syncs(self) -> dict:
                     skipped += 1
                     continue
 
-                cron_expr = job.schedule_cron if job else "0 * * * *"
-                last_sync = config.last_sync_at or config.created_at
+                cron_expr = _as_str(job.schedule_cron) if job else "0 * * * *"
+                last_sync = (
+                    config.last_sync_at
+                    if isinstance(config.last_sync_at, datetime)
+                    else _as_datetime(config.created_at)
+                )
                 cron = croniter(cron_expr, last_sync)
                 next_run = cron.get_next(datetime)
 

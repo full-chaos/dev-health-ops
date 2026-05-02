@@ -11,6 +11,11 @@ from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import (
     _GIT_TARGETS,
     _WORK_ITEM_TARGETS,
+    _as_dict,
+    _as_int,
+    _as_str,
+    _as_str_list,
+    _as_uuid,
     _decrypt_credential_sync,
     _extract_owner_repo,
     _extract_provider_token,
@@ -102,7 +107,7 @@ def _sync_launchdarkly_feature_flags(
             ]
 
         sink = ClickHouseMetricsSink(db_url)
-        sink.org_id = org_id  # type: ignore[attr-defined]
+        setattr(sink, "org_id", org_id)
         builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
         try:
             sink.write_feature_flags(flags)
@@ -217,7 +222,7 @@ def _sync_gitlab_feature_flags(
     )
 
     sink = ClickHouseMetricsSink(db_url)
-    sink.org_id = org_id  # type: ignore[attr-defined]
+    setattr(sink, "org_id", org_id)
     builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
     try:
         sink.write_feature_flags(flags)
@@ -379,10 +384,10 @@ def run_sync_config(
             if config is None:
                 raise ValueError(f"Sync configuration not found: {config_id}")
 
-            provider = (config.provider or "").lower()
-            config_name = config.name
-            sync_targets = list(config.sync_targets or [])
-            sync_options = dict(config.sync_options or {})
+            provider = _as_str(config.provider).lower()
+            config_name = _as_str(config.name)
+            sync_targets = _as_str_list(config.sync_targets)
+            sync_options = _as_dict(config.sync_options)
 
             if config.credential_id:
                 credential = (
@@ -413,35 +418,35 @@ def run_sync_config(
             )
             if job is None:
                 job = ScheduledJob(
-                    name=f"sync-config-{config.id}",
+                    name=f"sync-config-{_as_uuid(config.id)}",
                     job_type="sync",
                     schedule_cron="0 * * * *",
                     org_id=org_id,
                     job_config={
                         "provider": provider,
-                        "sync_config_id": str(config.id),
+                        "sync_config_id": str(_as_uuid(config.id)),
                     },
-                    sync_config_id=config.id,
+                    sync_config_id=_as_uuid(config.id),
                     status=JobStatus.ACTIVE.value,
                 )
                 session.add(job)
                 session.flush()
 
-            job_id = job.id
+            job_id = _as_uuid(job.id)
 
             run = JobRun(
-                job_id=job.id,
+                job_id=job_id,
                 triggered_by=triggered_by,
                 status=JobRunStatus.PENDING.value,
             )
             session.add(run)
             session.flush()
-            run_id = run.id
+            run_id = _as_uuid(run.id)
 
-            run.status = JobRunStatus.RUNNING.value
-            run.started_at = started_at
-            job.is_running = True
-            job.last_run_at = started_at
+            setattr(run, "status", JobRunStatus.RUNNING.value)
+            setattr(run, "started_at", started_at)
+            setattr(job, "is_running", True)
+            setattr(job, "last_run_at", started_at)
             session.flush()
 
         result_payload: dict[str, Any] = {
@@ -612,13 +617,13 @@ def run_sync_config(
         duration_seconds = int((completed_at - started_at).total_seconds())
 
         with get_postgres_session_sync() as session:
-            run = session.query(JobRun).filter(JobRun.id == run_id).one_or_none()
-            job = (
+            run_record = session.query(JobRun).filter(JobRun.id == run_id).one_or_none()
+            job_record = (
                 session.query(ScheduledJob)
                 .filter(ScheduledJob.id == job_id)
                 .one_or_none()
             )
-            config = (
+            config_record = (
                 session.query(SyncConfiguration)
                 .filter(
                     SyncConfiguration.id == config_uuid,
@@ -627,25 +632,25 @@ def run_sync_config(
                 .one_or_none()
             )
 
-            if run:
-                run.status = JobRunStatus.SUCCESS.value
-                run.completed_at = completed_at
-                run.duration_seconds = duration_seconds
-                run.result = result_payload
-                run.error = None
+            if run_record:
+                setattr(run_record, "status", JobRunStatus.SUCCESS.value)
+                setattr(run_record, "completed_at", completed_at)
+                setattr(run_record, "duration_seconds", duration_seconds)
+                setattr(run_record, "result", result_payload)
+                setattr(run_record, "error", None)
 
-            if job:
-                job.is_running = False
-                job.last_run_status = JobRunStatus.SUCCESS.value
-                job.last_run_duration_seconds = duration_seconds
-                job.last_run_error = None
-                job.run_count = int(job.run_count or 0) + 1
+            if job_record:
+                setattr(job_record, "is_running", False)
+                setattr(job_record, "last_run_status", JobRunStatus.SUCCESS.value)
+                setattr(job_record, "last_run_duration_seconds", duration_seconds)
+                setattr(job_record, "last_run_error", None)
+                setattr(job_record, "run_count", _as_int(job_record.run_count) + 1)
 
-            if config:
-                config.last_sync_at = completed_at
-                config.last_sync_success = True
-                config.last_sync_error = None
-                config.last_sync_stats = result_payload
+            if config_record:
+                setattr(config_record, "last_sync_at", completed_at)
+                setattr(config_record, "last_sync_success", True)
+                setattr(config_record, "last_sync_error", None)
+                setattr(config_record, "last_sync_stats", result_payload)
 
             session.flush()
 
@@ -680,15 +685,15 @@ def run_sync_config(
         try:
             if run_id is not None:
                 with get_postgres_session_sync() as session:
-                    run = (
+                    run_record = (
                         session.query(JobRun).filter(JobRun.id == run_id).one_or_none()
                     )
-                    job = (
+                    job_record = (
                         session.query(ScheduledJob)
                         .filter(ScheduledJob.id == job_id)
                         .one_or_none()
                     )
-                    config = (
+                    config_record = (
                         session.query(SyncConfiguration)
                         .filter(
                             SyncConfiguration.id == config_uuid,
@@ -697,24 +702,36 @@ def run_sync_config(
                         .one_or_none()
                     )
 
-                    if run:
-                        run.status = JobRunStatus.FAILED.value
-                        run.completed_at = completed_at
-                        run.duration_seconds = duration_seconds
-                        run.error = str(exc)
+                    if run_record:
+                        setattr(run_record, "status", JobRunStatus.FAILED.value)
+                        setattr(run_record, "completed_at", completed_at)
+                        setattr(run_record, "duration_seconds", duration_seconds)
+                        setattr(run_record, "error", str(exc))
 
-                    if job:
-                        job.is_running = False
-                        job.last_run_status = JobRunStatus.FAILED.value
-                        job.last_run_duration_seconds = duration_seconds
-                        job.last_run_error = str(exc)
-                        job.run_count = int(job.run_count or 0) + 1
-                        job.failure_count = int(job.failure_count or 0) + 1
+                    if job_record:
+                        setattr(job_record, "is_running", False)
+                        setattr(
+                            job_record, "last_run_status", JobRunStatus.FAILED.value
+                        )
+                        setattr(
+                            job_record,
+                            "last_run_duration_seconds",
+                            duration_seconds,
+                        )
+                        setattr(job_record, "last_run_error", str(exc))
+                        setattr(
+                            job_record, "run_count", _as_int(job_record.run_count) + 1
+                        )
+                        setattr(
+                            job_record,
+                            "failure_count",
+                            _as_int(job_record.failure_count) + 1,
+                        )
 
-                    if config:
-                        config.last_sync_at = completed_at
-                        config.last_sync_success = False
-                        config.last_sync_error = str(exc)
+                    if config_record:
+                        setattr(config_record, "last_sync_at", completed_at)
+                        setattr(config_record, "last_sync_success", False)
+                        setattr(config_record, "last_sync_error", str(exc))
 
                     session.flush()
         except Exception as update_error:

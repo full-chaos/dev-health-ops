@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.models.teams import Team
@@ -15,6 +14,12 @@ from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import add_sink_arg, validate_sink
 
 DEFAULT_TEAM_MAPPING_PATH = Path("src/dev_health_ops/config/team_mapping.yaml")
+
+
+def _yaml_safe_load(stream: Any) -> Any:
+    yaml_module = importlib.import_module("yaml")
+    safe_load = getattr(yaml_module, "safe_load")
+    return safe_load(stream)
 
 
 def _norm_key(value: str) -> str:
@@ -131,7 +136,7 @@ def load_team_resolver(path: Path | None = None) -> TeamResolver:
 
     try:
         with path.open("r", encoding="utf-8") as handle:
-            payload = yaml.safe_load(handle) or {}
+            payload = _yaml_safe_load(handle) or {}
     except FileNotFoundError:
         payload = {}
 
@@ -238,8 +243,6 @@ def sync_teams(ns: argparse.Namespace) -> int:
     ops_links: list[JiraProjectOpsTeamLink] = []
 
     if provider == "config":
-        import yaml
-
         path = Path(ns.path) if ns.path else DEFAULT_TEAM_MAPPING_PATH
         if not path.exists():
             logging.error(f"Teams config file not found at {path}")
@@ -247,7 +250,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
 
         try:
             with path.open("r", encoding="utf-8") as handle:
-                payload = yaml.safe_load(handle) or {}
+                payload = _yaml_safe_load(handle) or {}
         except Exception as e:
             logging.error(f"Failed to parse teams config: {e}")
             return 1
@@ -271,14 +274,14 @@ def sync_teams(ns: argparse.Namespace) -> int:
         from dev_health_ops.providers.jira.client import JiraClient
 
         try:
-            client = JiraClient.from_env()
+            jira_client = JiraClient.from_env()
         except ValueError as e:
             logging.error(f"Jira configuration error: {e}")
             return 1
 
         try:
             logging.info("Fetching projects from Jira...")
-            projects = client.get_all_projects()
+            projects = jira_client.get_all_projects()
             for p in projects:
                 # Use project Key as ID (stable), Name as Name
                 key = p.get("key")
@@ -304,7 +307,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
             logging.error(f"Failed to fetch Jira projects: {e}")
             return 1
         finally:
-            client.close()
+            jira_client.close()
 
     elif provider == "jira-ops":
         from atlassian.graph.api.jira_projects import (
@@ -325,10 +328,10 @@ def sync_teams(ns: argparse.Namespace) -> int:
         project_types = _parse_project_types(os.getenv("JIRA_OPS_PROJECT_TYPES"))
         ops_team_cache: dict[str, Team] = {}
 
-        client = build_atlassian_graphql_client()
+        atlassian_client = build_atlassian_graphql_client()
         try:
             for project in iter_projects_with_opsgenie_linkable_teams(
-                client,
+                atlassian_client,
                 cloud_id=cloud_id,
                 project_types=project_types,
             ):
@@ -360,7 +363,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
             logging.error(f"Failed to fetch Jira ops teams: {e}")
             return 1
         finally:
-            client.close()
+            atlassian_client.close()
 
     elif provider == "synthetic":
         from dev_health_ops.fixtures.generator import SyntheticDataGenerator
@@ -455,25 +458,28 @@ def sync_teams(ns: argparse.Namespace) -> int:
         from dev_health_ops.providers.linear.client import LinearClient
 
         try:
-            client = LinearClient.from_env()
+            linear_client = LinearClient.from_env()
         except ValueError as e:
             logging.error(f"Linear configuration error: {e}")
             return 1
         try:
             logging.info("Fetching teams from Linear...")
-            for t in client.iter_teams():
+            for t in linear_client.iter_teams():
                 if t.get("archivedAt"):
                     continue
                 team_key = t.get("key")
                 if not team_key:
                     continue
                 team_id = f"linear:{team_key}"
-                name = t.get("name")
+                name = str(t.get("name") or team_key)
                 description = t.get("description")
+                description_text = str(description) if description else None
                 members_nodes = (t.get("members", {}) or {}).get("nodes", [])
                 if t.get("members", {}).get("pageInfo", {}).get("hasNextPage"):
                     try:
-                        full_members = client.get_team_members(t.get("id"))
+                        full_members = linear_client.get_team_members(
+                            str(t.get("id") or "")
+                        )
                     except Exception:
                         full_members = members_nodes
                     members_source = full_members
@@ -485,7 +491,10 @@ def sync_teams(ns: argparse.Namespace) -> int:
                 members = [m for m in members if m]
                 teams_data.append(
                     Team(
-                        id=team_id, name=name, description=description, members=members
+                        id=team_id,
+                        name=name,
+                        description=description_text,
+                        members=members,
                     )
                 )
             logging.info(f"Fetched {len(teams_data)} teams from Linear.")
@@ -493,9 +502,9 @@ def sync_teams(ns: argparse.Namespace) -> int:
             logging.error(f"Failed to fetch Linear teams: {e}")
             return 1
         finally:
-            if hasattr(client, "close"):
+            if hasattr(linear_client, "close"):
                 try:
-                    client.close()
+                    linear_client.close()
                 except Exception:  # noqa: BLE001 — best-effort close, ignore errors
                     pass
     elif provider == "ms-teams":
@@ -577,6 +586,8 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> None:
     from dev_health_ops.models.settings import TeamMapping
 
     org_id = getattr(ns, "org", None)
+    if org_id is None:
+        return
 
     try:
         with get_postgres_session_sync() as session:
@@ -586,23 +597,23 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> None:
                     continue
 
                 existing = session.execute(
-                    select(TeamMapping).where(
-                        TeamMapping.org_id == org_id,
-                        TeamMapping.team_id == team_id,
-                    )
+                    select(TeamMapping).filter_by(org_id=org_id, team_id=team_id)
                 ).scalar_one_or_none()
 
+                team_name = str(getattr(team, "name", team_id) or team_id)
+                team_description = getattr(team, "description", None)
+
                 if existing:
-                    existing.name = getattr(team, "name", team_id)
-                    existing.description = getattr(team, "description", None)
-                    existing.is_active = True
+                    setattr(existing, "name", team_name)
+                    setattr(existing, "description", team_description)
+                    setattr(existing, "is_active", True)
                 else:
                     session.add(
                         TeamMapping(
                             team_id=team_id,
-                            name=getattr(team, "name", team_id),
+                            name=team_name,
                             org_id=org_id,
-                            description=getattr(team, "description", None),
+                            description=team_description,
                             is_active=True,
                         )
                     )

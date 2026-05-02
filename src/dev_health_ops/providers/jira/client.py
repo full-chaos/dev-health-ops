@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def _require_jira() -> Any:
     try:
-        from jira import JIRA  # type: ignore
+        from jira import JIRA
 
         return JIRA
     except (

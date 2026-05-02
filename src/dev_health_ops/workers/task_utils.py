@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,68 @@ def _resolve_env_credentials(provider: str) -> dict[str, str]:
         for field_name, env_var in env_map.items()
         if (value := os.getenv(env_var))
     }
+
+
+def _as_uuid(value: object) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
+
+
+def _as_uuid_or_none(value: object | None) -> uuid.UUID | None:
+    if value is None:
+        return None
+    return _as_uuid(value)
+
+
+def _as_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    raise TypeError(f"Expected datetime, got {type(value)!r}")
+
+
+def _as_datetime_or_none(value: object | None) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    return None
+
+
+def _as_str(value: object | None) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def _as_str_or_none(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
+
+
+def _as_bool(value: object | None) -> bool:
+    return value if isinstance(value, bool) else bool(value)
+
+
+def _as_int(value: object | None, default: int = 0) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    return int(str(value))
+
+
+def _as_str_list(value: object | None) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item is not None]
+
+
+def _as_dict(value: object | None) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): raw_value for key, raw_value in value.items()}
 
 
 _GIT_TARGETS = {"git", "prs"}

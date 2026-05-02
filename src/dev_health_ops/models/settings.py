@@ -12,11 +12,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    Column,
     DateTime,
     ForeignKey,
     Index,
@@ -24,7 +24,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
 
@@ -79,19 +79,23 @@ class Setting(Base):
 
     __tablename__ = "settings"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, index=True, server_default="")
-    category = Column(Text, nullable=False, index=True)
-    key = Column(Text, nullable=False)
-    value = Column(Text, nullable=True, comment="Setting value (may be encrypted)")
-    is_encrypted = Column(Boolean, nullable=False, default=False)
-    description = Column(Text, nullable=True)
-    created_at = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
+    category: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Setting value (may be encrypted)"
+    )
+    is_encrypted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -113,9 +117,9 @@ class Setting(Base):
         org_id: str | None = None,
         is_encrypted: bool = False,
         description: str | None = None,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
-        self.org_id = org_id
+        self.org_id = org_id or ""
         self.category = category
         self.key = key
         self.value = value
@@ -134,35 +138,41 @@ class IntegrationCredential(Base):
 
     __tablename__ = "integration_credentials"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, index=True, server_default="")
-    provider = Column(Text, nullable=False, index=True)
-    name = Column(Text, nullable=False, comment="Display name for this credential set")
-    is_active = Column(Boolean, nullable=False, default=True)
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Display name for this credential set"
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    credentials_encrypted = Column(
+    credentials_encrypted: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
         comment="Encrypted JSON containing provider-specific credentials",
     )
 
-    config = Column(
+    config: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
         comment="Non-sensitive provider configuration (base URLs, options)",
     )
 
-    last_test_at = Column(DateTime(timezone=True), nullable=True)
-    last_test_success = Column(Boolean, nullable=True)
-    last_test_error = Column(Text, nullable=True)
+    last_test_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_test_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_test_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -182,11 +192,11 @@ class IntegrationCredential(Base):
         name: str,
         org_id: str | None = None,
         credentials_encrypted: str | None = None,
-        config: dict | None = None,
+        config: dict[str, Any] | None = None,
         is_active: bool = True,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
-        self.org_id = org_id
+        self.org_id = org_id or ""
         self.provider = provider
         self.name = name
         self.is_active = is_active
@@ -205,68 +215,76 @@ class SyncConfiguration(Base):
 
     __tablename__ = "sync_configurations"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, index=True, server_default="")
-    name = Column(Text, nullable=False, comment="Display name for this sync config")
-    provider = Column(Text, nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
+    name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Display name for this sync config"
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False, index=True)
 
-    credential_id = Column(
+    credential_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID,
         ForeignKey("integration_credentials.id", ondelete="SET NULL"),
         nullable=True,
     )
-    credential = relationship("IntegrationCredential")
+    credential: Mapped[IntegrationCredential | None] = relationship(
+        "IntegrationCredential"
+    )
 
-    sync_targets = Column(
+    sync_targets: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
         comment="List of targets to sync (repos, projects, etc.)",
     )
 
-    sync_options = Column(
+    sync_options: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
         comment="Provider-specific sync options",
     )
 
-    is_active = Column(Boolean, nullable=False, default=True)
-    last_sync_at = Column(DateTime(timezone=True), nullable=True)
-    last_sync_success = Column(Boolean, nullable=True)
-    last_sync_error = Column(Text, nullable=True)
-    last_sync_stats = Column(
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_sync_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_sync_stats: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         comment="Stats from last sync (items synced, duration, etc.)",
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    parent_id = Column(
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID,
         ForeignKey("sync_configurations.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
-    parent = relationship(
+    parent: Mapped[SyncConfiguration | None] = relationship(
         "SyncConfiguration",
         remote_side="SyncConfiguration.id",
         back_populates="children",
         foreign_keys=[parent_id],
         lazy="raise",
     )
-    children = relationship(
+    children: Mapped[list[SyncConfiguration]] = relationship(
         "SyncConfiguration",
         back_populates="parent",
         cascade="all, delete-orphan",
@@ -285,13 +303,13 @@ class SyncConfiguration(Base):
         provider: str,
         org_id: str | None = None,
         credential_id: uuid.UUID | None = None,
-        sync_targets: list | None = None,
-        sync_options: dict | None = None,
+        sync_targets: list[str] | None = None,
+        sync_options: dict[str, Any] | None = None,
         is_active: bool = True,
         parent_id: uuid.UUID | None = None,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
-        self.org_id = org_id
+        self.org_id = org_id or ""
         self.name = name
         self.provider = provider
         self.credential_id = credential_id
@@ -312,51 +330,63 @@ class ScheduledJob(Base):
 
     __tablename__ = "scheduled_jobs"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, index=True, server_default="")
-    name = Column(Text, nullable=False, comment="Display name for this job")
-    job_type = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
+    name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Display name for this job"
+    )
+    job_type: Mapped[str] = mapped_column(
         Text, nullable=False, index=True, comment="Type of job (sync, metrics, etc.)"
     )
 
-    schedule_cron = Column(
+    schedule_cron: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment="Cron expression for scheduling (e.g., '0 * * * *' for hourly)",
     )
-    timezone = Column(Text, nullable=False, default="UTC")
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, default="UTC")
 
-    job_config = Column(
+    job_config: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
         comment="Job-specific configuration",
     )
 
-    sync_config_id = Column(
+    sync_config_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID,
         ForeignKey("sync_configurations.id", ondelete="SET NULL"),
         nullable=True,
     )
-    sync_config = relationship("SyncConfiguration")
+    sync_config: Mapped[SyncConfiguration | None] = relationship("SyncConfiguration")
 
-    status = Column(Integer, nullable=False, default=JobStatus.ACTIVE.value)
-    is_running = Column(Boolean, nullable=False, default=False)
+    status: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=JobStatus.ACTIVE.value
+    )
+    is_running: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    last_run_at = Column(DateTime(timezone=True), nullable=True)
-    last_run_status = Column(Integer, nullable=True)
-    last_run_duration_seconds = Column(Integer, nullable=True)
-    last_run_error = Column(Text, nullable=True)
-    next_run_at = Column(DateTime(timezone=True), nullable=True)
-    run_count = Column(Integer, nullable=False, default=0)
-    failure_count = Column(Integer, nullable=False, default=0)
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_run_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_run_duration_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    last_run_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    run_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -375,13 +405,13 @@ class ScheduledJob(Base):
         job_type: str,
         schedule_cron: str,
         org_id: str | None = None,
-        job_config: dict | None = None,
+        job_config: dict[str, Any] | None = None,
         sync_config_id: uuid.UUID | None = None,
         tz: str = "UTC",
         status: int = JobStatus.ACTIVE.value,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
-        self.org_id = org_id
+        self.org_id = org_id or ""
         self.name = name
         self.job_type = job_type
         self.schedule_cron = schedule_cron
@@ -404,32 +434,40 @@ class JobRun(Base):
 
     __tablename__ = "job_runs"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    job_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("scheduled_jobs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    job = relationship("ScheduledJob")
+    job: Mapped[ScheduledJob] = relationship("ScheduledJob")
 
-    status = Column(Integer, nullable=False, default=JobRunStatus.PENDING.value)
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    duration_seconds = Column(Integer, nullable=True)
+    status: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=JobRunStatus.PENDING.value
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    result = Column(JSON, nullable=True, comment="Job execution results/stats")
-    error = Column(Text, nullable=True)
-    error_traceback = Column(Text, nullable=True)
+    result: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True, comment="Job execution results/stats"
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_traceback: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    triggered_by = Column(
+    triggered_by: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="scheduler",
         comment="What triggered this run (scheduler, manual, webhook)",
     )
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -445,7 +483,7 @@ class JobRun(Base):
         job_id: uuid.UUID,
         triggered_by: str = "scheduler",
         status: int = JobRunStatus.PENDING.value,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
         self.job_id = job_id
         self.triggered_by = triggered_by
@@ -462,40 +500,42 @@ class IdentityMapping(Base):
 
     __tablename__ = "identity_mappings"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, index=True, server_default="")
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
 
-    canonical_id = Column(
+    canonical_id: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         index=True,
         comment="Canonical identity (usually email or unique ID)",
     )
-    display_name = Column(Text, nullable=True)
-    email = Column(Text, nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
 
-    provider_identities = Column(
+    provider_identities: Mapped[dict[str, list[str]]] = mapped_column(
         JSON,
         nullable=False,
         default=dict,
         comment="Map of provider -> [identities] (e.g., {'github': ['user1'], 'jira': ['accountId']})",
     )
 
-    team_ids = Column(
+    team_ids: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
         comment="List of team IDs this identity belongs to",
     )
 
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -513,12 +553,12 @@ class IdentityMapping(Base):
         org_id: str | None = None,
         display_name: str | None = None,
         email: str | None = None,
-        provider_identities: dict | None = None,
-        team_ids: list | None = None,
+        provider_identities: dict[str, list[str]] | None = None,
+        team_ids: list[str] | None = None,
         is_active: bool = True,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
-        self.org_id = org_id
+        self.org_id = org_id or ""
         self.canonical_id = canonical_id
         self.display_name = display_name
         self.email = email
@@ -537,63 +577,67 @@ class TeamMapping(Base):
 
     __tablename__ = "team_mappings"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, index=True, server_default="")
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
 
-    team_id = Column(Text, nullable=False, comment="Unique team identifier (slug)")
-    name = Column(Text, nullable=False, comment="Team display name")
-    description = Column(Text, nullable=True)
+    team_id: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Unique team identifier (slug)"
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False, comment="Team display name")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    repo_patterns = Column(
+    repo_patterns: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
         comment="List of repo patterns (glob) this team owns",
     )
-    project_keys = Column(
+    project_keys: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
         comment="List of Jira/Linear project keys",
     )
 
-    extra_data = Column(
+    extra_data: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         default=dict,
         comment="Additional team data (cost center, manager, etc.)",
     )
-    managed_fields = Column(
+    managed_fields: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
         default=list,
         comment="Fields the provider owns (e.g. name, repo_patterns)",
     )
-    sync_policy = Column(
+    sync_policy: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
         default=1,
         comment="0=merge (auto-apply), 1=flag (review), 2=manual_only",
     )
-    flagged_changes = Column(
+    flagged_changes: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True,
         comment="Pending provider-suggested changes for admin review",
     )
-    last_drift_sync_at = Column(
+    last_drift_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="Last time this team was checked for drift",
     )
 
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    created_at = Column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -610,16 +654,16 @@ class TeamMapping(Base):
         name: str,
         org_id: str | None = None,
         description: str | None = None,
-        repo_patterns: list | None = None,
-        project_keys: list | None = None,
-        extra_data: dict | None = None,
-        managed_fields: list | None = None,
+        repo_patterns: list[str] | None = None,
+        project_keys: list[str] | None = None,
+        extra_data: dict[str, Any] | None = None,
+        managed_fields: list[str] | None = None,
         sync_policy: int = 1,
-        flagged_changes: dict | None = None,
+        flagged_changes: dict[str, Any] | None = None,
         is_active: bool = True,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
-        self.org_id = org_id
+        self.org_id = org_id or ""
         self.team_id = team_id
         self.name = name
         self.description = description
@@ -643,24 +687,24 @@ class SyncWatermark(Base):
 
     __tablename__ = "sync_watermarks"
 
-    id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    org_id = Column(Text, nullable=False, server_default="")
-    repo_id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    repo_id: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment="owner/repo for GitHub, project_id for GitLab",
     )
-    target = Column(
+    target: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment="Sync target: git, prs, cicd, deployments, incidents, work-items",
     )
-    last_synced_at = Column(
+    last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment="Timestamp of last successful sync for this target",
     )
-    updated_at = Column(
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
@@ -680,9 +724,9 @@ class SyncWatermark(Base):
         target: str,
         org_id: str | None = None,
         last_synced_at: datetime | None = None,
-    ):
+    ) -> None:
         self.id = uuid.uuid4()
-        self.org_id = org_id
+        self.org_id = org_id or ""
         self.repo_id = repo_id
         self.target = target
         self.last_synced_at = last_synced_at

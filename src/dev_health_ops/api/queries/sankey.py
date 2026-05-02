@@ -58,7 +58,7 @@ async def fetch_expense_counts(
           AND org_id = %(org_id)s
             {scope_filter}
     """
-    params = {"start_day": start_day, "end_day": end_day}
+    params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
     params["org_id"] = org_id
     return await query_dicts(sink, query, params)
@@ -81,7 +81,7 @@ async def fetch_expense_abandoned(
           AND org_id = %(org_id)s
             {scope_filter}
     """
-    params = {"start_day": start_day, "end_day": end_day}
+    params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
     params["org_id"] = org_id
     return await query_dicts(sink, query, params)
@@ -107,7 +107,7 @@ async def fetch_state_status_counts(
         GROUP BY status
         ORDER BY items_touched DESC
     """
-    params = {"start_day": start_day, "end_day": end_day}
+    params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
     params.update(scope_params)
     params["org_id"] = org_id
     return await query_dicts(sink, query, params)

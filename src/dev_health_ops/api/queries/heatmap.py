@@ -32,7 +32,7 @@ async def fetch_review_wait_density(
         {scope_filter}
         GROUP BY weekday, hour
     """
-    params = {"start_ts": start_ts, "end_ts": end_ts}
+    params: dict[str, Any] = {"start_ts": start_ts, "end_ts": end_ts}
     params.update(scope_params)
     params["org_id"] = org_id
     return await query_dicts(sink, query, params)

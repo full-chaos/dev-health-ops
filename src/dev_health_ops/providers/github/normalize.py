@@ -4,7 +4,7 @@ import logging
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Protocol, TypedDict
+from typing import TypedDict
 from uuid import UUID
 
 from dev_health_ops.models.work_items import (
@@ -13,7 +13,16 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
+    WorkItemStatusCategory,
     WorkItemStatusTransition,
+    WorkItemType,
+)
+from dev_health_ops.providers.github.client import (
+    _GitHubCommentLike,
+    _GitHubEventLike,
+    _GitHubIssueLike,
+    _GitHubMilestoneLike,
+    _GitHubPullRequestLike,
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import (
@@ -41,50 +50,6 @@ from dev_health_ops.providers.normalize_helpers import (
     labels_from_nodes as _labels_from_nodes,
 )
 from dev_health_ops.providers.status_mapping import StatusMapping
-
-
-class _GitHubIssueLike(Protocol):
-    number: object
-    title: object
-    body: object
-    state: object
-    created_at: object
-    updated_at: object
-    closed_at: object
-    labels: object
-    assignees: object
-    user: object
-    html_url: object
-    url: object
-
-
-class _GitHubPullRequestLike(_GitHubIssueLike, Protocol):
-    merged: object
-    merged_at: object
-    draft: object
-
-
-class _GitHubEventLike(Protocol):
-    created_at: object
-    event: object
-    label: object
-    actor: object
-
-
-class _GitHubCommentLike(Protocol):
-    id: object
-    created_at: object
-    user: object
-    body: object
-
-
-class _GitHubMilestoneLike(Protocol):
-    id: object
-    number: object
-    title: object
-    created_at: object
-    due_on: object
-    state: object
 
 
 class _NodeCollection(TypedDict, total=False):
@@ -149,8 +114,13 @@ def github_issue_to_work_item(
     updated_at = _to_utc(getattr(issue, "updated_at", None)) or created_at
     closed_at = _to_utc(getattr(issue, "closed_at", None))
 
-    labels = [getattr(lbl, "name", None) for lbl in getattr(issue, "labels", []) or []]
-    labels = [str(lbl) for lbl in labels if lbl]
+    labels = [
+        str(label_name)
+        for label_name in (
+            getattr(label, "name", None) for label in getattr(issue, "labels", []) or []
+        )
+        if label_name
+    ]
 
     # If the issue is in a Project with a status field, prefer that as status_raw.
     status_raw = project_status_raw
@@ -200,13 +170,15 @@ def github_issue_to_work_item(
                 tzinfo=timezone.utc
             )
 
-        prev_status = "unknown"
+        prev_status: WorkItemStatusCategory = "unknown"
         for ev in sorted(list(events), key=_ev_dt):
             event_type = str(getattr(ev, "event", "") or "").lower()
             occurred_at = _to_utc(getattr(ev, "created_at", None)) or created_at
 
             if event_type in {"closed", "reopened"}:
-                to_status = "done" if event_type == "closed" else "todo"
+                to_status: WorkItemStatusCategory = (
+                    "done" if event_type == "closed" else "todo"
+                )
                 transitions.append(
                     WorkItemStatusTransition(
                         work_item_id=work_item_id,
@@ -572,10 +544,17 @@ def github_pr_to_work_item(
     closed_at = _to_utc(getattr(pr, "closed_at", None))
     merged_at = _to_utc(getattr(pr, "merged_at", None))
 
-    labels = [getattr(lbl, "name", None) for lbl in getattr(pr, "labels", []) or []]
-    labels = [str(lbl) for lbl in labels if lbl]
+    labels = [
+        str(label_name)
+        for label_name in (
+            getattr(label, "name", None) for label in getattr(pr, "labels", []) or []
+        )
+        if label_name
+    ]
 
     # Determine status based on state and merge status
+    status_raw: str | None
+    normalized_status: WorkItemStatusCategory
     if merged or merged_at:
         status_raw = "merged"
         normalized_status = "done"
@@ -600,7 +579,7 @@ def github_pr_to_work_item(
         )
 
     # PRs are always type "pr"
-    normalized_type = "pr"
+    normalized_type: WorkItemType = "pr"
 
     assignees: list[str] = []
     for assignee in getattr(pr, "assignees", []) or []:
@@ -637,7 +616,7 @@ def github_pr_to_work_item(
                 tzinfo=timezone.utc
             )
 
-        prev_status = "in_progress"  # PRs start as in_progress
+        prev_status: WorkItemStatusCategory = "in_progress"
         # Track if we've seen a merged event to determine closed status correctly
         merged_in_history = False
 
@@ -662,7 +641,9 @@ def github_pr_to_work_item(
                 prev_status = "done"
             elif event_type == "closed":
                 # Use merged_in_history to determine status at the time of close
-                to_status = "done" if merged_in_history else "canceled"
+                to_status: WorkItemStatusCategory = (
+                    "done" if merged_in_history else "canceled"
+                )
                 transitions.append(
                     WorkItemStatusTransition(
                         work_item_id=work_item_id,

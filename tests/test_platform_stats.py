@@ -32,7 +32,13 @@ async def session_maker(tmp_path: Path):
         await conn.run_sync(
             lambda sync_conn: Base.metadata.create_all(
                 sync_conn,
-                tables=tables_of(User, Organization, Membership, IntegrationCredential, SyncConfiguration),
+                tables=tables_of(
+                    User,
+                    Organization,
+                    Membership,
+                    IntegrationCredential,
+                    SyncConfiguration,
+                ),
             )
         )
 

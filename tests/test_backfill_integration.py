@@ -35,7 +35,9 @@ from tests._helpers import tables_of
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
-_TABLES = tables_of(User, Organization, SyncConfiguration, ScheduledJob, JobRun, BackfillJob)
+_TABLES = tables_of(
+    User, Organization, SyncConfiguration, ScheduledJob, JobRun, BackfillJob
+)
 
 
 @pytest_asyncio.fixture
@@ -462,7 +464,9 @@ def test_run_backfill_resolves_credentials_from_db(
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
         engine,
-        tables=tables_of(SyncConfiguration, ScheduledJob, JobRun, BackfillJob, IntegrationCredential),
+        tables=tables_of(
+            SyncConfiguration, ScheduledJob, JobRun, BackfillJob, IntegrationCredential
+        ),
     )
 
     org_id = str(uuid.uuid4())

@@ -6,7 +6,11 @@ from dev_health_ops.metrics.quality import (
     compute_rework_churn_ratio,
     compute_single_owner_file_ratio,
 )
-from dev_health_ops.metrics.schemas import CommitStatRow, PullRequestReviewRow, PullRequestRow
+from dev_health_ops.metrics.schemas import (
+    CommitStatRow,
+    PullRequestReviewRow,
+    PullRequestRow,
+)
 
 
 def test_rework_churn_ratio_proxy():

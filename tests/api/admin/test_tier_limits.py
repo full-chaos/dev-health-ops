@@ -39,7 +39,16 @@ from tests._helpers import tables_of
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
 
-_TABLES = tables_of(User, Organization, OrgLicense, TierLimit, IntegrationCredential, SyncConfiguration, ScheduledJob, JobRun)
+_TABLES = tables_of(
+    User,
+    Organization,
+    OrgLicense,
+    TierLimit,
+    IntegrationCredential,
+    SyncConfiguration,
+    ScheduledJob,
+    JobRun,
+)
 
 
 # ---------------------------------------------------------------------------

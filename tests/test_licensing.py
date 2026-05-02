@@ -1312,7 +1312,9 @@ class TestOrgFeatureOverrideUpdatedBy:
         db_path = tmp_path / "override-updated-by.db"
         engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
 
-        _tables = tables_of(User, Organization, Membership, OrgLicense, FeatureFlag, OrgFeatureOverride)
+        _tables = tables_of(
+            User, Organization, Membership, OrgLicense, FeatureFlag, OrgFeatureOverride
+        )
 
         async with engine.begin() as conn:
             await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables))

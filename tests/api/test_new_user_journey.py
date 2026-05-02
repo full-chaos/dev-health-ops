@@ -35,7 +35,22 @@ admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 
 VALID_PASSWORD = "SecurePass123!"
 
-_TABLES = tables_of(User, Organization, Membership, AuditLog, LoginAttempt, EmailVerificationToken, IntegrationCredential, SyncConfiguration, ScheduledJob, JobRun, IdentityMapping, TeamMapping, OrgLicense, TierLimit)
+_TABLES = tables_of(
+    User,
+    Organization,
+    Membership,
+    AuditLog,
+    LoginAttempt,
+    EmailVerificationToken,
+    IntegrationCredential,
+    SyncConfiguration,
+    ScheduledJob,
+    JobRun,
+    IdentityMapping,
+    TeamMapping,
+    OrgLicense,
+    TierLimit,
+)
 
 
 @pytest_asyncio.fixture

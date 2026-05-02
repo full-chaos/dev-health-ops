@@ -57,7 +57,9 @@ def test_build_reverse_alias_map_skips_empty_aliases():
     aliases = {
         "john.doe@example.com": ["jdoe", "", "  ", None],
     }
-    dynamic_build_reverse_alias_map = getattr(identity_aliases, "build_reverse_alias_map")
+    dynamic_build_reverse_alias_map = getattr(
+        identity_aliases, "build_reverse_alias_map"
+    )
     reverse = dynamic_build_reverse_alias_map(aliases)
 
     assert reverse["jdoe"] == "john.doe@example.com"

@@ -325,9 +325,7 @@ async def _run_async(db_url: str, limit_commits: int) -> int:
     try:
         async with session_factory() as session:
             commits = list((await session.execute(select(GitCommit))).scalars().all())
-            stats = list(
-                (await session.execute(select(GitCommitStat))).scalars().all()
-            )
+            stats = list((await session.execute(select(GitCommitStat))).scalars().all())
             prs = list((await session.execute(select(GitPullRequest))).scalars().all())
     finally:
         await engine.dispose()

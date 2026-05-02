@@ -29,6 +29,7 @@ def _as_work_item_type(value: str) -> WorkItemType | None:
         return cast(WorkItemType, value)
     return None
 
+
 DEFAULT_STATUS_MAPPING_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "status_mapping.yaml"
 )

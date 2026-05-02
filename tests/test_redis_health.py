@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.modules["valkey"] = MagicMock()
 
 from dev_health_ops.api.main import health  # noqa: E402
+from dev_health_ops.api.models.schemas import HealthResponse  # noqa: E402
 from dev_health_ops.api.services.cache import (  # noqa: E402
     MemoryBackend,
     RedisBackend,
     TTLCache,
 )
-from dev_health_ops.api.models.schemas import HealthResponse  # noqa: E402
 
 
 class TestRedisHealthCheck(unittest.IsolatedAsyncioTestCase):

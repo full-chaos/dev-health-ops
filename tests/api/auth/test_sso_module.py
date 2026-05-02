@@ -32,7 +32,9 @@ class TestSSOModuleStructure:
     def test_sso_endpoints_registered(self):
         from dev_health_ops.api.auth.sso import sso_router
 
-        paths = {route.path for route in sso_router.routes if isinstance(route, APIRoute)}
+        paths = {
+            route.path for route in sso_router.routes if isinstance(route, APIRoute)
+        }
         # SAML
         assert "/saml/{provider_id}/initiate" in paths
         assert "/saml/{provider_id}/acs" in paths

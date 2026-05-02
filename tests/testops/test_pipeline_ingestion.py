@@ -31,7 +31,9 @@ PipelineProcessor = TestOpsPipelineProcessor
 PipelineProcessor.__test__ = False
 
 if TYPE_CHECKING:
-    from dev_health_ops.connectors.testops.base import PipelineSyncBatch as PipelineSyncBatchType
+    from dev_health_ops.connectors.testops.base import (
+        PipelineSyncBatch as PipelineSyncBatchType,
+    )
     from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 
 

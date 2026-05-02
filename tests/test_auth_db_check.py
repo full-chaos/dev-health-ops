@@ -25,9 +25,7 @@ class _TokenOverrides(TypedDict, total=False):
     expires_delta: timedelta | None
 
 
-def _make_token(
-    auth_service: AuthService, **overrides: Unpack[_TokenOverrides]
-) -> str:
+def _make_token(auth_service: AuthService, **overrides: Unpack[_TokenOverrides]) -> str:
     return auth_service.create_access_token(
         user_id=overrides.get("user_id", str(uuid.uuid4())),
         email=overrides.get("email", "ghost@example.com"),

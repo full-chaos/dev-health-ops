@@ -1005,7 +1005,16 @@ async def bridge_db(tmp_path):
             lambda: datetime.now(timezone.utc).isoformat(sep=" "),
         )
 
-    _tables = tables_of(Organization, BillingPlan, BillingPrice, FeatureBundle, PlanFeatureBundle, Subscription, SubscriptionEvent, OrgLicense)
+    _tables = tables_of(
+        Organization,
+        BillingPlan,
+        BillingPrice,
+        FeatureBundle,
+        PlanFeatureBundle,
+        Subscription,
+        SubscriptionEvent,
+        OrgLicense,
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables))
@@ -1481,7 +1490,15 @@ async def billing_cascade_db(tmp_path):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
-    _tables = tables_of(Organization, BillingPlan, BillingPrice, FeatureBundle, PlanFeatureBundle, Subscription, SubscriptionEvent)
+    _tables = tables_of(
+        Organization,
+        BillingPlan,
+        BillingPrice,
+        FeatureBundle,
+        PlanFeatureBundle,
+        Subscription,
+        SubscriptionEvent,
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=_tables))

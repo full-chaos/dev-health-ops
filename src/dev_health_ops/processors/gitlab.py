@@ -41,7 +41,6 @@ if TYPE_CHECKING:
         ConnectorException,
         GitLabConnector,
     )
-    from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
 elif CONNECTORS_AVAILABLE:
     from dev_health_ops.connectors import (
@@ -49,13 +48,11 @@ elif CONNECTORS_AVAILABLE:
         ConnectorException,
         GitLabConnector,
     )
-    from dev_health_ops.connectors.models import Repository
     from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
 else:
     BatchResult = None
     GitLabConnector = None
     ConnectorException = Exception
-    Repository = None
     RateLimitConfig = None
     RateLimitGate = None
 

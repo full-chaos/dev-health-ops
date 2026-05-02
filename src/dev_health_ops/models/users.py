@@ -199,7 +199,7 @@ class Organization(Base):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
-    retention_policies: Mapped[list[OrgRetentionPolicy]] = relationship(
+    retention_policies: Mapped[list["OrgRetentionPolicy"]] = relationship(  # noqa: UP037
         "OrgRetentionPolicy",
         back_populates="organization",
         cascade="all, delete-orphan",

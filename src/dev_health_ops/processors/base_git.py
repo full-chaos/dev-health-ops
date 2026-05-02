@@ -16,25 +16,19 @@ import asyncio
 import logging
 from collections.abc import Coroutine
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dev_health_ops.models.git import GitBlame, GitCommitStat, GitFile
 from dev_health_ops.processors.fetch_utils import AsyncBatchCollector
 from dev_health_ops.utils import CONNECTORS_AVAILABLE
 
-if CONNECTORS_AVAILABLE:
-    from dev_health_ops.connectors.utils import (
-        RateLimitConfig as _RateLimitConfig,
-    )
-    from dev_health_ops.connectors.utils import (
-        RateLimitGate as _RateLimitGate,
-    )
+if TYPE_CHECKING:
+    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
+elif CONNECTORS_AVAILABLE:
+    from dev_health_ops.connectors.utils import RateLimitConfig, RateLimitGate
 else:
-    _RateLimitConfig = None
-    _RateLimitGate = None
-
-RateLimitConfig = _RateLimitConfig
-RateLimitGate = _RateLimitGate
+    RateLimitConfig = None
+    RateLimitGate = None
 
 logger = logging.getLogger(__name__)
 

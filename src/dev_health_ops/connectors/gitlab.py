@@ -151,7 +151,7 @@ class GitLabConnector(GitConnector):
         :return: List of Organization objects (representing GitLab groups).
         """
         try:
-            groups = []
+            groups: list[Organization] = []
 
             gl_groups = self.gitlab.groups.list(
                 per_page=self.per_page,
@@ -217,7 +217,7 @@ class GitLabConnector(GitConnector):
             - user_name='johndoe' fetches johndoe's projects
         """
         try:
-            projects = []
+            projects: list[Repository] = []
 
             # Sanitize user-supplied values to prevent log injection (CodeQL py/log-injection).
             _group = (
@@ -238,7 +238,10 @@ class GitLabConnector(GitConnector):
             )
 
             # Build common list parameters
-            list_params = {"per_page": self.per_page, "get_all": (max_projects is None)}
+            list_params: dict[str, Any] = {
+                "per_page": self.per_page,
+                "get_all": (max_projects is None),
+            }
             if search:
                 list_params["search"] = search
 
@@ -375,7 +378,7 @@ class GitLabConnector(GitConnector):
 
     def get_project_name(self, project_id_or_path: int | str) -> str:
         """Return the canonical path for a GitLab project."""
-        project = self.get_project(project_id_or_path)
+        project = self.gitlab.projects.get(project_id_or_path)
         return str(
             getattr(project, "path_with_namespace", None)
             or getattr(project, "path", None)
@@ -408,7 +411,7 @@ class GitLabConnector(GitConnector):
 
         try:
             project = self.gitlab.projects.get(project_identifier)
-            contributors = []
+            contributors: list[Author] = []
 
             gl_contributors = project.repository_contributors(
                 per_page=self.per_page,
@@ -619,7 +622,7 @@ class GitLabConnector(GitConnector):
             return []
 
         try:
-            merge_requests = []
+            merge_requests: list[PullRequest] = []
             page = 1
 
             while True:

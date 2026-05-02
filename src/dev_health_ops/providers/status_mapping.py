@@ -4,7 +4,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, cast, get_args
 
 import yaml
 
@@ -13,6 +13,21 @@ from dev_health_ops.models.work_items import (
     WorkItemStatusCategory,
     WorkItemType,
 )
+
+_VALID_STATUS_CATEGORIES: frozenset[str] = frozenset(get_args(WorkItemStatusCategory))
+_VALID_WORK_ITEM_TYPES: frozenset[str] = frozenset(get_args(WorkItemType))
+
+
+def _as_status_category(value: str) -> WorkItemStatusCategory | None:
+    if value in _VALID_STATUS_CATEGORIES:
+        return cast(WorkItemStatusCategory, value)
+    return None
+
+
+def _as_work_item_type(value: str) -> WorkItemType | None:
+    if value in _VALID_WORK_ITEM_TYPES:
+        return cast(WorkItemType, value)
+    return None
 
 DEFAULT_STATUS_MAPPING_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "status_mapping.yaml"
@@ -170,13 +185,19 @@ def load_status_mapping(path: Path | None = None) -> StatusMapping:
 
         # Start from base categories.
         for category, values in (base_status or {}).items():
-            for key, mapped in _index_values(values or [], str(category)).items():
+            narrowed = _as_status_category(str(category))
+            if narrowed is None:
+                continue
+            for key, mapped in _index_values(values or [], narrowed).items():
                 indexed[key] = mapped
 
         # Apply provider overrides.
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("statuses") or {}).items():
-            for key, mapped in _index_values(values or [], str(category)).items():
+            narrowed = _as_status_category(str(category))
+            if narrowed is None:
+                continue
+            for key, mapped in _index_values(values or [], narrowed).items():
                 indexed[key] = mapped
 
         # Ensure type is correct at runtime.
@@ -188,7 +209,10 @@ def load_status_mapping(path: Path | None = None) -> StatusMapping:
         indexed: dict[str, WorkItemStatusCategory] = {}
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("status_labels") or {}).items():
-            for key, mapped in _index_values(values or [], str(category)).items():
+            narrowed = _as_status_category(str(category))
+            if narrowed is None:
+                continue
+            for key, mapped in _index_values(values or [], narrowed).items():
                 indexed[key] = mapped
         return {k: v for k, v in indexed.items()}
 
@@ -196,22 +220,28 @@ def load_status_mapping(path: Path | None = None) -> StatusMapping:
         indexed: dict[str, WorkItemType] = {}
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("types") or {}).items():
+            narrowed = _as_work_item_type(str(category))
+            if narrowed is None:
+                continue
             for raw in values or []:
                 key = _norm_key(str(raw))
                 if not key:
                     continue
-                indexed[key] = str(category)
+                indexed[key] = narrowed
         return indexed
 
     def _build_label_type_index(provider_name: str) -> dict[str, WorkItemType]:
         indexed: dict[str, WorkItemType] = {}
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("type_labels") or {}).items():
+            narrowed = _as_work_item_type(str(category))
+            if narrowed is None:
+                continue
             for raw in values or []:
                 key = _norm_key(str(raw))
                 if not key:
                     continue
-                indexed[key] = str(category)
+                indexed[key] = narrowed
         return indexed
 
     status_by_provider: dict[str, dict[str, WorkItemStatusCategory]] = {}

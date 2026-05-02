@@ -162,7 +162,7 @@ class GitHubConnector(GitConnector):
         :return: List of Organization objects.
         """
         try:
-            orgs = []
+            orgs: list[Organization] = []
             user = self.github.get_user()
 
             for gh_org in user.get_orgs():
@@ -217,7 +217,7 @@ class GitHubConnector(GitConnector):
             - pattern='*/sync*' matches 'anyorg/sync-tool'
         """
         try:
-            repos = []
+            repos: list[Repository] = []
 
             # Determine the appropriate API method and parameters
             if search:
@@ -229,7 +229,9 @@ class GitHubConnector(GitConnector):
                     query_parts.append(f"user:{user_name}")
                 gh_repos = self.github.search_repositories(query=" ".join(query_parts))
             else:
-                # Fetch repositories without search
+                # Each branch returns a different PyGithub class that all
+                # expose .get_repos(); typed as Any to avoid the surface union.
+                source: Any
                 if org_name:
                     source = self.github.get_organization(org_name)
                 elif user_name:
@@ -292,7 +294,7 @@ class GitHubConnector(GitConnector):
         """
         try:
             gh_repo = self.github.get_repo(f"{owner}/{repo}")
-            contributors = []
+            contributors: list[Author] = []
 
             for contributor in gh_repo.get_contributors():
                 if max_contributors and len(contributors) >= max_contributors:
@@ -461,7 +463,7 @@ class GitHubConnector(GitConnector):
         """
         try:
             gh_repo = self.github.get_repo(f"{owner}/{repo}")
-            prs = []
+            prs: list[PullRequest] = []
 
             # per_page is set at Github client level during initialization
             for gh_pr in gh_repo.get_pulls(state=state):
@@ -675,7 +677,7 @@ class GitHubConnector(GitConnector):
         owner: str,
         repo: str,
         endpoint: str,
-        params: dict[str, Any],
+        params: dict[str, Any] | None,
         max_items: int | None = None,
     ) -> list[dict[str, Any]]:
         base_url = (

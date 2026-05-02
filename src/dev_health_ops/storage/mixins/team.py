@@ -5,9 +5,10 @@ from typing import Any
 from sqlalchemy import select
 
 from dev_health_ops.models.teams import JiraProjectOpsTeamLink, Team
+from dev_health_ops.storage.mixins.base import SQLAlchemyStoreMixinProtocol
 
 
-class TeamMixin:
+class TeamMixin(SQLAlchemyStoreMixinProtocol):
     async def insert_teams(self, teams: list[Any]) -> None:
         if not teams:
             return

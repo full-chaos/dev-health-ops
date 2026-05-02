@@ -21,10 +21,11 @@ from dev_health_ops.metrics.schemas import (
     WorkItemUserMetricsDailyRecord,
 )
 from dev_health_ops.models.git import Repo
+from dev_health_ops.storage.mixins.base import SQLAlchemyStoreMixinProtocol
 from dev_health_ops.storage.utils import _parse_date_value, _parse_datetime_value
 
 
-class MetricsMixin:
+class MetricsMixin(SQLAlchemyStoreMixinProtocol):
     async def get_complexity_snapshots(
         self,
         *,

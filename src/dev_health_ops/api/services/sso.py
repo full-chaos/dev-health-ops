@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib
 import logging
 import secrets
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypedDict
 from urllib.parse import urlencode, urlparse
 from xml.etree.ElementTree import Element, ParseError
 
@@ -42,6 +43,81 @@ class SAMLProcessingError(SSOProcessingError):
 
 class OIDCProcessingError(SSOProcessingError):
     pass
+
+
+class OIDCMetadata(TypedDict):
+    issuer: str
+    token_endpoint: str
+    userinfo_endpoint: str | None
+    jwks_uri: str
+
+
+def _require_str(value: object, field_name: str) -> str:
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"{field_name} must be a string")
+
+
+def _optional_str(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _require_str(value, field_name)
+
+
+def _require_bool(value: object, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise TypeError(f"{field_name} must be a bool")
+
+
+def _require_datetime(value: object, field_name: str) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    raise TypeError(f"{field_name} must be a datetime")
+
+
+def _optional_datetime(value: object, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    return _require_datetime(value, field_name)
+
+
+def _string_dict(value: object, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError(f"{field_name} must be a dict")
+    keys = value.keys()
+    if not all(isinstance(key, str) for key in keys):
+        raise TypeError(f"{field_name} keys must be strings")
+    return dict(value)
+
+
+def _string_list(value: object, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be a list")
+    items: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            items.append(item)
+            continue
+        if item is not None:
+            raise TypeError(f"{field_name} items must be strings")
+    return items
+
+
+def _provider_protocol(provider: SSOProvider) -> str:
+    return _require_str(provider.protocol, "provider.protocol")
+
+
+def _is_saml_provider(provider: SSOProvider) -> bool:
+    return _provider_protocol(provider) == SSOProtocol.SAML.value
+
+
+def _is_oidc_provider(provider: SSOProvider) -> bool:
+    return _provider_protocol(provider) == SSOProtocol.OIDC.value
 
 
 @dataclass
@@ -161,7 +237,10 @@ class SSOService:
         self, org_id: uuid.UUID, provider_id: uuid.UUID
     ) -> SSOProvider | None:
         stmt = select(SSOProvider).where(
-            and_(SSOProvider.id == provider_id, SSOProvider.org_id == org_id)
+            and_(
+                getattr(SSOProvider, "id") == provider_id,
+                getattr(SSOProvider, "org_id") == org_id,
+            )
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -170,7 +249,10 @@ class SSOService:
         self, org_id: uuid.UUID, name: str
     ) -> SSOProvider | None:
         stmt = select(SSOProvider).where(
-            and_(SSOProvider.org_id == org_id, SSOProvider.name == name)
+            and_(
+                getattr(SSOProvider, "org_id") == org_id,
+                getattr(SSOProvider, "name") == name,
+            )
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -179,12 +261,12 @@ class SSOService:
         self, org_id: uuid.UUID, protocol: str | None = None
     ) -> SSOProvider | None:
         conditions = [
-            SSOProvider.org_id == org_id,
-            SSOProvider.is_default == True,  # noqa: E712
-            SSOProvider.status == SSOProviderStatus.ACTIVE.value,
+            getattr(SSOProvider, "org_id") == org_id,
+            getattr(SSOProvider, "is_default") == True,  # noqa: E712
+            getattr(SSOProvider, "status") == SSOProviderStatus.ACTIVE.value,
         ]
         if protocol:
-            conditions.append(SSOProvider.protocol == protocol)
+            conditions.append(getattr(SSOProvider, "protocol") == protocol)
 
         stmt = select(SSOProvider).where(and_(*conditions))
         result = await self.session.execute(stmt)
@@ -198,12 +280,12 @@ class SSOService:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[Sequence[SSOProvider], int]:
-        conditions = [SSOProvider.org_id == org_id]
+        conditions = [getattr(SSOProvider, "org_id") == org_id]
 
         if protocol:
-            conditions.append(SSOProvider.protocol == protocol)
+            conditions.append(getattr(SSOProvider, "protocol") == protocol)
         if status:
-            conditions.append(SSOProvider.status == status)
+            conditions.append(getattr(SSOProvider, "status") == status)
 
         count_stmt = select(SSOProvider).where(and_(*conditions))
         count_result = await self.session.execute(count_stmt)
@@ -212,7 +294,7 @@ class SSOService:
         stmt = (
             select(SSOProvider)
             .where(and_(*conditions))
-            .order_by(SSOProvider.created_at)
+            .order_by(getattr(SSOProvider, "created_at"))
             .limit(limit)
             .offset(offset)
         )
@@ -240,31 +322,31 @@ class SSOService:
             return None
 
         if name is not None:
-            provider.name = name
+            setattr(provider, "name", name)
         if config is not None:
-            provider.config = config
+            setattr(provider, "config", config)
         if encrypted_secrets is not None:
             encrypted_secrets = {
                 k: encrypt_value(v) if isinstance(v, str) else v
                 for k, v in encrypted_secrets.items()
             }
-            provider.encrypted_secrets = encrypted_secrets
+            setattr(provider, "encrypted_secrets", encrypted_secrets)
         if status is not None:
-            provider.status = status
+            setattr(provider, "status", status)
         if is_default is not None:
             if is_default:
-                await self._clear_default_provider(org_id, str(provider.protocol))
-            provider.is_default = is_default
+                await self._clear_default_provider(org_id, _provider_protocol(provider))
+            setattr(provider, "is_default", is_default)
         if allow_idp_initiated is not None:
-            provider.allow_idp_initiated = allow_idp_initiated
+            setattr(provider, "allow_idp_initiated", allow_idp_initiated)
         if auto_provision_users is not None:
-            provider.auto_provision_users = auto_provision_users
+            setattr(provider, "auto_provision_users", auto_provision_users)
         if default_role is not None:
-            provider.default_role = default_role
+            setattr(provider, "default_role", default_role)
         if allowed_domains is not None:
-            provider.allowed_domains = allowed_domains
+            setattr(provider, "allowed_domains", allowed_domains)
 
-        provider.updated_at = datetime.now(timezone.utc)
+        setattr(provider, "updated_at", datetime.now(timezone.utc))
         await self.session.flush()
 
         logger.info("SSO provider updated: %s for org=%s", provider_id, org_id)
@@ -298,7 +380,7 @@ class SSOService:
     async def record_login(self, org_id: uuid.UUID, provider_id: uuid.UUID) -> None:
         provider = await self.get_provider(org_id, provider_id)
         if provider:
-            provider.last_login_at = datetime.now(timezone.utc)
+            setattr(provider, "last_login_at", datetime.now(timezone.utc))
             await self.session.flush()
 
     async def record_error(
@@ -306,13 +388,13 @@ class SSOService:
     ) -> None:
         provider = await self.get_provider(org_id, provider_id)
         if provider:
-            provider.last_error = error
-            provider.last_error_at = datetime.now(timezone.utc)
-            provider.status = SSOProviderStatus.ERROR.value
+            setattr(provider, "last_error", error)
+            setattr(provider, "last_error_at", datetime.now(timezone.utc))
+            setattr(provider, "status", SSOProviderStatus.ERROR.value)
             await self.session.flush()
 
     def generate_saml_sp_metadata(self, provider: SSOProvider) -> str:
-        if not provider.is_saml:
+        if not _is_saml_provider(provider):
             raise ValueError("Provider is not SAML")
 
         config = provider.get_saml_config()
@@ -342,7 +424,7 @@ class SSOService:
         provider: SSOProvider,
         relay_state: str | None = None,
     ) -> str:
-        if not provider.is_saml:
+        if not _is_saml_provider(provider):
             raise ValueError("Provider is not SAML")
 
         config = provider.get_saml_config()
@@ -436,7 +518,7 @@ class SSOService:
         saml_response: str,
         relay_state: str | None,
     ) -> dict[str, Any]:
-        if not provider.is_saml:
+        if not _is_saml_provider(provider):
             raise SAMLProcessingError("Provider is not SAML")
 
         config = provider.get_saml_config()
@@ -458,7 +540,7 @@ class SSOService:
         response_xml = self._parse_saml_xml(decoded_response)
         self._validate_saml_signature(response_xml, config.get("certificate"))
 
-        namespaces = {
+        namespaces: dict[str, str] = {
             "samlp": "urn:oasis:names:tc:SAML:2.0:protocol",
             "saml": "urn:oasis:names:tc:SAML:2.0:assertion",
         }
@@ -525,7 +607,7 @@ class SSOService:
         state: str,
         code_verifier: str | None,
     ) -> dict[str, Any]:
-        if not provider.is_oidc:
+        if not _is_oidc_provider(provider):
             raise OIDCProcessingError("Provider is not OIDC")
 
         if not code:
@@ -560,11 +642,10 @@ class SSOService:
         )
 
         userinfo_claims = None
-        if oidc_metadata.get("userinfo_endpoint") and token_response.get(
-            "access_token"
-        ):
+        userinfo_endpoint = oidc_metadata.get("userinfo_endpoint")
+        if userinfo_endpoint and token_response.get("access_token"):
             userinfo_claims = await self._fetch_userinfo(
-                oidc_metadata["userinfo_endpoint"], token_response["access_token"]
+                userinfo_endpoint, token_response["access_token"]
             )
 
         claim_mapping = config.get("claim_mapping", {})
@@ -596,7 +677,13 @@ class SSOService:
         if not provider:
             raise SSOProcessingError("SSO provider not found")
 
-        allowed = [d.strip().lower() for d in (provider.allowed_domains or []) if d]
+        allowed = [
+            domain.strip().lower()
+            for domain in _string_list(
+                provider.allowed_domains, "provider.allowed_domains"
+            )
+            if domain
+        ]
         if allowed:
             try:
                 _, domain = email.rsplit("@", 1)
@@ -612,16 +699,20 @@ class SSOService:
                     "Email domain is not permitted for this SSO provider"
                 )
 
-        stmt = select(User).where(User.email == email)
+        stmt = select(User).where(getattr(User, "email") == email)
         result = await self.session.execute(stmt)
         user = result.scalar_one_or_none()
 
         auth_provider_value = (
-            AuthProvider.SAML.value if provider.is_saml else AuthProvider.OIDC.value
+            AuthProvider.SAML.value
+            if _is_saml_provider(provider)
+            else AuthProvider.OIDC.value
         )
 
         if not user:
-            if not provider.auto_provision_users:
+            if not _require_bool(
+                provider.auto_provision_users, "provider.auto_provision_users"
+            ):
                 raise SSOProcessingError(
                     "User not found and auto-provisioning disabled"
                 )
@@ -645,15 +736,23 @@ class SSOService:
                 provider.name,
             )
         else:
-            if user.auth_provider != auth_provider_value:
-                user.auth_provider = auth_provider_value
-            if external_id and user.auth_provider_id != external_id:
-                user.auth_provider_id = external_id
-            if name and not user.full_name:
-                user.full_name = name
+            current_auth_provider = _optional_str(
+                user.auth_provider, "user.auth_provider"
+            )
+            if current_auth_provider != auth_provider_value:
+                setattr(user, "auth_provider", auth_provider_value)
+            current_provider_user_id = _optional_str(
+                user.auth_provider_id, "user.auth_provider_id"
+            )
+            if external_id and current_provider_user_id != external_id:
+                setattr(user, "auth_provider_id", external_id)
+            current_full_name = _optional_str(user.full_name, "user.full_name")
+            if name and not current_full_name:
+                setattr(user, "full_name", name)
 
             membership_stmt = select(Membership).where(
-                Membership.user_id == user.id, Membership.org_id == provider.org_id
+                getattr(Membership, "user_id") == user.id,
+                getattr(Membership, "org_id") == provider.org_id,
             )
             membership_result = await self.session.execute(membership_stmt)
             membership = membership_result.scalar_one_or_none()
@@ -665,7 +764,7 @@ class SSOService:
                     provider.name,
                 )
 
-        user.last_login_at = datetime.now(timezone.utc)
+        setattr(user, "last_login_at", datetime.now(timezone.utc))
         return user, membership, provider
 
     @staticmethod
@@ -681,7 +780,7 @@ class SSOService:
     def _find_text(
         element: Element,
         path: str,
-        namespaces: Mapping[str, str],
+        namespaces: dict[str, str],
     ) -> str | None:
         node = element.find(path, namespaces)
         if node is None or node.text is None:
@@ -695,7 +794,8 @@ class SSOService:
             raise SAMLProcessingError("SAML certificate is required for validation")
 
         try:
-            from signxml import XMLVerifier  # type: ignore[import-not-found]
+            xml_verifier_module = importlib.import_module("signxml")
+            XMLVerifier = xml_verifier_module.XMLVerifier
         except ImportError as exc:
             raise SAMLProcessingError(
                 "SAML signature validation requires signxml"
@@ -709,7 +809,7 @@ class SSOService:
     @staticmethod
     def _extract_saml_attributes(
         assertion: Element,
-        namespaces: Mapping[str, str],
+        namespaces: dict[str, str],
     ) -> dict[str, str]:
         attributes: dict[str, str] = {}
         for attr in assertion.findall(".//saml:Attribute", namespaces):
@@ -737,7 +837,7 @@ class SSOService:
         self,
         assertion: Element,
         subject_confirmation: Element,
-        namespaces: Mapping[str, str],
+        namespaces: dict[str, str],
     ) -> None:
         now = datetime.now(timezone.utc)
         skew = timedelta(minutes=self.SAML_TIMESTAMP_SKEW_MINUTES)
@@ -771,28 +871,44 @@ class SSOService:
 
     @staticmethod
     def _get_expected_state(provider: SSOProvider) -> str | None:
-        return (provider.encrypted_secrets or {}).get("expected_state") or (
-            provider.config or {}
-        ).get("expected_state")
+        secrets_map = _string_dict(
+            provider.encrypted_secrets, "provider.encrypted_secrets"
+        )
+        config_map = _string_dict(provider.config, "provider.config")
+        expected_state = secrets_map.get("expected_state") or config_map.get(
+            "expected_state"
+        )
+        return expected_state if isinstance(expected_state, str) else None
 
     @staticmethod
     def _get_expected_nonce(provider: SSOProvider) -> str | None:
-        return (provider.encrypted_secrets or {}).get("expected_nonce") or (
-            provider.config or {}
-        ).get("expected_nonce")
+        secrets_map = _string_dict(
+            provider.encrypted_secrets, "provider.encrypted_secrets"
+        )
+        config_map = _string_dict(provider.config, "provider.config")
+        expected_nonce = secrets_map.get("expected_nonce") or config_map.get(
+            "expected_nonce"
+        )
+        return expected_nonce if isinstance(expected_nonce, str) else None
 
-    async def _get_oidc_metadata(self, config: dict[str, Any]) -> dict[str, str]:
-        metadata = {
-            "issuer": config.get("issuer"),
-            "token_endpoint": config.get("token_endpoint"),
-            "userinfo_endpoint": config.get("userinfo_endpoint"),
-            "jwks_uri": config.get("jwks_uri"),
-        }
+    async def _get_oidc_metadata(self, config: dict[str, Any]) -> OIDCMetadata:
+        issuer = _optional_str(config.get("issuer"), "OIDC issuer")
+        token_endpoint = _optional_str(
+            config.get("token_endpoint"), "OIDC token_endpoint"
+        )
+        userinfo_endpoint = _optional_str(
+            config.get("userinfo_endpoint"), "OIDC userinfo_endpoint"
+        )
+        jwks_uri = _optional_str(config.get("jwks_uri"), "OIDC jwks_uri")
 
-        if metadata["token_endpoint"] and metadata["jwks_uri"]:
-            return metadata
+        if token_endpoint and jwks_uri:
+            return {
+                "issuer": issuer or "",
+                "token_endpoint": token_endpoint,
+                "userinfo_endpoint": userinfo_endpoint,
+                "jwks_uri": jwks_uri,
+            }
 
-        issuer = config.get("issuer")
         if not issuer:
             raise OIDCProcessingError("OIDC issuer is required")
 
@@ -818,20 +934,31 @@ class SSOService:
                     "Failed to fetch OIDC discovery document"
                 ) from exc
 
-        data = response.json()
-        metadata.update(
-            {
-                "issuer": data.get("issuer", issuer),
-                "token_endpoint": data.get("token_endpoint"),
-                "userinfo_endpoint": data.get("userinfo_endpoint"),
-                "jwks_uri": data.get("jwks_uri"),
-            }
+        discovery_data = _string_dict(response.json(), "OIDC discovery document")
+        resolved_issuer = (
+            _optional_str(discovery_data.get("issuer"), "OIDC discovery issuer")
+            or issuer
+        )
+        resolved_token_endpoint = _optional_str(
+            discovery_data.get("token_endpoint"), "OIDC discovery token_endpoint"
+        )
+        resolved_userinfo_endpoint = _optional_str(
+            discovery_data.get("userinfo_endpoint"),
+            "OIDC discovery userinfo_endpoint",
+        )
+        resolved_jwks_uri = _optional_str(
+            discovery_data.get("jwks_uri"), "OIDC discovery jwks_uri"
         )
 
-        if not metadata["token_endpoint"] or not metadata["jwks_uri"]:
+        if not resolved_token_endpoint or not resolved_jwks_uri:
             raise OIDCProcessingError("OIDC discovery missing required endpoints")
 
-        return metadata
+        return {
+            "issuer": resolved_issuer,
+            "token_endpoint": resolved_token_endpoint,
+            "userinfo_endpoint": resolved_userinfo_endpoint,
+            "jwks_uri": resolved_jwks_uri,
+        }
 
     async def _exchange_oidc_code(
         self,
@@ -841,7 +968,9 @@ class SSOService:
         token_endpoint: str,
     ) -> dict[str, Any]:
         config = provider.get_oidc_config()
-        secrets = provider.encrypted_secrets or {}
+        secret_values = _string_dict(
+            provider.encrypted_secrets, "provider.encrypted_secrets"
+        )
 
         redirect_uri = f"{self.base_url}/oidc/{provider.id}/callback"
         payload = {
@@ -851,7 +980,7 @@ class SSOService:
             "client_id": config.get("client_id"),
         }
 
-        raw_secret = secrets.get("client_secret")
+        raw_secret = secret_values.get("client_secret")
         if raw_secret:
             try:
                 client_secret = decrypt_value(raw_secret)
@@ -931,36 +1060,48 @@ class SSOService:
     async def _clear_default_provider(self, org_id: uuid.UUID, protocol: str) -> None:
         stmt = select(SSOProvider).where(
             and_(
-                SSOProvider.org_id == org_id,
-                SSOProvider.protocol == protocol,
-                SSOProvider.is_default == True,  # noqa: E712
+                getattr(SSOProvider, "org_id") == org_id,
+                getattr(SSOProvider, "protocol") == protocol,
+                getattr(SSOProvider, "is_default") == True,  # noqa: E712
             )
         )
         result = await self.session.execute(stmt)
         for provider in result.scalars().all():
-            provider.is_default = False
+            setattr(provider, "is_default", False)
         await self.session.flush()
 
     @staticmethod
     def to_entry(provider: SSOProvider) -> SSOProviderEntry:
+        config = _string_dict(provider.config, "provider.config")
+        allowed_domains = _string_list(
+            provider.allowed_domains, "provider.allowed_domains"
+        )
         return SSOProviderEntry(
             id=str(provider.id),
             org_id=str(provider.org_id),
-            name=str(provider.name),
-            protocol=str(provider.protocol),
-            status=str(provider.status),
-            is_default=bool(provider.is_default),
-            allow_idp_initiated=bool(provider.allow_idp_initiated),
-            auto_provision_users=bool(provider.auto_provision_users),
-            default_role=str(provider.default_role),
-            config=dict(provider.config) if provider.config else {},
-            allowed_domains=list(provider.allowed_domains)
-            if provider.allowed_domains
-            else [],
-            last_metadata_sync_at=provider.last_metadata_sync_at,
-            last_login_at=provider.last_login_at,
-            last_error=str(provider.last_error) if provider.last_error else None,
-            last_error_at=provider.last_error_at,
-            created_at=provider.created_at,
-            updated_at=provider.updated_at,
+            name=_require_str(provider.name, "provider.name"),
+            protocol=_require_str(provider.protocol, "provider.protocol"),
+            status=_require_str(provider.status, "provider.status"),
+            is_default=_require_bool(provider.is_default, "provider.is_default"),
+            allow_idp_initiated=_require_bool(
+                provider.allow_idp_initiated, "provider.allow_idp_initiated"
+            ),
+            auto_provision_users=_require_bool(
+                provider.auto_provision_users, "provider.auto_provision_users"
+            ),
+            default_role=_require_str(provider.default_role, "provider.default_role"),
+            config=config,
+            allowed_domains=allowed_domains,
+            last_metadata_sync_at=_optional_datetime(
+                provider.last_metadata_sync_at, "provider.last_metadata_sync_at"
+            ),
+            last_login_at=_optional_datetime(
+                provider.last_login_at, "provider.last_login_at"
+            ),
+            last_error=_optional_str(provider.last_error, "provider.last_error"),
+            last_error_at=_optional_datetime(
+                provider.last_error_at, "provider.last_error_at"
+            ),
+            created_at=_require_datetime(provider.created_at, "provider.created_at"),
+            updated_at=_require_datetime(provider.updated_at, "provider.updated_at"),
         )

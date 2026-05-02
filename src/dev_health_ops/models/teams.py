@@ -3,7 +3,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, DateTime, Text
+from sqlalchemy import JSON, DateTime, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from dev_health_ops.models.git import GUID, Base
 
@@ -11,15 +12,23 @@ from dev_health_ops.models.git import GUID, Base
 class Team(Base):
     __tablename__ = "teams"
 
-    id = Column(Text, primary_key=True, comment="Unique team identifier (slug)")
-    org_id = Column(Text, nullable=False, index=True, server_default="")
-    team_uuid = Column(
+    id: Mapped[str] = mapped_column(
+        Text, primary_key=True, comment="Unique team identifier (slug)"
+    )
+    org_id: Mapped[str] = mapped_column(
+        Text, nullable=False, index=True, server_default=""
+    )
+    team_uuid: Mapped[uuid.UUID | None] = mapped_column(
         GUID, unique=True, default=uuid.uuid4, comment="Internal unique identifier"
     )
-    name = Column(Text, nullable=False, comment="Team display name")
-    description = Column(Text, nullable=True, comment="Team description")
-    members = Column(JSON, default=list, comment="List of member identities")
-    updated_at = Column(
+    name: Mapped[str] = mapped_column(Text, nullable=False, comment="Team display name")
+    description: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Team description"
+    )
+    members: Mapped[list[str] | None] = mapped_column(
+        JSON, default=list, comment="List of member identities"
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
@@ -47,11 +56,19 @@ class Team(Base):
 class JiraProjectOpsTeamLink(Base):
     __tablename__ = "jira_project_ops_team_links"
 
-    project_key = Column(Text, primary_key=True, comment="Jira project key")
-    ops_team_id = Column(Text, primary_key=True, comment="Atlassian Ops team ID")
-    project_name = Column(Text, nullable=False, comment="Jira project name")
-    ops_team_name = Column(Text, nullable=False, comment="Atlassian Ops team name")
-    updated_at = Column(
+    project_key: Mapped[str] = mapped_column(
+        Text, primary_key=True, comment="Jira project key"
+    )
+    ops_team_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, comment="Atlassian Ops team ID"
+    )
+    project_name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Jira project name"
+    )
+    ops_team_name: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Atlassian Ops team name"
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),

@@ -12,6 +12,7 @@ from dev_health_ops.models.work_items import (
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
+    WorkItemStatusCategory,
     WorkItemStatusTransition,
 )
 from dev_health_ops.providers.identity import IdentityResolver
@@ -101,7 +102,7 @@ def gitlab_issue_to_work_item(
                 tzinfo=timezone.utc
             )
 
-        prev_status = "unknown"
+        prev_status: WorkItemStatusCategory = "unknown"
         for ev in sorted(list(label_events), key=_ev_dt):
             action = str(_get(ev, "action") or "").lower()
             label = _get(ev, "label") or {}
@@ -128,7 +129,7 @@ def gitlab_issue_to_work_item(
                     occurred_at=occurred_at,
                     from_status_raw=None,
                     to_status_raw=label_name,
-                    from_status=prev_status,  # type: ignore[arg-type]
+                    from_status=prev_status,
                     to_status=mapped,
                     actor=None,
                 )
@@ -256,7 +257,7 @@ def gitlab_mr_to_work_item(
     completed_at = merged_at or closed_at
 
     if state_events:
-        prev_status = "unknown"
+        prev_status: WorkItemStatusCategory = "unknown"
         for ev in sorted(
             state_events,
             key=lambda e: (
@@ -268,7 +269,7 @@ def gitlab_mr_to_work_item(
             occurred_at = _to_utc(_parse_iso(_get(ev, "created_at"))) or created_at
 
             if ev_state == "merged":
-                to_status = "done"
+                to_status: WorkItemStatusCategory = "done"
             elif ev_state == "closed":
                 to_status = "canceled"
             elif ev_state == "opened" or ev_state == "reopened":
@@ -650,7 +651,7 @@ def gitlab_epic_to_work_item(
     completed_at = closed_at
 
     if state_events:
-        prev_status = "unknown"
+        prev_status: WorkItemStatusCategory = "unknown"
         for ev in sorted(
             state_events,
             key=lambda e: (
@@ -662,7 +663,7 @@ def gitlab_epic_to_work_item(
             occurred_at = _to_utc(_parse_iso(_get(ev, "created_at"))) or created_at
 
             if ev_state == "closed":
-                to_status = "done"
+                to_status: WorkItemStatusCategory = "done"
             elif ev_state == "opened" or ev_state == "reopened":
                 to_status = "todo"
             else:

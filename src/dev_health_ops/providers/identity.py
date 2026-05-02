@@ -114,11 +114,19 @@ def normalize_git_identity(
     Uses IdentityResolver if provided, otherwise falls back to email > name > "unknown".
     """
     if resolver is not None:
-        return resolver.resolve(
-            provider="git",  # type: ignore[arg-type]
-            email=email,
-            display_name=display_name,
-        )
+        if email:
+            normalized = _norm_email(email)
+            if normalized:
+                return resolver.alias_to_canonical.get(
+                    _norm_key(normalized), normalized
+                )
+        if display_name:
+            display_norm = display_name.strip()
+            if display_norm:
+                return resolver.alias_to_canonical.get(
+                    _norm_key(display_norm), display_norm
+                )
+        return "unknown"
 
     if email:
         normalized = email.strip()

@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from dev_health_ops.metrics.compute import commit_size_bucket, compute_daily_metrics
+from dev_health_ops.metrics.schemas import CommitStatRow, PullRequestRow
 
 
 def test_commit_size_bucket_boundaries() -> None:
@@ -19,7 +20,7 @@ def test_daily_user_aggregation_distinct_files_and_prs() -> None:
     day = date(2025, 2, 1)
     start = datetime(2025, 2, 1, tzinfo=timezone.utc)
 
-    commit_stat_rows = [
+    commit_stat_rows: list[CommitStatRow] = [
         # user1 commit1 touches file1 + file2 (small)
         {
             "repo_id": repo_id,
@@ -65,7 +66,7 @@ def test_daily_user_aggregation_distinct_files_and_prs() -> None:
         },
     ]
 
-    pull_request_rows = [
+    pull_request_rows: list[PullRequestRow] = [
         # PR authored today by user1, not merged
         {
             "repo_id": repo_id,
@@ -142,11 +143,11 @@ def test_repo_median_pr_cycle_even_count() -> None:
     day = date(2025, 2, 1)
     start = datetime(2025, 2, 1, tzinfo=timezone.utc)
 
-    commit_stat_rows = []
+    commit_stat_rows: list[CommitStatRow] = []
 
     # Cycle times in hours: 1, 3, 5, 10 -> median = (3+5)/2 = 4
     cycles = [1, 3, 5, 10]
-    pull_request_rows = []
+    pull_request_rows: list[PullRequestRow] = []
     for i, hours in enumerate(cycles, start=1):
         pull_request_rows.append(
             {

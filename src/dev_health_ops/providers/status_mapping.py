@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import yaml
 
@@ -29,13 +30,26 @@ _STATUS_PRIORITY: list[WorkItemStatusCategory] = [
     "unknown",
 ]
 
+_TYPE_PRIORITY: tuple[WorkItemType, ...] = (
+    "incident",
+    "bug",
+    "epic",
+    "story",
+    "task",
+    "chore",
+    "issue",
+    "unknown",
+)
+
+_TCategory = TypeVar("_TCategory", WorkItemStatusCategory, WorkItemType)
+
 
 def _norm_key(value: str) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
-def _index_values(values: Iterable[str], category: str) -> dict[str, str]:
-    indexed: dict[str, str] = {}
+def _index_values(values: Iterable[str], category: _TCategory) -> dict[str, _TCategory]:
+    indexed: dict[str, _TCategory] = {}
     for raw in values:
         key = _norm_key(str(raw))
         if not key:
@@ -116,18 +130,9 @@ class StatusMapping:
                 matched_types.add(mapped)
         if matched_types:
             # Bug/incident are most important for quality rollups.
-            for candidate in [
-                "incident",
-                "bug",
-                "epic",
-                "story",
-                "task",
-                "chore",
-                "issue",
-                "unknown",
-            ]:
+            for candidate in _TYPE_PRIORITY:
                 if candidate in matched_types:
-                    return candidate  # type: ignore[return-value]
+                    return candidate
 
         type_map = self.type_by_provider.get(provider_key) or {}
         if type_raw:
@@ -166,13 +171,13 @@ def load_status_mapping(path: Path | None = None) -> StatusMapping:
         # Start from base categories.
         for category, values in (base_status or {}).items():
             for key, mapped in _index_values(values or [], str(category)).items():
-                indexed[key] = mapped  # type: ignore[assignment]
+                indexed[key] = mapped
 
         # Apply provider overrides.
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("statuses") or {}).items():
             for key, mapped in _index_values(values or [], str(category)).items():
-                indexed[key] = mapped  # type: ignore[assignment]
+                indexed[key] = mapped
 
         # Ensure type is correct at runtime.
         return {k: v for k, v in indexed.items()}
@@ -184,7 +189,7 @@ def load_status_mapping(path: Path | None = None) -> StatusMapping:
         prov_cfg = providers.get(provider_name) or {}
         for category, values in (prov_cfg.get("status_labels") or {}).items():
             for key, mapped in _index_values(values or [], str(category)).items():
-                indexed[key] = mapped  # type: ignore[assignment]
+                indexed[key] = mapped
         return {k: v for k, v in indexed.items()}
 
     def _build_type_index(provider_name: str) -> dict[str, WorkItemType]:
@@ -195,7 +200,7 @@ def load_status_mapping(path: Path | None = None) -> StatusMapping:
                 key = _norm_key(str(raw))
                 if not key:
                     continue
-                indexed[key] = str(category)  # type: ignore[assignment]
+                indexed[key] = str(category)
         return indexed
 
     def _build_label_type_index(provider_name: str) -> dict[str, WorkItemType]:
@@ -206,7 +211,7 @@ def load_status_mapping(path: Path | None = None) -> StatusMapping:
                 key = _norm_key(str(raw))
                 if not key:
                     continue
-                indexed[key] = str(category)  # type: ignore[assignment]
+                indexed[key] = str(category)
         return indexed
 
     status_by_provider: dict[str, dict[str, WorkItemStatusCategory]] = {}

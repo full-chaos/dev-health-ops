@@ -171,11 +171,13 @@ class TestGenerateReleaseImpactDaily:
     def test_coverage_ratio_in_range(self, generator: SyntheticDataGenerator) -> None:
         records = generator.generate_release_impact_daily(days=5)
         for r in records:
+            assert r.coverage_ratio is not None
             assert 0.0 <= r.coverage_ratio <= 1.0
 
     def test_confidence_in_range(self, generator: SyntheticDataGenerator) -> None:
         records = generator.generate_release_impact_daily(days=5)
         for r in records:
+            assert r.release_impact_confidence_score is not None
             assert 0.0 <= r.release_impact_confidence_score <= 1.0
 
     def test_repo_id_set(self, generator: SyntheticDataGenerator) -> None:

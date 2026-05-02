@@ -23,6 +23,19 @@ from dev_health_ops.licensing.types import (
     GRACE_DAYS,
     LicenseLimits,
 )
+from dev_health_ops.licensing.validator import ValidationResult
+
+
+def assert_validation_error(result: ValidationResult) -> str:
+    error = result.error
+    assert error is not None
+    return error
+
+
+def assert_license_payload(result: ValidationResult) -> LicensePayload:
+    payload = result.payload
+    assert payload is not None
+    return payload
 
 
 def create_test_keypair() -> tuple[str, str]:
@@ -90,19 +103,19 @@ class TestLicenseValidator:
         result = validator.validate("invalid_license_no_dot")
 
         assert result.valid is False
-        assert "Invalid license format" in result.error
+        assert "Invalid license format" in assert_validation_error(result)
 
     def test_invalid_format_multiple_dots(self, validator: LicenseValidator):
         result = validator.validate("a.b.c")
 
         assert result.valid is False
-        assert "Invalid license format" in result.error
+        assert "Invalid license format" in assert_validation_error(result)
 
     def test_invalid_base64(self, validator: LicenseValidator):
         result = validator.validate("not!valid!base64.also!invalid!")
 
         assert result.valid is False
-        assert "Invalid base64" in result.error
+        assert "Invalid base64" in assert_validation_error(result)
 
     def test_invalid_signature(self, validator: LicenseValidator):
         other_public, other_private = create_test_keypair()
@@ -111,7 +124,7 @@ class TestLicenseValidator:
         result = validator.validate(license_str)
 
         assert result.valid is False
-        assert "Invalid signature" in result.error
+        assert "Invalid signature" in assert_validation_error(result)
 
     def test_tampered_payload(
         self, validator: LicenseValidator, keypair: tuple[str, str]
@@ -129,7 +142,7 @@ class TestLicenseValidator:
         result = validator.validate(tampered_license)
 
         assert result.valid is False
-        assert "Invalid signature" in result.error
+        assert "Invalid signature" in assert_validation_error(result)
 
     def test_expired_license_past_grace(
         self, validator: LicenseValidator, keypair: tuple[str, str]
@@ -142,7 +155,7 @@ class TestLicenseValidator:
         result = validator.validate(license_str)
 
         assert result.valid is False
-        assert "expired" in result.error.lower()
+        assert "expired" in assert_validation_error(result).lower()
 
     def test_license_in_grace_period(
         self, validator: LicenseValidator, keypair: tuple[str, str]
@@ -173,10 +186,11 @@ class TestLicenseValidator:
         _, private_key = keypair
         license_str = generate_test_license(private_key)
         result = validator.validate(license_str)
+        payload = assert_license_payload(result)
 
-        assert validator.has_feature(result.payload, "team_dashboard") is True
-        assert validator.has_feature(result.payload, "sso") is False
-        assert validator.has_feature(result.payload, "nonexistent") is False
+        assert validator.has_feature(payload, "team_dashboard") is True
+        assert validator.has_feature(payload, "sso") is False
+        assert validator.has_feature(payload, "nonexistent") is False
 
     def test_check_limit_within(
         self, validator: LicenseValidator, keypair: tuple[str, str]
@@ -184,9 +198,10 @@ class TestLicenseValidator:
         _, private_key = keypair
         license_str = generate_test_license(private_key)
         result = validator.validate(license_str)
+        payload = assert_license_payload(result)
 
-        assert validator.check_limit(result.payload, "users", 10) is True
-        assert validator.check_limit(result.payload, "users", 25) is True
+        assert validator.check_limit(payload, "users", 10) is True
+        assert validator.check_limit(payload, "users", 25) is True
 
     def test_check_limit_exceeded(
         self, validator: LicenseValidator, keypair: tuple[str, str]
@@ -194,8 +209,9 @@ class TestLicenseValidator:
         _, private_key = keypair
         license_str = generate_test_license(private_key)
         result = validator.validate(license_str)
+        payload = assert_license_payload(result)
 
-        assert validator.check_limit(result.payload, "users", 30) is False
+        assert validator.check_limit(payload, "users", 30) is False
 
     def test_invalid_public_key(self):
         with pytest.raises(LicenseValidationError, match="Invalid public key"):
@@ -428,7 +444,9 @@ class TestRequireFeatureDecorator:
         with pytest.raises(HTTPException) as exc_info:
             my_endpoint()
         assert exc_info.value.status_code == 402
-        assert exc_info.value.detail["error"] == "feature_not_licensed"
+        detail = exc_info.value.detail
+        assert isinstance(detail, dict)
+        assert detail.get("error") == "feature_not_licensed"
 
     @pytest.mark.asyncio
     async def test_async_function_allowed(self, keypair: tuple[str, str]):
@@ -532,7 +550,9 @@ class TestRequireLimitDecorator:
         with pytest.raises(HTTPException) as exc_info:
             add_user()
         assert exc_info.value.status_code == 402
-        assert exc_info.value.detail["error"] == "limit_exceeded"
+        detail = exc_info.value.detail
+        assert isinstance(detail, dict)
+        assert detail.get("error") == "limit_exceeded"
 
     @pytest.mark.asyncio
     async def test_async_function_within_limit(self, keypair: tuple[str, str]):
@@ -858,12 +878,13 @@ class TestSignLicense:
             license_str = sign_license(keypair.private_key, org_id="org-1", tier=tier)
             validator = LicenseValidator(keypair.public_key)
             result = validator.validate(license_str)
+            payload = assert_license_payload(result)
 
             assert result.valid is True
-            assert result.payload.tier == tier
-            assert result.payload.features == get_features_for_tier(tier)
-            assert result.payload.limits == DEFAULT_LIMITS[tier]
-            assert result.payload.grace_days == GRACE_DAYS[tier]
+            assert payload.tier == tier
+            assert payload.features == get_features_for_tier(tier)
+            assert payload.limits == DEFAULT_LIMITS[tier]
+            assert payload.grace_days == GRACE_DAYS[tier]
 
     def test_tier_string_normalization(self, keypair: KeyPair):
         license_str = sign_license(
@@ -873,7 +894,7 @@ class TestSignLicense:
         result = validator.validate(license_str)
 
         assert result.valid is True
-        assert result.payload.tier == LicenseTier.ENTERPRISE
+        assert assert_license_payload(result).tier == LicenseTier.ENTERPRISE
 
     def test_invalid_tier(self, keypair: KeyPair):
         with pytest.raises(ValueError, match="Invalid tier"):
@@ -907,9 +928,10 @@ class TestSignLicense:
         validator = LicenseValidator(keypair.public_key)
         result = validator.validate(license_str)
 
-        assert result.payload.features == custom_features
-        assert result.payload.limits == custom_limits
-        assert result.payload.grace_days == 7
+        payload = assert_license_payload(result)
+        assert payload.features == custom_features
+        assert payload.limits == custom_limits
+        assert payload.grace_days == 7
 
     def test_optional_fields(self, keypair: KeyPair):
         license_str = sign_license(
@@ -922,9 +944,10 @@ class TestSignLicense:
         validator = LicenseValidator(keypair.public_key)
         result = validator.validate(license_str)
 
-        assert result.payload.org_name == "Acme Corp"
-        assert result.payload.contact_email == "billing@acme.com"
-        assert result.payload.license_id is not None
+        payload = assert_license_payload(result)
+        assert payload.org_name == "Acme Corp"
+        assert payload.contact_email == "billing@acme.com"
+        assert payload.license_id is not None
 
     def test_explicit_license_id(self, keypair: KeyPair):
         license_str = sign_license(
@@ -936,7 +959,7 @@ class TestSignLicense:
         validator = LicenseValidator(keypair.public_key)
         result = validator.validate(license_str)
 
-        assert result.payload.license_id == "custom-id-42"
+        assert assert_license_payload(result).license_id == "custom-id-42"
 
     def test_duration_days_sets_expiry(self, keypair: KeyPair):
         now = int(time.time())
@@ -950,8 +973,9 @@ class TestSignLicense:
         validator = LicenseValidator(keypair.public_key)
         result = validator.validate(license_str)
 
-        assert result.payload.iat == now
-        assert result.payload.exp == now + 30 * 86400
+        payload = assert_license_payload(result)
+        assert payload.iat == now
+        assert payload.exp == now + 30 * 86400
 
     def test_tampered_license_rejected(self, keypair: KeyPair):
         license_str = sign_license(keypair.private_key, org_id="org-1", tier="team")
@@ -965,7 +989,7 @@ class TestSignLicense:
         validator = LicenseValidator(keypair.public_key)
         result = validator.validate(tampered_license)
         assert result.valid is False
-        assert "Invalid signature" in result.error
+        assert "Invalid signature" in assert_validation_error(result)
 
     def test_wrong_key_rejected(self):
         kp1 = generate_keypair()
@@ -975,7 +999,7 @@ class TestSignLicense:
         result = validator.validate(license_str)
 
         assert result.valid is False
-        assert "Invalid signature" in result.error
+        assert "Invalid signature" in assert_validation_error(result)
 
 
 class TestSignPayload:
@@ -1057,7 +1081,7 @@ class TestTestKeypairAndGenerateTestLicense:
         result = validator.validate(license_str)
 
         assert result.valid is True
-        assert result.payload.tier == LicenseTier.TEAM
+        assert assert_license_payload(result).tier == LicenseTier.TEAM
 
     def test_generate_test_license_custom_duration(self):
         from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
@@ -1070,8 +1094,9 @@ class TestTestKeypairAndGenerateTestLicense:
         result = validator.validate(license_str)
 
         assert result.valid is True
-        assert result.payload.iat == now
-        assert result.payload.exp == now + 30 * 86400
+        payload = assert_license_payload(result)
+        assert payload.iat == now
+        assert payload.exp == now + 30 * 86400
 
     def test_generate_test_license_default_duration_10_years(self):
         from dev_health_ops.licensing import TEST_KEYPAIR, generate_test_license
@@ -1081,7 +1106,7 @@ class TestTestKeypairAndGenerateTestLicense:
         validator = LicenseValidator(TEST_KEYPAIR.public_key)
         result = validator.validate(license_str)
 
-        assert result.payload.exp == now + 3650 * 86400
+        assert assert_license_payload(result).exp == now + 3650 * 86400
 
 
 class TestLicensesCliCommands:
@@ -1139,9 +1164,10 @@ class TestLicensesCliCommands:
         result = validator.validate(license_str)
 
         assert result.valid is True
-        assert result.payload.sub == "org-42"
-        assert result.payload.tier == LicenseTier.ENTERPRISE
-        assert result.payload.org_name == "Test Corp"
+        payload = assert_license_payload(result)
+        assert payload.sub == "org-42"
+        assert payload.tier == LicenseTier.ENTERPRISE
+        assert payload.org_name == "Test Corp"
 
 
 class TestGetFeaturesForTier:
@@ -1213,8 +1239,9 @@ class TestGetFeaturesForTier:
         result = validator.validate(license_str)
 
         assert result.valid is True
-        assert result.payload.features == get_features_for_tier(LicenseTier.ENTERPRISE)
-        assert result.payload.features["sso_saml"] is True
+        payload = assert_license_payload(result)
+        assert payload.features == get_features_for_tier(LicenseTier.ENTERPRISE)
+        assert payload.features["sso_saml"] is True
 
     def test_require_feature_passes_for_enterprise_sso_saml(self):
         """@require_feature works for the canonical sso_saml key at enterprise tier."""

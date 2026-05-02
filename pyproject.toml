@@ -190,5 +190,7 @@ module = [
   "signxml.*",
   "yaml",
   "yaml.*",
+  "requests",
+  "requests.*",
 ]
 ignore_missing_imports = true

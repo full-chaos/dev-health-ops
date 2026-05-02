@@ -255,7 +255,7 @@ def linear_comment_to_interaction_event(
     )
 
     user = _get(comment, "user") or {}
-    actor = identity.resolve(
+    actor: str | None = identity.resolve(
         provider="linear",
         email=_get(user, "email"),
         username=None,

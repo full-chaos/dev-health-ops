@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar
 
 if TYPE_CHECKING:
     from dev_health_ops.models.work_items import (
@@ -126,6 +126,12 @@ class Provider(ABC):
 
 
 _TClient = TypeVar("_TClient")
+_TClient_co = TypeVar("_TClient_co", covariant=True)
+
+
+class _ClientFactory(Protocol[_TClient_co]):
+    @classmethod
+    def from_env(cls) -> _TClient_co: ...
 
 
 class ProviderWithClient(Provider, Generic[_TClient]):
@@ -149,7 +155,7 @@ class ProviderWithClient(Provider, Generic[_TClient]):
       ``ingest``/``iter_ingest`` directly (e.g. streaming iterators).
     """
 
-    client_cls: ClassVar[type]
+    client_cls: ClassVar[type[Any]]
 
     def __init__(
         self,
@@ -182,7 +188,7 @@ class ProviderWithClient(Provider, Generic[_TClient]):
         Resolved on ``type(self)`` at call-time, which lets tests patch the
         classmethod directly (e.g. ``patch("pkg.client.Cls.from_env")``).
         """
-        return type(self).client_cls.from_env()
+        return self.client_cls.from_env()
 
     def _validate_ctx(self, ctx: IngestionContext) -> None:
         """Validate ``ctx`` before any client is built.

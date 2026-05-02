@@ -49,9 +49,11 @@ def get_clickhouse_uri() -> str | None:
 
 
 def _ensure_async_postgres(uri: str) -> str:
-    """Ensure PostgreSQL URI uses asyncpg driver."""
+    """Ensure semantic DB URIs use an async driver."""
     if uri.startswith("postgresql://"):
         return uri.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if uri.startswith("sqlite://") and not uri.startswith("sqlite+aiosqlite://"):
+        return uri.replace("sqlite://", "sqlite+aiosqlite://", 1)
     return uri
 
 
@@ -64,12 +66,11 @@ def get_postgres_engine() -> AsyncEngine:
             raise RuntimeError(
                 "PostgreSQL URI not configured. Set POSTGRES_URI environment variable."
             )
-        _postgres_engine = create_async_engine(
-            uri,
-            pool_pre_ping=True,
-            pool_size=20,
-            max_overflow=10,
-        )
+        engine_kwargs: dict[str, bool | int] = {"pool_pre_ping": True}
+        if uri.startswith("postgresql+"):
+            engine_kwargs["pool_size"] = 20
+            engine_kwargs["max_overflow"] = 10
+        _postgres_engine = create_async_engine(uri, **engine_kwargs)
     return _postgres_engine
 
 

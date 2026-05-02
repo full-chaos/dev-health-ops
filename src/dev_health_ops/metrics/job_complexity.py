@@ -73,7 +73,7 @@ def run_complexity_scan_job(
 
             try:
                 commit_sha = repo.git.rev_list("-1", f"--before={end_of_day_ts}", ref)
-            except git.Exc as e:
+            except git.GitCommandError as e:
                 logger.warning(f"Could not find commit for {d}: {e}")
                 continue
 

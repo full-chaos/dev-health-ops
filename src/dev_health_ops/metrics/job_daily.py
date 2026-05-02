@@ -191,7 +191,7 @@ async def run_daily_metrics_job(
 
     # Propagate org_id to sinks for auto-injection into metric records.
     for s in sinks:
-        s.org_id = org_id  # type: ignore[attr-defined]
+        setattr(s, "org_id", org_id)
 
     for s in sinks:
         if hasattr(s, "ensure_tables"):
@@ -369,9 +369,9 @@ async def run_daily_metrics_job(
             business_hours_end=business_end,
         )
 
-        wi_metrics = []
-        wi_user_metrics = []
-        wi_cycle_times = []
+        wi_metrics: list[Any] = []
+        wi_user_metrics: list[Any] = []
+        wi_cycle_times: list[Any] = []
         if work_items:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
                 compute_work_item_metrics_daily(
@@ -551,7 +551,7 @@ async def run_daily_metrics_finalize(
 
     # Propagate org_id to sinks for auto-injection into metric records.
     for s in sinks_list:
-        s.org_id = org_id  # type: ignore[attr-defined]
+        setattr(s, "org_id", org_id)
 
     for s in sinks_list:
         if hasattr(s, "ensure_tables"):

@@ -167,6 +167,9 @@ def to_dataclass(cls: Any, row_map: dict[str, Any]) -> Any:
     """Instantiate a dataclass from a dict, filtering unknown fields and parsing datetimes."""
     import dataclasses
 
+    if not isinstance(cls, type):
+        raise TypeError(f"Expected dataclass type, got {type(cls).__name__}")
+
     if not dataclasses.is_dataclass(cls):
         return cls(**row_map)
 

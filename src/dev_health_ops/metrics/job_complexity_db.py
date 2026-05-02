@@ -226,7 +226,7 @@ def run_complexity_db_job(
     sink = ClickHouseMetricsSink(resolved_db_url)
     try:
         sink.ensure_tables()
-        sink.org_id = org_id  # type: ignore[attr-defined]
+        setattr(sink, "org_id", org_id)
 
         scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
         if language_globs:
@@ -397,6 +397,7 @@ def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
 def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
     validate_sink(ns)
     end_day, backfill_days = resolve_date_range(ns)
+    org_id = getattr(ns, "org", None) or ""
     return run_complexity_db_job(
         repo_id=ns.repo_id,
         db_url=resolve_sink_uri(ns),
@@ -406,5 +407,5 @@ def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
         max_files=ns.max_files,
         search_pattern=ns.search,
         exclude_globs=ns.exclude,
-        org_id=getattr(ns, "org", None),
+        org_id=org_id,
     )

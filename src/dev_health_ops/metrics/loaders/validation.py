@@ -25,23 +25,20 @@ import types
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime
-from typing import (
-    Any,
-    Union,
-    get_args,
-    get_origin,
-    get_type_hints,
-)
+from typing import Any, Union, get_args, get_origin, get_type_hints
+
+typing_extensions_module: Any
 
 try:
-    from typing_extensions import NotRequired, is_typeddict
+    import typing_extensions as typing_extensions_module
 except ImportError:
+    typing_extensions_module = None
     from typing import _TypedDictMeta  # type: ignore[attr-defined]
 
-    def is_typeddict(tp: Any) -> bool:
+    def is_typeddict(tp: object) -> bool:
         return isinstance(tp, _TypedDictMeta)
-
-    NotRequired = None  # type: ignore[misc,assignment]
+else:
+    is_typeddict = typing_extensions_module.is_typeddict
 
 
 _VALIDATE_ENABLED = os.environ.get("VALIDATE_LOADER_OUTPUT", "").lower() in (
@@ -84,10 +81,10 @@ def _is_optional(type_hint: Any) -> bool:
 
 def _is_not_required(type_hint: Any) -> bool:
     """Check if a type hint is NotRequired[T]."""
-    if NotRequired is None:
+    if typing_extensions_module is None:
         return False
     origin = get_origin(type_hint)
-    return origin is NotRequired
+    return origin is typing_extensions_module.NotRequired
 
 
 def _unwrap_optional(type_hint: Any) -> Any:
@@ -214,7 +211,7 @@ def validate_typed_dict(
             ValidationError("__hints__", f"Failed to get type hints: {e}", row_index)
         ]
 
-    optional_keys = getattr(td_class, "__optional_keys__", set())
+    optional_keys: set[str] = getattr(td_class, "__optional_keys__", set())
 
     for key, type_hint in hints.items():
         if key in data:

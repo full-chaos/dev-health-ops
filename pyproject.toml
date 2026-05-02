@@ -155,3 +155,40 @@ per-file-ignores = { "__init__.py" = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests", "scripts"]
+plugins = ["pydantic.mypy"]
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+follow_imports = "skip"
+show_error_codes = true
+pretty = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+  "celery",
+  "celery.*",
+  "atlassian",
+  "atlassian.*",
+  "radon",
+  "radon.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["yaml", "yaml.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["dev_health_ops.processors.github"]
+ignore_errors = true

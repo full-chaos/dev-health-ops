@@ -9,16 +9,45 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Literal, TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from stripe.params._price_create_params import PriceCreateParams
+from stripe.params._product_create_params import ProductCreateParams
 
 from dev_health_ops.models.billing import BillingInterval, BillingPlan, BillingPrice
 
+from ._helpers import (
+    assign_attr,
+    ensure_str_dict,
+    normalize_billing_tier,
+    require_int,
+    require_str,
+)
 from .stripe_client import get_stripe_client
 
 logger = logging.getLogger(__name__)
+
+
+class StripeProductRecord(TypedDict):
+    id: str
+    name: str
+    description: str | None
+    metadata: dict[str, str]
+
+
+class StripeRecurringRecord(TypedDict):
+    interval: str
+
+
+class StripePriceRecord(TypedDict):
+    id: str
+    unit_amount: int
+    currency: str
+    active: bool
+    recurring: StripeRecurringRecord
 
 
 @dataclass
@@ -53,7 +82,9 @@ def _stripe_interval_to_billing(interval: str) -> str | None:
     return None
 
 
-async def _load_existing_plans(db: AsyncSession) -> dict[str, BillingPlan]:
+async def _load_existing_plans(
+    db: AsyncSession,
+) -> tuple[dict[str, BillingPlan], dict[str, BillingPlan], dict[str, BillingPlan]]:
     """Load all billing plans keyed by stripe_product_id, key, and slugified name."""
     result = await db.execute(select(BillingPlan))
     plans = list(result.scalars().all())
@@ -63,17 +94,19 @@ async def _load_existing_plans(db: AsyncSession) -> dict[str, BillingPlan]:
     by_slug: dict[str, BillingPlan] = {}
 
     for plan in plans:
-        if plan.stripe_product_id:
-            by_stripe_id[plan.stripe_product_id] = plan
-        by_key[plan.key] = plan
-        by_slug[_slugify(plan.name)] = plan
+        if isinstance(plan.stripe_product_id, str) and plan.stripe_product_id:
+            by_stripe_id[
+                require_str(plan.stripe_product_id, "plan.stripe_product_id")
+            ] = plan
+        by_key[require_str(plan.key, "plan.key")] = plan
+        by_slug[_slugify(require_str(plan.name, "plan.name"))] = plan
 
-    return by_stripe_id, by_key, by_slug  # type: ignore[return-value]
+    return by_stripe_id, by_key, by_slug
 
 
 def _match_plan(
     product_id: str,
-    metadata: dict,
+    metadata: dict[str, str],
     name: str,
     by_stripe_id: dict[str, BillingPlan],
     by_key: dict[str, BillingPlan],
@@ -97,15 +130,21 @@ def _match_plan(
 async def _upsert_prices(
     db: AsyncSession,
     plan: BillingPlan,
-    stripe_prices: list[dict],
+    stripe_prices: list[StripePriceRecord],
 ) -> None:
     """Create or update BillingPrice rows from Stripe price data."""
     result = await db.execute(
         select(BillingPrice).where(BillingPrice.plan_id == plan.id)
     )
     all_prices = list(result.scalars().all())
-    existing = {p.stripe_price_id: p for p in all_prices if p.stripe_price_id}
-    existing_by_interval = {p.interval: p for p in all_prices}
+    existing = {
+        require_str(p.stripe_price_id, "price.stripe_price_id"): p
+        for p in all_prices
+        if isinstance(p.stripe_price_id, str) and p.stripe_price_id
+    }
+    existing_by_interval = {
+        require_str(p.interval, "price.interval"): p for p in all_prices
+    }
 
     now = datetime.now(timezone.utc)
     for sp in stripe_prices:
@@ -120,18 +159,18 @@ async def _upsert_prices(
         if stripe_price_id in existing:
             # Update existing price matched by stripe_price_id
             price = existing[stripe_price_id]
-            price.amount = sp["unit_amount"]
-            price.currency = sp["currency"]
-            price.is_active = sp["active"]
-            price.updated_at = now
+            assign_attr(price, "amount", sp["unit_amount"])
+            assign_attr(price, "currency", sp["currency"])
+            assign_attr(price, "is_active", sp["active"])
+            assign_attr(price, "updated_at", now)
         elif billing_interval in existing_by_interval:
             # Match by interval and attach stripe_price_id
             price = existing_by_interval[billing_interval]
-            price.stripe_price_id = stripe_price_id
-            price.amount = sp["unit_amount"]
-            price.currency = sp["currency"]
-            price.is_active = sp["active"]
-            price.updated_at = now
+            assign_attr(price, "stripe_price_id", stripe_price_id)
+            assign_attr(price, "amount", sp["unit_amount"])
+            assign_attr(price, "currency", sp["currency"])
+            assign_attr(price, "is_active", sp["active"])
+            assign_attr(price, "updated_at", now)
         else:
             # Create new price
             db.add(
@@ -148,26 +187,75 @@ async def _upsert_prices(
             )
 
 
-def _fetch_all_products(client) -> list[dict]:
+def _product_to_record(product: object) -> StripeProductRecord | None:
+    product_id = getattr(product, "id", None)
+    name = getattr(product, "name", None)
+    if not isinstance(product_id, str) or not isinstance(name, str):
+        return None
+
+    metadata_obj = getattr(product, "metadata", None)
+    to_dict = getattr(metadata_obj, "to_dict", None)
+    metadata_source = to_dict() if callable(to_dict) else metadata_obj
+    metadata = ensure_str_dict(metadata_source)
+    description = getattr(product, "description", None)
+    return {
+        "id": product_id,
+        "name": name,
+        "description": description if isinstance(description, str) else None,
+        "metadata": metadata,
+    }
+
+
+def _fetch_all_products(client) -> list[StripeProductRecord]:
     """Fetch all active Stripe products with pagination."""
-    products = []
+    products: list[StripeProductRecord] = []
     params: dict = {"active": True, "limit": 100}
     while True:
         response = client.products.list(params=params)
-        products.extend(response.data)
+        for product in response.data:
+            record = _product_to_record(product)
+            if record is not None:
+                products.append(record)
         if not response.has_more:
             break
         params["starting_after"] = response.data[-1].id
     return products
 
 
-def _fetch_prices_for_product(client, product_id: str) -> list[dict]:
+def _price_to_record(stripe_price: object) -> StripePriceRecord | None:
+    price_id = getattr(stripe_price, "id", None)
+    unit_amount = getattr(stripe_price, "unit_amount", None)
+    currency = getattr(stripe_price, "currency", None)
+    active = getattr(stripe_price, "active", None)
+    recurring = getattr(stripe_price, "recurring", None)
+    interval = getattr(recurring, "interval", None) if recurring is not None else None
+    if (
+        not isinstance(price_id, str)
+        or not isinstance(unit_amount, int)
+        or not isinstance(currency, str)
+        or not isinstance(active, bool)
+        or not isinstance(interval, str)
+    ):
+        return None
+    return {
+        "id": price_id,
+        "unit_amount": unit_amount,
+        "currency": currency,
+        "active": active,
+        "recurring": {"interval": interval},
+    }
+
+
+def _fetch_prices_for_product(client, product_id: str) -> list[StripePriceRecord]:
     """Fetch all prices for a Stripe product."""
-    prices = []
+    prices: list[StripePriceRecord] = []
     params: dict = {"product": product_id, "active": True, "limit": 100}
     while True:
         response = client.prices.list(params=params)
-        prices.extend(response.data)
+        for stripe_price in response.data:
+            record = _price_to_record(stripe_price)
+            if record is not None:
+                prices.append(record)
         if not response.has_more:
             break
         params["starting_after"] = response.data[-1].id
@@ -191,15 +279,13 @@ async def pull_from_stripe(
     products = _fetch_all_products(client)
 
     for product in products:
-        product_id = product.id
-        name = product.name or ""
-        metadata = product.metadata.to_dict() if product.metadata else {}
+        product_id = product["id"]
+        name = product["name"]
+        metadata = product["metadata"]
 
         try:
             prices = _fetch_prices_for_product(client, product_id)
-            recurring_prices = [
-                p for p in prices if getattr(p, "recurring", None) is not None
-            ]
+            recurring_prices = prices
 
             if not recurring_prices:
                 report.skipped.append(f"{name} ({product_id}): no recurring prices")
@@ -213,25 +299,29 @@ async def pull_from_stripe(
 
             if existing_plan:
                 if not dry_run:
-                    existing_plan.stripe_product_id = product_id
-                    existing_plan.name = name or existing_plan.name
-                    if metadata.get("tier"):
-                        existing_plan.tier = metadata["tier"]
-                    existing_plan.updated_at = now
-                    await _upsert_prices(
-                        db,
+                    assign_attr(existing_plan, "stripe_product_id", product_id)
+                    assign_attr(
                         existing_plan,
-                        [_price_to_dict(p) for p in recurring_prices],
+                        "name",
+                        name or require_str(existing_plan.name, "plan.name"),
                     )
+                    if metadata.get("tier"):
+                        assign_attr(
+                            existing_plan,
+                            "tier",
+                            normalize_billing_tier(metadata["tier"]),
+                        )
+                    assign_attr(existing_plan, "updated_at", now)
+                    await _upsert_prices(db, existing_plan, recurring_prices)
                 report.updated.append(f"{existing_plan.key} ← {product_id}")
             else:
                 plan_key = metadata.get("plan_key") or _slugify(name)
-                tier = metadata.get("tier", "team")
+                tier = normalize_billing_tier(metadata.get("tier"))
                 if not dry_run:
                     plan = BillingPlan(
                         key=plan_key,
                         name=name,
-                        description=product.description or None,
+                        description=product["description"],
                         tier=tier,
                         stripe_product_id=product_id,
                         metadata_=metadata,
@@ -240,11 +330,7 @@ async def pull_from_stripe(
                     )
                     db.add(plan)
                     await db.flush()
-                    await _upsert_prices(
-                        db,
-                        plan,
-                        [_price_to_dict(p) for p in recurring_prices],
-                    )
+                    await _upsert_prices(db, plan, recurring_prices)
                     # Keep lookup dicts current so later products can
                     # match plans created earlier in this same loop.
                     by_stripe_id[product_id] = plan
@@ -268,21 +354,6 @@ async def pull_from_stripe(
     return report
 
 
-def _price_to_dict(stripe_price) -> dict:
-    """Normalize a Stripe price object to a plain dict."""
-    return {
-        "id": stripe_price.id,
-        "unit_amount": stripe_price.unit_amount,
-        "currency": stripe_price.currency,
-        "active": stripe_price.active,
-        "recurring": {
-            "interval": stripe_price.recurring.interval,
-        }
-        if stripe_price.recurring
-        else {},
-    }
-
-
 async def sync_all_to_stripe(db: AsyncSession) -> SyncReport:
     """Push all local plans without a stripe_product_id to Stripe.
 
@@ -301,14 +372,19 @@ async def sync_all_to_stripe(db: AsyncSession) -> SyncReport:
 
     for plan in plans:
         try:
-            product = client.products.create(
-                params={
-                    "name": plan.name,
-                    "description": plan.description or "",
-                    "metadata": {"plan_key": plan.key, "tier": plan.tier},
-                }
+            plan_description = (
+                plan.description if isinstance(plan.description, str) else ""
             )
-            plan.stripe_product_id = product.id
+            product_params: ProductCreateParams = {
+                "name": require_str(plan.name, "plan.name"),
+                "description": plan_description,
+                "metadata": {
+                    "plan_key": require_str(plan.key, "plan.key"),
+                    "tier": normalize_billing_tier(plan.tier),
+                },
+            }
+            product = client.products.create(params=product_params)
+            assign_attr(plan, "stripe_product_id", product.id)
 
             price_result = await db.execute(
                 select(BillingPrice).where(BillingPrice.plan_id == plan.id)
@@ -317,28 +393,29 @@ async def sync_all_to_stripe(db: AsyncSession) -> SyncReport:
             now = datetime.now(timezone.utc)
 
             for price in prices:
-                if price.stripe_price_id:
+                if isinstance(price.stripe_price_id, str) and price.stripe_price_id:
                     continue
-                stripe_price = client.prices.create(
-                    params={
-                        "product": product.id,
-                        "unit_amount": price.amount,
-                        "currency": price.currency,
-                        "recurring": {
-                            "interval": "month"
-                            if price.interval == BillingInterval.MONTHLY.value
-                            else "year"
-                        },
-                        "metadata": {
-                            "plan_key": plan.key,
-                            "interval": price.interval,
-                        },
-                    }
+                recurring_interval: Literal["month", "year"] = (
+                    "month"
+                    if require_str(price.interval, "price.interval")
+                    == BillingInterval.MONTHLY.value
+                    else "year"
                 )
-                price.stripe_price_id = stripe_price.id
-                price.updated_at = now
+                price_params: PriceCreateParams = {
+                    "product": product.id,
+                    "unit_amount": require_int(price.amount, "price.amount"),
+                    "currency": require_str(price.currency, "price.currency"),
+                    "recurring": {"interval": recurring_interval},
+                    "metadata": {
+                        "plan_key": require_str(plan.key, "plan.key"),
+                        "interval": require_str(price.interval, "price.interval"),
+                    },
+                }
+                stripe_price = client.prices.create(params=price_params)
+                assign_attr(price, "stripe_price_id", stripe_price.id)
+                assign_attr(price, "updated_at", now)
 
-            plan.updated_at = now
+            assign_attr(plan, "updated_at", now)
             report.created.append(f"{plan.key} → {product.id}")
 
         except Exception as exc:

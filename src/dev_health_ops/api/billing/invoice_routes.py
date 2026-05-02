@@ -14,7 +14,7 @@ from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.dependencies import get_postgres_session_dep as get_session
 from dev_health_ops.api.services.auth import AuthenticatedUser
 
-from ._helpers import _resolve_org_id
+from ._helpers import _resolve_org_id, assign_attr, require_str, require_uuid
 from .invoice_service import InvoiceService
 from .stripe_client import get_stripe_client
 
@@ -177,28 +177,33 @@ async def void_invoice(
     invoice = await invoice_service.get_invoice(session, invoice_uuid, resolved_org_id)
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    if invoice.status != "open":
+    if require_str(invoice.status, "invoice.status") != "open":
         raise HTTPException(
             status_code=400,
-            detail=f"Only open invoices can be voided (current status: {invoice.status})",
+            detail=(
+                "Only open invoices can be voided "
+                f"(current status: {require_str(invoice.status, 'invoice.status')})"
+            ),
         )
 
     try:
         stripe_client = get_stripe_client()
-        stripe_client.invoices.void_invoice(invoice.stripe_invoice_id)
+        stripe_client.invoices.void_invoice(
+            require_str(invoice.stripe_invoice_id, "invoice.stripe_invoice_id")
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to void invoice: {exc}")
 
     updated_invoice = await invoice_service.mark_voided(
-        session, invoice.stripe_invoice_id
+        session, require_str(invoice.stripe_invoice_id, "invoice.stripe_invoice_id")
     )
-    updated_invoice.amount_remaining = int(Decimal("0"))
+    assign_attr(updated_invoice, "amount_remaining", int(Decimal("0")))
     await session.commit()
     refreshed = await invoice_service.get_invoice(
         session,
-        updated_invoice.id,
+        require_uuid(updated_invoice.id, "invoice.id"),
         resolved_org_id,
     )
     if refreshed is None:

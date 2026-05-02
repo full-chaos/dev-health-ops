@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.billing.audit_service import BillingAuditService
 from dev_health_ops.models.billing_audit import BillingAuditLog
 
+from ._helpers import ensure_dict, require_str, require_uuid
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,14 +157,14 @@ class ReconciliationService:
 
         description = f"Mismatch resolved: {resolution}"
         return await self.audit_service.log(
-            org_id=row.org_id,
+            org_id=require_uuid(row.org_id, "audit.org_id"),
             action="reconciliation.completed",
-            resource_type=row.resource_type,
-            resource_id=row.resource_id,
+            resource_type=require_str(row.resource_type, "audit.resource_type"),
+            resource_id=require_uuid(row.resource_id, "audit.resource_id"),
             description=description,
             actor_id=actor_id,
-            local_state=row.local_state,
-            stripe_state=row.stripe_state,
+            local_state=ensure_dict(row.local_state),
+            stripe_state=ensure_dict(row.stripe_state),
             reconciliation_status="matched",
         )
 

@@ -21,6 +21,12 @@ def _reset_price_map():
     reset_price_tier_map()
 
 
+@pytest.fixture(autouse=True)
+def _billing_env():
+    with patch.dict("os.environ", {"APP_BASE_URL": "https://example.com"}):
+        yield
+
+
 def _build_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -453,7 +459,11 @@ async def test_webhook_invoice_paid_sends_receipt_email(client):
 
     mock_inv_svc = MagicMock()
     mock_inv_svc.is_duplicate_event = AsyncMock(return_value=False)
-    mock_invoice = MagicMock(id="inv_test", stripe_invoice_id="in_test", status="paid")
+    mock_invoice = MagicMock(
+        id="00000000-0000-0000-0000-000000000111",
+        stripe_invoice_id="in_test",
+        status="paid",
+    )
     mock_inv_svc.upsert_invoice = AsyncMock(return_value=mock_invoice)
     mock_inv_svc.upsert_line_items = AsyncMock()
     mock_inv_svc.mark_paid = AsyncMock()
@@ -516,7 +526,11 @@ async def test_webhook_invoice_payment_failed_sends_email(client):
 
     mock_inv_svc = MagicMock()
     mock_inv_svc.is_duplicate_event = AsyncMock(return_value=False)
-    mock_invoice = MagicMock(id="inv_test", stripe_invoice_id="in_test", status="open")
+    mock_invoice = MagicMock(
+        id="00000000-0000-0000-0000-000000000222",
+        stripe_invoice_id="in_test",
+        status="open",
+    )
     mock_inv_svc.upsert_invoice = AsyncMock(return_value=mock_invoice)
     mock_inv_svc.upsert_line_items = AsyncMock()
     mock_inv_svc.mark_paid = AsyncMock()
@@ -715,7 +729,11 @@ async def test_webhook_email_failure_does_not_break_webhook(client):
 
     mock_inv_svc = MagicMock()
     mock_inv_svc.is_duplicate_event = AsyncMock(return_value=False)
-    mock_invoice = MagicMock(id="inv_test", stripe_invoice_id="in_test", status="paid")
+    mock_invoice = MagicMock(
+        id="00000000-0000-0000-0000-000000000333",
+        stripe_invoice_id="in_test",
+        status="paid",
+    )
     mock_inv_svc.upsert_invoice = AsyncMock(return_value=mock_invoice)
     mock_inv_svc.upsert_line_items = AsyncMock()
     mock_inv_svc.mark_paid = AsyncMock()
@@ -1136,10 +1154,10 @@ async def test_subscription_creates_org_license(bridge_db):
         assert lic is not None, "OrgLicense must be created after subscription upsert"
         assert lic.tier == "enterprise"
         features = lic.features_override
-        assert isinstance(features, list)
-        assert "sso_saml" in features
-        assert "audit_log" in features
-        assert "ip_allowlist" in features
+        assert isinstance(features, dict)
+        assert features.get("sso_saml") is True
+        assert features.get("audit_log") is True
+        assert features.get("ip_allowlist") is True
 
 
 @pytest.mark.asyncio
@@ -1273,7 +1291,7 @@ async def test_subscription_cancellation_downgrades_license(bridge_db):
             "Cancelled subscription must downgrade to community"
         )
         assert lic.is_valid is False, "Cancelled OrgLicense must be marked invalid"
-        assert lic.features_override == [], "No features for community downgrade"
+        assert lic.features_override == {}, "No features for community downgrade"
 
 
 @pytest.mark.asyncio

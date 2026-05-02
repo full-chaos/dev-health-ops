@@ -6,9 +6,17 @@ from typing import Any
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from stripe.params._refund_create_params import RefundCreateParams
 
 from dev_health_ops.models.refunds import Refund
 
+from ._helpers import (
+    RefundReason,
+    assign_attr,
+    ensure_dict,
+    require_int,
+    require_uuid,
+)
 from .stripe_client import get_stripe_client
 
 
@@ -24,7 +32,7 @@ class RefundService:
         db: AsyncSession,
         invoice_id: uuid.UUID,
         amount: int | None = None,
-        reason: str | None = None,
+        reason: RefundReason | None = None,
         description: str | None = None,
         actor_id: uuid.UUID | None = None,
     ) -> Refund:
@@ -57,7 +65,7 @@ class RefundService:
             raise ValueError("Invoice does not have a Stripe charge ID")
 
         stripe_client = get_stripe_client()
-        params: dict[str, Any] = {
+        params: RefundCreateParams = {
             "charge": charge_id,
             "amount": refund_amount,
             "metadata": {
@@ -212,7 +220,7 @@ class RefundService:
             except ValueError:
                 resolved_org_id = None
         if resolved_org_id is None and refund is not None:
-            resolved_org_id = refund.org_id
+            resolved_org_id = require_uuid(refund.org_id, "refund.org_id")
 
         if resolved_org_id is None:
             return
@@ -242,33 +250,65 @@ class RefundService:
                 description=_obj_get(stripe_refund, "description"),
                 failure_reason=_obj_get(stripe_refund, "failure_reason"),
                 initiated_by=None,
-                metadata_=metadata,
+                metadata_=ensure_dict(metadata),
             )
             db.add(refund)
         else:
-            refund.stripe_charge_id = str(
-                charge_id
-                or _obj_get(stripe_refund, "charge")
-                or refund.stripe_charge_id
+            assign_attr(
+                refund,
+                "stripe_charge_id",
+                str(
+                    charge_id
+                    or _obj_get(stripe_refund, "charge")
+                    or refund.stripe_charge_id
+                ),
             )
-            refund.stripe_payment_intent_id = _obj_get(
-                stripe_refund, "payment_intent", refund.stripe_payment_intent_id
+            assign_attr(
+                refund,
+                "stripe_payment_intent_id",
+                _obj_get(
+                    stripe_refund, "payment_intent", refund.stripe_payment_intent_id
+                ),
             )
-            refund.amount = int(_obj_get(stripe_refund, "amount") or refund.amount)
-            refund.currency = str(
-                _obj_get(stripe_refund, "currency") or refund.currency or "usd"
-            ).lower()
-            refund.status = str(_obj_get(stripe_refund, "status") or refund.status)
-            refund.reason = _obj_get(stripe_refund, "reason", refund.reason)
+            assign_attr(
+                refund,
+                "amount",
+                int(
+                    _obj_get(
+                        stripe_refund,
+                        "amount",
+                        require_int(refund.amount, "refund.amount"),
+                    )
+                ),
+            )
+            assign_attr(
+                refund,
+                "currency",
+                str(
+                    _obj_get(stripe_refund, "currency") or refund.currency or "usd"
+                ).lower(),
+            )
+            assign_attr(
+                refund,
+                "status",
+                str(_obj_get(stripe_refund, "status") or refund.status),
+            )
+            assign_attr(
+                refund, "reason", _obj_get(stripe_refund, "reason", refund.reason)
+            )
             stripe_description = _obj_get(stripe_refund, "description")
-            if stripe_description and not refund.description:
-                refund.description = stripe_description
-            refund.failure_reason = _obj_get(
-                stripe_refund, "failure_reason", refund.failure_reason
+            if isinstance(stripe_description, str) and not isinstance(
+                refund.description, str
+            ):
+                assign_attr(refund, "description", stripe_description)
+            assign_attr(
+                refund,
+                "failure_reason",
+                _obj_get(stripe_refund, "failure_reason", refund.failure_reason),
             )
-            refund.metadata_ = metadata
+            assign_attr(refund, "metadata_", ensure_dict(metadata))
             if invoice_id and refund.invoice_id is None:
-                refund.invoice_id = invoice_id
+                assign_attr(refund, "invoice_id", invoice_id)
 
         await db.commit()
 

@@ -18,6 +18,8 @@ class CommitStatRow(TypedDict):
     file_path: str | None
     additions: int
     deletions: int
+    old_file_mode: NotRequired[str | None]
+    new_file_mode: NotRequired[str | None]
 
 
 class PullRequestRow(TypedDict):

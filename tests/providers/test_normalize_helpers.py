@@ -76,6 +76,8 @@ class TestLabelsFromNodes:
 
     def test_object_nodes(self) -> None:
         class N:
+            name: object
+
             def __init__(self, name: str) -> None:
                 self.name = name
 

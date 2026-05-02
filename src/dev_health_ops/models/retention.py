@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -17,6 +18,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
+
+if TYPE_CHECKING:
+    from dev_health_ops.models.users import Organization, User
 
 
 class RetentionResourceType(str, Enum):
@@ -71,10 +75,10 @@ class OrgRetentionPolicy(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    organization: Mapped[Organization] = relationship(  # noqa: F821
+    organization: Mapped["Organization"] = relationship(
         "Organization", back_populates="retention_policies"
     )
-    created_by: Mapped[User | None] = relationship(  # noqa: F821
+    created_by: Mapped["User | None"] = relationship(
         "User", foreign_keys=[created_by_id]
     )
 

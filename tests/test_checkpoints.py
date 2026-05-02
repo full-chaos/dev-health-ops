@@ -82,6 +82,7 @@ def test_mark_completed_sets_status_and_timestamp(db_session):
     mark_completed(db_session, cp.id)
 
     refreshed = get_checkpoint(db_session, ORG_ID, repo_id, METRIC_TYPE, DAY)
+    assert refreshed is not None
     assert refreshed.status == CheckpointStatus.COMPLETED
     assert refreshed.completed_at is not None
 
@@ -98,6 +99,7 @@ def test_mark_failed_sets_status_and_error(db_session):
     mark_failed(db_session, cp.id, "connection timeout")
 
     refreshed = get_checkpoint(db_session, ORG_ID, repo_id, METRIC_TYPE, DAY)
+    assert refreshed is not None
     assert refreshed.status == CheckpointStatus.FAILED
     assert refreshed.error == "connection timeout"
 
@@ -155,6 +157,7 @@ def test_reset_stale_running(db_session):
 
     assert count == 1
     refreshed = get_checkpoint(db_session, ORG_ID, repo_id, METRIC_TYPE, DAY)
+    assert refreshed is not None
     assert refreshed.status == CheckpointStatus.PENDING
     assert refreshed.started_at is None
     assert refreshed.worker_id is None

@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
@@ -28,6 +28,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dev_health_ops.models.git import GUID, Base
+
+if TYPE_CHECKING:
+    from dev_health_ops.models.retention import OrgRetentionPolicy
 
 
 class MemberRole(str, Enum):
@@ -196,7 +199,7 @@ class Organization(Base):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
-    retention_policies: Mapped[list[OrgRetentionPolicy]] = relationship(  # noqa: F821
+    retention_policies: Mapped[list["OrgRetentionPolicy"]] = relationship(
         "OrgRetentionPolicy",
         back_populates="organization",
         cascade="all, delete-orphan",

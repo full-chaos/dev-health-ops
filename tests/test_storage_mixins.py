@@ -16,6 +16,10 @@ from dev_health_ops.storage.mixins.work_item import WorkItemMixin
 
 
 class _DummyStore(GitDataMixin, CicdMixin, TestOpsTestsMixin, WorkItemMixin):
+    session = None
+    _ci_pipeline_runs_table = "ci_pipeline_runs"
+    _ci_job_runs_table = "ci_job_runs"
+
     def __init__(self):
         self.calls = []
         self._work_items_table = "work_items"
@@ -26,6 +30,9 @@ class _DummyStore(GitDataMixin, CicdMixin, TestOpsTestsMixin, WorkItemMixin):
         self._test_suite_results_table = "test_suite_results"
         self._test_case_results_table = "test_case_results"
         self._coverage_snapshots_table = "coverage_snapshots"
+
+    def _insert_for_dialect(self, model):
+        return None
 
     async def _upsert_many(self, model, rows, conflict_columns, update_columns):
         self.calls.append(

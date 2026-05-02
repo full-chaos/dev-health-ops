@@ -86,6 +86,18 @@ def _review_state(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+def _submitted_reviews(
+    reviews: list[dict[str, Any]],
+) -> list[tuple[datetime, dict[str, Any]]]:
+    ordered: list[tuple[datetime, dict[str, Any]]] = []
+    for review in reviews:
+        submitted_at = review.get("submitted_at")
+        if isinstance(submitted_at, datetime):
+            ordered.append((submitted_at, review))
+    ordered.sort(key=lambda item: item[0])
+    return ordered
+
+
 def _rework_windows(
     reviews: list[dict[str, Any]],
     *,
@@ -96,20 +108,15 @@ def _rework_windows(
     if not reviews:
         return windows
 
-    ordered = [r for r in reviews if r.get("submitted_at")]
-    ordered.sort(key=lambda r: r.get("submitted_at"))
+    ordered = _submitted_reviews(reviews)
 
-    for idx, review in enumerate(ordered):
+    for idx, (start, review) in enumerate(ordered):
         state = _review_state(review.get("state"))
         if state not in {"changes_requested", "requested_changes", "request_changes"}:
             continue
-        start = review.get("submitted_at")
-        if start is None:
-            continue
         next_time = review_end
-        for next_review in ordered[idx + 1 :]:
-            candidate = next_review.get("submitted_at")
-            if candidate and candidate > start:
+        for candidate, _next_review in ordered[idx + 1 :]:
+            if candidate > start:
                 next_time = candidate
                 break
         if start < review_start:
@@ -120,6 +127,237 @@ def _rework_windows(
             windows.append((start, next_time))
 
     return windows
+
+
+def _build_pr_flame_response(
+    *,
+    repo_id: str,
+    number: int,
+    pr: dict[str, Any],
+    reviews: list[dict[str, Any]],
+) -> FlameResponse:
+    start = pr.get("created_at")
+    end = pr.get("merged_at") or pr.get("closed_at") or _now_like(start)
+    if start is None:
+        raise HTTPException(status_code=404, detail="PR timeline unavailable")
+
+    root_id = f"pr:{repo_id}:{number}"
+    pr_frames: list[FlameFrame] = []
+    root = _frame(
+        frame_id=root_id,
+        parent_id=None,
+        label="PR lifecycle",
+        start=start,
+        end=end,
+        state="active",
+        category="planned",
+    )
+    if root:
+        pr_frames.append(root)
+
+    first_review_at = pr.get("first_review_at")
+    if first_review_at and first_review_at > start:
+        wait = _frame(
+            frame_id=f"{root_id}:wait",
+            parent_id=root_id,
+            label="Review waiting",
+            start=start,
+            end=first_review_at,
+            state="waiting",
+            category="planned",
+        )
+        if wait:
+            pr_frames.append(wait)
+
+    review_start = first_review_at or start
+    review = _frame(
+        frame_id=f"{root_id}:review",
+        parent_id=root_id,
+        label="Review and merge",
+        start=review_start,
+        end=end,
+        state="active",
+        category="planned",
+    )
+    if review:
+        pr_frames.append(review)
+        for idx, (rework_start, rework_end) in enumerate(
+            _rework_windows(reviews, review_start=review_start, review_end=end),
+            start=1,
+        ):
+            rework = _frame(
+                frame_id=f"{root_id}:rework:{idx}",
+                parent_id=review.id,
+                label="Rework loop",
+                start=rework_start,
+                end=rework_end,
+                state="active",
+                category="rework",
+            )
+            if rework:
+                pr_frames.append(rework)
+
+    timeline = FlameTimeline(start=start, end=end)
+    if not validate_flame_frames(timeline, pr_frames):
+        raise HTTPException(status_code=422, detail="Flame frames have gaps")
+
+    entity = {
+        "repo_id": repo_id,
+        "number": number,
+        "title": pr.get("title"),
+        "state": pr.get("state"),
+    }
+    return FlameResponse(entity=entity, timeline=timeline, frames=pr_frames)
+
+
+def _build_issue_flame_response(
+    *,
+    entity_id: str,
+    issue: dict[str, Any],
+) -> FlameResponse:
+    start = issue.get("created_at")
+    if start is None:
+        raise HTTPException(status_code=404, detail="Issue timeline unavailable")
+    end = issue.get("completed_at") or _now_like(start)
+
+    root_id = f"issue:{entity_id}"
+    issue_frames: list[FlameFrame] = []
+    root = _frame(
+        frame_id=root_id,
+        parent_id=None,
+        label="Issue lifecycle",
+        start=start,
+        end=end,
+        state="active",
+        category="planned",
+    )
+    if root:
+        issue_frames.append(root)
+
+    started_at = issue.get("started_at")
+    if started_at and started_at > start:
+        waiting = _frame(
+            frame_id=f"{root_id}:wait",
+            parent_id=root_id,
+            label="Backlog waiting",
+            start=start,
+            end=started_at,
+            state="waiting",
+            category="planned",
+        )
+        if waiting:
+            issue_frames.append(waiting)
+
+    progress_start = started_at or start
+    progress = _frame(
+        frame_id=f"{root_id}:work",
+        parent_id=root_id,
+        label="Active work",
+        start=progress_start,
+        end=end,
+        state="active",
+        category="planned",
+    )
+    if progress:
+        issue_frames.append(progress)
+
+    timeline = FlameTimeline(start=start, end=end)
+    if not validate_flame_frames(timeline, issue_frames):
+        raise HTTPException(status_code=422, detail="Flame frames have gaps")
+
+    entity = {
+        "work_item_id": issue.get("work_item_id"),
+        "provider": issue.get("provider"),
+        "type": issue.get("type"),
+        "status": issue.get("status"),
+    }
+    return FlameResponse(entity=entity, timeline=timeline, frames=issue_frames)
+
+
+def _build_deployment_flame_response(
+    *,
+    repo_id: str,
+    deployment_id: str,
+    deployment: dict[str, Any],
+) -> FlameResponse:
+    start = (
+        deployment.get("started_at")
+        or deployment.get("merged_at")
+        or deployment.get("deployed_at")
+    )
+    if start is None:
+        raise HTTPException(status_code=404, detail="Deployment timeline unavailable")
+    end = (
+        deployment.get("finished_at")
+        or deployment.get("deployed_at")
+        or _now_like(start)
+    )
+
+    root_id = f"deploy:{repo_id}:{deployment_id}"
+    deployment_frames: list[FlameFrame] = []
+    root = _frame(
+        frame_id=root_id,
+        parent_id=None,
+        label="Deployment lifecycle",
+        start=start,
+        end=end,
+        state="ci",
+        category="planned",
+    )
+    if root:
+        deployment_frames.append(root)
+
+    merged_at = deployment.get("merged_at")
+    if merged_at and merged_at < start:
+        queue = _frame(
+            frame_id=f"{root_id}:queue",
+            parent_id=root_id,
+            label="Queue waiting",
+            start=merged_at,
+            end=start,
+            state="waiting",
+            category="planned",
+        )
+        if queue:
+            deployment_frames.append(queue)
+
+    pipeline = _frame(
+        frame_id=f"{root_id}:pipeline",
+        parent_id=root_id,
+        label="Deploy pipeline",
+        start=start,
+        end=end,
+        state="ci",
+        category="planned",
+    )
+    if pipeline:
+        deployment_frames.append(pipeline)
+
+    deployed_at = deployment.get("deployed_at")
+    if pipeline and deployed_at and deployed_at > pipeline.start and end > deployed_at:
+        deploy = _frame(
+            frame_id=f"{root_id}:deploy",
+            parent_id=pipeline.id,
+            label="Deploy",
+            start=deployed_at,
+            end=end,
+            state="active",
+            category="planned",
+        )
+        if deploy:
+            deployment_frames.append(deploy)
+
+    timeline = FlameTimeline(start=start, end=end)
+    if not validate_flame_frames(timeline, deployment_frames):
+        raise HTTPException(status_code=422, detail="Flame frames have gaps")
+
+    entity = {
+        "repo_id": repo_id,
+        "deployment_id": deployment_id,
+        "status": deployment.get("status"),
+        "environment": deployment.get("environment"),
+    }
+    return FlameResponse(entity=entity, timeline=timeline, frames=deployment_frames)
 
 
 async def build_flame_response(
@@ -154,144 +392,19 @@ async def build_flame_response(
                 number=number,
                 org_id=org_id,
             )
-
-            start = pr.get("created_at")
-            end = pr.get("merged_at") or pr.get("closed_at") or _now_like(start)
-            if start is None:
-                raise HTTPException(status_code=404, detail="PR timeline unavailable")
-
-            root_id = f"pr:{repo_id}:{number}"
-            frames: list[FlameFrame] = []
-            root = _frame(
-                frame_id=root_id,
-                parent_id=None,
-                label="PR lifecycle",
-                start=start,
-                end=end,
-                state="active",
-                category="planned",
+            return _build_pr_flame_response(
+                repo_id=repo_id,
+                number=number,
+                pr=pr,
+                reviews=reviews,
             )
-            if root:
-                frames.append(root)
-
-            first_review_at = pr.get("first_review_at")
-            if first_review_at and first_review_at > start:
-                wait = _frame(
-                    frame_id=f"{root_id}:wait",
-                    parent_id=root_id,
-                    label="Review waiting",
-                    start=start,
-                    end=first_review_at,
-                    state="waiting",
-                    category="planned",
-                )
-                if wait:
-                    frames.append(wait)
-
-            review_start = first_review_at or start
-            review = _frame(
-                frame_id=f"{root_id}:review",
-                parent_id=root_id,
-                label="Review and merge",
-                start=review_start,
-                end=end,
-                state="active",
-                category="planned",
-            )
-            if review:
-                frames.append(review)
-                for idx, (rework_start, rework_end) in enumerate(
-                    _rework_windows(reviews, review_start=review_start, review_end=end),
-                    start=1,
-                ):
-                    rework = _frame(
-                        frame_id=f"{root_id}:rework:{idx}",
-                        parent_id=review.id,
-                        label="Rework loop",
-                        start=rework_start,
-                        end=rework_end,
-                        state="active",
-                        category="rework",
-                    )
-                    if rework:
-                        frames.append(rework)
-
-            timeline = FlameTimeline(start=start, end=end)
-            if not validate_flame_frames(timeline, frames):
-                raise HTTPException(status_code=422, detail="Flame frames have gaps")
-
-            entity = {
-                "repo_id": repo_id,
-                "number": number,
-                "title": pr.get("title"),
-                "state": pr.get("state"),
-            }
-            return FlameResponse(entity=entity, timeline=timeline, frames=frames)
 
         if entity_type == "issue":
             issue = await fetch_issue(sink, work_item_id=entity_id, org_id=org_id)
             if not issue:
                 raise HTTPException(status_code=404, detail="Issue not found")
 
-            start = issue.get("created_at")
-            if start is None:
-                raise HTTPException(
-                    status_code=404, detail="Issue timeline unavailable"
-                )
-            end = issue.get("completed_at") or _now_like(start)
-
-            root_id = f"issue:{entity_id}"
-            frames: list[FlameFrame] = []
-            root = _frame(
-                frame_id=root_id,
-                parent_id=None,
-                label="Issue lifecycle",
-                start=start,
-                end=end,
-                state="active",
-                category="planned",
-            )
-            if root:
-                frames.append(root)
-
-            started_at = issue.get("started_at")
-            if started_at and started_at > start:
-                waiting = _frame(
-                    frame_id=f"{root_id}:wait",
-                    parent_id=root_id,
-                    label="Backlog waiting",
-                    start=start,
-                    end=started_at,
-                    state="waiting",
-                    category="planned",
-                )
-                if waiting:
-                    frames.append(waiting)
-
-            progress_start = started_at or start
-            progress = _frame(
-                frame_id=f"{root_id}:work",
-                parent_id=root_id,
-                label="Active work",
-                start=progress_start,
-                end=end,
-                state="active",
-                category="planned",
-            )
-            if progress:
-                frames.append(progress)
-
-            timeline = FlameTimeline(start=start, end=end)
-            if not validate_flame_frames(timeline, frames):
-                raise HTTPException(status_code=422, detail="Flame frames have gaps")
-
-            entity = {
-                "work_item_id": issue.get("work_item_id"),
-                "provider": issue.get("provider"),
-                "type": issue.get("type"),
-                "status": issue.get("status"),
-            }
-            return FlameResponse(entity=entity, timeline=timeline, frames=frames)
+            return _build_issue_flame_response(entity_id=entity_id, issue=issue)
 
         if entity_type == "deployment":
             repo_id, deployment_id = _parse_repo_entity(entity_id)
@@ -304,90 +417,10 @@ async def build_flame_response(
             if not deployment:
                 raise HTTPException(status_code=404, detail="Deployment not found")
 
-            start = (
-                deployment.get("started_at")
-                or deployment.get("merged_at")
-                or deployment.get("deployed_at")
+            return _build_deployment_flame_response(
+                repo_id=repo_id,
+                deployment_id=deployment_id,
+                deployment=deployment,
             )
-            if start is None:
-                raise HTTPException(
-                    status_code=404, detail="Deployment timeline unavailable"
-                )
-            end = (
-                deployment.get("finished_at")
-                or deployment.get("deployed_at")
-                or _now_like(start)
-            )
-
-            root_id = f"deploy:{repo_id}:{deployment_id}"
-            frames: list[FlameFrame] = []
-            root = _frame(
-                frame_id=root_id,
-                parent_id=None,
-                label="Deployment lifecycle",
-                start=start,
-                end=end,
-                state="ci",
-                category="planned",
-            )
-            if root:
-                frames.append(root)
-
-            merged_at = deployment.get("merged_at")
-            if merged_at and merged_at < start:
-                queue = _frame(
-                    frame_id=f"{root_id}:queue",
-                    parent_id=root_id,
-                    label="Queue waiting",
-                    start=merged_at,
-                    end=start,
-                    state="waiting",
-                    category="planned",
-                )
-                if queue:
-                    frames.append(queue)
-
-            pipeline = _frame(
-                frame_id=f"{root_id}:pipeline",
-                parent_id=root_id,
-                label="Deploy pipeline",
-                start=start,
-                end=end,
-                state="ci",
-                category="planned",
-            )
-            if pipeline:
-                frames.append(pipeline)
-
-            deployed_at = deployment.get("deployed_at")
-            if (
-                pipeline
-                and deployed_at
-                and deployed_at > pipeline.start
-                and end > deployed_at
-            ):
-                deploy = _frame(
-                    frame_id=f"{root_id}:deploy",
-                    parent_id=pipeline.id,
-                    label="Deploy",
-                    start=deployed_at,
-                    end=end,
-                    state="active",
-                    category="planned",
-                )
-                if deploy:
-                    frames.append(deploy)
-
-            timeline = FlameTimeline(start=start, end=end)
-            if not validate_flame_frames(timeline, frames):
-                raise HTTPException(status_code=422, detail="Flame frames have gaps")
-
-            entity = {
-                "repo_id": repo_id,
-                "deployment_id": deployment_id,
-                "status": deployment.get("status"),
-                "environment": deployment.get("environment"),
-            }
-            return FlameResponse(entity=entity, timeline=timeline, frames=frames)
 
     raise HTTPException(status_code=404, detail="Unknown entity type")

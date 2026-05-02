@@ -129,7 +129,6 @@ async def accept_invite(
     invite: OrgInvite,
     user_id: uuid.UUID,
 ) -> Membership:
-    invite = invite
     now = datetime.now(timezone.utc)
     if invite.status != "pending" or _as_utc(invite.expires_at) < now:
         raise ValueError("Invite is not valid")

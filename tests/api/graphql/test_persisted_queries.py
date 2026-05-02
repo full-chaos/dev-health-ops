@@ -55,7 +55,7 @@ def test_load_persisted_query_from_registry_file(tmp_path, monkeypatch):
 def test_schema_version_mismatch_raises_error():
     persisted.clear_cache()
     persisted.register_query("q-old", "query { old }", "old")
-    persisted._QUERY_CACHE["q-old"].schema_version = "0.9"  # type: ignore[misc]
+    persisted._QUERY_CACHE["q-old"].schema_version = "0.9"
 
     with pytest.raises(PersistedQueryError, match="current version"):
         persisted.load_persisted_query("q-old")

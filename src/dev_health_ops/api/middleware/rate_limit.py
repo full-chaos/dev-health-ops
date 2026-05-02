@@ -8,12 +8,12 @@ from fastapi import Request
 
 # No-op limiter for test/dev environments to avoid decorator signature issues.
 try:
-    from slowapi import Limiter  # type: ignore
+    from slowapi import Limiter
     from slowapi.util import get_remote_address  # noqa: F401
 except Exception:
-    Limiter = None  # type: ignore
+    Limiter = None  # type: ignore[misc,assignment]
 
-    def get_remote_address(request: Request) -> str:  # type: ignore[misc]
+    def get_remote_address(request: Request) -> str:
         return "unknown"
 
 
@@ -102,8 +102,8 @@ _REDIS_URL = os.getenv("REDIS_URL")
 class _NoOpLimiter:
     """Pass-through limiter when slowapi is unavailable (tests, minimal installs)."""
 
-    def limit(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-        def _decorator(func):  # type: ignore[no-untyped-def]
+    def limit(self, *args, **kwargs):
+        def _decorator(func):
             return func
 
         return _decorator
@@ -119,4 +119,4 @@ if Limiter is not None:
             "Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "..."
         )
 else:
-    limiter = _NoOpLimiter()  # type: ignore[assignment]
+    limiter = _NoOpLimiter()

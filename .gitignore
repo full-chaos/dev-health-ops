@@ -26,3 +26,12 @@ build/
 dist/
 **.claude/worktree**
 *supabase/**
+
+# Sisyphus orchestration artifacts (planning docs, local agent state)
+.sisyphus/
+
+# Local GitLab Runner state (do not commit)
+.gitlab/gitlab-runner/
+
+# Mypy report artifact
+index.txt

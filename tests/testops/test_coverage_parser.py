@@ -6,11 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from dev_health_ops.parsers.coverage import (  # type: ignore[reportMissingImports]
+from dev_health_ops.parsers.coverage import (
     parse_cobertura_xml,
     parse_lcov_report,
 )
-from dev_health_ops.processors.testops_coverage import (  # type: ignore[reportMissingImports]
+from dev_health_ops.processors.testops_coverage import (
     process_coverage_report,
 )
 

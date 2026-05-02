@@ -7,9 +7,9 @@ from uuid import uuid4
 import pytest
 
 from dev_health_ops.parsers.junit import (
-    parse_junit_xml,  # type: ignore[reportMissingImports]
+    parse_junit_xml,
 )
-from dev_health_ops.processors.testops_tests import (  # type: ignore[reportMissingImports]
+from dev_health_ops.processors.testops_tests import (
     process_test_report,
 )
 

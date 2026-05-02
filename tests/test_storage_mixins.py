@@ -9,7 +9,7 @@ import pytest
 
 from dev_health_ops.storage.mixins.cicd import CicdMixin
 from dev_health_ops.storage.mixins.git import GitDataMixin
-from dev_health_ops.storage.mixins.testops_tests import (  # type: ignore[reportMissingImports]
+from dev_health_ops.storage.mixins.testops_tests import (
     TestOpsTestsMixin,
 )
 from dev_health_ops.storage.mixins.work_item import WorkItemMixin

@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -85,7 +84,7 @@ async def test_upsert_from_stripe_persists_trial_dates(session_maker):
     async with session_maker() as session:
         org = await _seed_org(session)
         stripe_sub = _stripe_subscription_payload()
-        org_id = cast(uuid.UUID, org.id)
+        org_id = org.id
         resolved_price_id = uuid.uuid4()
         resolved_plan_id = uuid.uuid4()
 
@@ -122,7 +121,7 @@ async def test_has_had_trial_returns_true_when_trial_exists(session_maker):
         session.add(sub)
         await session.commit()
 
-        assert await _has_had_trial(cast(uuid.UUID, org.id), session) is True
+        assert await _has_had_trial(org.id, session) is True
 
 
 @pytest.mark.asyncio
@@ -144,7 +143,7 @@ async def test_has_had_trial_returns_false_when_no_trial(session_maker):
         session.add(sub)
         await session.commit()
 
-        assert await _has_had_trial(cast(uuid.UUID, org.id), session) is False
+        assert await _has_had_trial(org.id, session) is False
 
 
 @pytest.mark.asyncio
@@ -152,4 +151,4 @@ async def test_has_had_trial_returns_false_when_no_subscription(session_maker):
     async with session_maker() as session:
         org = await _seed_org(session)
 
-        assert await _has_had_trial(cast(uuid.UUID, org.id), session) is False
+        assert await _has_had_trial(org.id, session) is False

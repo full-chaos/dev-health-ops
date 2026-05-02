@@ -165,11 +165,12 @@ async def test_superadmin_subscription_endpoints_allow_cross_org_listing(
 
     from dev_health_ops.api.billing import subscriptions
 
-    captured: dict[str, object] = {"orgs": []}
+    captured_orgs: list[object] = []
+    captured: dict[str, object] = {"orgs": captured_orgs}
 
     class _FakeService:
         async def get_for_org(self, org_id):
-            captured["orgs"].append(org_id)
+            captured_orgs.append(org_id)
             now = datetime.now(timezone.utc)
             return SimpleNamespace(
                 id=uuid.uuid4(),
@@ -186,7 +187,7 @@ async def test_superadmin_subscription_endpoints_allow_cross_org_listing(
             )
 
         async def get_history(self, org_id, limit, offset):
-            captured["orgs"].append(org_id)
+            captured_orgs.append(org_id)
             return [], 0
 
     async def _fake_load_plan_price(_sub, _db):
@@ -241,18 +242,19 @@ async def test_superadmin_refund_endpoints_allow_cross_org_listing(
 
     from dev_health_ops.api.billing import refund_routes
 
-    captured: dict[str, object] = {"orgs": []}
+    captured_orgs: list[object] = []
+    captured: dict[str, object] = {"orgs": captured_orgs}
 
     @asynccontextmanager
     async def _fake_session():
         yield object()
 
     async def _fake_list_refunds(db, org_id, limit, offset):
-        captured["orgs"].append(org_id)
+        captured_orgs.append(org_id)
         return [], 0
 
     async def _fake_get_refund(db, refund_id, org_id):
-        captured["orgs"].append(org_id)
+        captured_orgs.append(org_id)
         return None
 
     monkeypatch.setattr(refund_routes, "get_postgres_session", _fake_session)
@@ -339,14 +341,15 @@ async def test_superadmin_with_invalid_org_id_still_resolves_globally(
 
     from dev_health_ops.api.billing import refund_routes
 
-    captured: dict[str, object] = {"orgs": []}
+    captured_orgs: list[object] = []
+    captured: dict[str, object] = {"orgs": captured_orgs}
 
     @asynccontextmanager
     async def _fake_session():
         yield object()
 
     async def _fake_list_refunds(db, org_id, limit, offset):
-        captured["orgs"].append(org_id)
+        captured_orgs.append(org_id)
         return [], 0
 
     monkeypatch.setattr(refund_routes, "get_postgres_session", _fake_session)

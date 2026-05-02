@@ -215,7 +215,7 @@ class TestAsyncPaginationHandler:
             return list(range((page - 1) * per_page, page * per_page))
 
         handler = AsyncPaginationHandler(per_page=10)
-        results = await handler.paginate_all(fetch_func)
+        results: list[int] = await handler.paginate_all(fetch_func)
         assert len(results) == 20
 
     @pytest.mark.asyncio
@@ -227,5 +227,5 @@ class TestAsyncPaginationHandler:
             return list(range((page - 1) * per_page, page * per_page))
 
         handler = AsyncPaginationHandler(per_page=10, max_items=15)
-        results = await handler.paginate_all(fetch_func)
+        results: list[int] = await handler.paginate_all(fetch_func)
         assert len(results) == 15

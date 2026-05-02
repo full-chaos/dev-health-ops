@@ -27,6 +27,7 @@ from dev_health_ops.fixtures.runner import (
     _build_repo_team_assignments,
     _verify_repo_cooccurrence_density,
 )
+from dev_health_ops.models.work_items import WorkItem
 
 
 class TestWorkTypeCooccurrence:
@@ -143,7 +144,7 @@ class TestFlowMatrixCrossEntityEdgeCount:
 
     def _cross_entity_pairs(
         self,
-        items: list[object],
+        items: list[WorkItem],
         bridge_key: str,
         dim_key: str,
     ) -> int:

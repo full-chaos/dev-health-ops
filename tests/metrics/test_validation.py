@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import pytest
 from typing_extensions import NotRequired, TypedDict
@@ -119,7 +120,7 @@ class TestValidateTypedDictWithSchemas:
             "additions": 10,
             "deletions": 5,
         }
-        errors = validate_typed_dict(data, CommitStatRow)
+        errors = validate_typed_dict(cast(dict[str, Any], data), CommitStatRow)
         assert errors == []
 
     def test_commit_stat_missing_required(self):
@@ -141,7 +142,7 @@ class TestValidateTypedDictWithSchemas:
             "created_at": datetime.now(timezone.utc),
             "merged_at": None,
         }
-        errors = validate_typed_dict(data, PullRequestRow)
+        errors = validate_typed_dict(cast(dict[str, Any], data), PullRequestRow)
         assert errors == [], f"Unexpected errors: {errors}"
 
     def test_pull_request_with_all_not_required_fields(self):
@@ -161,7 +162,7 @@ class TestValidateTypedDictWithSchemas:
             "deletions": 20,
             "changed_files": 3,
         }
-        errors = validate_typed_dict(data, PullRequestRow)
+        errors = validate_typed_dict(cast(dict[str, Any], data), PullRequestRow)
         assert errors == [], f"Unexpected errors: {errors}"
 
 
@@ -179,7 +180,7 @@ class TestValidateRows:
         assert errors == []
 
     def test_invalid_row_reports_index(self):
-        rows = [
+        rows: list[dict[str, Any]] = [
             {"name": "valid", "count": 1},
             {"name": "invalid"},
         ]

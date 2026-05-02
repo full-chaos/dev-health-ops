@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -460,7 +461,9 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_git_commit_data(self, commit_data: list[GitCommit]) -> None:
+    async def insert_git_commit_data(
+        self, commit_data: Sequence[GitCommit | dict[str, Any]]
+    ) -> None:
         if not commit_data:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
@@ -636,7 +639,9 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_git_pull_requests(self, pr_data: list[GitPullRequest]) -> None:
+    async def insert_git_pull_requests(
+        self, pr_data: Sequence[GitPullRequest | dict[str, Any]]
+    ) -> None:
         if not pr_data:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
@@ -893,7 +898,9 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_deployments(self, deployments: list[Deployment]) -> None:
+    async def insert_deployments(
+        self, deployments: Sequence[Deployment | dict[str, Any]]
+    ) -> None:
         if not deployments:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
@@ -975,7 +982,9 @@ class ClickHouseStore:
             rows,
         )
 
-    async def insert_incidents(self, incidents: list[Incident]) -> None:
+    async def insert_incidents(
+        self, incidents: Sequence[Incident | dict[str, Any]]
+    ) -> None:
         if not incidents:
             return
         synced_at_default = self._normalize_datetime(datetime.now(timezone.utc))
@@ -1611,7 +1620,9 @@ class ClickHouseStore:
                 )
         return links
 
-    async def insert_work_items(self, work_items: list[WorkItem]) -> None:
+    async def insert_work_items(
+        self, work_items: Sequence[WorkItem | dict[str, Any]]
+    ) -> None:
         if not work_items:
             return
 

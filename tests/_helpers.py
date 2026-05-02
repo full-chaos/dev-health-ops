@@ -7,12 +7,12 @@ quirks.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import Table
 
 
-def tables_of(*models: type) -> list[Table]:
+def tables_of(*models: Any) -> list[Table]:
     """Return ``[Model.__table__, ...]`` typed as ``list[Table]``.
 
     SQLAlchemy 2's ``DeclarativeBase`` declares ``__table__`` as
@@ -24,14 +24,8 @@ def tables_of(*models: type) -> list[Table]:
     so this helper performs the narrowing once instead of forcing every
     test fixture to repeat ``cast(Table, Model.__table__)``.
 
-    Example
-    -------
-    .. code-block:: python
-
-        await conn.run_sync(
-            lambda c: Base.metadata.create_all(
-                c, tables=tables_of(User, Org, Membership)
-            )
-        )
+    The ``Any`` parameter type is intentional: SQLAlchemy mapped classes use
+    ``DeclarativeAttributeIntercept`` as their metaclass, which doesn't
+    surface ``__table__`` to a plain ``type[...]`` view.
     """
     return [cast(Table, model.__table__) for model in models]

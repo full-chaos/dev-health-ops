@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import (
+    _as_str,
     _decrypt_credential_sync,
     _extract_provider_token,
     _get_db_url,
@@ -53,7 +54,7 @@ def run_backfill(
             if config is None:
                 raise ValueError(f"Sync configuration not found: {sync_config_id}")
 
-            provider = (config.provider or "").lower()
+            provider = _as_str(config.provider).lower()
             if config.credential_id:
                 credential = (
                     session.query(IntegrationCredential)
@@ -87,8 +88,8 @@ def run_backfill(
                     .one_or_none()
                 )
                 if bf_job:
-                    bf_job.status = "running"
-                    bf_job.started_at = started_at
+                    setattr(bf_job, "status", "running")
+                    setattr(bf_job, "started_at", started_at)
                     session.flush()
 
         def _backfill_progress(
@@ -108,7 +109,7 @@ def run_backfill(
                         .one_or_none()
                     )
                     if bf_job:
-                        bf_job.completed_chunks = chunk_idx
+                        setattr(bf_job, "completed_chunks", chunk_idx)
                         session.flush()
             except Exception:
                 logger.debug(
@@ -142,8 +143,8 @@ def run_backfill(
                         .one_or_none()
                     )
                     if bf_job:
-                        bf_job.status = "completed"
-                        bf_job.completed_at = completed_at
+                        setattr(bf_job, "status", "completed")
+                        setattr(bf_job, "completed_at", completed_at)
                         session.flush()
             except Exception:
                 logger.debug(
@@ -176,9 +177,9 @@ def run_backfill(
                         .one_or_none()
                     )
                     if bf_job:
-                        bf_job.status = "failed"
-                        bf_job.error_message = str(exc)
-                        bf_job.completed_at = completed_at
+                        setattr(bf_job, "status", "failed")
+                        setattr(bf_job, "error_message", str(exc))
+                        setattr(bf_job, "completed_at", completed_at)
                         session.flush()
             except Exception:
                 logger.debug("Failed to mark backfill job failed: %s", backfill_job_id)

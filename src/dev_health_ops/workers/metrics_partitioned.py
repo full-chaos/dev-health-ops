@@ -193,7 +193,7 @@ def run_daily_metrics_batch(
                     checkpoint_day,
                     self.request.id,
                 )
-                checkpoint_id = checkpoint.id
+                checkpoint_id = uuid.UUID(str(checkpoint.id))
 
             run_async(
                 run_daily_metrics_job(
@@ -294,7 +294,7 @@ def run_daily_metrics_finalize_task(
             checkpoint = mark_running(
                 session, org_id, None, "daily_finalize", checkpoint_day, self.request.id
             )
-            checkpoint_id = checkpoint.id
+            checkpoint_id = uuid.UUID(str(checkpoint.id))
 
         run_async(
             _run_finalize(

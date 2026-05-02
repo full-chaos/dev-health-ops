@@ -87,14 +87,11 @@ def _hash_filters(filters: FilterInput | None) -> str:
     import json
 
     # Convert filters to a hashable representation
-    filter_dict = {}
+    filter_dict: dict[str, Any] = {}
     if filters.scope:
         filter_dict["scope"] = {
-            "org_ids": filters.scope.org_ids,
-            "team_ids": filters.scope.team_ids,
-            "repo_ids": filters.scope.repo_ids,
-            "service_ids": filters.scope.service_ids,
-            "developer_ids": filters.scope.developer_ids,
+            "level": filters.scope.level.value,
+            "ids": filters.scope.ids,
         }
     if filters.who:
         filter_dict["who"] = {
@@ -108,12 +105,12 @@ def _hash_filters(filters: FilterInput | None) -> str:
         }
     if filters.why:
         filter_dict["why"] = {
-            "work_categories": filters.why.work_categories,
-            "issue_types": filters.why.issue_types,
+            "work_category": filters.why.work_category,
+            "issue_type": filters.why.issue_type,
         }
     if filters.how:
         filter_dict["how"] = {
-            "flow_stages": filters.how.flow_stages,
+            "flow_stage": filters.how.flow_stage,
         }
 
     filter_json = json.dumps(filter_dict, sort_keys=True, default=str)

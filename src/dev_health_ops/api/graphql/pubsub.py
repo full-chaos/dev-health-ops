@@ -121,8 +121,13 @@ class RedisPubSub:
 
     async def _subscribe_redis(self, channel: str) -> AsyncIterator[PubSubMessage]:
         """Subscribe using Redis pub/sub."""
+        pubsub = None
         try:
-            pubsub = self._client.pubsub()
+            client = self._client
+            if client is None:
+                return
+
+            pubsub = client.pubsub()
             await pubsub.subscribe(channel)
             logger.debug("Subscribed to Redis channel: %s", channel)
 

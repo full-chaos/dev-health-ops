@@ -265,13 +265,15 @@ async def resolve_analytics(
         validate_sankey_limits(batch.flow_matrix.max_nodes, batch.flow_matrix.max_edges)
 
     # Build list of all query coroutines for parallel execution
+    use_investment = bool(batch.use_investment)
+
     timeseries_coros: list[Coroutine[Any, Any, list[TimeseriesResult]]] = [
         _execute_timeseries_query(
             client,
             ts_req,
             org_id,
             timeout,
-            batch.use_investment,
+            use_investment,
             batch.filters,
         )
         for ts_req in batch.timeseries
@@ -283,7 +285,7 @@ async def resolve_analytics(
             bd_req,
             org_id,
             timeout,
-            batch.use_investment,
+            use_investment,
             batch.filters,
         )
         for bd_req in batch.breakdowns

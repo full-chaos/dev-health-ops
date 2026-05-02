@@ -1,6 +1,7 @@
 """Celery configuration from environment variables."""
 
 import os
+from typing import Any
 
 from celery.schedules import crontab
 
@@ -28,7 +29,7 @@ task_max_retries = 3
 
 # Queue settings
 task_default_queue = "default"
-task_queues = {
+task_queues: dict[str, dict[str, Any]] = {
     "default": {},
     "metrics": {},
     "sync": {},

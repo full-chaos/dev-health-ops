@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _uuid_value(value: object) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
+
+
+def _datetime_value(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    raise TypeError(f"Expected datetime, got {type(value)!r}")
 
 
 @celery_app.task(
@@ -48,13 +61,18 @@ def dispatch_scheduled_reports(self) -> dict:
                     skipped += 1
                     continue
 
-                last_run = report.last_run_at or report.created_at
-                cron = croniter(job.schedule_cron, last_run)
+                report_id = _uuid_value(report.id)
+                last_run = (
+                    report.last_run_at
+                    if isinstance(report.last_run_at, datetime)
+                    else _datetime_value(report.created_at)
+                )
+                cron = croniter(str(job.schedule_cron), last_run)
                 next_run = cron.get_next(datetime)
 
                 if next_run <= now:
                     run = ReportRun(
-                        report_id=report.id,
+                        report_id=report_id,
                         triggered_by="scheduler",
                         status=ReportRunStatus.PENDING.value,
                     )
@@ -67,12 +85,12 @@ def dispatch_scheduled_reports(self) -> dict:
 
                     execute_saved_report.apply_async(
                         kwargs={
-                            "report_id": str(report.id),
+                            "report_id": str(report_id),
                             "run_id": str(run.id),
                         },
                         queue="reports",
                     )
-                    dispatched.append(str(report.id))
+                    dispatched.append(str(report_id))
                 else:
                     skipped += 1
 

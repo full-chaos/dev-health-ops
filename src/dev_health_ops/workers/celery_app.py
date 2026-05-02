@@ -2,6 +2,7 @@
 
 import logging
 import time
+from typing import Any
 
 from celery import Celery
 from celery.signals import task_postrun, task_prerun, worker_init
@@ -21,12 +22,17 @@ _task_start: dict[str, float] = {}
 
 
 @task_prerun.connect
-def _task_started(task_id: str, task, **kwargs) -> None:  # type: ignore[no-untyped-def]
+def _task_started(task_id: str, task: Any, **kwargs: Any) -> None:
     _task_start[task_id] = time.perf_counter()
 
 
 @task_postrun.connect
-def _task_finished(task_id: str, task, state: str = "SUCCESS", **kwargs) -> None:  # type: ignore[no-untyped-def]
+def _task_finished(
+    task_id: str,
+    task: Any,
+    state: str = "SUCCESS",
+    **kwargs: Any,
+) -> None:
     start = _task_start.pop(task_id, None)
     duration = (time.perf_counter() - start) if start is not None else 0.0
     try:
@@ -45,7 +51,7 @@ def _task_finished(task_id: str, task, state: str = "SUCCESS", **kwargs) -> None
 
 
 @worker_init.connect
-def _run_migrations_on_startup(**kwargs) -> None:  # type: ignore[no-untyped-def]
+def _run_migrations_on_startup(**kwargs: Any) -> None:
     """Apply pending Alembic migrations when the worker process starts.
 
     This ensures the Postgres schema is always up-to-date before tasks run,

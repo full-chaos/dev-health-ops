@@ -126,7 +126,7 @@ def create_graphql_app(
             context.db_url = db_url
         return context
 
-    router = GraphQLRouter(
+    router = GraphQLRouter[GraphQLContext, None](
         schema=schema,
         context_getter=context_getter,
         path="",

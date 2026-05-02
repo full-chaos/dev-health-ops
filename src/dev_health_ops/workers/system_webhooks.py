@@ -78,7 +78,8 @@ def process_webhook_event(
             logger.warning("Unknown webhook provider: %s", provider)
             return {"status": "error", "reason": f"unknown_provider: {provider}"}
 
-        _invalidate_sync_cache(provider, org_id)
+        if org_id is not None:
+            _invalidate_sync_cache(provider, org_id)
 
         return {
             "status": "success",

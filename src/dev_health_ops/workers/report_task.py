@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import traceback
+import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import select
 
@@ -19,6 +21,24 @@ DATE_RANGE_DAYS = {
 }
 
 DEFAULT_SECTIONS = ["summary", "delivery", "quality", "wellbeing"]
+
+
+def _json_object(value: object | None) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): raw_value for key, raw_value in value.items()}
+
+
+def _datetime_or_none(value: object | None) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    return None
+
+
+def _string_value(value: object | None) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
 
 
 def _build_default_plan(
@@ -67,9 +87,12 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
     from dev_health_ops.models.reports import ReportRun, ReportRunStatus, SavedReport
     from dev_health_ops.reports.export import persist_report_run
 
+    report_uuid = uuid.UUID(report_id)
+    run_uuid = uuid.UUID(run_id)
+
     with get_postgres_session_sync() as session:
         report = session.execute(
-            select(SavedReport).where(SavedReport.id == report_id)
+            select(SavedReport).where(SavedReport.id == report_uuid)
         ).scalar_one_or_none()
 
         if report is None:
@@ -77,15 +100,15 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
             return {"status": "error", "reason": "report_not_found"}
 
         run = session.execute(
-            select(ReportRun).where(ReportRun.id == run_id)
+            select(ReportRun).where(ReportRun.id == run_uuid)
         ).scalar_one_or_none()
 
         if run is None:
             logger.error("ReportRun %s not found", run_id)
             return {"status": "error", "reason": "run_not_found"}
 
-        run.status = ReportRunStatus.RUNNING.value
-        run.started_at = datetime.now(timezone.utc)
+        setattr(run, "status", ReportRunStatus.RUNNING.value)
+        setattr(run, "started_at", datetime.now(timezone.utc))
         session.commit()
 
     try:
@@ -98,12 +121,16 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
         clickhouse_dsn = require_clickhouse_uri()
 
         with get_postgres_session_sync() as session:
-            report = session.execute(
-                select(SavedReport).where(SavedReport.id == report_id)
-            ).scalar_one()
-            plan_data = report.report_plan or {}
-            params = report.parameters or {}
-            report_org_id = report.org_id
+            report_row = session.execute(
+                select(
+                    SavedReport.report_plan,
+                    SavedReport.parameters,
+                    SavedReport.org_id,
+                ).where(SavedReport.id == report_uuid)
+            ).one()
+            plan_data: dict[str, Any] = _json_object(report_row.report_plan)
+            params: dict[str, Any] = _json_object(report_row.parameters)
+            report_org_id = _string_value(report_row.org_id)
 
         if not plan_data:
             plan_data = _build_default_plan(report_id, report_org_id, params)
@@ -140,25 +167,29 @@ def execute_saved_report(self, report_id: str, run_id: str) -> dict:
         logger.exception("Report execution failed for run %s", run_id)
         with get_postgres_session_sync() as session:
             run = session.execute(
-                select(ReportRun).where(ReportRun.id == run_id)
+                select(ReportRun).where(ReportRun.id == run_uuid)
             ).scalar_one_or_none()
             if run:
-                run.status = ReportRunStatus.FAILED.value
-                run.completed_at = datetime.now(timezone.utc)
-                if run.started_at:
-                    run.duration_seconds = (
-                        run.completed_at - run.started_at
-                    ).total_seconds()
-                run.error = str(exc)
-                run.error_traceback = traceback.format_exc()
+                completed_at = datetime.now(timezone.utc)
+                setattr(run, "status", ReportRunStatus.FAILED.value)
+                setattr(run, "completed_at", completed_at)
+                started_at = _datetime_or_none(run.started_at)
+                if started_at is not None:
+                    setattr(
+                        run,
+                        "duration_seconds",
+                        (completed_at - started_at).total_seconds(),
+                    )
+                setattr(run, "error", str(exc))
+                setattr(run, "error_traceback", traceback.format_exc())
                 session.commit()
 
             report_obj = session.execute(
-                select(SavedReport).where(SavedReport.id == report_id)
+                select(SavedReport).where(SavedReport.id == report_uuid)
             ).scalar_one_or_none()
             if report_obj:
-                report_obj.last_run_at = datetime.now(timezone.utc)
-                report_obj.last_run_status = ReportRunStatus.FAILED.value
+                setattr(report_obj, "last_run_at", datetime.now(timezone.utc))
+                setattr(report_obj, "last_run_status", ReportRunStatus.FAILED.value)
                 session.commit()
 
         return {"status": "failed", "run_id": run_id, "error": str(exc)}

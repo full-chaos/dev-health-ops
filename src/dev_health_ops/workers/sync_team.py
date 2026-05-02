@@ -4,12 +4,31 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
+
+
+def _string_list(value: object | None) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
+
+
+def _uuid_value(value: object) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
+
+
+def _string_or_none(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return value if isinstance(value, str) else str(value)
 
 
 async def _discover_and_sync_all(org_id: str | None) -> dict:
@@ -27,10 +46,12 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
     )
     from dev_health_ops.db import get_postgres_session
 
+    effective_org_id = org_id or ""
+
     async with get_postgres_session() as session:
-        creds_svc = IntegrationCredentialsService(session, org_id)
-        discovery_svc = TeamDiscoveryService(session, org_id)
-        drift_svc = TeamDriftSyncService(session, org_id)
+        creds_svc = IntegrationCredentialsService(session, effective_org_id)
+        discovery_svc = TeamDiscoveryService(session, effective_org_id)
+        drift_svc = TeamDriftSyncService(session, effective_org_id)
 
         async def _run_one(provider: str) -> dict:
             credential = await creds_svc.get(provider, "default")
@@ -39,12 +60,16 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
             decrypted = await creds_svc.get_decrypted_credentials(provider, "default")
             if decrypted is None:
                 return {"provider": provider, "skipped": "no_decrypted"}
-            config = credential.config or {}
+            config: dict[str, Any] = (
+                credential.config if isinstance(credential.config, dict) else {}
+            )
             try:
                 if provider == "github":
                     token = decrypted.get("token")
                     org_name = config.get("org")
-                    if not token or not org_name:
+                    if not isinstance(token, str) or not token:
+                        return {"provider": provider, "skipped": "missing_config"}
+                    if not isinstance(org_name, str) or not org_name:
                         return {"provider": provider, "skipped": "missing_config"}
                     teams = await discovery_svc.discover_github(
                         token=token, org_name=org_name
@@ -53,7 +78,11 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
                     token = decrypted.get("token")
                     group_path = config.get("group")
                     url = config.get("url", "https://gitlab.com")
-                    if not token or not group_path:
+                    if not isinstance(token, str) or not token:
+                        return {"provider": provider, "skipped": "missing_config"}
+                    if not isinstance(group_path, str) or not group_path:
+                        return {"provider": provider, "skipped": "missing_config"}
+                    if not isinstance(url, str) or not url:
                         return {"provider": provider, "skipped": "missing_config"}
                     teams = await discovery_svc.discover_gitlab(
                         token=token, group_path=group_path, url=url
@@ -62,7 +91,11 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
                     email = decrypted.get("email")
                     api_token = decrypted.get("api_token") or decrypted.get("token")
                     jira_url = config.get("url") or decrypted.get("url")
-                    if not email or not api_token or not jira_url:
+                    if not isinstance(email, str) or not email:
+                        return {"provider": provider, "skipped": "missing_config"}
+                    if not isinstance(api_token, str) or not api_token:
+                        return {"provider": provider, "skipped": "missing_config"}
+                    if not isinstance(jira_url, str) or not jira_url:
                         return {"provider": provider, "skipped": "missing_config"}
                     teams = await discovery_svc.discover_jira(
                         email=email, api_token=api_token, url=jira_url
@@ -117,7 +150,7 @@ def reconcile_team_members(self, org_id: str | None = None) -> dict:
 
         for mapping in mappings:
             canonical_id = str(mapping.canonical_id)
-            for team_id in mapping.team_ids or []:
+            for team_id in _string_list(mapping.team_ids):
                 if not team_id:
                     continue
                 team_members.setdefault(str(team_id), set()).add(canonical_id)
@@ -137,11 +170,11 @@ def reconcile_team_members(self, org_id: str | None = None) -> dict:
             now = datetime.now(timezone.utc)
             updated_teams = [
                 Team(
-                    id=team.id,
-                    team_uuid=uuid.UUID(str(team.team_uuid)),
-                    name=team.name,
-                    description=team.description,
-                    members=sorted(team_members.get(team.id, set())),
+                    id=str(team.id),
+                    team_uuid=_uuid_value(team.team_uuid),
+                    name=str(team.name),
+                    description=_string_or_none(team.description),
+                    members=sorted(team_members.get(str(team.id), set())),
                     updated_at=now,
                 )
                 for team in teams

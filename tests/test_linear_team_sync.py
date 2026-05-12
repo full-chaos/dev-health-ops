@@ -335,6 +335,7 @@ class TestDiscoverLinear:
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
+        mock_client.__enter__.return_value = mock_client
         mock_client.iter_teams.return_value = [
             {
                 "id": "team-eng",
@@ -367,6 +368,7 @@ class TestDiscoverLinear:
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
+        mock_client.__enter__.return_value = mock_client
         mock_client.iter_teams.return_value = []
 
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)
@@ -383,6 +385,7 @@ class TestDiscoverLinear:
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
+        mock_client.__enter__.return_value = mock_client
         mock_client.iter_teams.return_value = [
             {
                 "id": "team-eng",
@@ -402,11 +405,12 @@ class TestDiscoverLinear:
     def test_discover_linear_client_closed_on_success(
         self, mock_client_class: MagicMock
     ) -> None:
-        """discover_linear() always closes the client (via finally block)."""
+        """discover_linear() always closes the client (via context manager __exit__)."""
         from dev_health_ops.api.services.settings import TeamDiscoveryService
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
+        mock_client.__enter__.return_value = mock_client
         mock_client.iter_teams.return_value = [
             {
                 "id": "team-eng",
@@ -419,4 +423,5 @@ class TestDiscoverLinear:
         service = TeamDiscoveryService.__new__(TeamDiscoveryService)
         asyncio.run(service.discover_linear(api_key="test-key"))
 
-        mock_client.close.assert_called_once()
+        # Context-manager protocol guarantees cleanup via __exit__
+        mock_client.__exit__.assert_called_once()

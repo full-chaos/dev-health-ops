@@ -138,7 +138,6 @@ async def async_main():
         print(f"\nAsync processing completed: {successful}/{len(results)} successful")
 
 
-
 if __name__ == "__main__":
     import argparse
 

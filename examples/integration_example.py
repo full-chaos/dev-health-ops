@@ -33,7 +33,6 @@ async def github_to_storage_example():
 
     # Initialize connector
     with GitHubConnector(token=token) as connector:
-
         try:
             # Get a repository
             print("Fetching repositories...")
@@ -66,7 +65,9 @@ async def github_to_storage_example():
 
                 # For demo purposes, we'll use PyGithub to get commits
                 gh_repo = connector.github.get_repo(repo.full_name)
-                commits: list[Any] = list(gh_repo.get_commits()[:5])  # Get first 5 commits
+                commits: list[Any] = list(
+                    gh_repo.get_commits()[:5]
+                )  # Get first 5 commits
 
                 commit_objects = []
                 for commit in commits:
@@ -75,7 +76,9 @@ async def github_to_storage_example():
                         hash=commit.sha,
                         message=commit.commit.message,
                         author_name=(
-                            commit.commit.author.name if commit.commit.author else "Unknown"
+                            commit.commit.author.name
+                            if commit.commit.author
+                            else "Unknown"
                         ),
                         author_email=(
                             commit.commit.author.email if commit.commit.author else ""
@@ -91,7 +94,9 @@ async def github_to_storage_example():
                             else "Unknown"
                         ),
                         committer_email=(
-                            commit.commit.committer.email if commit.commit.committer else ""
+                            commit.commit.committer.email
+                            if commit.commit.committer
+                            else ""
                         ),
                         committer_when=(
                             commit.commit.committer.date
@@ -148,7 +153,6 @@ async def gitlab_to_storage_example():
 
     # Initialize connector
     with GitLabConnector(private_token=token) as connector:
-
         try:
             # Get a project
             print("Fetching projects...")
@@ -192,7 +196,9 @@ async def gitlab_to_storage_example():
                             else "Unknown"
                         ),
                         author_email=(
-                            commit.author_email if hasattr(commit, "author_email") else ""
+                            commit.author_email
+                            if hasattr(commit, "author_email")
+                            else ""
                         ),
                         author_when=(
                             datetime.fromisoformat(
@@ -219,7 +225,9 @@ async def gitlab_to_storage_example():
                             else datetime.now(timezone.utc)
                         ),
                         parents=(
-                            len(commit.parent_ids) if hasattr(commit, "parent_ids") else 0
+                            len(commit.parent_ids)
+                            if hasattr(commit, "parent_ids")
+                            else 0
                         ),
                     )
                     commit_objects.append(git_commit)

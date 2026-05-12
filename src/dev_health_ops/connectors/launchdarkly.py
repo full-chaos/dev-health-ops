@@ -195,7 +195,9 @@ class LaunchDarklyConnector:
             if len(all_items) >= total or len(items) < limit:
                 break
             offset += limit
-        logger.info("Fetched %d flags for project %s", len(all_items), sanitize_for_log(key))
+        logger.info(
+            "Fetched %d flags for project %s", len(all_items), sanitize_for_log(key)
+        )
         return all_items
 
     async def get_audit_log(

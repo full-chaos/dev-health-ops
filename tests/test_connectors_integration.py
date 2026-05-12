@@ -69,7 +69,6 @@ class TestGitHubIntegration:
             for repo in repos[:5]:  # Print first 5
                 print(f"  - {repo.full_name} (⭐ {repo.stars})")
 
-
     def test_list_public_repos_from_user(self):
         """Test fetching first 10 public repos from a GitHub user."""
         # Skip if no token provided
@@ -95,7 +94,6 @@ class TestGitHubIntegration:
             print(f"\nFetched {len(repos)} repositories from torvalds user:")
             for repo in repos[:5]:  # Print first 5
                 print(f"  - {repo.full_name} (⭐ {repo.stars})")
-
 
     def test_search_public_repos(self):
         """Test searching for public repositories."""
@@ -123,7 +121,6 @@ class TestGitHubIntegration:
             print(f"\nFound {len(repos)} Python repositories:")
             for repo in repos[:5]:  # Print first 5
                 print(f"  - {repo.full_name} (⭐ {repo.stars})")
-
 
 
 @pytest.mark.skipif(
@@ -160,7 +157,6 @@ class TestGitLabIntegration:
             for project in projects[:5]:  # Print first 5
                 print(f"  - {project.full_name} (⭐ {project.stars})")
 
-
     def test_list_public_projects_from_gitlab_group(self):
         """Test fetching first 10 public projects from a GitLab group."""
         # Use unauthenticated connector for public projects
@@ -192,7 +188,6 @@ class TestGitLabIntegration:
             for project in projects[:5]:  # Print first 5
                 print(f"  - {project.full_name} (⭐ {project.stars})")
 
-
     def test_search_public_projects(self):
         """Test searching for public projects on GitLab."""
         # Use unauthenticated connector for public projects
@@ -215,4 +210,3 @@ class TestGitLabIntegration:
             print(f"\nFound {len(projects)} projects matching 'docker':")
             for project in projects[:5]:  # Print first 5
                 print(f"  - {project.full_name} (⭐ {project.stars})")
-

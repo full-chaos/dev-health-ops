@@ -57,7 +57,6 @@ def test_github_private_repo():
     print(f"Using token: {token[:10]}...")
 
     with GitHubConnector(token=token) as connector:
-
         try:
             # Test 1: List user's repositories (should include private ones)
             print("\n1. Listing user's repositories...")
@@ -71,8 +70,12 @@ def test_github_private_repo():
                     break
 
             if not found:
-                print(f"   ⚠️  Private repository {private_repo} not found in user's repos")
-                print("   This might mean the token doesn't have access to this repository")
+                print(
+                    f"   ⚠️  Private repository {private_repo} not found in user's repos"
+                )
+                print(
+                    "   This might mean the token doesn't have access to this repository"
+                )
 
             # Test 2: Get repository statistics
             print("\n2. Fetching repository statistics...")
@@ -84,7 +87,9 @@ def test_github_private_repo():
 
             # Test 3: Get contributors
             print("\n3. Fetching contributors...")
-            contributors = connector.get_contributors(owner, repo_name, max_contributors=5)
+            contributors = connector.get_contributors(
+                owner, repo_name, max_contributors=5
+            )
             print(f"   ✅ Found {len(contributors)} contributors")
             for contributor in contributors[:3]:
                 print(f"      - {contributor.username}")
@@ -121,7 +126,6 @@ def test_github_private_repo():
             return False
 
 
-
 def test_gitlab_private_project():
     """Test accessing a GitLab private project."""
     print("\n" + "=" * 70)
@@ -149,7 +153,6 @@ def test_gitlab_private_project():
     print(f"Using token: {token[:10]}...")
 
     with GitLabConnector(url=gitlab_url, private_token=token) as connector:
-
         try:
             # Test 1: Get project details
             print("\n1. Fetching project details...")
@@ -208,7 +211,9 @@ def test_gitlab_private_project():
             # Test 4: List user's projects (should include private ones)
             print("\n4. Listing accessible projects...")
             projects = connector.list_projects(max_projects=10)
-            print(f"   ✅ Found {len(projects)} accessible projects (may include private)")
+            print(
+                f"   ✅ Found {len(projects)} accessible projects (may include private)"
+            )
 
             print("\n✅ Successfully accessed private GitLab project!")
             return True
@@ -234,7 +239,6 @@ def test_gitlab_private_project():
             print(f"\n❌ Unexpected error: {e}")
             traceback.print_exc()
             return False
-
 
 
 def main():

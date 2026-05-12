@@ -304,6 +304,12 @@ async def test_process_github_repos_batch_upserts_during_async_processing(monkey
         def close(self):
             return
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
 
     await processors.github.process_github_repos_batch(
@@ -405,6 +411,12 @@ async def test_process_github_repos_batch_stores_commits_and_stats(monkeypatch):
 
         def close(self):
             return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
 
     monkeypatch.setattr(processors.github, "GitHubConnector", DummyConnector)
     monkeypatch.setattr(

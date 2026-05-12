@@ -67,12 +67,11 @@ class TestGitHubPrivateRepoAccess:
 
         # Parse owner and repo
 
-        try:
-            owner, repo_name = private_repo.split("/")
-        except ValueError:
+        if "/" not in private_repo:
             pytest.fail(
                 f"GITHUB_PRIVATE_REPO should be in 'owner/repo' format, got: {private_repo}"
             )
+        owner, repo_name = private_repo.split("/", 1)
 
         with GitHubConnector(token=token) as connector:
             try:
@@ -118,7 +117,9 @@ class TestGitHubPrivateRepoAccess:
 
                 # Test 4: Get pull requests
                 print("\nTest 4: Fetching pull requests for private repository...")
-                prs = connector.get_pull_requests(owner, repo_name, state="all", max_prs=5)
+                prs = connector.get_pull_requests(
+                    owner, repo_name, state="all", max_prs=5
+                )
 
                 assert prs is not None, (
                     "Should return PRs list (even if empty) for private repository"
@@ -181,7 +182,6 @@ class TestGitHubPrivateRepoAccess:
                 print(f"  - {repo.full_name}")
 
 
-
 @pytest.mark.skipif(skip_integration or skip_gitlab_network, reason=gitlab_skip_reason)
 class TestGitLabPrivateProjectAccess:
     """Integration tests for GitLab connector with private projects."""
@@ -208,19 +208,23 @@ class TestGitLabPrivateProjectAccess:
 
                 # Try to get the project (works with both name and ID)
                 # Note: This is a direct python-gitlab API call, not wrapped by connector
+                project_identifier = private_project
                 try:
                     project = connector.gitlab.projects.get(private_project)
                     print(f"  ✓ Successfully accessed private project: {project.name}")
-                    project_identifier = private_project
                 except Exception as e:
                     # python-gitlab can raise various exceptions (GitlabAuthenticationError, GitlabGetError, etc.)
-                    pytest.fail(f"Failed to access private project {private_project}: {e}")
+                    pytest.fail(
+                        f"Failed to access private project {private_project}: {e}"
+                    )
 
                 # Test 2: List projects (should include private ones)
                 print("\nTest 2: Listing accessible projects (including private)...")
                 projects = connector.list_projects(max_projects=20)
 
-                assert len(projects) > 0, "User should have access to at least one project"
+                assert len(projects) > 0, (
+                    "User should have access to at least one project"
+                )
                 print(
                     f"  ✓ Successfully fetched {len(projects)} projects (may include private)"
                 )
@@ -318,7 +322,6 @@ class TestGitLabPrivateProjectAccess:
                     or "unauthorized" in str(e).lower()
                 ), f"Expected authentication error, got: {e}"
 
-
     def test_list_user_projects_includes_private(self):
         """Test that listing user's projects includes private projects."""
         token = os.getenv("GITLAB_TOKEN")
@@ -341,7 +344,6 @@ class TestGitLabPrivateProjectAccess:
                 print(f"  - {project.full_name}")
 
 
-
 @pytest.mark.skipif(skip_integration, reason="Integration tests disabled")
 class TestPrivateRepoTokenValidation:
     """Tests for token validation and error handling."""
@@ -358,7 +360,6 @@ class TestPrivateRepoTokenValidation:
                 connector.list_repositories(max_repos=1)
 
             print(f"  ✓ Correctly raised exception: {type(exc_info.value).__name__}")
-
 
     def test_gitlab_invalid_token(self):
         """Test that GitLab connector fails gracefully with invalid token."""

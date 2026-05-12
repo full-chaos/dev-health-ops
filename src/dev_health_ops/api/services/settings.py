@@ -710,8 +710,7 @@ class TeamDiscoveryService:
             from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
 
             DiscoveredTeam = _get_discovered_team_cls()
-            client = LinearClient(auth=LinearAuth(api_key=api_key))
-            try:
+            with LinearClient(auth=LinearAuth(api_key=api_key)) as client:
                 teams: list[Any] = []
                 for team in client.iter_teams():
                     teams.append(
@@ -724,8 +723,6 @@ class TeamDiscoveryService:
                         )
                     )
                 return teams
-            finally:
-                client.close()
 
         return await asyncio.to_thread(_discover)
 

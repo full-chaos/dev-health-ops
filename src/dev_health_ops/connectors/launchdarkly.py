@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 
+from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.connectors.exceptions import (
     APIException,
     AuthenticationException,
@@ -131,7 +132,7 @@ class LaunchDarklyConnector:
                         logger.warning(
                             "LaunchDarkly %d on %s (attempt %d/%d), retrying in %.1fs",
                             response.status_code,
-                            path,
+                            sanitize_for_log(path),
                             attempt + 1,
                             self.max_retries,
                             retry_after,
@@ -149,7 +150,7 @@ class LaunchDarklyConnector:
                 if attempt < self.max_retries - 1:
                     logger.warning(
                         "LaunchDarkly request to %s failed (attempt %d/%d): %s",
-                        path,
+                        sanitize_for_log(path),
                         attempt + 1,
                         self.max_retries,
                         exc,
@@ -194,7 +195,7 @@ class LaunchDarklyConnector:
             if len(all_items) >= total or len(items) < limit:
                 break
             offset += limit
-        logger.info("Fetched %d flags for project %s", len(all_items), key)
+        logger.info("Fetched %d flags for project %s", len(all_items), sanitize_for_log(key))
         return all_items
 
     async def get_audit_log(

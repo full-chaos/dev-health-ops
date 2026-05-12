@@ -122,9 +122,7 @@ async def async_main():
         return
 
     print("=== Async Batch Processing Example ===")
-    connector = GitHubConnector(token=token)
-
-    try:
+    with GitHubConnector(token=token) as connector:
         results = await connector.get_repos_with_stats_async(
             user_name="chrisgeo",
             pattern="chrisgeo/*",
@@ -139,8 +137,6 @@ async def async_main():
         successful = sum(1 for r in results if r.success)
         print(f"\nAsync processing completed: {successful}/{len(results)} successful")
 
-    finally:
-        connector.close()
 
 
 if __name__ == "__main__":

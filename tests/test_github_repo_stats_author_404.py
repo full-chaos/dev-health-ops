@@ -42,9 +42,7 @@ class _Repo:
 
 
 def test_get_repo_stats_does_not_fail_on_author_profile_404(monkeypatch):
-    connector = GitHubConnector(token="test_token")
-
-    try:
+    with GitHubConnector(token="test_token") as connector:
         monkeypatch.setattr(
             connector.github,
             "get_repo",
@@ -57,5 +55,3 @@ def test_get_repo_stats_does_not_fail_on_author_profile_404(monkeypatch):
         assert stats.deletions == 2
         assert len(stats.authors) == 1
         assert stats.authors[0].username == "deleted-user"
-    finally:
-        connector.close()

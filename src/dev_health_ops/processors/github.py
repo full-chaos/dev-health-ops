@@ -908,196 +908,197 @@ async def process_github_repo(
         else GitHubConnector(token=token)
     )
     try:
-        # 1. Fetch Repo Info
-        logging.info("Fetching repository information...")
-        gh_repo = await loop.run_in_executor(
-            None, _fetch_github_repo_info_sync, connector, owner, repo_name
-        )
-
-        # Create/Insert Repo
-        repo_info = Repository(
-            id=gh_repo.id,
-            name=gh_repo.name,
-            full_name=gh_repo.full_name,
-            default_branch=gh_repo.default_branch,
-            description=gh_repo.description,
-            url=gh_repo.html_url,
-            created_at=gh_repo.created_at,
-            updated_at=gh_repo.updated_at,
-            language=gh_repo.language,
-            stars=gh_repo.stargazers_count,
-            forks=gh_repo.forks_count,
-        )
-
-        db_repo = Repo(
-            repo_path=None,
-            repo=repo_info.full_name,
-            provider="github",
-            settings={
-                "source": "github",
-                "repo_id": repo_info.id,
-                "url": repo_info.url,
-                "default_branch": repo_info.default_branch,
-            },
-            tags=[
-                "github",
-                repo_info.language,
-            ]
-            if repo_info.language
-            else ["github"],
-        )
-
-        await ingestion_sink.insert_repo(db_repo)
-        logging.info(f"Repository stored: {db_repo.repo} ({db_repo.id})")
-
-        if blame_only:
-            await _backfill_github_missing_data(
-                store=store,
-                ingestion_sink=ingestion_sink,
-                connector=connector,
-                db_repo=db_repo,
-                repo_full_name=repo_info.full_name,
-                default_branch=repo_info.default_branch,
-                max_commits=max_commits,
-                blame_only=True,
-            )
-            logging.info(
-                "Completed blame-only sync for GitHub repository: %s/%s",
-                owner,
-                repo_name,
-            )
-            return
-
-        if sync_git:
-            # 2. Fetch Commits
-            if max_commits is None:
-                logging.info("Fetching all commits from GitHub...")
-            else:
-                logging.info(f"Fetching up to {max_commits} commits from GitHub...")
-            raw_commits, commit_objects = await loop.run_in_executor(
-                None,
-                _fetch_github_commits_sync,
-                gh_repo,
-                max_commits,
-                db_repo.id,
-                since,
+        with connector:
+            # 1. Fetch Repo Info
+            logging.info("Fetching repository information...")
+            gh_repo = await loop.run_in_executor(
+                None, _fetch_github_repo_info_sync, connector, owner, repo_name
             )
 
-            if commit_objects:
-                await ingestion_sink.insert_git_commit_data(commit_objects)
-                logging.info(f"Stored {len(commit_objects)} commits from GitHub")
-
-            # 3. Fetch Stats
-            logging.info("Fetching commit stats from GitHub...")
-            stats_limit = 50 if max_commits is None else min(max_commits, 50)
-            stats_objects = await loop.run_in_executor(
-                None,
-                _fetch_github_commit_stats_sync,
-                raw_commits,
-                db_repo.id,
-                stats_limit,
-                since,
+            # Create/Insert Repo
+            repo_info = Repository(
+                id=gh_repo.id,
+                name=gh_repo.name,
+                full_name=gh_repo.full_name,
+                default_branch=gh_repo.default_branch,
+                description=gh_repo.description,
+                url=gh_repo.html_url,
+                created_at=gh_repo.created_at,
+                updated_at=gh_repo.updated_at,
+                language=gh_repo.language,
+                stars=gh_repo.stargazers_count,
+                forks=gh_repo.forks_count,
             )
 
-            if stats_objects:
-                await ingestion_sink.insert_git_commit_stats(stats_objects)
+            db_repo = Repo(
+                repo_path=None,
+                repo=repo_info.full_name,
+                provider="github",
+                settings={
+                    "source": "github",
+                    "repo_id": repo_info.id,
+                    "url": repo_info.url,
+                    "default_branch": repo_info.default_branch,
+                },
+                tags=[
+                    "github",
+                    repo_info.language,
+                ]
+                if repo_info.language
+                else ["github"],
+            )
+
+            await ingestion_sink.insert_repo(db_repo)
+            logging.info(f"Repository stored: {db_repo.repo} ({db_repo.id})")
+
+            if blame_only:
+                await _backfill_github_missing_data(
+                    store=store,
+                    ingestion_sink=ingestion_sink,
+                    connector=connector,
+                    db_repo=db_repo,
+                    repo_full_name=repo_info.full_name,
+                    default_branch=repo_info.default_branch,
+                    max_commits=max_commits,
+                    blame_only=True,
+                )
                 logging.info(
-                    "Stored %d commit stats from GitHub",
-                    len(stats_objects),
+                    "Completed blame-only sync for GitHub repository: %s/%s",
+                    owner,
+                    repo_name,
+                )
+                return
+
+            if sync_git:
+                # 2. Fetch Commits
+                if max_commits is None:
+                    logging.info("Fetching all commits from GitHub...")
+                else:
+                    logging.info(f"Fetching up to {max_commits} commits from GitHub...")
+                raw_commits, commit_objects = await loop.run_in_executor(
+                    None,
+                    _fetch_github_commits_sync,
+                    gh_repo,
+                    max_commits,
+                    db_repo.id,
+                    since,
                 )
 
-        if sync_prs:
-            # 4. Fetch PRs
-            logging.info("Fetching pull requests from GitHub...")
-            pr_total = await loop.run_in_executor(
-                None,
-                _sync_github_prs_to_store,
-                connector,
-                owner,
-                repo_name,
-                db_repo.id,
-                ingestion_sink,
-                loop,
-                BATCH_SIZE,
-                "all",
-                None,
-                since,
-            )
-            logging.info(f"Stored {pr_total} pull requests from GitHub")
+                if commit_objects:
+                    await ingestion_sink.insert_git_commit_data(commit_objects)
+                    logging.info(f"Stored {len(commit_objects)} commits from GitHub")
 
-        if sync_cicd:
-            logging.info("Fetching CI/CD workflow runs from GitHub...")
-            pipeline_runs = await loop.run_in_executor(
-                None,
-                _fetch_github_workflow_runs_sync,
-                gh_repo,
-                db_repo.id,
-                BATCH_SIZE,
-                since,
-            )
-            if pipeline_runs:
-                await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
-                logging.info("Stored %d workflow runs", len(pipeline_runs))
-
-        if sync_deployments:
-            logging.info("Fetching deployments from GitHub...")
-            deployments = await loop.run_in_executor(
-                None,
-                _fetch_github_deployments_sync,
-                gh_repo,
-                db_repo.id,
-                BATCH_SIZE,
-                since,
-            )
-            if deployments:
-                await ingestion_sink.insert_deployments(deployments)
-                logging.info("Stored %d deployments", len(deployments))
-
-        if sync_incidents:
-            logging.info("Fetching incident issues from GitHub...")
-            incidents = await loop.run_in_executor(
-                None,
-                _fetch_github_incidents_sync,
-                gh_repo,
-                db_repo.id,
-                BATCH_SIZE,
-                since,
-            )
-            if incidents:
-                await ingestion_sink.insert_incidents(incidents)
-                logging.info("Stored %d incidents", len(incidents))
-
-        if sync_security:
-            logging.info("Fetching security alerts from GitHub...")
-            security_alerts = await loop.run_in_executor(
-                None,
-                _fetch_github_security_alerts_sync,
-                connector,
-                owner,
-                repo_name,
-                db_repo.id,
-                BATCH_SIZE,
-                since,
-            )
-            if security_alerts:
-                insert_security_alerts = getattr(
-                    ingestion_sink, "insert_security_alerts"
+                # 3. Fetch Stats
+                logging.info("Fetching commit stats from GitHub...")
+                stats_limit = 50 if max_commits is None else min(max_commits, 50)
+                stats_objects = await loop.run_in_executor(
+                    None,
+                    _fetch_github_commit_stats_sync,
+                    raw_commits,
+                    db_repo.id,
+                    stats_limit,
+                    since,
                 )
-                await insert_security_alerts(security_alerts)
-                logging.info("Stored %d security alerts", len(security_alerts))
 
-        # 5. Fetch Blame (Optional & Stubbed)
-        if fetch_blame:
-            logging.info("Fetching blame data (file list) from GitHub...")
-            await loop.run_in_executor(
-                None, _fetch_github_blame_sync, gh_repo, db_repo.id
+                if stats_objects:
+                    await ingestion_sink.insert_git_commit_stats(stats_objects)
+                    logging.info(
+                        "Stored %d commit stats from GitHub",
+                        len(stats_objects),
+                    )
+
+            if sync_prs:
+                # 4. Fetch PRs
+                logging.info("Fetching pull requests from GitHub...")
+                pr_total = await loop.run_in_executor(
+                    None,
+                    _sync_github_prs_to_store,
+                    connector,
+                    owner,
+                    repo_name,
+                    db_repo.id,
+                    ingestion_sink,
+                    loop,
+                    BATCH_SIZE,
+                    "all",
+                    None,
+                    since,
+                )
+                logging.info(f"Stored {pr_total} pull requests from GitHub")
+
+            if sync_cicd:
+                logging.info("Fetching CI/CD workflow runs from GitHub...")
+                pipeline_runs = await loop.run_in_executor(
+                    None,
+                    _fetch_github_workflow_runs_sync,
+                    gh_repo,
+                    db_repo.id,
+                    BATCH_SIZE,
+                    since,
+                )
+                if pipeline_runs:
+                    await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
+                    logging.info("Stored %d workflow runs", len(pipeline_runs))
+
+            if sync_deployments:
+                logging.info("Fetching deployments from GitHub...")
+                deployments = await loop.run_in_executor(
+                    None,
+                    _fetch_github_deployments_sync,
+                    gh_repo,
+                    db_repo.id,
+                    BATCH_SIZE,
+                    since,
+                )
+                if deployments:
+                    await ingestion_sink.insert_deployments(deployments)
+                    logging.info("Stored %d deployments", len(deployments))
+
+            if sync_incidents:
+                logging.info("Fetching incident issues from GitHub...")
+                incidents = await loop.run_in_executor(
+                    None,
+                    _fetch_github_incidents_sync,
+                    gh_repo,
+                    db_repo.id,
+                    BATCH_SIZE,
+                    since,
+                )
+                if incidents:
+                    await ingestion_sink.insert_incidents(incidents)
+                    logging.info("Stored %d incidents", len(incidents))
+
+            if sync_security:
+                logging.info("Fetching security alerts from GitHub...")
+                security_alerts = await loop.run_in_executor(
+                    None,
+                    _fetch_github_security_alerts_sync,
+                    connector,
+                    owner,
+                    repo_name,
+                    db_repo.id,
+                    BATCH_SIZE,
+                    since,
+                )
+                if security_alerts:
+                    insert_security_alerts = getattr(
+                        ingestion_sink, "insert_security_alerts"
+                    )
+                    await insert_security_alerts(security_alerts)
+                    logging.info("Stored %d security alerts", len(security_alerts))
+
+            # 5. Fetch Blame (Optional & Stubbed)
+            if fetch_blame:
+                logging.info("Fetching blame data (file list) from GitHub...")
+                await loop.run_in_executor(
+                    None, _fetch_github_blame_sync, gh_repo, db_repo.id
+                )
+
+            logging.info(
+                "Successfully processed GitHub repository: %s/%s",
+                owner,
+                repo_name,
             )
-
-        logging.info(
-            "Successfully processed GitHub repository: %s/%s",
-            owner,
-            repo_name,
-        )
 
     except ConnectorException as e:
         logging.error(f"Connector error: {e}")
@@ -1105,8 +1106,6 @@ async def process_github_repo(
     except Exception as e:
         logging.error(f"Error processing GitHub repository: {e}")
         raise
-    finally:
-        connector.close()
 
 
 async def process_github_repos_batch(
@@ -1435,38 +1434,25 @@ async def process_github_repos_batch(
                 loop.call_soon_threadsafe(_enqueue)
 
     try:
-        if sync_git:
-            results_queue = asyncio.Queue(maxsize=max(1, max_concurrent * 2))
+        with connector:
+            if sync_git:
+                results_queue = asyncio.Queue(maxsize=max(1, max_concurrent * 2))
 
-            async def _consume_results() -> None:
-                assert results_queue is not None
-                while True:
-                    item = await results_queue.get()
-                    try:
-                        if item is _queue_sentinel:
-                            return
-                        await store_result(item)
-                    finally:
-                        results_queue.task_done()
+                async def _consume_results() -> None:
+                    assert results_queue is not None
+                    while True:
+                        item = await results_queue.get()
+                        try:
+                            if item is _queue_sentinel:
+                                return
+                            await store_result(item)
+                        finally:
+                            results_queue.task_done()
 
-            consumer_task = asyncio.create_task(_consume_results())
+                consumer_task = asyncio.create_task(_consume_results())
 
-            if use_async:
-                await connector.get_repos_with_stats_async(
-                    org_name=org_name,
-                    user_name=user_name,
-                    pattern=pattern,
-                    batch_size=batch_size,
-                    max_concurrent=max_concurrent,
-                    rate_limit_delay=rate_limit_delay,
-                    max_commits_per_repo=max_commits_per_repo,
-                    max_repos=max_repos,
-                    on_repo_complete=on_repo_complete,
-                )
-            else:
-                await loop.run_in_executor(
-                    None,
-                    lambda: connector.get_repos_with_stats(
+                if use_async:
+                    await connector.get_repos_with_stats_async(
                         org_name=org_name,
                         user_name=user_name,
                         pattern=pattern,
@@ -1476,54 +1462,68 @@ async def process_github_repos_batch(
                         max_commits_per_repo=max_commits_per_repo,
                         max_repos=max_repos,
                         on_repo_complete=on_repo_complete,
+                    )
+                else:
+                    await loop.run_in_executor(
+                        None,
+                        lambda: connector.get_repos_with_stats(
+                            org_name=org_name,
+                            user_name=user_name,
+                            pattern=pattern,
+                            batch_size=batch_size,
+                            max_concurrent=max_concurrent,
+                            rate_limit_delay=rate_limit_delay,
+                            max_commits_per_repo=max_commits_per_repo,
+                            max_repos=max_repos,
+                            on_repo_complete=on_repo_complete,
+                        ),
+                    )
+
+                await results_queue.join()
+                await results_queue.put(_queue_sentinel)
+                await consumer_task
+            else:
+                repos = await loop.run_in_executor(
+                    None,
+                    lambda: connector.list_repositories(
+                        org_name=org_name,
+                        user_name=user_name,
+                        pattern=pattern,
+                        max_repos=max_repos,
                     ),
                 )
+                semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
-            await results_queue.join()
-            await results_queue.put(_queue_sentinel)
-            await consumer_task
-        else:
-            repos = await loop.run_in_executor(
-                None,
-                lambda: connector.list_repositories(
-                    org_name=org_name,
-                    user_name=user_name,
-                    pattern=pattern,
-                    max_repos=max_repos,
-                ),
-            )
-            semaphore = asyncio.Semaphore(max(1, max_concurrent))
-
-            async def _process_repo(repo_info) -> None:
-                async with semaphore:
-                    result = BatchResult(
-                        repository=repo_info,
-                        stats=None,
-                        success=True,
-                    )
-                    try:
-                        await store_result(result)
-                    except Exception as e:
+                async def _process_repo(repo_info) -> None:
+                    async with semaphore:
                         result = BatchResult(
                             repository=repo_info,
                             stats=None,
-                            error=str(e),
-                            success=False,
+                            success=True,
                         )
-                    on_repo_complete(result)
+                        try:
+                            await store_result(result)
+                        except Exception as e:
+                            result = BatchResult(
+                                repository=repo_info,
+                                stats=None,
+                                error=str(e),
+                                success=False,
+                            )
+                        on_repo_complete(result)
 
-            tasks = [asyncio.create_task(_process_repo(repo)) for repo in repos]
-            if tasks:
-                await asyncio.gather(*tasks)
+                tasks = [asyncio.create_task(_process_repo(repo)) for repo in repos]
+                if tasks:
+                    await asyncio.gather(*tasks)
 
-        # Summary
-        successful = sum(1 for r in all_results if r.success)
-        failed = sum(1 for r in all_results if not r.success)
-        logging.info("=== Batch Processing Complete ===")
-        logging.info(f"  Successful: {successful}")
-        logging.info(f"  Failed: {failed}")
-        logging.info(f"  Total: {len(all_results)}")
-        logging.info(f"  Stored: {stored_count}")
+            # Summary
+            successful = sum(1 for r in all_results if r.success)
+            failed = sum(1 for r in all_results if not r.success)
+            logging.info("=== Batch Processing Complete ===")
+            logging.info(f"  Successful: {successful}")
+            logging.info(f"  Failed: {failed}")
+            logging.info(f"  Total: {len(all_results)}")
+            logging.info(f"  Stored: {stored_count}")
 
     except ConnectorException as e:
         logging.error(f"Connector error: {e}")
@@ -1531,5 +1531,3 @@ async def process_github_repos_batch(
     except Exception as e:
         logging.error(f"Error in batch processing: {e}")
         raise
-    finally:
-        connector.close()

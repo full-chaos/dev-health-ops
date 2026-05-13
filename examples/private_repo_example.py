@@ -56,72 +56,74 @@ def test_github_private_repo():
     print(f"\nAttempting to access private repository: {private_repo}")
     print(f"Using token: {token[:10]}...")
 
-    connector = GitHubConnector(token=token)
+    with GitHubConnector(token=token) as connector:
+        try:
+            # Test 1: List user's repositories (should include private ones)
+            print("\n1. Listing user's repositories...")
+            repos = connector.list_repositories(user_name=owner, max_repos=50)
 
-    try:
-        # Test 1: List user's repositories (should include private ones)
-        print("\n1. Listing user's repositories...")
-        repos = connector.list_repositories(user_name=owner, max_repos=50)
+            found = False
+            for repo in repos:
+                if repo.full_name == private_repo:
+                    found = True
+                    print(f"   ✅ Found private repository: {repo.full_name}")
+                    break
 
-        found = False
-        for repo in repos:
-            if repo.full_name == private_repo:
-                found = True
-                print(f"   ✅ Found private repository: {repo.full_name}")
-                break
+            if not found:
+                print(
+                    f"   ⚠️  Private repository {private_repo} not found in user's repos"
+                )
+                print(
+                    "   This might mean the token doesn't have access to this repository"
+                )
 
-        if not found:
-            print(f"   ⚠️  Private repository {private_repo} not found in user's repos")
-            print("   This might mean the token doesn't have access to this repository")
+            # Test 2: Get repository statistics
+            print("\n2. Fetching repository statistics...")
+            stats = connector.get_repo_stats(owner, repo_name, max_commits=10)
+            print(f"   ✅ Total commits: {stats.total_commits}")
+            print(f"   ✅ Total additions: {stats.additions}")
+            print(f"   ✅ Total deletions: {stats.deletions}")
+            print(f"   ✅ Authors: {len(stats.authors)}")
 
-        # Test 2: Get repository statistics
-        print("\n2. Fetching repository statistics...")
-        stats = connector.get_repo_stats(owner, repo_name, max_commits=10)
-        print(f"   ✅ Total commits: {stats.total_commits}")
-        print(f"   ✅ Total additions: {stats.additions}")
-        print(f"   ✅ Total deletions: {stats.deletions}")
-        print(f"   ✅ Authors: {len(stats.authors)}")
-
-        # Test 3: Get contributors
-        print("\n3. Fetching contributors...")
-        contributors = connector.get_contributors(owner, repo_name, max_contributors=5)
-        print(f"   ✅ Found {len(contributors)} contributors")
-        for contributor in contributors[:3]:
-            print(f"      - {contributor.username}")
-
-        # Test 4: Check rate limit
-        print("\n4. Checking rate limit...")
-        rate_limit = connector.get_rate_limit()
-        print(
-            f"   ✅ Rate limit: {rate_limit['remaining']}/{rate_limit['limit']} remaining"
-        )
-
-        print("\n✅ Successfully accessed private GitHub repository!")
-        return True
-
-    except AuthenticationException as e:
-        print(f"\n❌ Authentication failed: {e}")
-        print("   Make sure your GITHUB_TOKEN has the 'repo' scope")
-        print("   Go to https://github.com/settings/tokens to verify")
-        return False
-
-    except APIException as e:
-        if "404" in str(e):
-            print(f"\n❌ Repository not found: {e}")
-            print(
-                "   Either the repository doesn't exist or your token doesn't have access"
+            # Test 3: Get contributors
+            print("\n3. Fetching contributors...")
+            contributors = connector.get_contributors(
+                owner, repo_name, max_contributors=5
             )
-        else:
-            print(f"\n❌ API error: {e}")
-        return False
+            print(f"   ✅ Found {len(contributors)} contributors")
+            for contributor in contributors[:3]:
+                print(f"      - {contributor.username}")
 
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
-        traceback.print_exc()
-        return False
+            # Test 4: Check rate limit
+            print("\n4. Checking rate limit...")
+            rate_limit = connector.get_rate_limit()
+            print(
+                f"   ✅ Rate limit: {rate_limit['remaining']}/{rate_limit['limit']} remaining"
+            )
 
-    finally:
-        connector.close()
+            print("\n✅ Successfully accessed private GitHub repository!")
+            return True
+
+        except AuthenticationException as e:
+            print(f"\n❌ Authentication failed: {e}")
+            print("   Make sure your GITHUB_TOKEN has the 'repo' scope")
+            print("   Go to https://github.com/settings/tokens to verify")
+            return False
+
+        except APIException as e:
+            if "404" in str(e):
+                print(f"\n❌ Repository not found: {e}")
+                print(
+                    "   Either the repository doesn't exist or your token doesn't have access"
+                )
+            else:
+                print(f"\n❌ API error: {e}")
+            return False
+
+        except Exception as e:
+            print(f"\n❌ Unexpected error: {e}")
+            traceback.print_exc()
+            return False
 
 
 def test_gitlab_private_project():
@@ -150,95 +152,93 @@ def test_gitlab_private_project():
     print(f"GitLab URL: {gitlab_url}")
     print(f"Using token: {token[:10]}...")
 
-    connector = GitLabConnector(url=gitlab_url, private_token=token)
-
-    try:
-        # Test 1: Get project details
-        print("\n1. Fetching project details...")
+    with GitLabConnector(url=gitlab_url, private_token=token) as connector:
         try:
-            # Direct python-gitlab API call to verify basic access
-            project = connector.gitlab.projects.get(private_project)
-            print(f"   ✅ Found project: {project.name}")
+            # Test 1: Get project details
+            print("\n1. Fetching project details...")
+            try:
+                # Direct python-gitlab API call to verify basic access
+                project = connector.gitlab.projects.get(private_project)
+                print(f"   ✅ Found project: {project.name}")
+                print(
+                    f"   ✅ Full path: {project.path_with_namespace if hasattr(project, 'path_with_namespace') else 'N/A'}"
+                )
+            except Exception as e:
+                # python-gitlab can raise various exceptions depending on the error
+                print(f"   ❌ Failed to access project: {e}")
+                return False
+
+            # Determine project identifier for subsequent calls
+            project_identifier = private_project
+
+            # Test 2: Get project statistics
+            print("\n2. Fetching project statistics...")
+            try:
+                stats = connector.get_repo_stats_by_project(
+                    project_name=project_identifier, max_commits=10
+                )
+            except Exception:
+                if str(private_project).isdigit():
+                    stats = connector.get_repo_stats_by_project(
+                        project_id=int(private_project), max_commits=10
+                    )
+                else:
+                    raise
+
+            print(f"   ✅ Total commits: {stats.total_commits}")
+            print(f"   ✅ Total additions: {stats.additions}")
+            print(f"   ✅ Total deletions: {stats.deletions}")
+            print(f"   ✅ Authors: {len(stats.authors)}")
+
+            # Test 3: Get contributors
+            print("\n3. Fetching contributors...")
+            try:
+                contributors = connector.get_contributors_by_project(
+                    project_name=project_identifier, max_contributors=5
+                )
+            except Exception:
+                if str(private_project).isdigit():
+                    contributors = connector.get_contributors_by_project(
+                        project_id=int(private_project), max_contributors=5
+                    )
+                else:
+                    raise
+
+            print(f"   ✅ Found {len(contributors)} contributors")
+            for contributor in contributors[:3]:
+                print(f"      - {contributor.username}")
+
+            # Test 4: List user's projects (should include private ones)
+            print("\n4. Listing accessible projects...")
+            projects = connector.list_projects(max_projects=10)
             print(
-                f"   ✅ Full path: {project.path_with_namespace if hasattr(project, 'path_with_namespace') else 'N/A'}"
+                f"   ✅ Found {len(projects)} accessible projects (may include private)"
             )
-        except Exception as e:
-            # python-gitlab can raise various exceptions depending on the error
-            print(f"   ❌ Failed to access project: {e}")
+
+            print("\n✅ Successfully accessed private GitLab project!")
+            return True
+
+        except AuthenticationException as e:
+            print(f"\n❌ Authentication failed: {e}")
+            print(
+                "   Make sure your GITLAB_TOKEN has 'read_api' and 'read_repository' scopes"
+            )
             return False
 
-        # Determine project identifier for subsequent calls
-        project_identifier = private_project
-
-        # Test 2: Get project statistics
-        print("\n2. Fetching project statistics...")
-        try:
-            stats = connector.get_repo_stats_by_project(
-                project_name=project_identifier, max_commits=10
-            )
-        except Exception:
-            if str(private_project).isdigit():
-                stats = connector.get_repo_stats_by_project(
-                    project_id=int(private_project), max_commits=10
+        except APIException as e:
+            if "404" in str(e):
+                print(f"\n❌ Project not found: {e}")
+                print(
+                    "   Either the project doesn't exist or your token doesn't have access"
                 )
             else:
-                raise
+                print(f"\n❌ API error: {e}")
+            return False
 
-        print(f"   ✅ Total commits: {stats.total_commits}")
-        print(f"   ✅ Total additions: {stats.additions}")
-        print(f"   ✅ Total deletions: {stats.deletions}")
-        print(f"   ✅ Authors: {len(stats.authors)}")
-
-        # Test 3: Get contributors
-        print("\n3. Fetching contributors...")
-        try:
-            contributors = connector.get_contributors_by_project(
-                project_name=project_identifier, max_contributors=5
-            )
-        except Exception:
-            if str(private_project).isdigit():
-                contributors = connector.get_contributors_by_project(
-                    project_id=int(private_project), max_contributors=5
-                )
-            else:
-                raise
-
-        print(f"   ✅ Found {len(contributors)} contributors")
-        for contributor in contributors[:3]:
-            print(f"      - {contributor.username}")
-
-        # Test 4: List user's projects (should include private ones)
-        print("\n4. Listing accessible projects...")
-        projects = connector.list_projects(max_projects=10)
-        print(f"   ✅ Found {len(projects)} accessible projects (may include private)")
-
-        print("\n✅ Successfully accessed private GitLab project!")
-        return True
-
-    except AuthenticationException as e:
-        print(f"\n❌ Authentication failed: {e}")
-        print(
-            "   Make sure your GITLAB_TOKEN has 'read_api' and 'read_repository' scopes"
-        )
-        return False
-
-    except APIException as e:
-        if "404" in str(e):
-            print(f"\n❌ Project not found: {e}")
-            print(
-                "   Either the project doesn't exist or your token doesn't have access"
-            )
-        else:
-            print(f"\n❌ API error: {e}")
-        return False
-
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
-        traceback.print_exc()
-        return False
-
-    finally:
-        connector.close()
+        except Exception as e:
+            print(f"\n❌ Unexpected error: {e}")
+            traceback.print_exc()
+            return False
 
 
 def main():

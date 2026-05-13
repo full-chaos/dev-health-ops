@@ -50,9 +50,7 @@ class TestGitHubIntegration:
         if not token:
             pytest.skip("GITHUB_TOKEN environment variable not set")
 
-        connector = GitHubConnector(token=token)
-
-        try:
+        with GitHubConnector(token=token) as connector:
             # Fetch first 10 repos from github organization
             repos = connector.list_repositories(org_name="github", max_repos=10)
 
@@ -71,9 +69,6 @@ class TestGitHubIntegration:
             for repo in repos[:5]:  # Print first 5
                 print(f"  - {repo.full_name} (⭐ {repo.stars})")
 
-        finally:
-            connector.close()
-
     def test_list_public_repos_from_user(self):
         """Test fetching first 10 public repos from a GitHub user."""
         # Skip if no token provided
@@ -81,9 +76,7 @@ class TestGitHubIntegration:
         if not token:
             pytest.skip("GITHUB_TOKEN environment variable not set")
 
-        connector = GitHubConnector(token=token)
-
-        try:
+        with GitHubConnector(token=token) as connector:
             # Fetch first 10 repos from torvalds (Linus Torvalds)
             repos = connector.list_repositories(user_name="torvalds", max_repos=10)
 
@@ -102,9 +95,6 @@ class TestGitHubIntegration:
             for repo in repos[:5]:  # Print first 5
                 print(f"  - {repo.full_name} (⭐ {repo.stars})")
 
-        finally:
-            connector.close()
-
     def test_search_public_repos(self):
         """Test searching for public repositories."""
         # Skip if no token provided
@@ -112,9 +102,7 @@ class TestGitHubIntegration:
         if not token:
             pytest.skip("GITHUB_TOKEN environment variable not set")
 
-        connector = GitHubConnector(token=token)
-
-        try:
+        with GitHubConnector(token=token) as connector:
             # Search for Python repositories
             repos = connector.list_repositories(
                 search="python language:python", max_repos=10
@@ -134,9 +122,6 @@ class TestGitHubIntegration:
             for repo in repos[:5]:  # Print first 5
                 print(f"  - {repo.full_name} (⭐ {repo.stars})")
 
-        finally:
-            connector.close()
-
 
 @pytest.mark.skipif(
     skip_integration or skip_gitlab_network,
@@ -148,11 +133,9 @@ class TestGitLabIntegration:
     def test_list_public_projects_from_gitlab(self):
         """Test fetching first 10 public projects from GitLab."""
         # Use unauthenticated connector for public projects
-        connector = GitLabConnector(
+        with GitLabConnector(
             url="https://gitlab.com", private_token=os.getenv("GITLAB_TOKEN")
-        )
-
-        try:
+        ) as connector:
             # Fetch first 10 public projects
             try:
                 projects = connector.list_projects(max_projects=10)
@@ -174,17 +157,12 @@ class TestGitLabIntegration:
             for project in projects[:5]:  # Print first 5
                 print(f"  - {project.full_name} (⭐ {project.stars})")
 
-        finally:
-            connector.close()
-
     def test_list_public_projects_from_gitlab_group(self):
         """Test fetching first 10 public projects from a GitLab group."""
         # Use unauthenticated connector for public projects
-        connector = GitLabConnector(
+        with GitLabConnector(
             url="https://gitlab.com", private_token=os.getenv("GITLAB_TOKEN")
-        )
-
-        try:
+        ) as connector:
             # Fetch first 10 repos from gitlab-org group
             try:
                 projects = connector.list_projects(
@@ -210,17 +188,12 @@ class TestGitLabIntegration:
             for project in projects[:5]:  # Print first 5
                 print(f"  - {project.full_name} (⭐ {project.stars})")
 
-        finally:
-            connector.close()
-
     def test_search_public_projects(self):
         """Test searching for public projects on GitLab."""
         # Use unauthenticated connector for public projects
-        connector = GitLabConnector(
+        with GitLabConnector(
             url="https://gitlab.com", private_token=os.getenv("GITLAB_TOKEN")
-        )
-
-        try:
+        ) as connector:
             # Search for docker projects
             projects = connector.list_projects(search="docker", max_projects=10)
 
@@ -237,6 +210,3 @@ class TestGitLabIntegration:
             print(f"\nFound {len(projects)} projects matching 'docker':")
             for project in projects[:5]:  # Print first 5
                 print(f"  - {project.full_name} (⭐ {project.stars})")
-
-        finally:
-            connector.close()

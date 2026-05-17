@@ -29,10 +29,14 @@ def test_round_trip_encrypts_and_decrypts(monkeypatch: pytest.MonkeyPatch) -> No
     assert encryption.decrypt_value(ciphertext) == "super-secret"
 
 
-def test_pbkdf2_key_derivation_is_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pbkdf2_key_derivation_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _set_key(monkeypatch)
 
-    assert encryption._derive_key("same-secret") == encryption._derive_key("same-secret")
+    assert encryption._derive_key("same-secret") == encryption._derive_key(
+        "same-secret"
+    )
     assert encryption._derive_key("same-secret") != encryption._derive_legacy_key(
         "same-secret"
     )

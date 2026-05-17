@@ -27,7 +27,7 @@ class ReencryptStats:
     skipped_v1: int = 0
     failed: int = 0
 
-    def merge(self, other: "ReencryptStats") -> None:
+    def merge(self, other: ReencryptStats) -> None:
         self.scanned += other.scanned
         self.upgraded += other.upgraded
         self.skipped_v1 += other.skipped_v1

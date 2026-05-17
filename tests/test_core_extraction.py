@@ -164,10 +164,10 @@ class TestBackwardCompatibility:
         assert callable(invalidate_on_sync_complete)
         assert CacheInvalidationEvent is not None
 
-    def test_api_settings_still_exports_decrypt_value(self):
-        """api.services.settings must still export decrypt/encrypt for compat."""
-        # Settings imports from core.encryption, so these names must be accessible
-        # either via the settings module or directly from core.encryption
+    def test_api_configuration_exports_decrypt_value(self):
+        """api.services.configuration must still export decrypt/encrypt."""
+        # Configuration imports from core.encryption, so these names must be accessible
+        # either via the configuration module or directly from core.encryption
         from dev_health_ops.core.encryption import decrypt_value, encrypt_value
 
         assert callable(decrypt_value)

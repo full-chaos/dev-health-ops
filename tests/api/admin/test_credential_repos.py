@@ -140,7 +140,7 @@ _FAKE_REPOS = [
     ),
 ]
 
-_DECRYPT_PATCH = "dev_health_ops.api.services.settings.IntegrationCredentialsService.get_decrypted_credentials_by_id"
+_DECRYPT_PATCH = "dev_health_ops.api.services.configuration.IntegrationCredentialsService.get_decrypted_credentials_by_id"
 _GH_CONNECTOR = "dev_health_ops.connectors.github.GitHubConnector"
 
 

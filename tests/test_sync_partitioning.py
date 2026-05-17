@@ -742,19 +742,19 @@ class TestExtractProviderToken:
 
 class TestNormalizeCredentialKeys:
     def test_linear_apiKey_to_api_key(self):
-        from dev_health_ops.api.services.settings import _normalize_credential_keys
+        from dev_health_ops.api.services.configuration import _normalize_credential_keys
 
         result = _normalize_credential_keys("linear", {"apiKey": "lin_api_xxx"})
         assert result == {"api_key": "lin_api_xxx"}
 
     def test_already_snake_case_unchanged(self):
-        from dev_health_ops.api.services.settings import _normalize_credential_keys
+        from dev_health_ops.api.services.configuration import _normalize_credential_keys
 
         result = _normalize_credential_keys("linear", {"api_key": "lin_api_xxx"})
         assert result == {"api_key": "lin_api_xxx"}
 
     def test_jira_normalizes_multiple_keys(self):
-        from dev_health_ops.api.services.settings import _normalize_credential_keys
+        from dev_health_ops.api.services.configuration import _normalize_credential_keys
 
         result = _normalize_credential_keys(
             "jira",
@@ -771,14 +771,14 @@ class TestNormalizeCredentialKeys:
         }
 
     def test_unknown_provider_no_change(self):
-        from dev_health_ops.api.services.settings import _normalize_credential_keys
+        from dev_health_ops.api.services.configuration import _normalize_credential_keys
 
         creds = {"someKey": "val"}
         result = _normalize_credential_keys("unknown", creds)
         assert result == {"someKey": "val"}
 
     def test_github_normalizes_baseUrl(self):
-        from dev_health_ops.api.services.settings import _normalize_credential_keys
+        from dev_health_ops.api.services.configuration import _normalize_credential_keys
 
         result = _normalize_credential_keys(
             "github", {"token": "ghp_xxx", "baseUrl": "https://gh.example.com"}

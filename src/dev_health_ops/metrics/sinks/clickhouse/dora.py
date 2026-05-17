@@ -6,11 +6,12 @@ Tables: dora_metrics_daily, testops_period_comparisons,
         testops_metric_anomalies, testops_metric_correlations,
         testops_benchmark_insights.
 """
+
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from dev_health_ops.metrics.schemas import DORAMetricsRecord
 from dev_health_ops.metrics.testops_schemas import (
@@ -21,25 +22,20 @@ from dev_health_ops.metrics.testops_schemas import (
     MetricCorrelationRecord,
     PeriodComparisonRecord,
 )
-from dev_health_ops.metrics.sinks.clickhouse._insert import DEFAULT_BATCH_SIZE
+
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.sinks.clickhouse._insert import _ClickHouseSinkBase
+else:
+
+    class _ClickHouseSinkBase:
+        pass
+
 
 logger = logging.getLogger(__name__)
 
 
-class DoraMixin:
+class DoraMixin(_ClickHouseSinkBase):
     """Mixin for DORA and benchmark/comparison write methods."""
-
-    if TYPE_CHECKING:
-        client: Any
-        org_id: str
-
-        def _insert_rows(
-            self,
-            table: str,
-            columns: list[str],
-            rows: Any,
-            batch_size: int = DEFAULT_BATCH_SIZE,
-        ) -> None: ...
 
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         if not rows:

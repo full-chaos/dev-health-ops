@@ -656,7 +656,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             if sink:
                 # Propagate org_id to sink for auto-injection into metric records.
-                sink.org_id = org_id  # type: ignore[attr-defined]
+                sink.org_id = org_id
 
                 # Generate and write worklogs
                 all_worklogs = []

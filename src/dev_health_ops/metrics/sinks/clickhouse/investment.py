@@ -5,12 +5,13 @@ Tables: investment_classifications_daily, investment_metrics_daily,
         issue_type_metrics_daily, work_unit_investments,
         work_unit_investment_quotes, investment_explanations.
 """
+
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from dev_health_ops.metrics.schemas import (
     InvestmentClassificationRecord,
@@ -20,25 +21,20 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitInvestmentEvidenceQuoteRecord,
     WorkUnitInvestmentRecord,
 )
-from dev_health_ops.metrics.sinks.clickhouse._insert import DEFAULT_BATCH_SIZE
+
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.sinks.clickhouse._insert import _ClickHouseSinkBase
+else:
+
+    class _ClickHouseSinkBase:
+        pass
+
 
 logger = logging.getLogger(__name__)
 
 
-class InvestmentMixin:
+class InvestmentMixin(_ClickHouseSinkBase):
     """Mixin for investment and work-unit classification write methods."""
-
-    if TYPE_CHECKING:
-        client: Any
-        org_id: str
-
-        def _insert_rows(
-            self,
-            table: str,
-            columns: list[str],
-            rows: Any,
-            batch_size: int = DEFAULT_BATCH_SIZE,
-        ) -> None: ...
 
     def write_investment_classifications(
         self, rows: Sequence[InvestmentClassificationRecord]

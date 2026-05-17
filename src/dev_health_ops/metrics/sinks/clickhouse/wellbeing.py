@@ -3,36 +3,32 @@ WellbeingMixin — user metrics, quality drag, and pipeline stability.
 
 Tables: user_metrics_daily, testops_quality_drag, testops_pipeline_stability.
 """
+
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from dev_health_ops.metrics.schemas import UserMetricsDailyRecord
 from dev_health_ops.metrics.testops_schemas import (
     PipelineStabilityRecord,
     QualityDragRecord,
 )
-from dev_health_ops.metrics.sinks.clickhouse._insert import DEFAULT_BATCH_SIZE
+
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.sinks.clickhouse._insert import _ClickHouseSinkBase
+else:
+
+    class _ClickHouseSinkBase:
+        pass
+
 
 logger = logging.getLogger(__name__)
 
 
-class WellbeingMixin:
+class WellbeingMixin(_ClickHouseSinkBase):
     """Mixin for wellbeing/quality-of-developer-life write methods."""
-
-    if TYPE_CHECKING:
-        client: Any
-        org_id: str
-
-        def _insert_rows(
-            self,
-            table: str,
-            columns: list[str],
-            rows: Any,
-            batch_size: int = DEFAULT_BATCH_SIZE,
-        ) -> None: ...
 
     def write_user_metrics(self, rows: Sequence[UserMetricsDailyRecord]) -> None:
         if not rows:

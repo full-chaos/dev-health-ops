@@ -11,6 +11,7 @@ Tables: repo_metrics_daily, ic_landscape_rolling_30d, file_metrics_daily,
         work_graph_pr_commit, work_items, work_item_transitions,
         capacity_forecasts.
 """
+
 from __future__ import annotations
 
 import logging
@@ -51,23 +52,19 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
     _dt_to_clickhouse_datetime,
 )
 
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.sinks.clickhouse._insert import _ClickHouseSinkBase
+else:
+
+    class _ClickHouseSinkBase:
+        pass
+
+
 logger = logging.getLogger(__name__)
 
 
-class WorkGraphMixin:
+class WorkGraphMixin(_ClickHouseSinkBase):
     """Mixin for work graph, work items, git metrics, and forecast write methods."""
-
-    if TYPE_CHECKING:
-        client: Any
-        org_id: str
-
-        def _insert_rows(
-            self,
-            table: str,
-            columns: list[str],
-            rows: Any,
-            batch_size: int = DEFAULT_BATCH_SIZE,
-        ) -> None: ...
 
     def write_repo_metrics(self, rows: Sequence[RepoMetricsDailyRecord]) -> None:
         if not rows:

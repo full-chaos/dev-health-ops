@@ -119,13 +119,32 @@ async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
     )
     return 0
 
+
 _GLOBAL_FLAG_SPECS: tuple[tuple[tuple[str, ...], dict[str, object]], ...] = (
-    (("--log-level",), {"dest": "log_level", "help": "(global) Logging level. See root --help."}),
+    (
+        ("--log-level",),
+        {"dest": "log_level", "help": "(global) Logging level. See root --help."},
+    ),
     (("--db",), {"dest": "db", "help": "(global) PostgreSQL URI. See root --help."}),
-    (("--analytics-db",), {"dest": "analytics_db", "help": "(global) ClickHouse URI. See root --help."}),
-    (("--org",), {"dest": "org", "help": "(global) Organization ID for multi-tenant scoping. See root --help."}),
-    (("-l", "--llm-provider"), {"dest": "llm_provider", "help": "(global) LLM provider. See root --help."}),
-    (("-m", "--model"), {"dest": "model", "help": "(global) LLM model. See root --help."}),
+    (
+        ("--analytics-db",),
+        {"dest": "analytics_db", "help": "(global) ClickHouse URI. See root --help."},
+    ),
+    (
+        ("--org",),
+        {
+            "dest": "org",
+            "help": "(global) Organization ID for multi-tenant scoping. See root --help.",
+        },
+    ),
+    (
+        ("-l", "--llm-provider"),
+        {"dest": "llm_provider", "help": "(global) LLM provider. See root --help."},
+    ),
+    (
+        ("-m", "--model"),
+        {"dest": "model", "help": "(global) LLM model. See root --help."},
+    ),
 )
 
 

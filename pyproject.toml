@@ -55,6 +55,8 @@ dependencies = [
   "PyJWT>=2.8.0",
   "bcrypt>=4.0.0",
   "email-validator>=2.0.0",
+  "cryptography>=41.0.0",
+  # Used by licensing Ed25519 signing/verification; do not remove with credential hardening.
   "PyNaCl>=1.5.0",
   "defusedxml>=0.7.0",
   "stripe>=7.0.0",

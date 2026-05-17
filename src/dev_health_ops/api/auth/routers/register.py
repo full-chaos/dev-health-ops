@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import bcrypt
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
 from dev_health_ops.api.middleware.rate_limit import (
@@ -30,7 +30,7 @@ router = APIRouter()
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8, max_length=128)
     full_name: str | None = None
     org_name: str | None = None
 

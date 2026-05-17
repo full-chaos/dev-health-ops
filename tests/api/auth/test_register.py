@@ -273,7 +273,7 @@ async def test_register_password_too_short_returns_422(client):
         json={"email": "short@example.com", "password": "Short1"},
     )
     assert response.status_code == 422
-    assert response.json()["detail"]["message"] == "Password validation failed"
+    assert response.json()["detail"]["message"] == "Validation failed"
     assert response.json()["detail"]["errors"]
 
 
@@ -333,3 +333,26 @@ async def test_register_email_send_failure_does_not_break_registration(
     data = response.json()
     assert "user_id" in data
     assert "org_id" in data
+
+
+@pytest.mark.asyncio
+async def test_register_password_field_min_length_rejected(client):
+    """Pydantic Field(min_length=8) rejects 7-char passwords before handler."""
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "minlen@example.com", "password": "Abc123!"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == "Validation failed"
+
+
+@pytest.mark.asyncio
+async def test_register_password_field_max_length_rejected(client):
+    """Pydantic Field(max_length=128) rejects 129-char passwords before handler."""
+    long_password = "A1!" + "a" * 126  # 129 chars
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": "maxlen@example.com", "password": long_password},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["message"] == "Validation failed"

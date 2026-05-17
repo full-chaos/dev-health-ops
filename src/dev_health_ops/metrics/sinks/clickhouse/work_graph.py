@@ -39,17 +39,17 @@ from dev_health_ops.metrics.schemas import (
     WorkItemStateDurationDailyRecord,
     WorkItemUserMetricsDailyRecord,
 )
+from dev_health_ops.metrics.sinks.clickhouse._insert import (
+    DEFAULT_BATCH_SIZE,
+    _chunked,
+    _dt_to_clickhouse_datetime,
+)
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItemDependency,
     WorkItemInteractionEvent,
     WorkItemReopenEvent,
     Worklog,
-)
-from dev_health_ops.metrics.sinks.clickhouse._insert import (
-    DEFAULT_BATCH_SIZE,
-    _chunked,
-    _dt_to_clickhouse_datetime,
 )
 
 if TYPE_CHECKING:
@@ -409,11 +409,9 @@ class WorkGraphMixin(_ClickHouseSinkBase):
             [
                 "repo_id",
                 "day",
-                "reviewer_email",
-                "author_email",
-                "reviews_given",
-                "changes_requested",
-                "approvals",
+                "reviewer",
+                "author",
+                "reviews_count",
                 "computed_at",
                 "org_id",
             ],

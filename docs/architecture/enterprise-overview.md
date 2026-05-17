@@ -145,4 +145,4 @@ org_feature_overrides (org_id, feature_name, enabled, expires_at)
 
 - [ADR-001: Enterprise Edition Design Decisions](adr/001-enterprise-edition.md)
 - [Licensing Architecture](licensing.md)
-- [Monetization Strategy](../monetization-strategy.md)
+- [Monetization Strategy](../product/monetization-strategy.md)

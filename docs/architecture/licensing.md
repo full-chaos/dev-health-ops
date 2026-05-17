@@ -2,7 +2,7 @@
 
 > **Status**: DECIDED  
 > **Model**: SaaS-first with runtime feature gating (GitLab model)  
-> **Related**: [ADR-001](adr/001-enterprise-edition.md), [Monetization Strategy](../monetization-strategy.md)
+> **Related**: [ADR-001](adr/001-enterprise-edition.md), [Monetization Strategy](../product/monetization-strategy.md)
 
 ## Overview
 
@@ -135,5 +135,5 @@ async def create_user(org_id: str, user_data: dict):
 ## Related Documents
 
 - [ADR-001: Enterprise Edition Design Decisions](adr/001-enterprise-edition.md)
-- [Monetization Strategy](../monetization-strategy.md)
+- [Monetization Strategy](../product/monetization-strategy.md)
 - [Enterprise Overview](enterprise-overview.md)

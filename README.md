@@ -73,7 +73,7 @@ Notes:
 - **GitHub**: Requires `repo` scope on your personal access token
 - **GitLab**: Requires `read_api` and `read_repository` scopes on your private token
 
-See [`docs/PRIVATE_REPO_TESTING.md`](docs/PRIVATE_REPO_TESTING.md) for detailed instructions on setting up and testing private repository access.
+See [`docs/connectors/private-repo-testing.md`](docs/connectors/private-repo-testing.md) for detailed instructions on setting up and testing private repository access.
 
 ## Batch Repository Processing ✅
 

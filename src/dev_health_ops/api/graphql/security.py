@@ -50,11 +50,15 @@ def environment_name() -> str:
     """
 
     return (
-        os.getenv("ENVIRONMENT")
-        or os.getenv("APP_ENV")
-        or os.getenv("ENV")
-        or "production"
-    ).strip().lower()
+        (
+            os.getenv("ENVIRONMENT")
+            or os.getenv("APP_ENV")
+            or os.getenv("ENV")
+            or "production"
+        )
+        .strip()
+        .lower()
+    )
 
 
 def is_development_environment() -> bool:

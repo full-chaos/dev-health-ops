@@ -8,7 +8,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-
 GRAPHQL_MODULES = [
     "dev_health_ops.api.graphql.security",
     "dev_health_ops.api.graphql.schema",
@@ -17,7 +16,9 @@ GRAPHQL_MODULES = [
 
 
 @pytest.fixture
-def graphql_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str], TestClient]]:
+def graphql_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[Callable[[str], TestClient]]:
     def _build(environment: str, *, security_enabled: bool | None = None) -> TestClient:
         monkeypatch.setenv("ENVIRONMENT", environment)
         monkeypatch.setenv("GRAPHQL_AUTH_REQUIRED", "false")
@@ -71,7 +72,8 @@ def test_introspection_rejected_outside_development(
     client = graphql_client(environment)
 
     response = client.post(
-        "/graphql?org_id=test-org", json={"query": "{ __schema { queryType { name } } }"}
+        "/graphql?org_id=test-org",
+        json={"query": "{ __schema { queryType { name } } }"},
     )
 
     assert response.status_code == 200
@@ -86,7 +88,9 @@ def test_introspection_rejected_outside_development(
 
 def test_query_exceeding_depth_limit_rejected(graphql_client):
     client = graphql_client("production")
-    deep_query = "{ __type(name: \"Query\") { " + "ofType { " * 13 + "name" + " }" * 13 + " } }"
+    deep_query = (
+        '{ __type(name: "Query") { ' + "ofType { " * 13 + "name" + " }" * 13 + " } }"
+    )
 
     response = client.post("/graphql?org_id=test-org", json={"query": deep_query})
 
@@ -102,7 +106,9 @@ def test_query_exceeding_alias_limit_rejected(graphql_client):
     client = graphql_client("production")
     aliases = " ".join(f"a{i}: __typename" for i in range(16))
 
-    response = client.post("/graphql?org_id=test-org", json={"query": "{ " + aliases + " }"})
+    response = client.post(
+        "/graphql?org_id=test-org", json={"query": "{ " + aliases + " }"}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -117,7 +123,10 @@ def test_query_size_limit_rejected_before_parsing(graphql_client):
     response = client.post("/graphql?org_id=test-org", json={"query": oversized_query})
 
     assert response.status_code == 413
-    assert response.json()["detail"]["message"] == "GraphQL request body exceeds size limit"
+    assert (
+        response.json()["detail"]["message"]
+        == "GraphQL request body exceeds size limit"
+    )
 
 
 def test_development_environment_permits_alias_depth_and_size_cases(graphql_client):
@@ -128,7 +137,9 @@ def test_development_environment_permits_alias_depth_and_size_cases(graphql_clie
     alias_response = client.post(
         "/graphql?org_id=test-org", json={"query": "{ " + aliases + " }"}
     )
-    size_response = client.post("/graphql?org_id=test-org", json={"query": oversized_query})
+    size_response = client.post(
+        "/graphql?org_id=test-org", json={"query": oversized_query}
+    )
 
     assert alias_response.status_code == 200
     assert "errors" not in alias_response.json()

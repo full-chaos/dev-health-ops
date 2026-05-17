@@ -151,7 +151,7 @@ if Limiter is not None:
             "Set TRUSTED_PROXIES (comma-separated IPs/CIDRs) when behind a load balancer."
         )
 else:
-    limiter = _NoOpLimiter()  # type: ignore[assignment]
+    limiter = _NoOpLimiter()
     LIMITER_BACKEND = "noop"
     _log.warning(
         "slowapi not installed — rate limiting disabled (NoOp). "

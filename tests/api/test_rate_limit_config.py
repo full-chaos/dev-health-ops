@@ -56,8 +56,8 @@ def _reload_rate_limit_noop(
     sys.modules.pop(module_name, None)
 
     # Make slowapi unimportable so the try/except in rate_limit.py sets Limiter = None.
-    monkeypatch.setitem(sys.modules, "slowapi", None)  # type: ignore[arg-type]
-    monkeypatch.setitem(sys.modules, "slowapi.util", None)  # type: ignore[arg-type]
+    monkeypatch.setitem(sys.modules, "slowapi", None)
+    monkeypatch.setitem(sys.modules, "slowapi.util", None)
 
     return importlib.import_module(module_name)
 
@@ -104,8 +104,11 @@ def test_rate_limiter_backend_redis_when_redis_url_set(monkeypatch):
 
 def test_rate_limiter_raises_in_prod_without_redis(monkeypatch):
     """Production startup must raise RuntimeError when REDIS_URL is missing (CHAOS-1554)."""
+    module, _ = _reload_rate_limit(
+        monkeypatch, redis_url=None, environment="production"
+    )
     with pytest.raises(RuntimeError, match="REDIS_URL must be set"):
-        _reload_rate_limit(monkeypatch, redis_url=None, environment="production")
+        module.verify_rate_limit_config()
 
 
 def test_rate_limiter_memory_allowed_in_development(monkeypatch):
@@ -128,8 +131,9 @@ def test_rate_limiter_memory_allowed_in_test_env(monkeypatch):
 
 def test_noop_limiter_raises_in_prod(monkeypatch):
     """slowapi absent in prod must raise RuntimeError, never silently disable limits (CHAOS-1554)."""
+    module = _reload_rate_limit_noop(monkeypatch, environment="production")
     with pytest.raises(RuntimeError, match="slowapi is not installed"):
-        _reload_rate_limit_noop(monkeypatch, environment="production")
+        module.verify_rate_limit_config()
 
 
 def test_noop_limiter_allowed_in_development(monkeypatch):

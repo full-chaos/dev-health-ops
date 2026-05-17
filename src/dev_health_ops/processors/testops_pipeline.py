@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from dev_health_ops.connectors.testops.base import (
+from dev_health_ops.providers._base import (
     BasePipelineAdapter,
     PipelineSyncBatch,
 )

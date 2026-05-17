@@ -11,16 +11,22 @@ import pytest
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 
 _github_actions_module = cast(
-    Any, importlib.import_module("dev_health_ops.connectors.testops.github_actions")
+    Any, importlib.import_module("dev_health_ops.providers.github.testops_pipeline")
 )
 _gitlab_ci_module = cast(
-    Any, importlib.import_module("dev_health_ops.connectors.testops.gitlab_ci")
+    Any, importlib.import_module("dev_health_ops.providers.gitlab.testops_pipeline")
 )
 _testops_base_module = cast(
-    Any, importlib.import_module("dev_health_ops.connectors.testops.base")
+    Any, importlib.import_module("dev_health_ops.providers._base")
 )
 _testops_processor_module = cast(
     Any, importlib.import_module("dev_health_ops.processors.testops_pipeline")
+)
+_legacy_github_actions_module = cast(
+    Any, importlib.import_module("dev_health_ops.connectors.testops.github_actions")
+)
+_legacy_gitlab_ci_module = cast(
+    Any, importlib.import_module("dev_health_ops.connectors.testops.gitlab_ci")
 )
 
 GitHubActionsAdapter = _github_actions_module.GitHubActionsAdapter
@@ -31,7 +37,7 @@ PipelineProcessor = TestOpsPipelineProcessor
 PipelineProcessor.__test__ = False
 
 if TYPE_CHECKING:
-    from dev_health_ops.connectors.testops.base import (
+    from dev_health_ops.providers._base import (
         PipelineSyncBatch as PipelineSyncBatchType,
     )
     from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
@@ -39,6 +45,11 @@ if TYPE_CHECKING:
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def test_legacy_testops_adapter_paths_reexport_provider_adapters() -> None:
+    assert _legacy_github_actions_module.GitHubActionsAdapter is GitHubActionsAdapter
+    assert _legacy_gitlab_ci_module.GitLabCIAdapter is GitLabCIAdapter
 
 
 @pytest.mark.asyncio

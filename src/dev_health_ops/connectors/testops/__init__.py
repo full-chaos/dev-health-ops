@@ -1,6 +1,6 @@
 from .base import BasePipelineAdapter, PipelineSyncBatch
-from .github_actions import GitHubActionsAdapter
-from .gitlab_ci import GitLabCIAdapter
+from dev_health_ops.providers.github.testops_pipeline import GitHubActionsAdapter
+from dev_health_ops.providers.gitlab.testops_pipeline import GitLabCIAdapter
 
 __all__ = [
     "BasePipelineAdapter",

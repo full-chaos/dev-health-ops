@@ -49,4 +49,12 @@ else:
     if isinstance(maybe_sso_router, APIRouter):
         router.include_router(maybe_sso_router)
 
-__all__ = ["_extract_unverified_org_and_subject", "create_refresh_token_record", "get_auth_service", "get_current_user", "get_current_user_optional", "get_postgres_session", "router"]
+__all__ = [
+    "_extract_unverified_org_and_subject",
+    "create_refresh_token_record",
+    "get_auth_service",
+    "get_current_user",
+    "get_current_user_optional",
+    "get_postgres_session",
+    "router",
+]

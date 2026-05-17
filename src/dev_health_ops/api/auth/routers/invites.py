@@ -18,7 +18,6 @@ from dev_health_ops.api.services.invites import (
 )
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.errors import error_detail
-
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.users import Membership, Organization, User
 

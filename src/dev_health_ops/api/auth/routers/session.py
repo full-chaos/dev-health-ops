@@ -12,8 +12,6 @@ from dev_health_ops.api.middleware.rate_limit import AUTH_VALIDATE_LIMIT, limite
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.refresh_tokens import revoke_token
 from dev_health_ops.api.utils.audit import emit_audit_log
-from dev_health_ops.api.utils.errors import error_detail
-
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.users import User
 

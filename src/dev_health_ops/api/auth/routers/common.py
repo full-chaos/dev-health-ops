@@ -9,7 +9,6 @@ from fastapi import Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-
 from dev_health_ops.models.users import Membership, Organization, User
 
 logger = logging.getLogger(__name__)

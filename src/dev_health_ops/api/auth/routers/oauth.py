@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-
 from dev_health_ops.api.services.oauth import (
     OAuthConfig,
     OAuthProviderError,

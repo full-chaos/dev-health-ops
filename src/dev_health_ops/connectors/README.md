@@ -1,4 +1,12 @@
-# GitHub and GitLab Connectors
+# Legacy GitHub and GitLab Connectors
+
+> **Legacy boundary:** `src/dev_health_ops/connectors/` is frozen for new
+> provider work. New integrations must live under
+> `src/dev_health_ops/providers/<provider>/` and use the canonical provider
+> contracts in `src/dev_health_ops/providers/base.py` or the async REST/TestOps
+> helpers in `src/dev_health_ops/providers/_base.py`. This package remains only
+> for existing GitHub/GitLab connector compatibility until the planned
+> deduplication/deletion work lands.
 
 Production-grade connectors for retrieving data from GitHub and GitLab APIs with automatic pagination, rate limiting, and error handling.
 

@@ -5,8 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
-
-from .base import BasePipelineAdapter, PipelineSyncBatch
+from dev_health_ops.providers._base import BasePipelineAdapter, PipelineSyncBatch
 
 
 class GitHubActionsAdapter(BasePipelineAdapter):

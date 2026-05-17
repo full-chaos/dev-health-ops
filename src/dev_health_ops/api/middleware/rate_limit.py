@@ -112,8 +112,15 @@ class _NoOpLimiter:
 def _is_dev_or_test() -> bool:
     """Return True when running in a local-development or test environment."""
     env = (
-        os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "production"
-    ).strip().lower()
+        (
+            os.getenv("ENVIRONMENT")
+            or os.getenv("APP_ENV")
+            or os.getenv("ENV")
+            or "production"
+        )
+        .strip()
+        .lower()
+    )
     return env in {"development", "dev", "local", "test", "testing"}
 
 
@@ -124,13 +131,6 @@ _log = logging.getLogger(__name__)
 
 
 if Limiter is not None:
-    if _REDIS_URL is None and not _is_dev_or_test():
-        raise RuntimeError(
-            "REDIS_URL must be set in non-development environments. "
-            "In-memory rate-limit storage (memory://) is per-process and "
-            "ineffective across multiple replicas. "
-            "Set REDIS_URL, or set ENVIRONMENT=development to suppress."
-        )
     _storage_uri = _REDIS_URL if _REDIS_URL else "memory://"
     LIMITER_BACKEND = "redis" if _REDIS_URL else "memory"
     limiter = Limiter(
@@ -151,15 +151,35 @@ if Limiter is not None:
             "Set TRUSTED_PROXIES (comma-separated IPs/CIDRs) when behind a load balancer."
         )
 else:
-    if not _is_dev_or_test():
-        raise RuntimeError(
-            "slowapi is not installed but is required in non-development environments. "
-            "Install slowapi (dev_health_ops API dependencies) or set "
-            "ENVIRONMENT=development to suppress."
-        )
-    limiter = _NoOpLimiter()  # type: ignore[assignment,unused-ignore]
+    limiter = _NoOpLimiter()  # type: ignore[assignment]
     LIMITER_BACKEND = "noop"
     _log.warning(
         "slowapi not installed — rate limiting disabled (NoOp). "
         "Acceptable for local development only."
     )
+
+
+def verify_rate_limit_config() -> None:
+    """Validate rate-limit configuration for the current environment.
+
+    Must be called from the application startup (lifespan), not at module
+    import time. Raises RuntimeError if the configuration is unsafe for
+    production. Deferring to startup keeps test imports and type-checking
+    import-clean while still enforcing the CHAOS-1554 safety contract.
+    """
+    if _is_dev_or_test():
+        return
+    redis_url = os.getenv("REDIS_URL")
+    if Limiter is None:
+        raise RuntimeError(
+            "slowapi is not installed but is required in non-development environments. "
+            "Install slowapi (dev_health_ops API dependencies) or set "
+            "ENVIRONMENT=development to suppress."
+        )
+    if redis_url is None:
+        raise RuntimeError(
+            "REDIS_URL must be set in non-development environments. "
+            "In-memory rate-limit storage (memory://) is per-process and "
+            "ineffective across multiple replicas. "
+            "Set REDIS_URL, or set ENVIRONMENT=development to suppress."
+        )

@@ -123,6 +123,23 @@ Goal: understand **boundaries** (ingest → normalize → persist → metricize 
 
 > **ClickHouse is the only supported analytics backend.** MongoDB, PostgreSQL, and SQLite support for analytics is deprecated.
 
+#### aiosqlite scope
+
+`aiosqlite` is intentionally kept as a SQLite driver alias for narrow, non-production use only.
+
+Allowed:
+
+* Test fixtures under `tests/`, including in-memory API endpoint tests that use `httpx.ASGITransport`.
+* Local-only ephemeral development with `sqlite:///path`.
+
+Forbidden:
+
+* Any production semantic database; use PostgreSQL.
+* Any analytics backend; use ClickHouse.
+* CI long-run pipelines or durable environments.
+
+The SQLite URL normalization paths in `src/dev_health_ops/db.py` and `metrics/db_utils.py` are intentional compatibility helpers, not permission to use SQLite beyond the scopes above.
+
 Backend selection:
 
 * Semantic DB: CLI `--db` or `POSTGRES_URI` (legacy fallback: `DATABASE_URI`).

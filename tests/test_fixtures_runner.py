@@ -256,3 +256,85 @@ def test_work_unit_investment_validation_rejects_low_repo_or_team_coverage():
         )
         is False
     )
+
+
+class TestGenerateUsersRespectsOrgId:
+    """Regression: ``generate_users(org_id=...)`` MUST stamp the supplied org_id
+    onto the Organization row and every Membership/license, so that synthetic
+    Postgres tenants line up with analytics-side org_id (CHAOS-1558)."""
+
+    _UUID_ORG = "11111111-1111-1111-1111-111111111111"
+
+    def test_supplied_uuid_propagates_to_org_and_memberships(self):
+        import uuid
+
+        gen = SyntheticDataGenerator(repo_name="acme/demo", seed=1)
+        data = gen.generate_users(org_id=self._UUID_ORG)
+
+        # Exactly one organization is produced (the admin org).
+        assert len(data["organizations"]) == 1
+        org = data["organizations"][0]
+        assert org.id == uuid.UUID(self._UUID_ORG)
+        # Slug must be deterministic AND derived from org_id, not hardcoded.
+        assert org.slug != "default-org"
+        assert org.slug == f"fixture-{uuid.UUID(self._UUID_ORG).hex[:8]}"
+
+        # Every membership (admin + first 5 authors) must target the supplied org.
+        assert len(data["memberships"]) >= 2, "expected admin + at least 1 author"
+        for m in data["memberships"]:
+            assert m.org_id == uuid.UUID(self._UUID_ORG), (
+                f"membership {m.id} for user {m.user_id} bound to wrong org "
+                f"{m.org_id}; expected {self._UUID_ORG}"
+            )
+
+        # License must also be tenant-scoped.
+        assert len(data["licenses"]) == 1
+        assert data["licenses"][0].org_id == uuid.UUID(self._UUID_ORG)
+
+    def test_non_uuid_org_id_hashed_deterministically(self):
+        import uuid
+
+        _NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        expected = uuid.uuid5(_NS, "acme-engineering")
+
+        gen = SyntheticDataGenerator(repo_name="acme/demo", seed=1)
+        data = gen.generate_users(org_id="acme-engineering")
+
+        assert data["organizations"][0].id == expected
+        assert data["organizations"][0].slug == "acme-engineering"
+        for m in data["memberships"]:
+            assert m.org_id == expected
+
+    def test_default_behaviour_preserved_when_org_id_omitted(self):
+        import uuid
+
+        _NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        expected = uuid.uuid5(_NS, "default-org")
+
+        gen = SyntheticDataGenerator(repo_name="acme/demo", seed=1)
+        data = gen.generate_users()  # no org_id
+
+        assert data["organizations"][0].id == expected
+        assert data["organizations"][0].slug == "default-org"
+        assert data["organizations"][0].name == "Default Organization"
+        for m in data["memberships"]:
+            assert m.org_id == expected
+
+    def test_org_id_with_unsafe_slug_chars_is_sanitised(self):
+        import uuid
+
+        gen = SyntheticDataGenerator(repo_name="acme/demo", seed=1)
+        # Mixed case, spaces, slashes, etc. must not break slug uniqueness.
+        data = gen.generate_users(org_id="ACME Engineering / R&D")
+
+        slug = data["organizations"][0].slug
+        # Slug must be non-empty, lowercase, and free of unsafe chars.
+        assert slug, "slug must not be empty after sanitisation"
+        assert slug == slug.lower()
+        assert all(c.isalnum() or c == "-" for c in slug)
+
+        # All memberships still tie to the same derived org UUID.
+        org_uuid = data["organizations"][0].id
+        assert isinstance(org_uuid, uuid.UUID)
+        for m in data["memberships"]:
+            assert m.org_id == org_uuid

@@ -67,7 +67,7 @@ Files surveyed:
   normalized batches without exercising the transport stack; registry tests can
   remain import/lazy-load focused.
 
-### 3. TestOps adapters under `src/dev_health_ops/connectors/testops/`
+### 3. TestOps adapters originally under `src/dev_health_ops/connectors/testops/`
 
 Files surveyed:
 
@@ -77,10 +77,17 @@ Files surveyed:
 | `src/dev_health_ops/connectors/testops/github_actions.py` | 171 | GitHub Actions pipeline/job adapter |
 | `src/dev_health_ops/connectors/testops/gitlab_ci.py` | 174 | GitLab CI pipeline/job adapter |
 
+Current implementation note: the shared TestOps contracts now live in
+`src/dev_health_ops/providers/_base.py`, and the GitHub Actions / GitLab CI
+adapters now live in provider-owned modules at
+`src/dev_health_ops/providers/github/testops_pipeline.py` and
+`src/dev_health_ops/providers/gitlab/testops_pipeline.py`. The
+`connectors/testops/` paths are compatibility re-export shims only.
+
 - **Sync/async:** Async-first via `httpx.AsyncClient` and async adapter methods.
 - **Transport:** `httpx` with injectable `AsyncBaseTransport`, env-token auth,
   and simple page iteration.
-- **Base class:** `BasePipelineAdapter` in `connectors/testops/base.py`.
+- **Base class:** `BasePipelineAdapter` in `providers/_base.py`.
 - **Retry/ratelimit story:** Minimal. It raises on 401 and `>=400`; no canonical
   retry, backoff, or 429 handling yet.
 - **Normalization story:** Adapters fetch raw REST JSON and immediately map to

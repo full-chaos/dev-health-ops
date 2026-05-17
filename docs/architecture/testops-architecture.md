@@ -8,10 +8,11 @@ TestOps extends the Dev Health platform to provide deep visibility into CI/CD pi
 ### Ingestion Layer
 The TestOps ingestion layer fetches raw execution data from CI/CD providers and parses test/coverage artifacts.
 
-- **CI/CD Connectors** (`src/dev_health_ops/connectors/testops/`):
-    - `github_actions.py`: Fetches workflow and job runs from GitHub Actions.
-    - `gitlab_ci.py`: Fetches pipeline and job data from GitLab CI.
-    - `base.py`: Defines the `BasePipelineAdapter` and `PipelineSyncBatch` contracts.
+- **CI/CD Provider Adapters** (`src/dev_health_ops/providers/<provider>/`):
+    - `providers/github/testops_pipeline.py`: Fetches workflow and job runs from GitHub Actions.
+    - `providers/gitlab/testops_pipeline.py`: Fetches pipeline and job data from GitLab CI.
+    - `providers/_base.py`: Defines the `BasePipelineAdapter` and `PipelineSyncBatch` contracts.
+    - `connectors/testops/`: Legacy compatibility re-export shims only.
 - **Test Result Processors** (`src/dev_health_ops/processors/testops_tests.py`):
     - Parses JUnit XML and other test report formats.
     - Normalizes test suites and cases into canonical models.

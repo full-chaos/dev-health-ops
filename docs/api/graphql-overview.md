@@ -18,7 +18,7 @@ The GraphQL analytics API provides a read-only query interface for dev-health-op
 ## Key design points
 
 - Queries compile to SQL via `src/dev_health_ops/api/graphql/sql/*` and execute against the analytics store.
-- Cost limits and validation are enforced in `src/dev_health_ops/api/graphql/cost.py`.
+- Cost limits and validation are enforced in `src/dev_health_ops/api/graphql/cost.py`. Detailed security controls, depth/alias limits, and authorization configurations are described in the [GraphQL Security Posture](graphql-security.md) guide.
 - Caching and persisted queries are supported via `src/dev_health_ops/api/graphql/persisted.py` and `src/dev_health_ops/api/graphql/persisted_queries.json`.
 
 ## Endpoint

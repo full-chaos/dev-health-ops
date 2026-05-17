@@ -3,24 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
-from importlib import import_module
 from typing import Literal, cast
-from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.metrics.sinks.factory import detect_backend
 from dev_health_ops.sentry import init_sentry
-from dev_health_ops.tracing import init_tracing, instrument_fastapi_app
+from dev_health_ops.tracing import init_tracing
 from dev_health_ops.utils.datetime import utc_today
 
 from .utils.logging import sanitize_for_log
@@ -30,21 +22,31 @@ configure_logging()
 init_sentry()
 init_tracing()
 
-from dev_health_ops.api.middleware import OrgIdMiddleware
-from dev_health_ops.api.middleware.correlation_id import CorrelationIdMiddleware
-from dev_health_ops.api.middleware.impersonation import ImpersonationMiddleware
 from dev_health_ops.api.middleware.rate_limit import limiter
-from dev_health_ops.api.middleware.security_headers import SecurityHeadersMiddleware
 from dev_health_ops.api.telemetry.router import router as telemetry_router
-from dev_health_ops.licensing import LicenseManager
 
+from ._errors import (
+    _generic_exception_handler as _generic_exception_handler,
+)
+from ._errors import (
+    register_exception_handlers,
+)
+from ._health import (
+    _analytics_db_url,
+    _check_celery_health,
+    _check_clickhouse_health,
+    _check_postgres_health,
+    _check_redis_health,
+)
+from ._lifespan import lifespan
+from ._middleware import register_middleware
+from ._observability import register_observability
 from .admin import router as admin_router
 from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router
 from .auth.router import get_current_user
 from .billing import router as billing_router
 from .graphql.app import create_graphql_app
-from .graphql.security import GraphQLQuerySizeLimitMiddleware
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from .models.filters import (
@@ -83,7 +85,7 @@ from .models.schemas import (
     WorkUnitInvestment,
 )
 from .orgs import router as orgs_router
-from .queries.client import clickhouse_client, close_global_client, query_dicts
+from .queries.client import clickhouse_client
 from .queries.drilldown import fetch_issues, fetch_pull_requests
 from .queries.filters import fetch_filter_options
 from .services.aggregated_flame import build_aggregated_flame_response
@@ -116,7 +118,6 @@ from .webhooks import router as webhooks_router
 
 HOME_CACHE = create_cache(ttl_seconds=60)
 EXPLAIN_CACHE = create_cache(ttl_seconds=120)
-DEFAULT_CLICKHOUSE_URI = "clickhouse://localhost:8123/default"
 
 logger = logging.getLogger(__name__)
 
@@ -129,131 +130,6 @@ _FORBIDDEN_QUERY_PARAMS = {
     "top",
     "bottom",
 }
-
-
-def _db_url() -> str:
-    dsn = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if dsn:
-        return dsn
-
-    raise RuntimeError(
-        "Database configuration is missing: set DATABASE_URI or DATABASE_URL "
-        "(e.g. 'clickhouse://localhost:8123/default')."
-    )
-
-
-def _postgres_url() -> str | None:
-    uri = os.getenv("POSTGRES_URI")
-    if uri:
-        return uri
-    fallback = os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
-    if fallback and "postgres" in fallback.lower():
-        return fallback
-    return None
-
-
-def _clickhouse_url() -> str:
-    return os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
-
-
-def _analytics_db_url() -> str:
-    uri = os.getenv("CLICKHOUSE_URI")
-    if not uri:
-        raise RuntimeError(
-            "CLICKHOUSE_URI is required for analytics queries "
-            "(e.g. 'clickhouse://localhost:8123/default')."
-        )
-    return uri
-
-
-def _check_sqlalchemy_health(dsn: str) -> bool:
-    from sqlalchemy import create_engine, text
-
-    engine = create_engine(dsn, pool_pre_ping=True)
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return True
-    except Exception:
-        return False
-    finally:
-        engine.dispose()
-
-
-async def _check_sqlalchemy_health_async(dsn: str) -> bool:
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    engine = create_async_engine(dsn, pool_pre_ping=True)
-    try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        return True
-    except Exception:
-        return False
-    finally:
-        await engine.dispose()
-
-
-def _dsn_uses_async_driver(dsn: str) -> bool:
-    scheme = urlparse(dsn).scheme.lower()
-    return "+asyncpg" in scheme or "+aiosqlite" in scheme
-
-
-async def _check_postgres_health() -> tuple[str, str]:
-    uri = _postgres_url()
-    if not uri:
-        return "postgres", "not_configured"
-    if _dsn_uses_async_driver(uri):
-        ok = await _check_sqlalchemy_health_async(uri)
-    else:
-        ok = await asyncio.to_thread(_check_sqlalchemy_health, uri)
-    return "postgres", "ok" if ok else "down"
-
-
-async def _check_clickhouse_health() -> tuple[str, str]:
-    uri = _clickhouse_url()
-    if not uri:
-        return "clickhouse", "not_configured"
-    try:
-        async with clickhouse_client(uri) as sink:
-            rows = await query_dicts(sink, "SELECT 1 AS ok", {})
-        return "clickhouse", "ok" if rows else "down"
-    except Exception:
-        return "clickhouse", "down"
-
-
-async def _check_redis_health() -> tuple[str, str]:
-    """Ping Redis directly to verify connectivity."""
-    redis_url = os.getenv("REDIS_URL", "")
-    if not redis_url:
-        return "redis", "not_configured"
-    try:
-        import valkey.asyncio as aioredis
-
-        client = aioredis.from_url(redis_url, socket_connect_timeout=2)
-        try:
-            await client.ping()
-            return "redis", "ok"
-        finally:
-            await client.aclose()
-    except Exception:
-        return "redis", "down"
-
-
-async def _check_celery_health() -> tuple[str, str]:
-    """Inspect active Celery workers via the broker."""
-    try:
-        from dev_health_ops.workers.celery_app import celery_app
-
-        # Use inspect with a very short timeout so health checks stay fast
-        inspect = celery_app.control.inspect(timeout=1.5)
-        active = await asyncio.to_thread(inspect.ping)
-        if active:
-            return "celery", "ok"
-        return "celery", "no_workers"
-    except Exception:
-        return "celery", "down"
 
 
 def _filters_from_query(
@@ -295,46 +171,6 @@ def _bounded_limit_param(limit: int, max_limit: int) -> int:
     return min(max(limit, 1), max_limit)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Initialize licensing
-    try:
-        manager = LicenseManager.initialize()
-        if manager.is_licensed:
-            logger.info("License initialized: tier=%s", manager.tier.value)
-        else:
-            logger.info("No license configured, using community tier")
-    except Exception as e:
-        logger.warning("License initialization failed: %s (using community tier)", e)
-
-    # Validate FeatureBundle feature keys against the canonical STANDARD_FEATURES registry
-    postgres_uri = _postgres_url()
-    if postgres_uri:
-        try:
-            from dev_health_ops.api.billing.bundle_validation import (
-                FeatureBundleIntegrityError,
-                validate_bundle_keys,
-            )
-            from dev_health_ops.db import get_postgres_session
-
-            async with get_postgres_session() as _session:
-                await validate_bundle_keys(_session)
-        except Exception as _exc:
-            from dev_health_ops.api.billing.bundle_validation import (
-                FeatureBundleIntegrityError,
-            )
-
-            if isinstance(_exc, FeatureBundleIntegrityError):
-                # Integrity check failed; re-raise to abort startup.
-                raise
-            logger.warning(
-                "FeatureBundle key validation skipped (DB not ready): %s", _exc
-            )
-
-    yield
-    await close_global_client()
-
-
 app = FastAPI(
     title="Dev Health Ops API",
     version="1.0.0",
@@ -343,86 +179,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-
-def _rate_limit_handler(request: Request, exc: Exception):
-    if isinstance(exc, RateLimitExceeded):
-        return JSONResponse(
-            status_code=429,
-            content={
-                "detail": {
-                    "message": "Rate limit exceeded. Please try again later.",
-                }
-            },
-        )
-    raise exc
-
-
-def _validation_error_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
-    errors = [str(error.get("msg", "Invalid value")) for error in exc.errors()]
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": {
-                "message": "Validation failed",
-                "errors": errors,
-            }
-        },
-    )
-
-
-async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch-all 500 handler that returns a sanitized response.
-
-    Logs the real exception with stack trace at ERROR level so operators can
-    investigate via logs/Sentry, but never leaks internals to the client.
-    """
-    logger.error(
-        "Unhandled exception on %s %s",
-        request.method,
-        request.url.path,
-        exc_info=exc,
-    )
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal Server Error"},
-    )
-
-
 app.state.limiter = limiter
-app.add_exception_handler(
-    RateLimitExceeded,
-    _rate_limit_handler,
-)
-app.add_exception_handler(RequestValidationError, _validation_error_handler)  # type: ignore[arg-type]
-app.add_exception_handler(Exception, _generic_exception_handler)
+register_exception_handlers(app)
 
-_cors_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
-_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Org-Id", "X-Request-ID"],
-    expose_headers=["X-Request-ID"],
-)
-app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(GraphQLQuerySizeLimitMiddleware)
-OriginValidationMiddleware = import_module(
-    "dev_health_ops.api.middleware.csrf"
-).OriginValidationMiddleware
-app.add_middleware(
-    OriginValidationMiddleware,
-    allowed_origins=_cors_origins,
-    protected_paths={"/api/v1/auth/register"},
-)
-app.add_middleware(SlowAPIMiddleware)
-app.add_middleware(OrgIdMiddleware)
-app.add_middleware(ImpersonationMiddleware)
-app.add_middleware(CorrelationIdMiddleware)
+register_middleware(app)
 
 graphql_app = create_graphql_app()
 app.include_router(graphql_app, prefix="/graphql")
@@ -436,23 +196,7 @@ app.include_router(telemetry_router)
 app.include_router(ingest_router)
 app.include_router(orgs_router)
 
-# OpenTelemetry FastAPI instrumentation (must run after app is created)
-instrument_fastapi_app(app)
-
-# Prometheus metrics — expose /metrics endpoint
-try:
-    from prometheus_fastapi_instrumentator import Instrumentator
-
-    Instrumentator(
-        should_group_status_codes=True,
-        should_ignore_untemplated=True,
-        excluded_handlers=["/health", "/ready", "/metrics"],
-    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
-    logger.info("Prometheus /metrics endpoint enabled")
-except ImportError:
-    logger.warning(
-        "prometheus-fastapi-instrumentator not installed — /metrics endpoint disabled"
-    )
+register_observability(app)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)

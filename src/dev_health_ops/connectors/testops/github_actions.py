@@ -5,7 +5,6 @@ from typing import Any
 from uuid import UUID
 
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
-
 from dev_health_ops.providers._base import BasePipelineAdapter, PipelineSyncBatch
 
 

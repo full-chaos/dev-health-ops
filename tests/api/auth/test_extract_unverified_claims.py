@@ -9,7 +9,7 @@ from dev_health_ops.api.auth.router import _extract_unverified_org_and_subject
 
 def test_returns_none_tuple_for_malformed_token(caplog):
     """A malformed token must yield (None, None) AND emit a debug log."""
-    caplog.set_level(logging.DEBUG, logger="dev_health_ops.api.auth.router")
+    caplog.set_level(logging.DEBUG, logger="dev_health_ops.api.auth.routers.common")
     org, sub = _extract_unverified_org_and_subject("not.a.token")
     assert (org, sub) == (None, None)
     assert any("unverified claims" in rec.message.lower() for rec in caplog.records)

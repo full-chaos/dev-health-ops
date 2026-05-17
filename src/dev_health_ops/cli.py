@@ -187,8 +187,15 @@ def _propagate_global_args_to_subparsers(parser: argparse.ArgumentParser) -> Non
                     # help is set per-spec to advertise the flag on every leaf
                     **kwargs,  # type: ignore[arg-type]
                 )
-            except argparse.ArgumentError:
-                pass
+            except argparse.ArgumentError as exc:
+                # Best-effort propagation: some leaf parsers may already define
+                # an equivalent/conflicting option. Keep building the CLI tree.
+                logging.debug(
+                    "Skipping global flag propagation for %s on parser %s: %s",
+                    option_strings,
+                    p.prog,
+                    exc,
+                )
 
     walk(parser)
 

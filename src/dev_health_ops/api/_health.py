@@ -13,6 +13,7 @@ import os
 from urllib.parse import urlparse
 
 from dev_health_ops.api.middleware.rate_limit import LIMITER_BACKEND
+
 from .queries.client import clickhouse_client, query_dicts
 
 DEFAULT_CLICKHOUSE_URI = "clickhouse://localhost:8123/default"

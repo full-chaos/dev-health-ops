@@ -2,12 +2,12 @@
 CIMixin — CI/CD, deploy, incident, testops pipeline/test/coverage,
 release confidence, feature flags, telemetry, and release impact write methods.
 """
+
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from dev_health_ops.metrics.schemas import (
     CICDMetricsDailyRecord,
@@ -31,23 +31,19 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
     _dt_to_clickhouse_datetime,
 )
 
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.sinks.clickhouse._insert import _ClickHouseSinkBase
+else:
+
+    class _ClickHouseSinkBase:
+        pass
+
+
 logger = logging.getLogger(__name__)
 
 
-class CIMixin:
+class CIMixin(_ClickHouseSinkBase):
     """Mixin for CI/CD and pipeline-related write methods."""
-
-    if TYPE_CHECKING:
-        client: Any
-        org_id: str
-
-        def _insert_rows(
-            self,
-            table: str,
-            columns: list[str],
-            rows: Any,
-            batch_size: int = DEFAULT_BATCH_SIZE,
-        ) -> None: ...
 
     def write_cicd_metrics(self, rows: Sequence[CICDMetricsDailyRecord]) -> None:
         if not rows:
@@ -182,7 +178,7 @@ class CIMixin:
                 "lines_covered",
                 "coverage_delta_pct",
                 "uncovered_files_count",
-                "coverage_change_direction",
+                "coverage_regression_count",
                 "team_id",
                 "service_id",
                 "org_id",

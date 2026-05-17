@@ -64,6 +64,14 @@ All deployment methods use the same environment variables:
 | `BATCH_SIZE` | Records per batch | 100 |
 | `MAX_WORKERS` | Parallel workers | 4 |
 
+### Rate Limiting
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `REDIS_URL` | Redis connection URL for distributed rate-limit storage. **Required in non-dev environments** — the API will refuse to start without it when `ENVIRONMENT` is not `development`/`local`/`test`. | — |
+| `TRUSTED_PROXIES` | Comma-separated list of trusted proxy IPs or CIDRs (e.g. `10.0.0.1,10.0.0.2`). Only peers in this list are allowed to set the `X-Forwarded-For` header for rate-limit key extraction. When unset, `X-Forwarded-For` is ignored and the TCP peer address is used. | — |
+
+> **Security note:** Never leave `TRUSTED_PROXIES` empty behind a load balancer — rate limits would key on the LB IP rather than the real client. Conversely, setting it when running without a proxy would allow header spoofing by any client.
 ---
 
 ## Kubernetes Deployment

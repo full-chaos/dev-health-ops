@@ -109,14 +109,57 @@ class _NoOpLimiter:
         return _decorator
 
 
+def _is_dev_or_test() -> bool:
+    """Return True when running in a local-development or test environment."""
+    env = (
+        os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "production"
+    ).strip().lower()
+    return env in {"development", "dev", "local", "test", "testing"}
+
+
+#: Exposed for /health endpoint — reports the active rate-limiter backend.
+LIMITER_BACKEND: str = "unknown"
+
+_log = logging.getLogger(__name__)
+
+
 if Limiter is not None:
+    if _REDIS_URL is None and not _is_dev_or_test():
+        raise RuntimeError(
+            "REDIS_URL must be set in non-development environments. "
+            "In-memory rate-limit storage (memory://) is per-process and "
+            "ineffective across multiple replicas. "
+            "Set REDIS_URL, or set ENVIRONMENT=development to suppress."
+        )
+    _storage_uri = _REDIS_URL if _REDIS_URL else "memory://"
+    LIMITER_BACKEND = "redis" if _REDIS_URL else "memory"
     limiter = Limiter(
-        key_func=get_remote_address,
-        storage_uri=_REDIS_URL if _REDIS_URL else "memory://",
+        key_func=get_forwarded_ip,
+        storage_uri=_storage_uri,
     )
     if _REDIS_URL:
-        logging.getLogger(__name__).info(
-            "Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "..."
+        _log.info("Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "...")
+    else:
+        _log.warning(
+            "REDIS_URL not set — rate limiter using in-memory storage "
+            "(per-process, not cluster-wide). Acceptable for local dev only."
+        )
+    if not _trusted_proxies():
+        _log.warning(
+            "TRUSTED_PROXIES is not set — X-Forwarded-For headers will be ignored "
+            "and rate limiting will key on TCP peer address only. "
+            "Set TRUSTED_PROXIES (comma-separated IPs/CIDRs) when behind a load balancer."
         )
 else:
+    if not _is_dev_or_test():
+        raise RuntimeError(
+            "slowapi is not installed but is required in non-development environments. "
+            "Install slowapi (dev_health_ops API dependencies) or set "
+            "ENVIRONMENT=development to suppress."
+        )
     limiter = _NoOpLimiter()  # type: ignore[assignment,unused-ignore]
+    LIMITER_BACKEND = "noop"
+    _log.warning(
+        "slowapi not installed — rate limiting disabled (NoOp). "
+        "Acceptable for local development only."
+    )

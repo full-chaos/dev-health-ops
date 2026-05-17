@@ -36,6 +36,7 @@ from ._health import (
     _check_celery_health,
     _check_clickhouse_health,
     _check_postgres_health,
+    _check_rate_limiter_backend,
     _check_redis_health,
 )
 from ._lifespan import lifespan
@@ -225,6 +226,10 @@ async def health() -> HealthResponse | JSONResponse:
             key, status_val = result
             services[key] = status_val
             required_statuses.append(status_val)
+
+    # Rate-limiter backend is informational — not counted toward overall health.
+    _, rl_status = await _check_rate_limiter_backend()
+    services["rate_limiter"] = rl_status
 
     overall = (
         "ok"

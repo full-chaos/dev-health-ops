@@ -12,6 +12,7 @@ import asyncio
 import os
 from urllib.parse import urlparse
 
+from dev_health_ops.api.middleware.rate_limit import LIMITER_BACKEND
 from .queries.client import clickhouse_client, query_dicts
 
 DEFAULT_CLICKHOUSE_URI = "clickhouse://localhost:8123/default"
@@ -155,12 +156,21 @@ async def _check_celery_health() -> tuple[str, str]:
         return "celery", "down"
 
 
+async def _check_rate_limiter_backend() -> tuple[str, str]:
+    """Report the configured rate-limiter storage backend (redis / memory / noop).
+
+    Informational only — not included in the overall health status.
+    """
+    return "rate_limiter", LIMITER_BACKEND
+
+
 __all__ = [
     "DEFAULT_CLICKHOUSE_URI",
     "_analytics_db_url",
     "_check_celery_health",
     "_check_clickhouse_health",
     "_check_postgres_health",
+    "_check_rate_limiter_backend",
     "_check_redis_health",
     "_check_sqlalchemy_health",
     "_check_sqlalchemy_health_async",

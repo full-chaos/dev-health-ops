@@ -1,0 +1,188 @@
+"""Integration credentials service.
+
+Stores per-provider credentials encrypted at rest. Decryption happens on
+read; the test-connection result is tracked alongside the credential.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from dev_health_ops.api.utils.logging import sanitize_for_log
+from dev_health_ops.core.encryption import decrypt_value, encrypt_value
+from dev_health_ops.models.settings import IntegrationCredential
+
+from ._helpers import _normalize_credential_keys
+
+logger = logging.getLogger(__name__)
+
+
+class IntegrationCredentialsService:
+    """Service for managing integration credentials with encryption."""
+
+    def __init__(self, session: AsyncSession, org_id: str):
+        self.session = session
+        self.org_id = org_id
+
+    async def get(
+        self,
+        provider: str,
+        name: str = "default",
+    ) -> IntegrationCredential | None:
+        """Get an integration credential."""
+        stmt = select(IntegrationCredential).where(
+            IntegrationCredential.org_id == self.org_id,
+            IntegrationCredential.provider == provider,
+            IntegrationCredential.name == name,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, credential_id: str) -> IntegrationCredential | None:
+        """Get an integration credential by its UUID primary key."""
+        import uuid as uuid_module
+
+        try:
+            cred_uuid = uuid_module.UUID(credential_id)
+        except (ValueError, AttributeError):
+            return None
+        stmt = select(IntegrationCredential).where(
+            IntegrationCredential.org_id == self.org_id,
+            IntegrationCredential.id == cred_uuid,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_decrypted_credentials_by_id(
+        self,
+        credential_id: str,
+    ) -> tuple[dict[str, Any] | None, IntegrationCredential | None]:
+        """Get credentials as a decrypted dictionary, looked up by ID.
+
+        Returns (decrypted_dict, credential_record) tuple.
+        """
+        cred: Any | None = await self.get_by_id(credential_id)
+        if cred is None or not cred.credentials_encrypted:
+            return None, cred
+
+        try:
+            decrypted = decrypt_value(cred.credentials_encrypted)
+            return json.loads(decrypted), cred
+        except (ValueError, json.JSONDecodeError):
+            logger.error(
+                "Failed to decrypt/parse integration config for id=%s",
+                sanitize_for_log(str(credential_id)),
+            )
+            return None, cred
+
+    async def get_decrypted_credentials(
+        self,
+        provider: str,
+        name: str = "default",
+    ) -> dict[str, Any] | None:
+        """Get credentials as a decrypted dictionary."""
+        cred: Any | None = await self.get(provider, name)
+        if cred is None or not cred.credentials_encrypted:
+            return None
+
+        try:
+            decrypted = decrypt_value(cred.credentials_encrypted)
+            return json.loads(decrypted)
+        except (ValueError, json.JSONDecodeError):
+            logger.error(
+                "Failed to decrypt/parse credentials for %s/%s",
+                sanitize_for_log(provider),
+                sanitize_for_log(name),
+            )
+            return None
+
+    async def set(
+        self,
+        provider: str,
+        credentials: dict[str, Any],
+        name: str = "default",
+        config: dict[str, Any] | None = None,
+        is_active: bool = True,
+    ) -> IntegrationCredential:
+        """Set integration credentials (always encrypted)."""
+        stmt = select(IntegrationCredential).where(
+            IntegrationCredential.org_id == self.org_id,
+            IntegrationCredential.provider == provider,
+            IntegrationCredential.name == name,
+        )
+        result = await self.session.execute(stmt)
+        cred: Any | None = result.scalar_one_or_none()
+
+        credentials = _normalize_credential_keys(provider, credentials)
+
+        encrypted_creds = encrypt_value(json.dumps(credentials))
+
+        if cred is None:
+            cred = IntegrationCredential(
+                provider=provider,
+                name=name,
+                org_id=self.org_id,
+                credentials_encrypted=encrypted_creds,
+                config=config or {},
+                is_active=is_active,
+            )
+            self.session.add(cred)
+        else:
+            cred.credentials_encrypted = encrypted_creds
+            if config is not None:
+                cred.config = config
+            cred.is_active = is_active
+
+        await self.session.flush()
+        return cred
+
+    async def update_test_result(
+        self,
+        provider: str,
+        success: bool,
+        error: str | None = None,
+        name: str = "default",
+    ) -> None:
+        """Update the test connection result."""
+        from datetime import datetime, timezone
+
+        cred: Any | None = await self.get(provider, name)
+        if cred:
+            cred.last_test_at = datetime.now(timezone.utc)
+            cred.last_test_success = success
+            cred.last_test_error = error
+            await self.session.flush()
+
+    async def list_by_provider(self, provider: str) -> list[IntegrationCredential]:
+        """List all credentials for a provider."""
+        stmt = select(IntegrationCredential).where(
+            IntegrationCredential.org_id == self.org_id,
+            IntegrationCredential.provider == provider,
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_all(self, active_only: bool = False) -> list[IntegrationCredential]:
+        """List all credentials."""
+        stmt = select(IntegrationCredential).where(
+            IntegrationCredential.org_id == self.org_id,
+        )
+        if active_only:
+            stmt = stmt.where(IntegrationCredential.is_active == True)  # noqa: E712
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def delete(self, provider: str, name: str = "default") -> bool:
+        """Delete a credential. Returns True if deleted."""
+        cred = await self.get(provider, name)
+        if cred is None:
+            return False
+
+        await self.session.delete(cred)
+        await self.session.flush()
+        return True

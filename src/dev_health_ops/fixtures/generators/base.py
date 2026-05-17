@@ -100,8 +100,8 @@ class BaseGeneratorMixin:
                 team_id = "alpha" if i == 0 else "beta"
                 team_name = "Alpha Team" if i == 0 else "Beta Team"
             else:
-                team_id = f"team-{i+1}"
-                team_name = f"Team {i+1}"
+                team_id = f"team-{i + 1}"
+                team_name = f"Team {i + 1}"
 
             teams.append(
                 Team(

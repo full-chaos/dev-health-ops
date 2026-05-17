@@ -14,7 +14,7 @@ from dev_health_ops.api.admin.schemas import (
     TeamMappingResponse,
     TeamMappingUpdate,
 )
-from dev_health_ops.api.services.settings import (
+from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
     TeamDiscoveryService,
     TeamMappingService,
@@ -200,7 +200,7 @@ async def get_pending_changes(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ):
-    from dev_health_ops.api.services.settings import TeamDriftSyncService
+    from dev_health_ops.api.services.configuration import TeamDriftSyncService
 
     svc = TeamDriftSyncService(session, org_id)
     changes = await svc.get_all_pending_changes()
@@ -215,7 +215,7 @@ async def approve_team_changes(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ):
-    from dev_health_ops.api.services.settings import TeamDriftSyncService
+    from dev_health_ops.api.services.configuration import TeamDriftSyncService
     from dev_health_ops.workers.product_tasks import sync_teams_to_analytics
 
     svc = TeamDriftSyncService(session, org_id)
@@ -238,7 +238,7 @@ async def dismiss_team_changes(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ):
-    from dev_health_ops.api.services.settings import TeamDriftSyncService
+    from dev_health_ops.api.services.configuration import TeamDriftSyncService
 
     svc = TeamDriftSyncService(session, org_id)
     indices = None if dismiss_all else change_indices

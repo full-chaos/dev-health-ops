@@ -136,7 +136,7 @@ class CredentialResolver:
         credential_name: str,
     ) -> ProviderCredentials | None:
         try:
-            from dev_health_ops.api.services.settings import (
+            from dev_health_ops.api.services.configuration import (
                 IntegrationCredentialsService,
             )
 

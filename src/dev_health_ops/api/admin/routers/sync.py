@@ -20,7 +20,7 @@ from dev_health_ops.api.admin.schemas import (
     SyncConfigUpdate,
 )
 from dev_health_ops.api.services.licensing import TierLimitService
-from dev_health_ops.api.services.settings import SyncConfigurationService
+from dev_health_ops.api.services.configuration import SyncConfigurationService
 from dev_health_ops.models.settings import JobRun, ScheduledJob, SyncConfiguration
 
 from .common import get_session

@@ -10,7 +10,7 @@ from dev_health_ops.api.admin.schemas import (
     SettingsListResponse,
     SettingUpdate,
 )
-from dev_health_ops.api.services.settings import SettingsService
+from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.models.settings import SettingCategory
 
 from .common import get_session

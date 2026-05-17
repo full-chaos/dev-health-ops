@@ -41,7 +41,7 @@ from dev_health_ops.api.services.auth import (
     get_auth_service,
 )
 from dev_health_ops.api.services.oauth import OAuthProviderType
-from dev_health_ops.api.services.settings import decrypt_value
+from dev_health_ops.api.services.configuration import decrypt_value
 from dev_health_ops.api.services.sso import SSOProcessingError, SSOService
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.db import get_postgres_session

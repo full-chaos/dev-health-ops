@@ -4,7 +4,7 @@
   credential keys from frontend forms into the snake_case form used inside
   the backend.
 * The ``_get_*_cls`` helpers perform lazy imports of admin schema classes to
-  avoid a circular dependency between ``api.services.settings`` and
+avoid a circular dependency between ``api.services.configuration`` and
   ``api.admin.schemas``.
 """
 

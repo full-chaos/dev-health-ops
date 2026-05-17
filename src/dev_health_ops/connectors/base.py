@@ -229,7 +229,7 @@ class GitConnector(ABC):
         # Sort kwargs to ensure stability
         sorted_args = sorted(kwargs.items())
         args_str = json.dumps(sorted_args, default=str)
-        args_hash = hashlib.md5(args_str.encode()).hexdigest()
+        args_hash = hashlib.md5(args_str.encode(), usedforsecurity=False).hexdigest()
         return f"{self.cache_prefix}{method}:{args_hash}"
 
     def _get_cached_item(self, key: str, model_class: Any) -> Any | None:

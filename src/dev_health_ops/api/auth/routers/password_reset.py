@@ -4,7 +4,7 @@ import importlib
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, select
 
 from dev_health_ops.api.middleware.rate_limit import get_auth_key, limiter
@@ -25,7 +25,7 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 @router.post("/forgot-password", response_model=VerifyEmailResponse)

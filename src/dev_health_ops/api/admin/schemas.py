@@ -402,7 +402,7 @@ class UserResponse(BaseModel):
 
 class UserCreate(BaseModel):
     email: str = Field(..., min_length=1)
-    password: str | None = Field(default=None, min_length=8)
+    password: str | None = Field(default=None, min_length=8, max_length=128)
     username: str | None = None
     full_name: str | None = None
     auth_provider: str = "local"
@@ -422,8 +422,8 @@ class UserUpdate(BaseModel):
 
 
 class UserSetPassword(BaseModel):
-    admin_password: str = Field(..., min_length=8)
-    password: str = Field(..., min_length=8)
+    admin_password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 # ---- Organization schemas ----

@@ -237,7 +237,8 @@ class InvestmentsGeneratorMixin(BaseGeneratorMixin):
                         from_ts.isoformat(),
                         to_ts.isoformat(),
                     ]
-                ).encode("utf-8")
+                ).encode("utf-8"),
+                usedforsecurity=False,
             ).hexdigest()
 
             records.append(

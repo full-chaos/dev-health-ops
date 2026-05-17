@@ -221,3 +221,36 @@ async def test_reset_password_expired_token_returns_400(
     )
     assert response.status_code == 400
     assert response.json()["detail"]["message"] == "Invalid or expired token"
+
+
+@pytest.mark.asyncio
+async def test_reset_password_new_password_too_short_rejected(
+    client, session_maker, seeded_user
+):
+    """Pydantic Field(min_length=8) rejects 7-char new_password with 422."""
+    async_client, _ = client
+    async with session_maker() as session:
+        token = await create_password_reset_token(session, seeded_user.id)
+        await session.commit()
+    response = await async_client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "new_password": "Ab1!xyz"},  # 7 chars
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reset_password_new_password_too_long_rejected(
+    client, session_maker, seeded_user
+):
+    """Pydantic Field(max_length=128) rejects 129-char new_password with 422."""
+    async_client, _ = client
+    async with session_maker() as session:
+        token = await create_password_reset_token(session, seeded_user.id)
+        await session.commit()
+    long_password = "A1!" + "a" * 126  # 129 chars
+    response = await async_client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": token, "new_password": long_password},
+    )
+    assert response.status_code == 422

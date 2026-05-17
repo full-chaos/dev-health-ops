@@ -55,7 +55,7 @@ def load_identity_aliases() -> dict[str, list[str]]:
 
 
 def person_id_for_identity(identity: str) -> str:
-    digest = hashlib.md5(identity.encode("utf-8")).hexdigest()
+    digest = hashlib.md5(identity.encode("utf-8"), usedforsecurity=False).hexdigest()
     return digest.lower()
 
 

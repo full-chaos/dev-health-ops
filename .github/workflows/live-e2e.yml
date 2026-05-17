@@ -99,6 +99,7 @@ jobs:
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           LIVE_E2E_FIXTURE_SEED: "20260219"
           LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
+          ENVIRONMENT: test
         run: |
           chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh
           ./ci/run_tests.sh live-e2e

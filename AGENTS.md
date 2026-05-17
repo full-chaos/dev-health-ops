@@ -29,6 +29,21 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 - UX-time LLM is **explanation only** and must not recompute categories/edges/weights.
 - Persistence goes through **sinks** only (no file exports, no debug dumps).
 
+## Provider boundary
+- New provider integrations live under `src/dev_health_ops/providers/<provider>/`.
+- Use the canonical provider contracts in `src/dev_health_ops/providers/base.py`;
+  async REST/TestOps providers use the shared base helpers in
+  `src/dev_health_ops/providers/_base.py`.
+- Raw fetch, pagination, auth, transport setup, retry, and rate-limit handling
+  belong in provider clients/adapters.
+- Normalization lives next to the provider (`providers/<provider>/normalize.py`
+  or provider-local mapping helpers) and returns normalized domain rows/models.
+- Processors orchestrate provider calls and persistence only; they must not own
+  raw provider fetch logic or provider-specific normalization.
+- `src/dev_health_ops/connectors/` is legacy and frozen. **Hard ban:** do not add
+  new provider code under `connectors/`; only compatibility aliases for existing
+  callers are allowed.
+
 ## Change discipline (agents)
 - Identify which layer you are changing: connector, processor, metrics, sink, API, UI.
 - Make the smallest possible change that achieves the outcome.

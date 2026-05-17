@@ -70,7 +70,7 @@ def _get_legacy_encryption_key() -> bytes:
 
 def is_v1_ciphertext(value: str | None) -> bool:
     """Return True when a value has the current v1 ciphertext prefix."""
-    return bool(value) and value.startswith(KEY_VERSION_PREFIX)
+    return value is not None and value.startswith(KEY_VERSION_PREFIX)
 
 
 def encrypt_value(plaintext: str) -> str:

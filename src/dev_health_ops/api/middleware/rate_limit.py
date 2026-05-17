@@ -129,6 +129,10 @@ LIMITER_BACKEND: str = "unknown"
 
 _log = logging.getLogger(__name__)
 
+#: Module-level type annotation enables both Limiter and _NoOpLimiter assignments
+#: in the conditional below without requiring type: ignore.
+limiter: Limiter | _NoOpLimiter
+
 
 if Limiter is not None:
     _storage_uri = _REDIS_URL if _REDIS_URL else "memory://"

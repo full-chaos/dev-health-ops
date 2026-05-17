@@ -20,6 +20,10 @@ from dev_health_ops.models.git import (
 from dev_health_ops.processors.base_git import (
     BaseGitProcessor,
     backfill_file_records,
+    build_ci_pipeline_run,
+    build_connector_pull_request,
+    build_deployment,
+    build_git_pull_request,
     check_backfill_needs,
 )
 from dev_health_ops.processors.fetch_utils import (
@@ -245,22 +249,7 @@ def _fetch_github_prs_sync(connector, owner, repo_name, repo_id, max_prs):
     )
     pr_objects = []
     for pr in prs:
-        git_pr = GitPullRequest(
-            repo_id=repo_id,
-            number=pr.number,
-            title=pr.title,
-            body=pr.body,
-            state=pr.state,
-            author_name=pr.author.username if pr.author else "Unknown",
-            author_email=pr.author.email if pr.author else None,
-            created_at=BaseGitProcessor.coerce_created_at(
-                pr.created_at, pr.merged_at, pr.closed_at
-            ),
-            merged_at=pr.merged_at,
-            closed_at=pr.closed_at,
-            head_branch=pr.head_branch,
-            base_branch=pr.base_branch,
-        )
+        git_pr = build_connector_pull_request(pr, repo_id=repo_id)
         pr_objects.append(git_pr)
     return pr_objects
 
@@ -300,7 +289,7 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
             continue
         finished_at = _coerce_datetime(getattr(run, "updated_at", None))
         runs.append(
-            CiPipelineRun(
+            build_ci_pipeline_run(
                 repo_id=repo_id,
                 run_id=str(getattr(run, "id", "")),
                 status=getattr(run, "conclusion", None) or getattr(run, "status", None),
@@ -340,7 +329,7 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
             releases=release_objects,
         )
         deployments.append(
-            Deployment(
+            build_deployment(
                 repo_id=repo_id,
                 deployment_id=str(getattr(dep, "id", "")),
                 status=getattr(dep, "state", None),
@@ -348,8 +337,6 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
                 started_at=created_at,
                 finished_at=None,
                 deployed_at=created_at,
-                merged_at=None,
-                pull_request_number=None,
                 release_ref=enrichment.release_ref,
                 release_ref_confidence=enrichment.confidence,
             )
@@ -496,17 +483,13 @@ def _collect_github_pr_objects(
 
         merged_at = getattr(gh_pr, "merged_at", None)
         closed_at = getattr(gh_pr, "closed_at", None)
-        created_at = BaseGitProcessor.coerce_created_at(
-            getattr(gh_pr, "created_at", None), merged_at, closed_at
-        )
-
         additions = getattr(gh_pr, "additions", 0)
         deletions = getattr(gh_pr, "deletions", 0)
         changed_files = getattr(gh_pr, "changed_files", 0)
         comments_count = getattr(gh_pr, "comments", 0)
 
         pr_objects.append(
-            GitPullRequest(
+            build_git_pull_request(
                 repo_id=repo_id,
                 number=int(getattr(gh_pr, "number", 0) or 0),
                 title=getattr(gh_pr, "title", None),
@@ -514,7 +497,7 @@ def _collect_github_pr_objects(
                 state=normalize_pr_state(getattr(gh_pr, "state", None), merged_at),
                 author_name=author_name,
                 author_email=author_email,
-                created_at=created_at,
+                created_at=getattr(gh_pr, "created_at", None),
                 merged_at=merged_at,
                 closed_at=closed_at,
                 head_branch=getattr(getattr(gh_pr, "head", None), "ref", None),

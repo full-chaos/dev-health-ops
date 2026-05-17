@@ -11,10 +11,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   integration:
     name: Integration Tests (conditional)
     runs-on: ubuntu-24.04-arm
+    # Integration tests need package read access for dependency installs.
     permissions:
       contents: read
       packages: read

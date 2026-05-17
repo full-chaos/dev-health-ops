@@ -12,6 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from dev_health_ops.api.middleware.rate_limit import verify_rate_limit_config
 from dev_health_ops.licensing import LicenseManager
 
 from ._health import _postgres_url
@@ -37,6 +38,9 @@ async def lifespan(app: FastAPI):
     Shutdown:
       * Close the global ClickHouse client.
     """
+    # Validate rate-limit configuration — hard-fails in prod without REDIS_URL (CHAOS-1554).
+    verify_rate_limit_config()
+
     # Initialize licensing
     try:
         manager = LicenseManager.initialize()

@@ -20,6 +20,9 @@ def setup_test_env(monkeypatch):
         "JWT_SECRET_KEY",
         "test-jwt-secret-key-at-least-32-characters-long",
     )
+    # Rate limiter (CHAOS-1554) hard-fails at startup when REDIS_URL is unset
+    # in non-dev environments. Mark tests as a dev-equivalent environment.
+    monkeypatch.setenv("ENVIRONMENT", "test")
 
 
 @pytest.fixture(autouse=True)

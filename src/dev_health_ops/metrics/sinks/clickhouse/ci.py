@@ -19,16 +19,16 @@ from dev_health_ops.metrics.schemas import (
     ReleaseImpactDailyRecord,
     TelemetrySignalBucketRecord,
 )
+from dev_health_ops.metrics.sinks.clickhouse._insert import (
+    DEFAULT_BATCH_SIZE,
+    _chunked,
+    _dt_to_clickhouse_datetime,
+)
 from dev_health_ops.metrics.testops_schemas import (
     CoverageMetricsDailyRecord,
     PipelineMetricsDailyRecord,
     ReleaseConfidenceRecord,
     TestMetricsDailyRecord,
-)
-from dev_health_ops.metrics.sinks.clickhouse._insert import (
-    DEFAULT_BATCH_SIZE,
-    _chunked,
-    _dt_to_clickhouse_datetime,
 )
 
 if TYPE_CHECKING:

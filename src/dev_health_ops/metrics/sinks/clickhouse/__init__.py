@@ -18,11 +18,11 @@ each responsible for one table family:
 
 from __future__ import annotations
 
-from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
 from dev_health_ops.metrics.sinks.clickhouse.ci import CIMixin
+from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
 from dev_health_ops.metrics.sinks.clickhouse.dora import DoraMixin
-from dev_health_ops.metrics.sinks.clickhouse.wellbeing import WellbeingMixin
 from dev_health_ops.metrics.sinks.clickhouse.investment import InvestmentMixin
+from dev_health_ops.metrics.sinks.clickhouse.wellbeing import WellbeingMixin
 from dev_health_ops.metrics.sinks.clickhouse.work_graph import WorkGraphMixin
 
 

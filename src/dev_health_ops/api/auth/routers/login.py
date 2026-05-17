@@ -39,6 +39,8 @@ from .common import (
 
 logger = logging.getLogger(__name__)
 
+# Intentional fixed bcrypt hash for missing-user timing mitigation; not a credential.
+# nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
 DUMMY_PASSWORD_HASH = "$2b$12$C6UzMDM.H6dfI/f/IKcEeO4x1n4Q4M4WQ0uGAaHo9dZYkTfLZNV6G"
 
 router = APIRouter()
@@ -187,6 +189,8 @@ async def login(
                     sanitize_for_log(payload.email),
                 )
             elif failure_error_message == "Invalid credentials":
+                # Email is sanitized before logging; no password or token is logged.
+                # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 logger.warning(
                     "Invalid password for user: %s", sanitize_for_log(payload.email)
                 )

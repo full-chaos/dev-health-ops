@@ -146,11 +146,11 @@ def _extract_unverified_org_and_subject(
     # Intentional unverified decode: audit-logging only — callers invoke this AFTER
     # validate_token has already failed. The returned org_id is never used for
     # authorization; it is passed straight to emit_audit_log.
-    # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
     import jwt as _jwt
     from jwt.exceptions import InvalidTokenError
 
     try:
+        # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
         claims = _jwt.decode(token, options={"verify_signature": False})
     except (InvalidTokenError, ValueError, AttributeError, TypeError) as exc:
         logger.debug("Could not parse unverified claims: %s", exc)

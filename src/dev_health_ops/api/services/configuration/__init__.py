@@ -1,30 +1,22 @@
-"""Settings services package.
+"""Configuration services package.
 
 This package replaces what used to be a single 1.6k-line
-``api/services/settings.py`` module. The file was split by domain to keep
+``api/services/configuration.py`` module. The file was split by domain to keep
 each service focused and reviewable; every public symbol that the old
 module exposed is re-exported here so existing imports keep working
 unchanged.
 
 Naming note
 -----------
-The package is still called ``settings`` for backwards compatibility with
-production callers and many ``unittest.mock.patch`` paths in the test
-suite (e.g. ``dev_health_ops.api.services.settings.IntegrationCredentialsService``).
-The name is somewhat misleading: this module is *not* Pydantic ``BaseSettings``
-and goes far beyond generic key/value settings — it bundles integration
+This module is *not* Pydantic ``BaseSettings`` and goes far beyond generic key/value settings — it bundles integration
 credentials, sync configuration, identity/team mappings, team discovery
 and drift, team membership management, and Jira activity inference.
-
-A rename (e.g. ``settings`` → ``configuration``) is desirable but risky
-and is intentionally **deferred to a follow-up ticket** so this change
-remains a pure refactor.
 """
 
 from __future__ import annotations
 
 # Re-export encryption helpers so existing
-# ``from dev_health_ops.api.services.settings import decrypt_value, encrypt_value``
+# ``from dev_health_ops.api.services.configuration import decrypt_value, encrypt_value``
 # imports keep working (used by SSO router/service and tests).
 from dev_health_ops.core.encryption import decrypt_value, encrypt_value
 

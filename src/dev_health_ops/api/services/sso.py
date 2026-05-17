@@ -21,7 +21,7 @@ from jwt import PyJWKClient
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.api.services.settings import decrypt_value, encrypt_value
+from dev_health_ops.api.services.configuration import decrypt_value, encrypt_value
 from dev_health_ops.api.utils.logging import sanitize_for_log
 from dev_health_ops.models.sso import (
     SSOProtocol,

@@ -40,7 +40,7 @@ Before starting, note the following corrections to the original audit findings (
 - `src/dev_health_ops/workers/sync_team.py` — parallelize provider discovery with `asyncio.gather`.
 - `src/dev_health_ops/connectors/base.py` — add `asyncio.Semaphore` to `GitConnector` base.
 - `src/dev_health_ops/api/ingest/consumer.py` — swap bare `time.sleep(1)` for bounded exponential backoff with cap.
-- `src/dev_health_ops/api/services/settings.py` — add `discover_members_jira_bulk` with gathered concurrency.
+- `src/dev_health_ops/api/services/configuration.py` — add `discover_members_jira_bulk` with gathered concurrency.
 - `src/dev_health_ops/api/services/work_unit_explain.py` — hoist regex compilation to module level.
 - `src/dev_health_ops/api/services/investment_flow.py` — parallelize sequential `fetch_investment_*_edges` with `asyncio.gather`.
 - `src/dev_health_ops/core/cache.py` — add `mget` method to `CacheBackend` + impls.
@@ -345,9 +345,9 @@ async def test_providers_discovered_concurrently(monkeypatch):
 
     with (
         patch.object(mod, "run_async", lambda coro: asyncio.get_event_loop().run_until_complete(coro)),
-        patch("dev_health_ops.api.services.settings.IntegrationCredentialsService", return_value=fake_creds),
-        patch("dev_health_ops.api.services.settings.TeamDiscoveryService", return_value=fake_discovery),
-        patch("dev_health_ops.api.services.settings.TeamDriftSyncService", return_value=fake_drift),
+patch("dev_health_ops.api.services.configuration.IntegrationCredentialsService", return_value=fake_creds),
+patch("dev_health_ops.api.services.configuration.TeamDiscoveryService", return_value=fake_discovery),
+patch("dev_health_ops.api.services.configuration.TeamDriftSyncService", return_value=fake_drift),
         patch("dev_health_ops.db.get_postgres_session", lambda: _FakeSession()),
     ):
         # Call the async body directly via the helper we'll add
@@ -369,7 +369,7 @@ Edit `src/dev_health_ops/workers/sync_team.py`. Replace the body of `sync_team_d
 
 ```python
 async def _discover_and_sync_all(org_id: str | None) -> dict:
-    from dev_health_ops.api.services.settings import (
+from dev_health_ops.api.services.configuration import (
         IntegrationCredentialsService,
         TeamDiscoveryService,
         TeamDriftSyncService,
@@ -708,7 +708,7 @@ EOF
 ## Task 5: Bulk Jira project-member discovery
 
 **Files:**
-- Modify: `src/dev_health_ops/api/services/settings.py` (add new method around line 1232)
+- Modify: `src/dev_health_ops/api/services/configuration.py` (add new method around line 1232)
 - Test: `tests/api/services/test_jira_bulk_members.py` (new)
 
 Today each `discover_members_jira(project_key)` call is one HTTPS round-trip wrapped in `asyncio.to_thread`. Callers that loop over many projects serialize those round-trips. Add a `discover_members_jira_bulk(project_keys)` that fans out via `asyncio.gather` with an `asyncio.Semaphore(5)` so we don't hammer Jira.
@@ -730,7 +730,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_bulk_members_concurrent(monkeypatch):
-    from dev_health_ops.api.services import settings as mod
+from dev_health_ops.api.services import configuration as mod
 
     active = 0
     peak = 0
@@ -769,7 +769,7 @@ async def test_bulk_members_concurrent(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bulk_members_honours_concurrency_cap(monkeypatch):
-    from dev_health_ops.api.services import settings as mod
+from dev_health_ops.api.services import configuration as mod
 
     active = 0
     peak = 0
@@ -802,7 +802,7 @@ Expected: FAIL — `AttributeError: 'TeamDiscoveryService' object has no attribu
 
 - [ ] **Step 3: Implement bulk method**
 
-Open `src/dev_health_ops/api/services/settings.py`. Immediately after the existing `discover_members_jira` method (around line 1232, just before `async def match_members`), add:
+Open `src/dev_health_ops/api/services/configuration.py`. Immediately after the existing `discover_members_jira` method (around line 1232, just before `async def match_members`), add:
 
 ```python
     async def discover_members_jira_bulk(
@@ -848,7 +848,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/dev_health_ops/api/services/settings.py tests/api/services/test_jira_bulk_members.py
+git add src/dev_health_ops/api/services/configuration.py tests/api/services/test_jira_bulk_members.py
 git commit -m "$(cat <<'EOF'
 perf(settings): add discover_members_jira_bulk with gathered concurrency
 

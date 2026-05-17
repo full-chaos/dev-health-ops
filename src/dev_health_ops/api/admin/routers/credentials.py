@@ -19,7 +19,7 @@ from dev_health_ops.api.admin.schemas import (
     TestConnectionRequest,
     TestConnectionResponse,
 )
-from dev_health_ops.api.services.settings import IntegrationCredentialsService
+from dev_health_ops.api.services.configuration import IntegrationCredentialsService
 
 from .common import get_session
 

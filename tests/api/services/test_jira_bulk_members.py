@@ -10,7 +10,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_bulk_members_concurrent(monkeypatch):
-    from dev_health_ops.api.services import settings as mod
+    from dev_health_ops.api.services import configuration as mod
 
     active = 0
     peak = 0
@@ -49,7 +49,7 @@ async def test_bulk_members_concurrent(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bulk_members_honours_concurrency_cap(monkeypatch):
-    from dev_health_ops.api.services import settings as mod
+    from dev_health_ops.api.services import configuration as mod
 
     active = 0
     peak = 0

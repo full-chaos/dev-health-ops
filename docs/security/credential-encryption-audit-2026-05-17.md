@@ -22,7 +22,7 @@ Scope: SQLAlchemy models under `src/dev_health_ops/models/`, with focused review
 
 - Location: `src/dev_health_ops/models/settings.py`, `Setting.value` with `Setting.is_encrypted`.
 - Secret types: generic application secrets stored as settings when callers pass `encrypt=True`.
-- Encryption path: `src/dev_health_ops/api/services/settings.py` `SettingsService.set` encrypts values with `encrypt_value` when `encrypt=True`; `SettingsService.get` decrypts when `is_encrypted` is true.
+- Encryption path: `src/dev_health_ops/api/services/configuration.py` `SettingsService.set` encrypts values with `encrypt_value` when `encrypt=True`; `SettingsService.get` decrypts when `is_encrypted` is true.
 - Status: encrypted at rest for encrypted settings.
 - Severity: Medium, because correctness depends on callers marking sensitive settings with `encrypt=True`.
 - Recommendation: keep sensitive settings on this path, document operator expectations, and use the v0→v1 re-encryption utility after deployment.

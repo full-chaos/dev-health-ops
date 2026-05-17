@@ -6,7 +6,7 @@ import os
 
 os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
 
-from dev_health_ops.api.services.settings import decrypt_value, encrypt_value
+from dev_health_ops.api.services.configuration import decrypt_value, encrypt_value
 
 
 def test_encrypt_decrypt_round_trip():

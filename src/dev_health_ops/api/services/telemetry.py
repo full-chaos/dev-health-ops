@@ -10,7 +10,7 @@ import httpx
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dev_health_ops.api.services.settings import SettingsService
+from dev_health_ops.api.services.configuration import SettingsService
 from dev_health_ops.models.audit import AuditAction, AuditLog, AuditResourceType
 from dev_health_ops.models.git import Repo
 from dev_health_ops.models.licensing import FeatureFlag, OrgFeatureOverride

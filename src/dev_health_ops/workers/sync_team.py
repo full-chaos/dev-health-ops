@@ -39,7 +39,7 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
     fans them out so the wall-time equals max(per-provider-time) rather than the
     sum.
     """
-    from dev_health_ops.api.services.settings import (
+    from dev_health_ops.api.services.configuration import (
         IntegrationCredentialsService,
         TeamDiscoveryService,
         TeamDriftSyncService,

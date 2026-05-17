@@ -331,7 +331,7 @@ class TestDiscoverLinear:
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_discover_linear_happy_path(self, mock_client_class: MagicMock) -> None:
         """discover_linear() returns DiscoveredTeam objects with correct provider fields."""
-        from dev_health_ops.api.services.settings import TeamDiscoveryService
+        from dev_health_ops.api.services.configuration import TeamDiscoveryService
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
@@ -364,7 +364,7 @@ class TestDiscoverLinear:
         self, mock_client_class: MagicMock
     ) -> None:
         """discover_linear() returns empty list when workspace has no teams."""
-        from dev_health_ops.api.services.settings import TeamDiscoveryService
+        from dev_health_ops.api.services.configuration import TeamDiscoveryService
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
@@ -381,7 +381,7 @@ class TestDiscoverLinear:
         self, mock_client_class: MagicMock
     ) -> None:
         """discover_linear() sets associations with provider_org='linear'."""
-        from dev_health_ops.api.services.settings import TeamDiscoveryService
+        from dev_health_ops.api.services.configuration import TeamDiscoveryService
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
@@ -406,7 +406,7 @@ class TestDiscoverLinear:
         self, mock_client_class: MagicMock
     ) -> None:
         """discover_linear() always closes the client (via context manager __exit__)."""
-        from dev_health_ops.api.services.settings import TeamDiscoveryService
+        from dev_health_ops.api.services.configuration import TeamDiscoveryService
 
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client

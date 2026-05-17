@@ -16,7 +16,7 @@ from dev_health_ops.api.admin.schemas import (
     JiraActivityInferenceResponse,
     TeamMembersDiscoverResponse,
 )
-from dev_health_ops.api.services.settings import (
+from dev_health_ops.api.services.configuration import (
     IdentityMappingService,
     IntegrationCredentialsService,
     JiraActivityInferenceService,

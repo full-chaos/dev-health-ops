@@ -1,14 +1,38 @@
 # Legacy GitHub and GitLab Connectors
 
-> **Legacy boundary:** `src/dev_health_ops/connectors/` is frozen for new
-> provider work. New integrations must live under
-> `src/dev_health_ops/providers/<provider>/` and use the canonical provider
-> contracts in `src/dev_health_ops/providers/base.py` or the async REST/TestOps
-> helpers in `src/dev_health_ops/providers/_base.py`. This package remains only
-> for existing GitHub/GitLab connector compatibility until the planned
-> deduplication/deletion work lands.
+> **FROZEN (legacy):** `src/dev_health_ops/connectors/` is legacy and frozen.
+> **Do not add new provider code in this package.**
 
-Production-grade connectors for retrieving data from GitHub and GitLab APIs with automatic pagination, rate limiting, and error handling.
+New provider development belongs in:
+
+- `src/dev_health_ops/providers/<provider>/`
+- Provider contract: `src/dev_health_ops/providers/base.py`
+- Async REST/TestOps helper base: `src/dev_health_ops/providers/_base.py`
+
+Policy reference: see the **Provider boundary** section in repo-root
+`AGENTS.md`.
+
+This package is retained for compatibility while migration completes.
+
+## Relationship to `providers/`
+
+`connectors/` remains a compatibility layer for legacy callers.
+`providers/` is the canonical home for provider integrations, normalization,
+and provider-specific transport/auth/retry logic.
+
+## Current contents and migration status
+
+- **Still legacy in `connectors/`**
+  - `github.py`, `gitlab.py` (legacy Git connector implementations)
+  - `base.py`, `models.py`, `exceptions.py` (legacy connector contracts/models)
+  - `teams.py`, `launchdarkly.py` (legacy non-work-item connectors)
+- **Moved/standardized in `providers/`**
+  - Canonical provider contracts: `providers/base.py`
+  - Shared async REST/TestOps adapter base: `providers/_base.py`
+  - Provider-local normalization helpers and registry utilities
+
+Until connectors are fully retired, keep this package stable and focused on
+backward compatibility only.
 
 ## Architecture
 

@@ -411,3 +411,78 @@ class TestSyncTimeWindowCLIArguments:
         )
         assert str(args.since) == "2025-01-01"
         assert str(args.date) == "2025-01-02"
+
+
+class TestGlobalFlagsPropagateToSubparsers:
+    """Regression: global flags (--org, --db, --analytics-db, --log-level,
+    --llm-provider, --model) must be accepted EITHER before OR after the
+    subcommand. Previously argparse rejected the after-subcommand form with
+    `unrecognized arguments: --org X`."""
+
+    def test_org_accepted_after_fixtures_generate(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            ["fixtures", "generate", "--org", "acme-org", "--days", "1"]
+        )
+        assert args.org == "acme-org"
+        assert args.days == 1
+
+    def test_org_accepted_after_sync_git(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "sync",
+                "git",
+                "--provider",
+                "github",
+                "--search",
+                "org/*",
+                "--org",
+                "acme-org",
+            ]
+        )
+        assert args.org == "acme-org"
+
+    def test_org_accepted_after_metrics_daily(self):
+        parser = build_parser()
+        args = parser.parse_args(["metrics", "daily", "--org", "acme-org"])
+        assert args.org == "acme-org"
+
+    def test_org_accepted_after_audit_perf(self):
+        parser = build_parser()
+        args = parser.parse_args(["audit", "perf", "--org", "acme-org"])
+        assert args.org == "acme-org"
+
+    def test_org_before_subcommand_still_works(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            ["--org", "acme-org", "fixtures", "generate", "--days", "1"]
+        )
+        assert args.org == "acme-org"
+
+    def test_db_analytics_db_and_log_level_propagate_to_leaves(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "fixtures",
+                "generate",
+                "--db",
+                "sqlite+aiosqlite:///:memory:",
+                "--analytics-db",
+                "clickhouse://localhost:8123/default",
+                "--log-level",
+                "DEBUG",
+            ]
+        )
+        assert args.db == "sqlite+aiosqlite:///:memory:"
+        assert args.analytics_db == "clickhouse://localhost:8123/default"
+        assert args.log_level == "DEBUG"
+
+    def test_root_default_preserved_when_leaf_flag_omitted(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            ["--org", "from-root", "fixtures", "generate", "--days", "1"]
+        )
+        # Leaf parser uses default=SUPPRESS, so omitting --org on the leaf must
+        # NOT clobber the value supplied before the subcommand.
+        assert args.org == "from-root"

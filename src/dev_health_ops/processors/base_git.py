@@ -18,7 +18,14 @@ from collections.abc import Coroutine
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from dev_health_ops.models.git import GitBlame, GitCommitStat, GitFile
+from dev_health_ops.models.git import (
+    CiPipelineRun,
+    Deployment,
+    GitBlame,
+    GitCommitStat,
+    GitFile,
+    GitPullRequest,
+)
 from dev_health_ops.processors.fetch_utils import AsyncBatchCollector
 from dev_health_ops.utils import CONNECTORS_AVAILABLE
 
@@ -157,6 +164,145 @@ class BackfillNeeds:
         )
 
 
+def build_git_pull_request(
+    *,
+    repo_id: Any,
+    number: int,
+    title: str | None,
+    body: str | None,
+    state: str | None,
+    author_name: str | None,
+    author_email: str | None,
+    created_at: datetime | None,
+    merged_at: datetime | None,
+    closed_at: datetime | None,
+    head_branch: str | None,
+    base_branch: str | None,
+    additions: int | None = None,
+    deletions: int | None = None,
+    changed_files: int | None = None,
+    first_review_at: datetime | None = None,
+    first_comment_at: datetime | None = None,
+    changes_requested_count: int | None = None,
+    reviews_count: int | None = None,
+    comments_count: int | None = None,
+) -> GitPullRequest:
+    """Build a normalized pull/merge request record for provider processors."""
+    values: dict[str, Any] = {
+        "repo_id": repo_id,
+        "number": number,
+        "title": title,
+        "body": body,
+        "state": state,
+        "author_name": author_name,
+        "author_email": author_email,
+        "created_at": BaseGitProcessor.coerce_created_at(
+            created_at, merged_at, closed_at
+        ),
+        "merged_at": merged_at,
+        "closed_at": closed_at,
+        "head_branch": head_branch,
+        "base_branch": base_branch,
+    }
+    optional_values = {
+        "additions": additions,
+        "deletions": deletions,
+        "changed_files": changed_files,
+        "first_review_at": first_review_at,
+        "first_comment_at": first_comment_at,
+        "changes_requested_count": changes_requested_count,
+        "reviews_count": reviews_count,
+        "comments_count": comments_count,
+    }
+    values.update(
+        {key: value for key, value in optional_values.items() if value is not None}
+    )
+    return GitPullRequest(**values)
+
+
+_DEFAULT_AUTHOR_EMAIL = object()
+
+
+def build_connector_pull_request(
+    record: Any,
+    *,
+    repo_id: Any,
+    state: str | None = None,
+    author_email: str | None | object = _DEFAULT_AUTHOR_EMAIL,
+) -> GitPullRequest:
+    """Build a pull request from connector model fields shared by GitHub/GitLab."""
+    author = getattr(record, "author", None)
+    resolved_author_email = (
+        getattr(author, "email", None)
+        if author_email is _DEFAULT_AUTHOR_EMAIL and author is not None
+        else author_email
+    )
+    return build_git_pull_request(
+        repo_id=repo_id,
+        number=record.number,
+        title=record.title,
+        body=record.body,
+        state=state if state is not None else record.state,
+        author_name=author.username if author else "Unknown",
+        author_email=(
+            resolved_author_email if isinstance(resolved_author_email, str) else None
+        ),
+        created_at=record.created_at,
+        merged_at=record.merged_at,
+        closed_at=record.closed_at,
+        head_branch=record.head_branch,
+        base_branch=record.base_branch,
+    )
+
+
+def build_ci_pipeline_run(
+    *,
+    repo_id: Any,
+    run_id: str,
+    status: str | None,
+    queued_at: datetime | None,
+    started_at: datetime,
+    finished_at: datetime | None,
+) -> CiPipelineRun:
+    """Build a CI pipeline run record from provider-normalized fields."""
+    return CiPipelineRun(
+        repo_id=repo_id,
+        run_id=run_id,
+        status=status,
+        queued_at=queued_at,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+
+def build_deployment(
+    *,
+    repo_id: Any,
+    deployment_id: str,
+    status: str | None,
+    environment: str | None,
+    started_at: datetime | None,
+    finished_at: datetime | None,
+    deployed_at: datetime | None,
+    release_ref: str,
+    release_ref_confidence: float,
+    merged_at: datetime | None = None,
+    pull_request_number: int | None = None,
+) -> Deployment:
+    """Build a deployment record from provider-normalized fields."""
+    return Deployment(
+        repo_id=repo_id,
+        deployment_id=deployment_id,
+        status=status,
+        environment=environment,
+        started_at=started_at,
+        finished_at=finished_at,
+        deployed_at=deployed_at,
+        merged_at=merged_at,
+        pull_request_number=pull_request_number,
+        release_ref=release_ref,
+        release_ref_confidence=release_ref_confidence,
+    )
 async def check_backfill_needs(
     store: Any,
     repo_id: Any,

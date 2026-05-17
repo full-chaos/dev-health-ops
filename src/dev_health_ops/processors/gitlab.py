@@ -19,6 +19,10 @@ from dev_health_ops.models.git import (
 from dev_health_ops.processors.base_git import (
     BaseGitProcessor,
     backfill_file_records,
+    build_ci_pipeline_run,
+    build_connector_pull_request,
+    build_deployment,
+    build_git_pull_request,
     check_backfill_needs,
 )
 from dev_health_ops.processors.fetch_utils import (
@@ -194,21 +198,11 @@ def _fetch_gitlab_mrs_sync(connector, project_id, repo_id, max_mrs):
     )
     pr_objects = []
     for mr in mrs:
-        git_pr = GitPullRequest(
+        git_pr = build_connector_pull_request(
+            mr,
             repo_id=repo_id,
-            number=mr.number,
-            title=mr.title,
-            body=mr.body,
             state=normalize_pr_state(mr.state, mr.merged_at),
-            author_name=mr.author.username if mr.author else "Unknown",
             author_email=None,
-            created_at=BaseGitProcessor.coerce_created_at(
-                mr.created_at, mr.merged_at, mr.closed_at
-            ),
-            merged_at=mr.merged_at,
-            closed_at=mr.closed_at,
-            head_branch=mr.head_branch,
-            base_branch=mr.base_branch,
         )
         pr_objects.append(git_pr)
     logging.info(
@@ -293,9 +287,7 @@ def _sync_gitlab_mrs_to_store(
             merged_at = safe_parse_datetime(mr.get("merged_at"))
             closed_at = safe_parse_datetime(mr.get("closed_at"))
             updated_at = safe_parse_datetime(mr.get("updated_at"))
-            created_at = BaseGitProcessor.coerce_created_at(
-                safe_parse_datetime(mr.get("created_at")), merged_at, closed_at
-            )
+            created_at = safe_parse_datetime(mr.get("created_at"))
 
             comments_count = int(mr.get("user_notes_count") or 0)
 
@@ -308,7 +300,7 @@ def _sync_gitlab_mrs_to_store(
                 break
 
             batch.append(
-                GitPullRequest(
+                build_git_pull_request(
                     repo_id=repo_id,
                     number=int(mr.get("iid") or 0),
                     title=mr.get("title") or None,
@@ -393,7 +385,7 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
         finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
 
         pipelines.append(
-            CiPipelineRun(
+            build_ci_pipeline_run(
                 repo_id=repo_id,
                 run_id=str(getattr(pipeline, "id", "")),
                 status=getattr(pipeline, "status", None),
@@ -461,7 +453,7 @@ def _fetch_gitlab_deployments_sync(
         )
 
         deployments.append(
-            Deployment(
+            build_deployment(
                 repo_id=repo_id,
                 deployment_id=str(dep.get("id", "")),
                 status=dep.get("status", None),
@@ -471,8 +463,6 @@ def _fetch_gitlab_deployments_sync(
                 started_at=created_at,
                 finished_at=finished_at,
                 deployed_at=created_at,
-                merged_at=None,
-                pull_request_number=None,
                 release_ref=enrichment.release_ref,
                 release_ref_confidence=enrichment.confidence,
             )

@@ -130,6 +130,7 @@ _FORBIDDEN_QUERY_PARAMS = {
     "bottom",
 }
 
+
 def _filters_from_query(
     scope_type: str,
     scope_id: str,
@@ -168,6 +169,7 @@ def _bounded_limit_param(limit: int, max_limit: int) -> int:
         return min(50, max_limit)
     return min(max(limit, 1), max_limit)
 
+
 app = FastAPI(
     title="Dev Health Ops API",
     version="1.0.0",
@@ -194,6 +196,7 @@ app.include_router(ingest_router)
 app.include_router(orgs_router)
 
 register_observability(app)
+
 
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 async def health() -> HealthResponse | JSONResponse:

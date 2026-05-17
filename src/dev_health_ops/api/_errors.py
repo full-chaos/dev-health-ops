@@ -40,9 +40,7 @@ def _rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
     raise exc
 
 
-def _validation_error_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+def _validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Return a structured 422 response for FastAPI request-validation errors.
 
     The parameter is typed as ``Exception`` to satisfy Starlette's
@@ -66,9 +64,7 @@ def _validation_error_handler(
     )
 
 
-async def _generic_exception_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all 500 handler that returns a sanitized response.
 
     Logs the real exception with stack trace at ERROR level so operators can

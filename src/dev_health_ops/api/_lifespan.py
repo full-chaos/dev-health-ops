@@ -45,9 +45,7 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("No license configured, using community tier")
     except Exception as e:
-        logger.warning(
-            "License initialization failed: %s (using community tier)", e
-        )
+        logger.warning("License initialization failed: %s (using community tier)", e)
 
     # Validate FeatureBundle feature keys against the canonical
     # STANDARD_FEATURES registry.

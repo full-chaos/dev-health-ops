@@ -120,6 +120,86 @@ async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
     return 0
 
 
+_GLOBAL_FLAG_SPECS: tuple[tuple[tuple[str, ...], dict[str, object]], ...] = (
+    (
+        ("--log-level",),
+        {"dest": "log_level", "help": "(global) Logging level. See root --help."},
+    ),
+    (("--db",), {"dest": "db", "help": "(global) PostgreSQL URI. See root --help."}),
+    (
+        ("--analytics-db",),
+        {"dest": "analytics_db", "help": "(global) ClickHouse URI. See root --help."},
+    ),
+    (
+        ("--org",),
+        {
+            "dest": "org",
+            "help": "(global) Organization ID for multi-tenant scoping. See root --help.",
+        },
+    ),
+    (
+        ("-l", "--llm-provider"),
+        {"dest": "llm_provider", "help": "(global) LLM provider. See root --help."},
+    ),
+    (
+        ("-m", "--model"),
+        {"dest": "model", "help": "(global) LLM model. See root --help."},
+    ),
+)
+
+
+def _propagate_global_args_to_subparsers(parser: argparse.ArgumentParser) -> None:
+    """Re-add root-parser globals on every leaf subparser.
+
+    Argparse normally requires global flags (e.g. ``--org``) to appear BEFORE
+    the subcommand. This walks the subparser tree and adds each global flag
+    to every leaf parser with ``default=SUPPRESS`` so users can write either:
+
+        dev-hops --org X fixtures generate ...
+        dev-hops fixtures generate --org X ...
+
+    Both forms populate ``ns.<dest>``. ``SUPPRESS`` ensures omitting the flag
+    on the leaf does not clobber the value supplied on the root parser.
+    """
+    visited: set[int] = set()
+
+    def walk(p: argparse.ArgumentParser) -> None:
+        if id(p) in visited:
+            return
+        visited.add(id(p))
+        sub_actions = [
+            a for a in p._actions if isinstance(a, argparse._SubParsersAction)
+        ]
+        if sub_actions:
+            for sa in sub_actions:
+                for child in sa.choices.values():
+                    walk(child)
+            return
+        # leaf parser: attach global flags if not already present
+        existing = {opt for a in p._actions for opt in a.option_strings}
+        for option_strings, kwargs in _GLOBAL_FLAG_SPECS:
+            if any(opt in existing for opt in option_strings):
+                continue
+            try:
+                p.add_argument(
+                    *option_strings,
+                    default=argparse.SUPPRESS,
+                    # help is set per-spec to advertise the flag on every leaf
+                    **kwargs,  # type: ignore[arg-type]
+                )
+            except argparse.ArgumentError as exc:
+                # Best-effort propagation: some leaf parsers may already define
+                # an equivalent/conflicting option. Keep building the CLI tree.
+                logging.debug(
+                    "Skipping global flag propagation for %s on parser %s: %s",
+                    option_strings,
+                    p.prog,
+                    exc,
+                )
+
+    walk(parser)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dev-health-ops",
@@ -229,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cleanup_all_parser.set_defaults(func=_cmd_maintenance_cleanup_all)
 
+    _propagate_global_args_to_subparsers(parser)
     return parser
 
 

@@ -12,6 +12,7 @@ from strawberry.fastapi import GraphQLRouter
 from .context import GraphQLContext, build_context
 from .persisted import get_schema_version
 from .schema import schema
+from .security import is_graphql_ide_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ def create_graphql_app(
         schema=schema,
         context_getter=context_getter,
         path="",
+        graphql_ide="graphiql" if is_graphql_ide_enabled() else None,
     )
 
     return router
@@ -141,7 +143,6 @@ def get_graphql_info() -> dict:
         "schema_version": get_schema_version(),
         "endpoints": {
             "graphql": "/graphql",
-            "graphiql": "/graphql",
             "subscriptions": "/graphql",
         },
         "features": [

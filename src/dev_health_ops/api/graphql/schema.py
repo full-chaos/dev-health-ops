@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 import strawberry
+from strawberry.extensions import AddValidationRules
 from strawberry.types import Info
 
 from .context import GraphQLContext
@@ -48,6 +49,7 @@ from .resolvers.reports import (
     resolve_trigger_report,
     resolve_update_saved_report,
 )
+from .security import get_graphql_validation_rules
 from .subscriptions import Subscription
 
 logger = logging.getLogger(__name__)
@@ -294,5 +296,5 @@ schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
     subscription=Subscription,
-    extensions=[OrgIdAuthExtension],
+    extensions=[OrgIdAuthExtension, AddValidationRules(get_graphql_validation_rules())],
 )

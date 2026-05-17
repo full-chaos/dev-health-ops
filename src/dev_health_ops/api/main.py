@@ -44,6 +44,7 @@ from .auth import router as auth_router
 from .auth.router import get_current_user
 from .billing import router as billing_router
 from .graphql.app import create_graphql_app
+from .graphql.security import GraphQLQuerySizeLimitMiddleware
 from .ingest import router as ingest_router
 from .licensing import router as licensing_router
 from .models.filters import (
@@ -318,10 +319,14 @@ async def lifespan(app: FastAPI):
 
             async with get_postgres_session() as _session:
                 await validate_bundle_keys(_session)
-        except FeatureBundleIntegrityError:
-            # Integrity check failed; re-raise to abort startup.
-            raise
         except Exception as _exc:
+            from dev_health_ops.api.billing.bundle_validation import (
+                FeatureBundleIntegrityError,
+            )
+
+            if isinstance(_exc, FeatureBundleIntegrityError):
+                # Integrity check failed; re-raise to abort startup.
+                raise
             logger.warning(
                 "FeatureBundle key validation skipped (DB not ready): %s", _exc
             )
@@ -405,6 +410,7 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(GraphQLQuerySizeLimitMiddleware)
 OriginValidationMiddleware = import_module(
     "dev_health_ops.api.middleware.csrf"
 ).OriginValidationMiddleware

@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.providers._base import (
     BasePipelineAdapter,
     PipelineSyncBatch,
 )
-from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 
 
 @dataclass(slots=True)

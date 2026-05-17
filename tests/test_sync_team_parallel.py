@@ -53,15 +53,15 @@ async def test_providers_discovered_concurrently(monkeypatch):
 
     with (
         patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService",
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService",
             return_value=fake_creds,
         ),
         patch(
-        "dev_health_ops.api.services.configuration.TeamDiscoveryService",
+            "dev_health_ops.api.services.configuration.TeamDiscoveryService",
             return_value=fake_discovery,
         ),
         patch(
-        "dev_health_ops.api.services.configuration.TeamDriftSyncService",
+            "dev_health_ops.api.services.configuration.TeamDriftSyncService",
             return_value=fake_drift,
         ),
         patch("dev_health_ops.db.get_postgres_session", lambda: _FakeSession()),

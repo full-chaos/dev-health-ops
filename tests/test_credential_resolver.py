@@ -236,7 +236,7 @@ class TestCredentialResolver:
         }
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -261,7 +261,7 @@ class TestCredentialResolver:
         }
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -283,7 +283,7 @@ class TestCredentialResolver:
         }
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -302,7 +302,7 @@ class TestCredentialResolver:
         mock_creds = {"api_key": "lin_api_database_key"}
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -324,7 +324,7 @@ class TestCredentialResolver:
         }
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -341,7 +341,7 @@ class TestCredentialResolver:
     async def test_fallback_to_environment(self, resolver):
         """Test fallback to environment when database returns None."""
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=None)
@@ -364,7 +364,7 @@ class TestCredentialResolver:
         )
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=None)
@@ -380,7 +380,7 @@ class TestCredentialResolver:
     async def test_error_no_credentials_found(self, resolver):
         """Test error when neither DB nor env has credentials."""
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=None)
@@ -417,7 +417,7 @@ class TestCredentialResolver:
         mock_creds = {"token": "ghp_custom_token"}
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -434,7 +434,7 @@ class TestCredentialResolver:
     async def test_database_error_falls_back_to_env(self, resolver):
         """Test that database errors gracefully fall back to env."""
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(
@@ -457,7 +457,7 @@ class TestCredentialResolver:
         mock_creds = {"token": "ghp_test"}
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -477,7 +477,7 @@ class TestCredentialResolver:
         }
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=mock_creds)
@@ -497,7 +497,7 @@ class TestCredentialResolver:
         key_path.write_text("synthetic-private-key", encoding="utf-8")
 
         with patch(
-        "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
+            "dev_health_ops.api.services.configuration.IntegrationCredentialsService"
         ) as mock_svc_class:
             mock_svc = AsyncMock()
             mock_svc.get_decrypted_credentials = AsyncMock(return_value=None)

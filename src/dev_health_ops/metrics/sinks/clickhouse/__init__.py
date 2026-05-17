@@ -15,6 +15,7 @@ each responsible for one table family:
   InvestmentMixin    — investment classifications/metrics, work-unit investments
   WorkGraphMixin     — work graph edges, work items, git/repo/file metrics, forecasts
 """
+
 from __future__ import annotations
 
 from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore

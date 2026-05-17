@@ -5,6 +5,7 @@ Contains: __init__, close, query_dicts, backend_type, get_all_teams,
           insert_teams, _apply_sql_migrations, ensure_schema, _insert_rows,
           and query-helper methods.
 """
+
 from __future__ import annotations
 
 import asyncio

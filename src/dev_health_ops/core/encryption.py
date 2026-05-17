@@ -86,8 +86,11 @@ def decrypt_value(ciphertext: str) -> str:
         key = _get_encryption_key()
         token = ciphertext.removeprefix(KEY_VERSION_PREFIX)
     elif ciphertext.startswith("v") and ":" in ciphertext:
-        version = ciphertext.split(":", 1)[0]
-        logger.error("Unsupported encrypted value version: %s", version)
+        # NOTE: deliberately do not log the parsed version prefix. CodeQL
+        # (py/clear-text-logging-sensitive-data) flags any logging of values
+        # derived from ciphertext, even when the derived value is only a
+        # short non-secret tag like "v2". The exception message below is
+        # sufficient for operators; full ciphertext is never persisted to logs.
         raise ValueError("Decryption failed - unsupported ciphertext version")
     else:
         key = _get_legacy_encryption_key()

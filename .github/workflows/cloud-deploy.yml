@@ -1,5 +1,8 @@
 name: Deploy cloud services
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:

@@ -14,10 +14,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    # CodeQL needs SARIF upload and audit access for security results.
     permissions:
       actions: read
       contents: read

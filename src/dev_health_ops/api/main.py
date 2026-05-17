@@ -27,6 +27,8 @@ from dev_health_ops.api.telemetry.router import router as telemetry_router
 
 from ._errors import (
     _generic_exception_handler as _generic_exception_handler,
+)
+from ._errors import (
     register_exception_handlers,
 )
 from ._health import (
@@ -39,7 +41,6 @@ from ._health import (
 from ._lifespan import lifespan
 from ._middleware import register_middleware
 from ._observability import register_observability
-
 from .admin import router as admin_router
 from .admin.impersonation import router as impersonation_router
 from .auth import router as auth_router

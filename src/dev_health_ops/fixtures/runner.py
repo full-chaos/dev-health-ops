@@ -307,7 +307,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         # Seed users/orgs/memberships/licenses into PostgreSQL (auth layer).
         # This must happen regardless of which analytics sink is used.
         user_generator = SyntheticDataGenerator(repo_name=base_name, seed=ns.seed)
-        user_data: dict[str, Any] | None = user_generator.generate_users()
+        user_data: dict[str, Any] | None = user_generator.generate_users(
+            org_id=org_id,
+        )
 
         if isinstance(store, SQLAlchemyStore) and db_type == "postgres":
             async with store.session_factory() as session:

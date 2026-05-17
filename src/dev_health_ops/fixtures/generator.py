@@ -1,6 +1,7 @@
 import hashlib
 import json
 import random
+import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
@@ -2821,6 +2822,7 @@ class SyntheticDataGenerator:
         *,
         default_password: str = "devhealth123",
         include_admin: bool = True,
+        org_id: str | None = None,
     ) -> dict[str, Any]:
         import bcrypt
 
@@ -2837,10 +2839,31 @@ class SyntheticDataGenerator:
             default_password.encode("utf-8"), bcrypt.gensalt()
         ).decode("utf-8")
 
+        _DEFAULT_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        # Resolve the target Postgres Organization identity from the supplied
+        # CLI/sink-level org_id, so that seeded users/memberships/licenses live
+        # in the SAME tenant as the analytics rows. Without this, the fixture
+        # generator hardcoded "default-org" and broke multi-tenant scoping.
+        if org_id:
+            try:
+                target_org_uuid = uuid.UUID(org_id)
+                _slug_seed = f"fixture-{target_org_uuid.hex[:8]}"
+            except ValueError:
+                target_org_uuid = uuid.uuid5(_DEFAULT_NS, org_id)
+                # Slug must satisfy uniqueness AND be deterministic per org_id.
+                _safe = re.sub(r"[^a-z0-9-]+", "-", org_id.lower()).strip("-")
+                _slug_seed = (_safe or f"fixture-{target_org_uuid.hex[:8]}")[:60]
+            target_slug = _slug_seed
+            target_name = f"Fixture Org ({org_id})"
+        else:
+            target_org_uuid = uuid.uuid5(_DEFAULT_NS, "default-org")
+            target_slug = "default-org"
+            target_name = "Default Organization"
+
         if include_admin:
             admin_user = User(
                 id=uuid.uuid5(
-                    uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"),
+                    _DEFAULT_NS,
                     "admin@devhealth.example",
                 ),
                 email="admin@devhealth.example",
@@ -2855,11 +2878,9 @@ class SyntheticDataGenerator:
             users.append(admin_user)
 
             admin_org = Organization(
-                id=uuid.uuid5(
-                    uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "default-org"
-                ),
-                slug="default-org",
-                name="Default Organization",
+                id=target_org_uuid,
+                slug=target_slug,
+                name=target_name,
                 tier="enterprise",
                 is_active=True,
             )
@@ -2892,9 +2913,7 @@ class SyntheticDataGenerator:
             default_org_id = orgs[0].id
 
         for name, email in self.authors[:5]:
-            user_id = uuid.uuid5(
-                uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), email
-            )
+            user_id = uuid.uuid5(_DEFAULT_NS, email)
             user = User(
                 id=user_id,
                 email=email,

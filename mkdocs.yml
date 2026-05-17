@@ -24,7 +24,8 @@ nav:
       - Concepts: product/concepts.md
       - Investment Taxonomy: product/investment-taxonomy.md
       - Capacity Planning: product/capacity-planning.md
-      - Monetization Strategy: monetization-strategy.md
+      - Monetization Strategy: product/monetization-strategy.md
+      - TestOps PRD: product/test-ops-prd.md
   - Getting Started: getting-started.md
   - Self-Hosted Quickstart: self-hosted-quickstart.md
   - Configuration: configuration.md
@@ -58,8 +59,8 @@ nav:
       - Overview: cli.md
       - Reference: ops/cli-reference.md
   - Connectors:
-      - Usage: CONNECTOR_USAGE.md
-      - Private Repos: PRIVATE_REPO_TESTING.md
+      - Usage: connectors/usage.md
+      - Private Repos: connectors/private-repo-testing.md
   - Metrics:
       - Overview: metrics.md
       - Inventory: metrics-inventory.md
@@ -92,11 +93,12 @@ nav:
   - Task Trackers: task_trackers.md
   - Roadmap: roadmap.md
   - Project Plan: project.md
+  - Plans:
+      - Dead Code Cleanup: plans/dead-code-cleanup-plan.md
+      - Atlassian Client Integration: plans/atlassian-client-integration.md
   - Appendix:
-      - Agent Instructions (index): appendix/agent-instructions/README.md
-
-
       - Legacy: appendix/legacy/index.md
+      - Export Schema Usage Audit: appendix/legacy/export-schema-usage-audit.md
 
 plugins:
   - search

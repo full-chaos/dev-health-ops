@@ -4,7 +4,7 @@ Deploy Dev Health Platform on your own infrastructure in under 30 minutes.
 
 ## License Requirements
 
-Before deploying, ensure you comply with the [Business Source License](../LICENSE.md):
+Before deploying, ensure you comply with the [Business Source License](https://github.com/chrisgeo/dev-health-ops/blob/main/LICENSE):
 
 | Organization Size | License Required |
 |-------------------|------------------|

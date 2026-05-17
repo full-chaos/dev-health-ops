@@ -33,6 +33,8 @@ Dev Health Ops uses a dual-database architecture separating **semantic** (operat
 
 Analytics queries use ClickHouse-specific features (ARRAY JOIN, JSONExtract, argMax) that have no equivalent in other backends. Attempting to use a non-ClickHouse backend for analytics endpoints returns a clear validation error (ValueError) directing users to configure `CLICKHOUSE_URI`.
 
+SQLite via `aiosqlite` remains allowed only for test fixtures and local-only ephemeral development. It must not be used for production semantic data, analytics, CI long-run pipelines, or durable environments; the `sqlite+aiosqlite` URL normalization helpers in `src/dev_health_ops/db.py` and `metrics/db_utils.py` exist for that narrow compatibility scope.
+
 ### What requires ClickHouse
 
 | Feature | Requires ClickHouse | Notes |

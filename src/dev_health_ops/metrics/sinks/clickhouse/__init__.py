@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dev_health_ops.metrics.sinks.clickhouse.ai_attribution import AIAttributionMixin
 from dev_health_ops.metrics.sinks.clickhouse.ai_governance import AIGovernanceMixin
+from dev_health_ops.metrics.sinks.clickhouse.ai_workflow import AIWorkflowMixin
 from dev_health_ops.metrics.sinks.clickhouse.ci import CIMixin
 from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
 from dev_health_ops.metrics.sinks.clickhouse.dora import DoraMixin
@@ -33,6 +34,7 @@ class ClickHouseMetricsSink(
     # Mixins come BEFORE ClickHouseCore so their concrete write_* methods
     # take priority in the MRO over BaseMetricsSink abstract methods.
     AIGovernanceMixin,
+    AIWorkflowMixin,
     AIAttributionMixin,
     CIMixin,
     DoraMixin,

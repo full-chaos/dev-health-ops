@@ -1,4 +1,5 @@
 from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import re
@@ -957,3 +958,98 @@ def enrich_work_item_with_priority(
         service_class=service_class,
         url=work_item.url,
     )
+
+
+# ---------------------------------------------------------------------------
+# AI attribution detection — wired into the GitHub normalize path
+# ---------------------------------------------------------------------------
+from dev_health_ops.providers._ai_detection import (  # noqa: E402
+    AIAttributionSignal,
+    AuthorInfo,
+    detect_from_author,
+    detect_from_branch_name,
+    detect_from_commit_trailers,
+    detect_from_pr_body,
+    detect_from_pr_labels,
+)
+
+
+def detect_pr_attributions(
+    *,
+    pr: _GitHubPullRequestLike,
+) -> list[AIAttributionSignal]:
+    """Detect all AI attribution signals from a GitHub pull request.
+
+    Runs every P0 source detector and returns the full list of raw signals.
+    Signals are not collapsed — all are returned for raw persistence.
+    Precedence is resolved at read time by the storage layer.
+
+    Sources checked (in precedence order, but all persisted regardless):
+        1. PR labels (highest confidence)
+        2. PR author (bot/app detection)
+        3. Commit trailers in PR body (squash merges expose them here)
+        4. PR head branch name (weak)
+        5. PR description body (weak)
+
+    Note on commit-level trailers:
+        Full commit message traversal requires an extra API call and is not
+        wired here — the normalize path receives the PR object only.  If the
+        PR was created from a squash/rebase workflow the body typically
+        contains the commit trailers.  Commit-level detection can be layered
+        in a follow-up when commit objects are fetched.
+
+    Args:
+        pr: PyGithub-compatible pull request object.
+
+    Returns:
+        List of :class:`AIAttributionSignal` objects (may be empty).
+    """
+    signals: list[AIAttributionSignal] = []
+
+    # 1. PR labels
+    labels = [
+        str(label_name)
+        for label_name in (
+            getattr(label, "name", None) for label in getattr(pr, "labels", []) or []
+        )
+        if label_name
+    ]
+    signals.extend(detect_from_pr_labels(labels))
+
+    # 2. PR author
+    user = getattr(pr, "user", None)
+    if user is not None:
+        login = getattr(user, "login", None) or ""
+        user_type = getattr(user, "type", None)  # "Bot" | "User" | "Organization"
+        app_slug = getattr(user, "app_slug", None)
+        author_signal = detect_from_author(
+            AuthorInfo(login=login, user_type=user_type, app_slug=app_slug)
+        )
+        if author_signal is not None:
+            signals.append(author_signal)
+
+    # 3. Commit trailers from PR body
+    #    Squash/rebase merges often include commit messages in the PR body.
+    body = getattr(pr, "body", "") or ""
+    signals.extend(detect_from_commit_trailers(body))
+
+    # 4. Head branch name (weak signal)
+    head = getattr(pr, "head", None)
+    head_ref = getattr(head, "ref", None) if head is not None else None
+    if head_ref:
+        branch_signal = detect_from_branch_name(str(head_ref))
+        if branch_signal is not None:
+            signals.append(branch_signal)
+
+    # 5. PR body text (keyword matching — weak signal)
+    #    Only run if body analysis hasn't already fired a trailer signal
+    #    from the same body text (avoids double-counting the same body).
+    trailer_fired = any(
+        s.source.value == "commit_trailer" for s in signals
+    )
+    if not trailer_fired and body:
+        body_signal = detect_from_pr_body(body)
+        if body_signal is not None:
+            signals.append(body_signal)
+
+    return signals

@@ -171,6 +171,14 @@ def run_work_items_sync_job(
         reopen_events: list[Any] = []
         interactions: list[Any] = []
         sprints: list[Any] = []
+        # AI attribution records collected across all provider batches.
+        # Populated when providers emit attribution signals (GitHub PRs).
+        # Written to sink via write_ai_attribution() at end of sync loop.
+        # NOTE: The legacy fetch_github_work_items() path used below for GitHub
+        # does not yet return attribution records. Full attribution flow for GitHub
+        # requires refactoring the GitHub sync to use GitHubProvider.iter_ingest()
+        # per discovered repo. See CHAOS-1580 follow-up.
+        ai_attributions: list[Any] = []
 
         if "jira" in provider_set:
             (
@@ -258,6 +266,9 @@ def run_work_items_sync_job(
                 reopen_events.extend(batch.reopen_events)
                 interactions.extend(batch.interactions)
                 sprints.extend(batch.sprints)
+                # Collect any AI attribution records in the batch.
+                if hasattr(batch, "ai_attributions"):
+                    ai_attributions.extend(batch.ai_attributions)
                 fetched_items += len(batch.work_items)
                 fetched_transitions += len(batch.status_transitions)
                 fetched_sprints += len(batch.sprints)
@@ -327,6 +338,14 @@ def run_work_items_sync_job(
                 s.write_work_item_interactions(interactions)
             if sprints and hasattr(s, "write_sprints"):
                 s.write_sprints(sprints)
+            # AI attribution records — gated with hasattr so this is a no-op
+            # until CHAOS-1579 (storage-worker) lands write_ai_attribution.
+            if ai_attributions and hasattr(s, "write_ai_attribution"):
+                logger.info(
+                    "Writing %d AI attribution records to %s",
+                    len(ai_attributions), type(s).__name__,
+                )
+                s.write_ai_attribution(ai_attributions)
 
         for d in days:
             wi_metrics, wi_user_metrics, wi_cycle_times = (

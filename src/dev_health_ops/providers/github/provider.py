@@ -10,6 +10,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from datetime import datetime, timezone
+
+from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -31,7 +34,6 @@ from dev_health_ops.providers.github.client import (
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.utils import env_flag as _env_flag
 from dev_health_ops.providers.utils import env_int
-
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +88,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
         """
         from dev_health_ops.providers.github.normalize import (
             detect_github_reopen_events,
+            detect_pr_attributions,
             enrich_work_item_with_priority,
             extract_github_dependencies,
             github_comment_to_interaction_event,
@@ -93,6 +96,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             github_milestone_to_sprint,
             github_pr_to_work_item,
         )
+
 
         # ctx.repo is already validated by _validate_ctx() in the base's ingest()
         assert ctx.repo is not None  # for type checker
@@ -104,7 +108,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
         reopen_events: list[WorkItemReopenEvent] = []
         interactions: list[WorkItemInteractionEvent] = []
         sprints: list[Sprint] = []
-
+        ai_attributions: list[AIAttributionRecord] = []
         include_prs = _env_flag("GITHUB_INCLUDE_PRS", True)
         fetch_comments = _env_flag("GITHUB_FETCH_COMMENTS", True)
         fetch_milestones = _env_flag("GITHUB_FETCH_MILESTONES", True)
@@ -288,6 +292,38 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                         )
                     )
 
+                    # Detect AI attribution signals for this PR.
+                    # Each signal is converted to a full AIAttributionRecord
+                    # using subject context from this ingestion pass.
+                    # org_id is not yet available in the provider layer;
+                    # use a sentinel nil UUID — the orchestrator / sink
+                    # should override with the real org_id before persisting.
+                    # TODO (CHAOS-1580 follow-up): thread org_id through
+                    # IngestionContext so we can set it correctly here.
+                    from uuid import UUID as _UUID
+                    _nil_org = _UUID(int=0)
+                    pr_signals = detect_pr_attributions(pr=pr)
+                    if pr_signals:
+                        _observed = _to_utc(getattr(pr, "created_at", None))
+                        _observed = _observed or datetime.now(timezone.utc)
+                        for _sig in pr_signals:
+                            ai_attributions.append(
+                                AIAttributionRecord.from_signal(
+                                    _sig,
+                                    org_id=_nil_org,
+                                    provider="github",
+                                    subject_type="pull_request",
+                                    subject_id=wi.work_item_id,
+                                    repo_id=None,
+                                    observed_at=_observed,
+                                )
+                            )
+                        logger.debug(
+                            "GitHub: detected %d AI attribution signal(s) for %s",
+                            len(pr_signals),
+                            wi.work_item_id,
+                        )
+
                     # Fetch comments for interactions
                     if fetch_comments:
                         try:
@@ -322,6 +358,12 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             sum(1 for w in work_items if w.work_item_id.startswith("ghpr:")),
             repo_full_name,
         )
+        if ai_attributions:
+            logger.info(
+                "GitHub: emitting %d AI attribution record(s) from %s",
+                len(ai_attributions),
+                repo_full_name,
+            )
 
         return ProviderBatch(
             work_items=work_items,
@@ -330,4 +372,5 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             interactions=interactions,
             sprints=sprints,
             reopen_events=reopen_events,
+            ai_attributions=ai_attributions,
         )

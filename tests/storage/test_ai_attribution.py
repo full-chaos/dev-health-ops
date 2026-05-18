@@ -20,8 +20,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from dev_health_ops.metrics.sinks.clickhouse.ai_attribution import (
-    AIAttributionMixin,
     _COLUMNS,
+    AIAttributionMixin,
     _to_row,
 )
 from dev_health_ops.models.ai_attribution import (

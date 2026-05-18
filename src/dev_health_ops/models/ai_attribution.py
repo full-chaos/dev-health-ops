@@ -20,7 +20,6 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID, uuid4
 
-
 # ---------------------------------------------------------------------------
 # Enumerations
 # ---------------------------------------------------------------------------
@@ -142,7 +141,7 @@ class AIAttributionRecord:
         subject_id: str,
         repo_id: UUID | None,
         observed_at: datetime,
-    ) -> "AIAttributionRecord":
+    ) -> AIAttributionRecord:
         """Promote a detection signal to a full persisted record."""
         return cls(
             org_id=org_id,

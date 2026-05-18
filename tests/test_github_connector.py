@@ -194,9 +194,10 @@ class TestGitHubConnectorRepositories:
 
 
 def test_get_pull_request_reviews_uses_graphql_pagination() -> None:
-    with patch("dev_health_ops.connectors.github.Github"), patch(
-        "dev_health_ops.connectors.github.GitHubGraphQLClient"
-    ) as graphql_cls:
+    with (
+        patch("dev_health_ops.connectors.github.Github"),
+        patch("dev_health_ops.connectors.github.GitHubGraphQLClient") as graphql_cls,
+    ):
         graphql = graphql_cls.return_value
         graphql.query.side_effect = [
             {

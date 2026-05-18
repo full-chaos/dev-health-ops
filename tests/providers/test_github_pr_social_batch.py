@@ -11,9 +11,12 @@ from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
 
 def _client() -> tuple[GitHubWorkClient, MagicMock, MagicMock]:
     gate = MagicMock()
-    with patch("github.Github"), patch(
-        "dev_health_ops.providers.github.client.GitHubGraphQLClient"
-    ) as graphql_cls:
+    with (
+        patch("github.Github"),
+        patch(
+            "dev_health_ops.providers.github.client.GitHubGraphQLClient"
+        ) as graphql_cls,
+    ):
         client = GitHubWorkClient(auth=GitHubAuth(token="token"), gate=gate)
     return client, graphql_cls.return_value, gate
 
@@ -129,14 +132,16 @@ def test_batched_pr_social_data_paginates_nested_connections() -> None:
     ]
 
     payload = next(
-        iter(client.iter_pr_social_data_batch(
-            owner="owner",
-            repo="repo",
-            prs=[_pr(1)],
-            comments_limit=10,
-            review_comments_limit=10,
-            reviews_limit=10,
-        ))
+        iter(
+            client.iter_pr_social_data_batch(
+                owner="owner",
+                repo="repo",
+                prs=[_pr(1)],
+                comments_limit=10,
+                review_comments_limit=10,
+                reviews_limit=10,
+            )
+        )
     )
 
     assert [comment.id for comment in payload.issue_comments] == [1, 2]
@@ -181,9 +186,7 @@ def test_batched_pr_social_data_surfaces_graphql_errors() -> None:
 
 def test_batched_pr_social_data_penalizes_retry_after_on_rate_limit() -> None:
     client, graphql, gate = _client()
-    graphql.query.side_effect = RateLimitException(
-        "limited", retry_after_seconds=42.0
-    )
+    graphql.query.side_effect = RateLimitException("limited", retry_after_seconds=42.0)
 
     with pytest.raises(RateLimitException):
         list(client.iter_pr_comments_batch(owner="owner", repo="repo", prs=[_pr(1)]))

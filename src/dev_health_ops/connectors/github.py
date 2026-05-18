@@ -560,14 +560,20 @@ class GitHubConnector(GitConnector):
                 for r in connection.get("nodes") or []:
                     if not isinstance(r, dict):
                         continue
-                    author = r.get("author") if isinstance(r.get("author"), dict) else {}
+                    author = (
+                        r.get("author") if isinstance(r.get("author"), dict) else {}
+                    )
                     submitted_at = None
                     if r.get("submittedAt"):
                         submitted_at = datetime.fromisoformat(
                             str(r["submittedAt"]).replace("Z", "+00:00")
                         )
-                    raw_id = r.get("databaseId") or r.get("fullDatabaseId") or r.get("id")
-                    review_url = r.get("url") or f"{pr.get('url')}#pullrequestreview-{raw_id}"
+                    raw_id = (
+                        r.get("databaseId") or r.get("fullDatabaseId") or r.get("id")
+                    )
+                    review_url = (
+                        r.get("url") or f"{pr.get('url')}#pullrequestreview-{raw_id}"
+                    )
                     reviews.append(
                         PullRequestReview(
                             id=str(raw_id),

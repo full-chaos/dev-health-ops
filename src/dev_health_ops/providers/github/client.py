@@ -616,7 +616,10 @@ class GitHubWorkClient:
                 for node in self._connection_nodes(comments_connection)
             ]
             comments_cursor = self._connection_cursor(comments_connection)
-            while comments_cursor and self._remaining_limit(comments_limit, len(comments)) != 0:
+            while (
+                comments_cursor
+                and self._remaining_limit(comments_limit, len(comments)) != 0
+            ):
                 remaining = self._remaining_limit(comments_limit, len(comments))
                 more = self._fetch_pr_social_data_page(
                     owner=owner,
@@ -627,7 +630,9 @@ class GitHubWorkClient:
                     reviews_first=0,
                     comments_after=comments_cursor,
                 ).get(number, {})
-                more_connection = more.get("comments") if isinstance(more, dict) else None
+                more_connection = (
+                    more.get("comments") if isinstance(more, dict) else None
+                )
                 comments.extend(
                     self._comment_from_graphql(node)
                     for node in self._connection_nodes(more_connection)
@@ -637,8 +642,13 @@ class GitHubWorkClient:
             reviews_connection = pr_node.get("reviews")
             reviews_nodes = self._connection_nodes(reviews_connection)
             reviews_cursor = self._connection_cursor(reviews_connection)
-            while reviews_cursor and self._remaining_limit(reviews_limit, len(reviews_nodes)) != 0:
-                remaining_reviews = self._remaining_limit(reviews_limit, len(reviews_nodes))
+            while (
+                reviews_cursor
+                and self._remaining_limit(reviews_limit, len(reviews_nodes)) != 0
+            ):
+                remaining_reviews = self._remaining_limit(
+                    reviews_limit, len(reviews_nodes)
+                )
                 more = self._fetch_pr_social_data_page(
                     owner=owner,
                     repo=repo,
@@ -660,12 +670,17 @@ class GitHubWorkClient:
                     self._comment_from_graphql(node)
                     for node in self._connection_nodes(review_comment_connection)
                 )
-                review_comment_cursor = self._connection_cursor(review_comment_connection)
+                review_comment_cursor = self._connection_cursor(
+                    review_comment_connection
+                )
                 review_node_id = review_node.get("id")
                 while (
                     isinstance(review_node_id, str)
                     and review_comment_cursor
-                    and self._remaining_limit(review_comments_limit, len(review_comments)) != 0
+                    and self._remaining_limit(
+                        review_comments_limit, len(review_comments)
+                    )
+                    != 0
                 ):
                     remaining_comments = self._remaining_limit(
                         review_comments_limit, len(review_comments)
@@ -864,7 +879,9 @@ class GitHubWorkClient:
                     all_changes.extend(changes)
                     raw_changes_cursor = changes_page_info.get("endCursor")
                     changes_cursor = (
-                        raw_changes_cursor if isinstance(raw_changes_cursor, str) else None
+                        raw_changes_cursor
+                        if isinstance(raw_changes_cursor, str)
+                        else None
                     )
 
                     # Fetch remaining changes for this specific item

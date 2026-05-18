@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+import dev_health_ops.metrics.job_work_items as job
+from dev_health_ops.metrics.work_items import DiscoveredRepo
+from dev_health_ops.models.ai_attribution import AIAttributionRecord
+
+
+@dataclass(frozen=True)
+class _Classification:
+    investment_area: str = "Maintenance / Tech Debt"
+    project_stream: str = ""
+    confidence: float = 1.0
+    rule_id: str = "test"
+
+
+class _Classifier:
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+    def classify(self, _payload: object) -> _Classification:
+        return _Classification()
+
+
+class _FakeClickHouseSink:
+    def __init__(self, _dsn: str) -> None:
+        self.org_id = ""
+        self.work_items: list[object] = []
+        self.transitions: list[object] = []
+        self.dependencies: list[object] = []
+        self.reopen_events: list[object] = []
+        self.interactions: list[object] = []
+        self.sprints: list[object] = []
+        self.ai_attributions: list[AIAttributionRecord] = []
+        self.metric_rows: list[object] = []
+
+    def ensure_tables(self) -> None:
+        return None
+
+    def query_dicts(
+        self, _query: str, _params: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return []
+
+    def write_work_items(self, rows: list[object]) -> None:
+        self.work_items.extend(rows)
+
+    def write_work_item_transitions(self, rows: list[object]) -> None:
+        self.transitions.extend(rows)
+
+    def write_work_item_dependencies(self, rows: list[object]) -> None:
+        self.dependencies.extend(rows)
+
+    def write_work_item_reopen_events(self, rows: list[object]) -> None:
+        self.reopen_events.extend(rows)
+
+    def write_work_item_interactions(self, rows: list[object]) -> None:
+        self.interactions.extend(rows)
+
+    def write_sprints(self, rows: list[object]) -> None:
+        self.sprints.extend(rows)
+
+    def write_ai_attribution(self, rows: list[AIAttributionRecord]) -> None:
+        self.ai_attributions.extend(rows)
+
+    def write_work_item_metrics(self, rows: list[object]) -> None:
+        self.metric_rows.extend(rows)
+
+    def write_work_item_user_metrics(self, rows: list[object]) -> None:
+        self.metric_rows.extend(rows)
+
+    def write_work_item_cycle_times(self, rows: list[object]) -> None:
+        self.metric_rows.extend(rows)
+
+    def write_work_item_state_durations(self, rows: list[object]) -> None:
+        self.metric_rows.extend(rows)
+
+    def write_issue_type_metrics(self, rows: list[object]) -> None:
+        self.metric_rows.extend(rows)
+
+    def write_investment_classifications(self, rows: list[object]) -> None:
+        self.metric_rows.extend(rows)
+
+    def write_investment_metrics(self, rows: list[object]) -> None:
+        self.metric_rows.extend(rows)
+
+    def close(self) -> None:
+        return None
+
+
+def _label(name: str) -> SimpleNamespace:
+    return SimpleNamespace(name=name)
+
+
+def _user(login: str, *, user_type: str = "User") -> SimpleNamespace:
+    return SimpleNamespace(
+        login=login,
+        email=f"{login}@example.com",
+        name=login,
+        type=user_type,
+        app_slug=None,
+    )
+
+
+def _issue(number: int) -> SimpleNamespace:
+    created = datetime(2026, 5, 1, 12, tzinfo=timezone.utc)
+    return SimpleNamespace(
+        number=number,
+        title=f"Issue {number}",
+        state="open",
+        body="normal non-AI work",
+        created_at=created,
+        updated_at=created,
+        closed_at=None,
+        html_url=f"https://github.com/fullchaos/dev-health/issues/{number}",
+        pull_request=None,
+        labels=[],
+        assignees=[],
+        user=_user("human-author"),
+    )
+
+
+def _pr(
+    number: int,
+    *,
+    labels: list[str] | None = None,
+    author: str = "human-author",
+    body: str = "normal PR",
+) -> SimpleNamespace:
+    created = datetime(2026, 5, 1, 13, tzinfo=timezone.utc)
+    return SimpleNamespace(
+        number=number,
+        title=f"PR {number}",
+        state="open",
+        merged=False,
+        draft=False,
+        body=body,
+        created_at=created,
+        updated_at=created,
+        closed_at=None,
+        merged_at=None,
+        html_url=f"https://github.com/fullchaos/dev-health/pull/{number}",
+        labels=[_label(name) for name in labels or []],
+        assignees=[],
+        user=_user(author, user_type="Bot" if author.endswith("[bot]") else "User"),
+        head=SimpleNamespace(ref="feature/human-work"),
+    )
+
+
+@pytest.mark.usefixtures("monkeypatch")
+def test_github_work_items_sync_writes_ai_attribution_with_org_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    org_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    sink = _FakeClickHouseSink("clickhouse://test")
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
+    monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
+    monkeypatch.setattr(
+        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
+    )
+    monkeypatch.setattr(
+        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(job, "parse_github_projects_v2_env", lambda: [])
+    monkeypatch.setattr(
+        job,
+        "_discover_repos",
+        lambda **_kwargs: [
+            DiscoveredRepo(
+                repo_id=repo_id,
+                full_name="fullchaos/dev-health",
+                source="github",
+                settings={},
+            )
+        ],
+    )
+
+    client = MagicMock()
+    client.iter_repo_milestones.return_value = []
+    client.iter_issues.return_value = [_issue(10)]
+    client.iter_pull_requests.return_value = [
+        _pr(11, labels=["ai-assisted"]),
+        _pr(12, author="claude-code[bot]"),
+        _pr(13, body="Implementation details\n\nAI-Assisted-By: Claude Code"),
+        _pr(14, body="Reviewed and implemented by a human."),
+    ]
+    client.iter_issue_events.return_value = []
+    client.iter_issue_comments.return_value = []
+    client.iter_pr_comments_batch.return_value = []
+
+    monkeypatch.setattr(
+        "dev_health_ops.providers.github.client.GitHubWorkClient.from_env",
+        lambda: client,
+    )
+
+    job.run_work_items_sync_job(
+        db_url="clickhouse://test",
+        day=date(2026, 5, 2),
+        backfill_days=1,
+        provider="github",
+        org_id=str(org_id),
+    )
+
+    assert sink.ai_attributions
+    assert {row.org_id for row in sink.ai_attributions} == {org_id}
+    assert {row.repo_id for row in sink.ai_attributions} == {repo_id}
+    assert {str(row.source) for row in sink.ai_attributions} >= {
+        "pr_label",
+        "bot_author",
+        "commit_trailer",
+    }
+
+    work_item_ids = {getattr(row, "work_item_id", "") for row in sink.work_items}
+    assert "gh:fullchaos/dev-health#10" in work_item_ids
+    assert "ghpr:fullchaos/dev-health#14" in work_item_ids
+    assert not any(
+        row.subject_id == "ghpr:fullchaos/dev-health#14" for row in sink.ai_attributions
+    )

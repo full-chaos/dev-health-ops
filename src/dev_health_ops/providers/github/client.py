@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol, TypedDict, TypeVar
 
 from dev_health_ops.connectors.utils.github_app import GitHubAppTokenProvider
@@ -24,6 +25,22 @@ logger = logging.getLogger(__name__)
 _TItem = TypeVar("_TItem")
 
 
+def _parse_github_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 class _GitHubLabelLike(Protocol):
     name: object
 
@@ -32,6 +49,39 @@ class _GitHubUserLike(Protocol):
     email: object
     login: object
     name: object
+
+
+@dataclass
+class GitHubGraphQLUser:
+    login: object = None
+    email: object = None
+    name: object = None
+
+
+@dataclass
+class GitHubGraphQLComment:
+    id: object
+    created_at: object
+    user: object
+    body: object
+
+
+@dataclass
+class GitHubGraphQLReview:
+    id: object
+    reviewer: object
+    state: object
+    submitted_at: object
+    body: object
+    url: object
+
+
+@dataclass(frozen=True)
+class BatchedPRPayload:
+    number: int
+    issue_comments: tuple[GitHubGraphQLComment, ...]
+    review_comments: tuple[GitHubGraphQLComment, ...]
+    reviews: tuple[GitHubGraphQLReview, ...]
 
 
 class _GitHubEventLike(Protocol):
@@ -294,6 +344,372 @@ class GitHubWorkClient:
         """
         yield from self._iter_with_limit(pr.get_review_comments(), limit=limit)
 
+    def iter_pr_social_data_batch(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        prs: Sequence[_GitHubPullRequestLike],
+        comments_limit: int | None = None,
+        review_comments_limit: int | None = None,
+        reviews_limit: int | None = None,
+        batch_size: int = 50,
+    ) -> Iterable[BatchedPRPayload]:
+        """Fetch PR issue comments, reviews, and review comments in GraphQL batches.
+
+        The query uses ``repository.pullRequest(number: ...)`` aliases instead of
+        ``repository.pullRequests`` pagination because callers already iterate PRs
+        through PyGithub and pass concrete PR objects. Aliases let us preserve that
+        iterator contract while collapsing N per-PR REST calls into one GraphQL
+        query per up-to-50 PRs. Nested connections are page-limited to control
+        GraphQL cost and are paginated per PR only when the first page indicates
+        more data.
+        """
+        numbers: list[int] = []
+        for pr in prs:
+            number = int(getattr(pr, "number", 0) or 0)
+            if number > 0:
+                numbers.append(number)
+
+        if not numbers:
+            return
+
+        page_size = max(1, min(50, int(batch_size)))
+        for index in range(0, len(numbers), page_size):
+            chunk = numbers[index : index + page_size]
+            initial = self._fetch_pr_social_data_page(
+                owner=owner,
+                repo=repo,
+                numbers=chunk,
+                comments_first=self._connection_first(comments_limit),
+                review_comments_first=self._connection_first(review_comments_limit),
+                reviews_first=self._connection_first(reviews_limit),
+            )
+            yield from self._complete_pr_social_payloads(
+                owner=owner,
+                repo=repo,
+                initial=initial,
+                comments_limit=comments_limit,
+                review_comments_limit=review_comments_limit,
+                reviews_limit=reviews_limit,
+            )
+
+    def iter_pr_comments_batch(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        prs: Sequence[_GitHubPullRequestLike],
+        limit: int | None = None,
+    ) -> Iterable[tuple[int, tuple[GitHubGraphQLComment, ...]]]:
+        """Return issue-style PR comments keyed by PR number."""
+        for payload in self.iter_pr_social_data_batch(
+            owner=owner,
+            repo=repo,
+            prs=prs,
+            comments_limit=limit,
+            review_comments_limit=0,
+            reviews_limit=0,
+        ):
+            yield payload.number, payload.issue_comments
+
+    def iter_pr_review_comments_batch(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        prs: Sequence[_GitHubPullRequestLike],
+        limit: int | None = None,
+    ) -> Iterable[tuple[int, tuple[GitHubGraphQLComment, ...]]]:
+        """Return review comments keyed by PR number."""
+        for payload in self.iter_pr_social_data_batch(
+            owner=owner,
+            repo=repo,
+            prs=prs,
+            comments_limit=0,
+            review_comments_limit=limit,
+            reviews_limit=limit,
+        ):
+            yield payload.number, payload.review_comments
+
+    def iter_pr_reviews_batch(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        prs: Sequence[_GitHubPullRequestLike],
+        limit: int | None = None,
+    ) -> Iterable[tuple[int, tuple[GitHubGraphQLReview, ...]]]:
+        """Return reviews keyed by PR number."""
+        for payload in self.iter_pr_social_data_batch(
+            owner=owner,
+            repo=repo,
+            prs=prs,
+            comments_limit=0,
+            review_comments_limit=0,
+            reviews_limit=limit,
+        ):
+            yield payload.number, payload.reviews
+
+    @staticmethod
+    def _connection_first(limit: int | None) -> int:
+        if limit is not None and int(limit) <= 0:
+            return 0
+        if limit is None:
+            return 100
+        return max(1, min(100, int(limit)))
+
+    @staticmethod
+    def _remaining_limit(limit: int | None, current_count: int) -> int | None:
+        if limit is None:
+            return None
+        return max(0, int(limit) - current_count)
+
+    @staticmethod
+    def _connection_nodes(connection: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not connection:
+            return []
+        nodes = connection.get("nodes") or []
+        return [node for node in nodes if isinstance(node, dict)]
+
+    @staticmethod
+    def _connection_cursor(connection: dict[str, Any] | None) -> str | None:
+        page_info = (connection or {}).get("pageInfo") or {}
+        if not isinstance(page_info, dict) or not page_info.get("hasNextPage"):
+            return None
+        cursor = page_info.get("endCursor")
+        return cursor if isinstance(cursor, str) and cursor else None
+
+    @staticmethod
+    def _graphql_arg(value: object) -> str:
+        return json.dumps(value)
+
+    @classmethod
+    def _comment_from_graphql(cls, node: dict[str, Any]) -> GitHubGraphQLComment:
+        author = node.get("author") if isinstance(node.get("author"), dict) else {}
+        user = GitHubGraphQLUser(login=(author or {}).get("login"))
+        raw_id = node.get("databaseId") or node.get("fullDatabaseId") or node.get("id")
+        return GitHubGraphQLComment(
+            id=raw_id,
+            created_at=_parse_github_datetime(node.get("createdAt")),
+            user=user,
+            body=node.get("body") or "",
+        )
+
+    @classmethod
+    def _review_from_graphql(cls, node: dict[str, Any]) -> GitHubGraphQLReview:
+        author = node.get("author") if isinstance(node.get("author"), dict) else {}
+        raw_id = node.get("databaseId") or node.get("fullDatabaseId") or node.get("id")
+        return GitHubGraphQLReview(
+            id=raw_id,
+            reviewer=(author or {}).get("login") or "Unknown",
+            state=node.get("state") or "",
+            submitted_at=_parse_github_datetime(node.get("submittedAt")),
+            body=node.get("body") or "",
+            url=node.get("url"),
+        )
+
+    def _fetch_pr_social_data_page(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        numbers: Sequence[int],
+        comments_first: int,
+        review_comments_first: int,
+        reviews_first: int,
+        comments_after: str | None = None,
+        reviews_after: str | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        aliases: list[str] = []
+        for idx, number in enumerate(numbers):
+            fields = ["number"]
+            if comments_first > 0:
+                comments_after_arg = self._graphql_arg(comments_after)
+                fields.append(
+                    f"comments(first: {comments_first}, after: {comments_after_arg}, orderBy: {{field: UPDATED_AT, direction: ASC}}) "
+                    "{ nodes { id databaseId fullDatabaseId body createdAt author { login } } "
+                    "pageInfo { hasNextPage endCursor } }"
+                )
+            if reviews_first > 0:
+                review_fields = [
+                    "id databaseId fullDatabaseId body state submittedAt url author { login }"
+                ]
+                if review_comments_first > 0:
+                    review_fields.append(
+                        f"comments(first: {review_comments_first}) "
+                        "{ nodes { id databaseId fullDatabaseId body createdAt author { login } } "
+                        "pageInfo { hasNextPage endCursor } }"
+                    )
+                reviews_after_arg = self._graphql_arg(reviews_after)
+                fields.append(
+                    f"reviews(first: {reviews_first}, after: {reviews_after_arg}) "
+                    f"{{ nodes {{ {' '.join(review_fields)} }} pageInfo {{ hasNextPage endCursor }} }}"
+                )
+            aliases.append(
+                f"pr{idx}: pullRequest(number: {int(number)}) {{ {' '.join(fields)} }}"
+            )
+
+        aliases_query = "\n".join(aliases)
+        query = f"""
+        query($owner: String!, $repo: String!) {{
+          repository(owner: $owner, name: $repo) {{
+            {aliases_query}
+          }}
+        }}
+        """
+        with gate_call(self.gate):
+            data = self.graphql.query(
+                query,
+                variables={"owner": owner, "repo": repo},
+            )
+        repository = (data or {}).get("repository") or {}
+        result: dict[int, dict[str, Any]] = {}
+        for idx, number in enumerate(numbers):
+            pr_node = repository.get(f"pr{idx}") or {}
+            if isinstance(pr_node, dict):
+                result[int(number)] = pr_node
+        return result
+
+    def _fetch_review_comments_page(
+        self,
+        *,
+        review_id: str,
+        first: int,
+        after: str | None,
+    ) -> dict[str, Any] | None:
+        query = """
+        query($reviewId: ID!, $first: Int!, $after: String) {
+          node(id: $reviewId) {
+            ... on PullRequestReview {
+              comments(first: $first, after: $after) {
+                nodes { id databaseId fullDatabaseId body createdAt author { login } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        }
+        """
+        with gate_call(self.gate):
+            data = self.graphql.query(
+                query,
+                variables={"reviewId": review_id, "first": first, "after": after},
+            )
+        node = (data or {}).get("node") or {}
+        comments = node.get("comments") if isinstance(node, dict) else None
+        return comments if isinstance(comments, dict) else None
+
+    def _complete_pr_social_payloads(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        initial: dict[int, dict[str, Any]],
+        comments_limit: int | None,
+        review_comments_limit: int | None,
+        reviews_limit: int | None,
+    ) -> Iterable[BatchedPRPayload]:
+        for number, pr_node in initial.items():
+            comments_connection = pr_node.get("comments")
+            comments = [
+                self._comment_from_graphql(node)
+                for node in self._connection_nodes(comments_connection)
+            ]
+            comments_cursor = self._connection_cursor(comments_connection)
+            while (
+                comments_cursor
+                and self._remaining_limit(comments_limit, len(comments)) != 0
+            ):
+                remaining = self._remaining_limit(comments_limit, len(comments))
+                more = self._fetch_pr_social_data_page(
+                    owner=owner,
+                    repo=repo,
+                    numbers=[number],
+                    comments_first=self._connection_first(remaining),
+                    review_comments_first=0,
+                    reviews_first=0,
+                    comments_after=comments_cursor,
+                ).get(number, {})
+                more_connection = (
+                    more.get("comments") if isinstance(more, dict) else None
+                )
+                comments.extend(
+                    self._comment_from_graphql(node)
+                    for node in self._connection_nodes(more_connection)
+                )
+                comments_cursor = self._connection_cursor(more_connection)
+
+            reviews_connection = pr_node.get("reviews")
+            reviews_nodes = self._connection_nodes(reviews_connection)
+            reviews_cursor = self._connection_cursor(reviews_connection)
+            while (
+                reviews_cursor
+                and self._remaining_limit(reviews_limit, len(reviews_nodes)) != 0
+            ):
+                remaining_reviews = self._remaining_limit(
+                    reviews_limit, len(reviews_nodes)
+                )
+                more = self._fetch_pr_social_data_page(
+                    owner=owner,
+                    repo=repo,
+                    numbers=[number],
+                    comments_first=0,
+                    review_comments_first=self._connection_first(review_comments_limit),
+                    reviews_first=self._connection_first(remaining_reviews),
+                    reviews_after=reviews_cursor,
+                ).get(number, {})
+                more_reviews = more.get("reviews") if isinstance(more, dict) else None
+                reviews_nodes.extend(self._connection_nodes(more_reviews))
+                reviews_cursor = self._connection_cursor(more_reviews)
+
+            reviews = [self._review_from_graphql(node) for node in reviews_nodes]
+            review_comments: list[GitHubGraphQLComment] = []
+            for review_node in reviews_nodes:
+                review_comment_connection = review_node.get("comments")
+                review_comments.extend(
+                    self._comment_from_graphql(node)
+                    for node in self._connection_nodes(review_comment_connection)
+                )
+                review_comment_cursor = self._connection_cursor(
+                    review_comment_connection
+                )
+                review_node_id = review_node.get("id")
+                while (
+                    isinstance(review_node_id, str)
+                    and review_comment_cursor
+                    and self._remaining_limit(
+                        review_comments_limit, len(review_comments)
+                    )
+                    != 0
+                ):
+                    remaining_comments = self._remaining_limit(
+                        review_comments_limit, len(review_comments)
+                    )
+                    more_comments = self._fetch_review_comments_page(
+                        review_id=review_node_id,
+                        first=self._connection_first(remaining_comments),
+                        after=review_comment_cursor,
+                    )
+                    review_comments.extend(
+                        self._comment_from_graphql(node)
+                        for node in self._connection_nodes(more_comments)
+                    )
+                    review_comment_cursor = self._connection_cursor(more_comments)
+
+            if comments_limit is not None:
+                comments = comments[: int(comments_limit)]
+            if reviews_limit is not None:
+                reviews = reviews[: int(reviews_limit)]
+            if review_comments_limit is not None:
+                review_comments = review_comments[: int(review_comments_limit)]
+
+            yield BatchedPRPayload(
+                number=number,
+                issue_comments=tuple(comments),
+                review_comments=tuple(review_comments),
+                reviews=tuple(reviews),
+            )
+
     def iter_repo_milestones(
         self,
         *,
@@ -461,13 +877,18 @@ class GitHubWorkClient:
                 if changes_page_info.get("hasNextPage"):
                     all_changes: list[dict[str, object]] = []
                     all_changes.extend(changes)
-                    changes_cursor = changes_page_info.get("endCursor")
+                    raw_changes_cursor = changes_page_info.get("endCursor")
+                    changes_cursor = (
+                        raw_changes_cursor
+                        if isinstance(raw_changes_cursor, str)
+                        else None
+                    )
 
                     # Fetch remaining changes for this specific item
                     while changes_cursor:
                         with gate_call(self.gate):
                             more_changes = self._fetch_item_changes(
-                                item_id=item.get("id"),
+                                item_id=str(item.get("id")),
                                 after=changes_cursor,
                             )
 
@@ -476,7 +897,12 @@ class GitHubWorkClient:
 
                         all_changes.extend(more_changes.get("nodes") or [])
                         changes_page_info = more_changes.get("pageInfo") or {}
-                        changes_cursor = changes_page_info.get("endCursor")
+                        raw_changes_cursor = changes_page_info.get("endCursor")
+                        changes_cursor = (
+                            raw_changes_cursor
+                            if isinstance(raw_changes_cursor, str)
+                            else None
+                        )
 
                         if not changes_page_info.get("hasNextPage"):
                             break

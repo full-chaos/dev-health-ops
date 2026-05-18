@@ -521,20 +521,76 @@ class GitHubConnector(GitConnector):
         :return: List of PullRequestReview objects.
         """
         try:
-            gh_repo = self.github.get_repo(f"{owner}/{repo}")
-            gh_pr = gh_repo.get_pull(number)
-            reviews = []
-            for r in gh_pr.get_reviews():
-                reviews.append(
-                    PullRequestReview(
-                        id=str(r.id),
-                        reviewer=r.user.login if r.user else "Unknown",
-                        state=r.state,
-                        submitted_at=r.submitted_at,
-                        body=r.body,
-                        url=gh_pr.html_url + f"#pullrequestreview-{r.id}",
-                    )
+            query = """
+            query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  url
+                  reviews(first: 100, after: $after) {
+                    nodes {
+                      id
+                      databaseId
+                      fullDatabaseId
+                      state
+                      submittedAt
+                      body
+                      url
+                      author { login }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """
+            reviews: list[PullRequestReview] = []
+            after: str | None = None
+            while True:
+                data = self.graphql.query(
+                    query,
+                    variables={
+                        "owner": owner,
+                        "repo": repo,
+                        "number": int(number),
+                        "after": after,
+                    },
                 )
+                pr = ((data or {}).get("repository") or {}).get("pullRequest") or {}
+                connection = pr.get("reviews") or {}
+                for r in connection.get("nodes") or []:
+                    if not isinstance(r, dict):
+                        continue
+                    author = (
+                        r.get("author") if isinstance(r.get("author"), dict) else {}
+                    )
+                    submitted_at = None
+                    if r.get("submittedAt"):
+                        submitted_at = datetime.fromisoformat(
+                            str(r["submittedAt"]).replace("Z", "+00:00")
+                        )
+                    raw_id = (
+                        r.get("databaseId") or r.get("fullDatabaseId") or r.get("id")
+                    )
+                    review_url = (
+                        r.get("url") or f"{pr.get('url')}#pullrequestreview-{raw_id}"
+                    )
+                    reviews.append(
+                        PullRequestReview(
+                            id=str(raw_id),
+                            reviewer=(author or {}).get("login") or "Unknown",
+                            state=str(r.get("state") or ""),
+                            submitted_at=submitted_at,
+                            body=r.get("body"),
+                            url=str(review_url) if review_url else None,
+                        )
+                    )
+                page_info = connection.get("pageInfo") or {}
+                if not page_info.get("hasNextPage"):
+                    break
+                cursor = page_info.get("endCursor")
+                if not isinstance(cursor, str) or not cursor:
+                    break
+                after = cursor
             return reviews
         except Exception as e:
             self._handle_github_exception(e)

@@ -6,6 +6,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
 from dev_health_ops.metrics.loaders.base import (
     DataLoader,
     naive_utc,
@@ -44,7 +45,7 @@ async def _clickhouse_query_dicts(
     return await query_dicts(client, query, params)
 
 
-class ClickHouseDataLoader(DataLoader):
+class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
     """DataLoader implementation for ClickHouse backend.
 
     Args:

@@ -15,12 +15,14 @@ each responsible for one table family:
   InvestmentMixin       — investment classifications/metrics, work-unit investments
   WorkGraphMixin        — work graph edges, work items, git/repo/file metrics, forecasts
   AIAttributionMixin    — AI attribution records (ai_attribution table)
+  AIImpactMixin         — AI workflow impact daily rollups
 """
 
 from __future__ import annotations
 
 from dev_health_ops.metrics.sinks.clickhouse.ai_attribution import AIAttributionMixin
 from dev_health_ops.metrics.sinks.clickhouse.ai_governance import AIGovernanceMixin
+from dev_health_ops.metrics.sinks.clickhouse.ai_impact import AIImpactMixin
 from dev_health_ops.metrics.sinks.clickhouse.ai_workflow import AIWorkflowMixin
 from dev_health_ops.metrics.sinks.clickhouse.ci import CIMixin
 from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
@@ -36,6 +38,7 @@ class ClickHouseMetricsSink(
     AIGovernanceMixin,
     AIWorkflowMixin,
     AIAttributionMixin,
+    AIImpactMixin,
     CIMixin,
     DoraMixin,
     WellbeingMixin,

@@ -49,11 +49,65 @@ class PullRequestReviewRow(TypedDict):
     state: str  # APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED|...
 
 
+class AIPullRequestAttributionRow(TypedDict):
+    repo_id: uuid.UUID
+    number: int
+    kind: str | None
+    work_type: str | None
+    team_id: str | None
+
+
 class PullRequestCommentRow(TypedDict):
     repo_id: uuid.UUID
     number: int
     commenter: str
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class AIOperatingLeverageComponents:
+    prs_component: float
+    cycle_time_component: float | None
+    review_component: float | None
+    rework_component: float | None
+    test_component: float | None
+    incident_component: float | None
+
+
+@dataclass(frozen=True)
+class AIImpactMetricsDailyRecord:
+    org_id: str
+    team_id: str | None
+    repo_id: uuid.UUID
+    work_type: str
+    day: date
+    attribution_bucket: str
+    prs_total: int
+    prs_merged: int
+    ai_assisted_prs: int
+    agent_created_prs: int
+    human_prs: int
+    unknown_prs: int
+    ai_assisted_pr_ratio: float | None
+    agent_created_pr_count: int
+    cycle_time_avg_hours: float | None
+    baseline_cycle_time_avg_hours: float | None
+    ai_cycle_time_delta_hours: float | None
+    reviews_per_pr: float | None
+    baseline_reviews_per_pr: float | None
+    ai_review_amplification: float | None
+    changes_requested_per_pr: float | None
+    rework_prs: int
+    rework_drag_rate: float | None
+    followup_commits_count: int
+    revert_prs: int
+    revert_rate: float | None
+    incidents_count: int
+    incident_drag_rate: float | None
+    test_gap_prs: int
+    test_gap_rate: float | None
+    leverage: AIOperatingLeverageComponents
+    computed_at: datetime
 
 
 class PipelineRunRow(TypedDict):

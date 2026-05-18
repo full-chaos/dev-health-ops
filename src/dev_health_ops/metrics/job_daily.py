@@ -12,6 +12,7 @@ from typing import Any
 
 from dev_health_ops.audit.ai_governance.loaders import build_governance_rows_for_day
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.metrics.ai_impact import compute_ai_impact_metrics_daily
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
@@ -426,6 +427,26 @@ async def run_daily_metrics_job(
         ai_policy_events, ai_governance_coverage = build_governance_rows_for_day(
             primary_sink, org_id=org_id, day=d
         )
+        ai_attribution_rows = []
+        ai_loader: Any = loader
+        if hasattr(ai_loader, "load_ai_pr_attributions"):
+            ai_attribution_rows = await ai_loader.load_ai_pr_attributions(
+                start=start,
+                end=end,
+                repo_id=repo_id,
+            )
+        ai_impact_metrics = compute_ai_impact_metrics_daily(
+            day=d,
+            org_id=org_id,
+            pull_request_rows=pr_rows,
+            pull_request_review_rows=review_rows,
+            ai_attribution_rows=ai_attribution_rows,
+            incident_rows=incident_rows,
+            commit_stat_rows=commit_rows,
+            computed_at=computed_at,
+            team_resolver=team_resolver,
+            repo_names_by_id=repo_names_by_id,
+        )
 
         for s in sinks:
             s.write_repo_metrics(result.repo_metrics)
@@ -448,6 +469,8 @@ async def run_daily_metrics_job(
             s.write_incident_metrics(incident_metrics)
             s.write_ai_policy_events(ai_policy_events)
             s.write_ai_governance_coverage_daily(ai_governance_coverage)
+            if ai_impact_metrics:
+                s.write_ai_impact_metrics(ai_impact_metrics)
             if all_file_metrics:
                 s.write_file_metrics(all_file_metrics)
 

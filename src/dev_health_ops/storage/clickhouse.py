@@ -152,6 +152,15 @@ class ClickHouseStore:
                             stmt = stmt.strip()
                             if not stmt:
                                 continue
+                            # Skip comment-only chunks (created when a stray
+                            # ';' appears inside a '--' comment block).
+                            code_lines = [
+                                line
+                                for line in stmt.splitlines()
+                                if line.strip() and not line.strip().startswith("--")
+                            ]
+                            if not code_lines:
+                                continue
                             await asyncio.to_thread(self.client.command, stmt)
                     except Exception as e:
                         logger.critical("Migration failed: %s\nError: %s", path.name, e)

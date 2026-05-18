@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar
 
 if TYPE_CHECKING:
+    from dev_health_ops.models.ai_attribution import AIAttributionRecord
     from dev_health_ops.models.work_items import (
         Sprint,
         WorkItem,
@@ -90,6 +91,11 @@ class ProviderBatch:
     sprints: list[Sprint] = field(default_factory=list)
     reopen_events: list[WorkItemReopenEvent] = field(default_factory=list)
     worklogs: list[Worklog] = field(default_factory=list)
+    # AI attribution signals detected during provider normalization.
+    # Populated by providers that support AI detection (currently GitHub).
+    # Records are passed to the ClickHouse sink by the sync orchestrator.
+    # NOTE: storage-worker (CHAOS-1579) may add this field too — trivial merge.
+    ai_attributions: list[AIAttributionRecord] = field(default_factory=list)
 
 
 class Provider(ABC):

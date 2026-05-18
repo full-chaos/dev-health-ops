@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from dev_health_ops.audit.ai_governance.loaders import build_governance_rows_for_day
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
@@ -422,6 +423,9 @@ async def run_daily_metrics_job(
         incident_metrics = compute_incident_metrics_daily(
             day=d, incidents=incident_rows, computed_at=computed_at
         )
+        ai_policy_events, ai_governance_coverage = build_governance_rows_for_day(
+            primary_sink, org_id=org_id, day=d
+        )
 
         for s in sinks:
             s.write_repo_metrics(result.repo_metrics)
@@ -442,6 +446,8 @@ async def run_daily_metrics_job(
             s.write_testops_coverage_metrics(testops_coverage_metrics)
             s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
+            s.write_ai_policy_events(ai_policy_events)
+            s.write_ai_governance_coverage_daily(ai_governance_coverage)
             if all_file_metrics:
                 s.write_file_metrics(all_file_metrics)
 

@@ -163,7 +163,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                 wi, wi_transitions = github_issue_to_work_item(
                     issue=issue,
                     repo_full_name=repo_full_name,
-                    repo_id=None,
+                    repo_id=ctx.repo_id,
                     status_mapping=self.status_mapping,
                     identity=self.identity,
                     events=events,
@@ -260,7 +260,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     wi, wi_transitions = github_pr_to_work_item(
                         pr=pr,
                         repo_full_name=repo_full_name,
-                        repo_id=None,
+                        repo_id=ctx.repo_id,
                         status_mapping=self.status_mapping,
                         identity=self.identity,
                         events=events,
@@ -293,27 +293,23 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     # Detect AI attribution signals for this PR.
                     # Each signal is converted to a full AIAttributionRecord
                     # using subject context from this ingestion pass.
-                    # org_id is not yet available in the provider layer;
-                    # use a sentinel nil UUID — the orchestrator / sink
-                    # should override with the real org_id before persisting.
-                    # TODO (CHAOS-1580 follow-up): thread org_id through
-                    # IngestionContext so we can set it correctly here.
-                    from uuid import UUID as _UUID
-
-                    _nil_org = _UUID(int=0)
                     pr_signals = detect_pr_attributions(pr=pr)
                     if pr_signals:
+                        if ctx.org_id is None:
+                            raise ValueError(
+                                "GitHub AI attribution requires ctx.org_id"
+                            )
                         _observed = _to_utc(getattr(pr, "created_at", None))
                         _observed = _observed or datetime.now(timezone.utc)
                         for _sig in pr_signals:
                             ai_attributions.append(
                                 AIAttributionRecord.from_signal(
                                     _sig,
-                                    org_id=_nil_org,
+                                    org_id=ctx.org_id,
                                     provider="github",
                                     subject_type="pull_request",
                                     subject_id=wi.work_item_id,
-                                    repo_id=None,
+                                    repo_id=ctx.repo_id,
                                     observed_at=_observed,
                                 )
                             )

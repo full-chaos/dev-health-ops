@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar
+from uuid import UUID
 
 if TYPE_CHECKING:
     from dev_health_ops.models.ai_attribution import AIAttributionRecord
@@ -64,6 +65,8 @@ class IngestionContext:
     - window: time bounds for incremental sync
     - project_key: Jira project key (e.g. "ABC")
     - repo: GitHub/GitLab repo identifier (e.g. "owner/repo")
+    - repo_id: internal repository UUID for persisted analytics rows
+    - org_id: organization UUID for scoped analytics rows
     - group: GitLab group path
     - limit: optional max items to fetch (for testing)
     """
@@ -71,6 +74,8 @@ class IngestionContext:
     window: IngestionWindow
     project_key: str | None = None  # jira
     repo: str | None = None  # github/gitlab
+    repo_id: UUID | None = None
+    org_id: UUID | None = None
     group: str | None = None  # gitlab
     limit: int | None = None
 

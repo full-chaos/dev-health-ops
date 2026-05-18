@@ -8,8 +8,6 @@ the underlying ingestion behavior.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-
 from datetime import datetime, timezone
 
 from dev_health_ops.models.ai_attribution import AIAttributionRecord

@@ -45,7 +45,7 @@ class AIImpactClickHouseLoader:
             pr.number AS number,
             attr.kind AS kind,
             coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type,
-            CAST(NULL, 'Nullable(String)') AS team_id
+            CAST('', 'String') AS team_id
         FROM git_pull_requests AS pr
         INNER JOIN work_graph_issue_pr AS link
             ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
@@ -65,12 +65,12 @@ class AIImpactClickHouseLoader:
             pr.number AS number,
             attr.kind AS kind,
             'pull_request' AS work_type,
-            CAST(NULL, 'Nullable(String)') AS team_id
+            CAST('', 'String') AS team_id
         FROM git_pull_requests AS pr
         INNER JOIN ai_attribution_resolved AS attr
             ON attr.subject_type = 'pull_request'
             AND attr.repo_id = pr.repo_id
-            AND attr.subject_id IN (toString(pr.number), concat(toString(pr.repo_id), '#', toString(pr.number)))
+            AND (attr.subject_id = toString(pr.number) OR attr.subject_id = concat(toString(pr.repo_id), '#', toString(pr.number)))
         WHERE ((pr.created_at >= {{start:DateTime}} AND pr.created_at < {{end:DateTime}})
             OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {{start:DateTime}} AND pr.merged_at < {{end:DateTime}}))
           {repo_filter}
@@ -89,7 +89,7 @@ class AIImpactClickHouseLoader:
                     "number": int(raw.get("number") or 0),
                     "kind": raw.get("kind"),
                     "work_type": raw.get("work_type"),
-                    "team_id": raw.get("team_id"),
+                    "team_id": raw.get("team_id") or None,
                 }
             )
         return rows
@@ -175,7 +175,7 @@ def _to_record(raw: dict[str, Any]) -> AIImpactMetricsDailyRecord:
         raise ValueError("ai_impact_metrics_daily row has invalid repo_id")
     return AIImpactMetricsDailyRecord(
         org_id=str(raw.get("org_id") or ""),
-        team_id=raw.get("team_id"),
+        team_id=raw.get("team_id") or None,
         repo_id=repo_id,
         work_type=str(raw.get("work_type") or "pull_request"),
         day=raw["day"],

@@ -13,7 +13,6 @@ from dev_health_ops.metrics.loaders.base import (
     parse_uuid,
     to_dataclass,
 )
-from dev_health_ops.metrics.query_builder import OrgScopedQuery
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
     DeploymentRow,
@@ -55,9 +54,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
     """
 
     def __init__(self, client: Any, org_id: str = "") -> None:
-        self.client = client
-        self.org_id = org_id
-        self._scope = OrgScopedQuery(org_id)
+        super().__init__(client, org_id=org_id)
 
     def _org_filter(self, *, alias: str = "") -> str:
         """Return an ``AND org_id = …`` clause when *org_id* is set."""

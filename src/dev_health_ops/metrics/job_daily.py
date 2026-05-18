@@ -444,7 +444,9 @@ async def run_daily_metrics_job(
             incident_rows=incident_rows,
             commit_stat_rows=commit_rows,
             computed_at=computed_at,
-            team_resolver=team_resolver,
+            team_resolver=lambda _repo_id, repo_name, _identity: (
+                repo_team_resolver.resolve(repo_name)
+            ),
             repo_names_by_id=repo_names_by_id,
         )
 

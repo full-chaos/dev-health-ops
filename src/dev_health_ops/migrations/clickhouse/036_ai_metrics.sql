@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS ai_impact_metrics_daily
 (
     org_id String,
-    team_id Nullable(String),
+    team_id String,                  -- empty string sentinel for no team association. Sorting key cannot be Nullable without allow_nullable_key.
     repo_id UUID,
     work_type LowCardinality(String),
     day Date,

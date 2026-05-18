@@ -64,7 +64,7 @@ class AIImpactMixin(_ClickHouseSinkBase):
         class _RowAdapter:
             def __init__(self, row: AIImpactMetricsDailyRecord) -> None:
                 self.org_id = row.org_id
-                self.team_id = row.team_id
+                self.team_id = row.team_id or ""
                 self.repo_id = row.repo_id
                 self.work_type = row.work_type
                 self.day = row.day

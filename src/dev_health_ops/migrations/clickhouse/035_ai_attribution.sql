@@ -40,7 +40,7 @@ SETTINGS index_granularity = 8192;
 -- Implemented as a plain VIEW (not an incremental MV) because precedence
 -- resolution requires visibility across all rows for a subject, which
 -- incremental ClickHouse MVs cannot provide.  The base table uses
--- ReplacingMergeTree(computed_at) for write-time deduplication per source;
+-- ReplacingMergeTree(computed_at) for write-time deduplication per source,
 -- this view handles read-time cross-source precedence resolution.
 --
 -- Source priority integers (lower = wins):

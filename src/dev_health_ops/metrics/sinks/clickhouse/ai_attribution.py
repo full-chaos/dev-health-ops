@@ -119,6 +119,4 @@ class AIAttributionMixin(_ClickHouseSinkBase):
             matrix = [_to_row(r) for r in chunk]
             self.client.insert("ai_attribution", matrix, column_names=_COLUMNS)
 
-        logger.debug(
-            "write_ai_attribution: persisted %d record(s)", len(records)
-        )
+        logger.debug("write_ai_attribution: persisted %d record(s)", len(records))

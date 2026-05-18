@@ -271,9 +271,7 @@ class TestAIAttributionMixin:
         sink.write_ai_attribution(records, batch_size=3)
         # 7 records, batch_size=3 → 3 insert calls: [3, 3, 1]
         assert sink.client.insert.call_count == 3
-        total = sum(
-            len(call.args[1]) for call in sink.client.insert.call_args_list
-        )
+        total = sum(len(call.args[1]) for call in sink.client.insert.call_args_list)
         assert total == 7
 
     def test_each_row_has_correct_column_count(self) -> None:
@@ -356,9 +354,7 @@ class TestSupersession:
             superseded_by=manual.record_id,
         )
         # Simulate what the CH view does: filter superseded_by IS NULL first
-        active = [
-            r for r in [manual, pr_label_superseded] if r.superseded_by is None
-        ]
+        active = [r for r in [manual, pr_label_superseded] if r.superseded_by is None]
         assert len(active) == 1
         assert active[0].source == AIAttributionSource.MANUAL
 

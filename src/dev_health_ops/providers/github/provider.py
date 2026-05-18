@@ -34,6 +34,7 @@ from dev_health_ops.providers.github.client import (
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.utils import env_flag as _env_flag
 from dev_health_ops.providers.utils import env_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,7 +97,6 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
             github_milestone_to_sprint,
             github_pr_to_work_item,
         )
-
 
         # ctx.repo is already validated by _validate_ctx() in the base's ingest()
         assert ctx.repo is not None  # for type checker
@@ -301,6 +301,7 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     # TODO (CHAOS-1580 follow-up): thread org_id through
                     # IngestionContext so we can set it correctly here.
                     from uuid import UUID as _UUID
+
                     _nil_org = _UUID(int=0)
                     pr_signals = detect_pr_attributions(pr=pr)
                     if pr_signals:

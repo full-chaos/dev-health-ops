@@ -343,7 +343,8 @@ def run_work_items_sync_job(
             if ai_attributions and hasattr(s, "write_ai_attribution"):
                 logger.info(
                     "Writing %d AI attribution records to %s",
-                    len(ai_attributions), type(s).__name__,
+                    len(ai_attributions),
+                    type(s).__name__,
                 )
                 s.write_ai_attribution(ai_attributions)
 

@@ -8,6 +8,7 @@ Signal precedence (resolved at READ time, persisted raw at WRITE time)::
 
     MANUAL > PR_LABEL > BOT_AUTHOR > COMMIT_TRAILER > CI_ANNOTATION > BRANCH_NAME > PR_BODY
 """
+
 from __future__ import annotations
 
 import re
@@ -20,6 +21,7 @@ from dev_health_ops.models.ai_attribution import (
     AIAttributionSignal,
     AIAttributionSource,
 )
+
 __all__ = [
     # enums
     "AIAttributionSource",
@@ -120,14 +122,46 @@ _AI_COAUTHOR_PATTERNS: list[re.Pattern[str]] = [
 
 # Branch-name patterns → (pattern, kind, actor_hint).
 _AI_BRANCH_PATTERNS: list[tuple[re.Pattern[str], AIAttributionKind, str]] = [
-    (re.compile(r"(?:^|[-/])copilot(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "copilot"),
-    (re.compile(r"(?:^|[-/])claude(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "claude"),
-    (re.compile(r"(?:^|[-/])cursor(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "cursor"),
-    (re.compile(r"(?:^|[-/])codex(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "codex"),
-    (re.compile(r"(?:^|[-/])windsurf(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "windsurf"),
-    (re.compile(r"(?:^|[-/])devin(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AGENT_CREATED, "devin"),
-    (re.compile(r"(?:^|[-/])agent(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AGENT_CREATED, "agent"),
-    (re.compile(r"(?:^|[-/])ai(?:[-/]|$)", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "ai"),
+    (
+        re.compile(r"(?:^|[-/])copilot(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AI_ASSISTED,
+        "copilot",
+    ),
+    (
+        re.compile(r"(?:^|[-/])claude(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AI_ASSISTED,
+        "claude",
+    ),
+    (
+        re.compile(r"(?:^|[-/])cursor(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AI_ASSISTED,
+        "cursor",
+    ),
+    (
+        re.compile(r"(?:^|[-/])codex(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AI_ASSISTED,
+        "codex",
+    ),
+    (
+        re.compile(r"(?:^|[-/])windsurf(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AI_ASSISTED,
+        "windsurf",
+    ),
+    (
+        re.compile(r"(?:^|[-/])devin(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AGENT_CREATED,
+        "devin",
+    ),
+    (
+        re.compile(r"(?:^|[-/])agent(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AGENT_CREATED,
+        "agent",
+    ),
+    (
+        re.compile(r"(?:^|[-/])ai(?:[-/]|$)", re.IGNORECASE),
+        AIAttributionKind.AI_ASSISTED,
+        "ai",
+    ),
 ]
 
 # PR body keyword patterns → (pattern, kind, actor_hint | None).
@@ -153,7 +187,11 @@ _PR_BODY_PATTERNS: list[tuple[re.Pattern[str], AIAttributionKind, str | None]] =
         None,
     ),
     # Tool name mentions (weaker — may be incidental discussion)
-    (re.compile(r"\bcopilot\b", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "copilot"),
+    (
+        re.compile(r"\bcopilot\b", re.IGNORECASE),
+        AIAttributionKind.AI_ASSISTED,
+        "copilot",
+    ),
     (re.compile(r"\bclaude\b", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "claude"),
     (re.compile(r"\bcodex\b", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "codex"),
     (re.compile(r"\bcursor\b", re.IGNORECASE), AIAttributionKind.AI_ASSISTED, "cursor"),

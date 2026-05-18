@@ -13,6 +13,7 @@ P0 sources:
     5. PR body            (detect_from_pr_body)
     6. CI annotations     (detect_from_ci_annotations)
 """
+
 from __future__ import annotations
 
 import pytest
@@ -243,10 +244,7 @@ class TestDetectFromCommitTrailers:
         assert len(signals) == 1
 
     def test_co_authored_by_copilot_email(self) -> None:
-        msg = (
-            "Implement feature\n\n"
-            "Co-authored-by: GitHub Copilot <copilot@github.com>"
-        )
+        msg = "Implement feature\n\nCo-authored-by: GitHub Copilot <copilot@github.com>"
         signals = detect_from_commit_trailers(msg)
         assert len(signals) == 1
         s = signals[0]
@@ -446,7 +444,9 @@ class TestDetectFromCiAnnotations:
     # --- positive cases ---
 
     def test_ai_generated_key(self) -> None:
-        annotations: list[dict[str, object]] = [{"key": "ai-generated", "message": "This was AI generated"}]
+        annotations: list[dict[str, object]] = [
+            {"key": "ai-generated", "message": "This was AI generated"}
+        ]
         signals = detect_from_ci_annotations(annotations)
         assert len(signals) == 1
         s = signals[0]
@@ -455,12 +455,16 @@ class TestDetectFromCiAnnotations:
         assert s.confidence >= 0.55
 
     def test_ai_assisted_name_field(self) -> None:
-        annotations: list[dict[str, object]] = [{"name": "ai-assisted", "level": "notice"}]
+        annotations: list[dict[str, object]] = [
+            {"name": "ai-assisted", "level": "notice"}
+        ]
         signals = detect_from_ci_annotations(annotations)
         assert len(signals) == 1
 
     def test_copilot_generated_title(self) -> None:
-        annotations: list[dict[str, object]] = [{"title": "copilot-generated", "message": "PR body"}]
+        annotations: list[dict[str, object]] = [
+            {"title": "copilot-generated", "message": "PR body"}
+        ]
         signals = detect_from_ci_annotations(annotations)
         assert len(signals) == 1
 
@@ -470,7 +474,9 @@ class TestDetectFromCiAnnotations:
         assert len(signals) == 1
 
     def test_llm_generated_key(self) -> None:
-        annotations: list[dict[str, object]] = [{"key": "llm-generated", "message": "By LLM"}]
+        annotations: list[dict[str, object]] = [
+            {"key": "llm-generated", "message": "By LLM"}
+        ]
         signals = detect_from_ci_annotations(annotations)
         assert len(signals) == 1
 
@@ -494,12 +500,16 @@ class TestDetectFromCiAnnotations:
         assert detect_from_ci_annotations([]) == []
 
     def test_non_ai_annotation(self) -> None:
-        annotations: list[dict[str, object]] = [{"key": "test-passed", "name": "unit-tests", "message": "All good"}]
+        annotations: list[dict[str, object]] = [
+            {"key": "test-passed", "name": "unit-tests", "message": "All good"}
+        ]
         assert detect_from_ci_annotations(annotations) == []
 
     def test_one_signal_per_annotation_object(self) -> None:
         """Even if an annotation has both key and name matching, only 1 signal."""
-        annotations: list[dict[str, object]] = [{"key": "ai-generated", "name": "ai-assisted"}]
+        annotations: list[dict[str, object]] = [
+            {"key": "ai-generated", "name": "ai-assisted"}
+        ]
         signals = detect_from_ci_annotations(annotations)
         assert len(signals) == 1
 
@@ -565,7 +575,9 @@ class TestIntegrationThreeSignals:
     def test_unknown_stays_unknown_no_guessing(self) -> None:
         """No signals should be emitted for a normal human PR."""
         label_signals = detect_from_pr_labels(["bug", "enhancement"])
-        author_signal = detect_from_author(AuthorInfo(login="octocat", user_type="User"))
+        author_signal = detect_from_author(
+            AuthorInfo(login="octocat", user_type="User")
+        )
         trailer_signals = detect_from_commit_trailers(
             "Fix: handle edge case in parser\n\nSigned-off-by: Dev <dev@example.com>"
         )
@@ -606,9 +618,7 @@ class TestIntegrationThreeSignals:
         if sig:
             all_test_signals.append(sig)
 
-        all_test_signals.extend(
-            detect_from_ci_annotations([{"key": "ai-generated"}])
-        )
+        all_test_signals.extend(detect_from_ci_annotations([{"key": "ai-generated"}]))
 
         assert all_test_signals, "Expected at least one signal in validation test"
         for s in all_test_signals:
@@ -623,13 +633,22 @@ class TestIntegrationThreeSignals:
         # we assert it here as a contract test on the detection functions.
         msg = "AI-Assisted-By: test\nCo-authored-by: bot <copilot@github.com>"
         label_signal = detect_from_pr_labels(["ai-assisted"])[0]
-        author_signal = detect_from_author(AuthorInfo(login="copilot[bot]", user_type="Bot"))
+        author_signal = detect_from_author(
+            AuthorInfo(login="copilot[bot]", user_type="Bot")
+        )
         trailer_signal = detect_from_commit_trailers(msg)[0]
         branch_signal = detect_from_branch_name("copilot/feat")
         body_signal = detect_from_pr_body("Generated by Copilot.")
         ci_signal = detect_from_ci_annotations([{"key": "ai-generated"}])[0]
 
-        for sig in [label_signal, author_signal, trailer_signal, branch_signal, body_signal, ci_signal]:
+        for sig in [
+            label_signal,
+            author_signal,
+            trailer_signal,
+            branch_signal,
+            body_signal,
+            ci_signal,
+        ]:
             assert sig is not None
             assert 0.0 <= sig.confidence <= 1.0, (
                 f"{sig.source}:{sig.kind} confidence={sig.confidence} out of [0,1]"

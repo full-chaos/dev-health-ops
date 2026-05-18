@@ -1044,9 +1044,7 @@ def detect_pr_attributions(
     # 5. PR body text (keyword matching — weak signal)
     #    Only run if body analysis hasn't already fired a trailer signal
     #    from the same body text (avoids double-counting the same body).
-    trailer_fired = any(
-        s.source.value == "commit_trailer" for s in signals
-    )
+    trailer_fired = any(s.source.value == "commit_trailer" for s in signals)
     if not trailer_fired and body:
         body_signal = detect_from_pr_body(body)
         if body_signal is not None:

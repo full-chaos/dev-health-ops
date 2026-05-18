@@ -24,7 +24,10 @@ from dev_health_ops.providers.base import (
     ProviderCapabilities,
     ProviderWithClient,
 )
-from dev_health_ops.providers.github.client import GitHubWorkClient
+from dev_health_ops.providers.github.client import (
+    GitHubGraphQLComment,
+    GitHubWorkClient,
+)
 from dev_health_ops.providers.normalize_common import to_utc as _to_utc
 from dev_health_ops.providers.utils import env_flag as _env_flag
 from dev_health_ops.providers.utils import env_int
@@ -225,12 +228,27 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     if remaining_limit <= 0:
                         remaining_limit = None
 
-                for pr in client.iter_pull_requests(
-                    owner=owner,
-                    repo=repo,
-                    state="all",
-                    limit=remaining_limit,
-                ):
+                prs = list(
+                    client.iter_pull_requests(
+                        owner=owner,
+                        repo=repo,
+                        state="all",
+                        limit=remaining_limit,
+                    )
+                )
+                pr_comments_by_number: dict[int, tuple[GitHubGraphQLComment, ...]] = {}
+                if fetch_comments:
+                    pr_comments_by_number = {
+                        number: comments
+                        for number, comments in client.iter_pr_comments_batch(
+                            owner=owner,
+                            repo=repo,
+                            prs=prs,
+                            limit=comments_limit,
+                        )
+                    }
+
+                for pr in prs:
                     if ctx.limit is not None and fetched_count >= ctx.limit:
                         break
 
@@ -273,9 +291,9 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
                     # Fetch comments for interactions
                     if fetch_comments:
                         try:
-                            for comment in client.iter_pr_comments(
-                                pr, limit=comments_limit
-                            ):
+                            pr_number = int(getattr(pr, "number", 0) or 0)
+                            comments = pr_comments_by_number.get(pr_number, ())
+                            for comment in comments:
                                 event = github_comment_to_interaction_event(
                                     comment=comment,
                                     work_item_id=wi.work_item_id,

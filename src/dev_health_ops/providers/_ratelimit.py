@@ -48,8 +48,13 @@ def gate_call(
     gate.wait_sync()
     try:
         yield
-    except Exception:
-        gate.penalize(retry_after)
+    except Exception as exc:
+        effective_retry_after = retry_after
+        if effective_retry_after is None:
+            candidate = getattr(exc, "retry_after_seconds", None)
+            if isinstance(candidate, int | float):
+                effective_retry_after = float(candidate)
+        gate.penalize(effective_retry_after)
         if swallow:
             return
         raise

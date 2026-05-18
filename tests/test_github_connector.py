@@ -191,3 +191,64 @@ class TestGitHubConnectorRepositories:
         assert len(repos) == 1
         assert repos[0].name == "org-repo"
         mock_github_instance.get_organization.assert_called_once_with("myorg")
+
+
+def test_get_pull_request_reviews_uses_graphql_pagination() -> None:
+    with patch("dev_health_ops.connectors.github.Github"), patch(
+        "dev_health_ops.connectors.github.GitHubGraphQLClient"
+    ) as graphql_cls:
+        graphql = graphql_cls.return_value
+        graphql.query.side_effect = [
+            {
+                "repository": {
+                    "pullRequest": {
+                        "url": "https://github.test/o/r/pull/1",
+                        "reviews": {
+                            "nodes": [
+                                {
+                                    "id": "PRR_1",
+                                    "databaseId": 1,
+                                    "fullDatabaseId": "1",
+                                    "state": "APPROVED",
+                                    "submittedAt": "2026-01-02T03:04:05Z",
+                                    "body": "LGTM",
+                                    "url": "https://github.test/review/1",
+                                    "author": {"login": "reviewer"},
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                        },
+                    }
+                }
+            },
+            {
+                "repository": {
+                    "pullRequest": {
+                        "url": "https://github.test/o/r/pull/1",
+                        "reviews": {
+                            "nodes": [
+                                {
+                                    "id": "PRR_2",
+                                    "databaseId": 2,
+                                    "fullDatabaseId": "2",
+                                    "state": "CHANGES_REQUESTED",
+                                    "submittedAt": None,
+                                    "body": None,
+                                    "url": None,
+                                    "author": None,
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        },
+                    }
+                }
+            },
+        ]
+
+        connector = GitHubConnector(token="token")
+        reviews = connector.get_pull_request_reviews("owner", "repo", 1)
+
+    assert [review.id for review in reviews] == ["1", "2"]
+    assert reviews[0].reviewer == "reviewer"
+    assert reviews[1].reviewer == "Unknown"
+    assert graphql.query.call_count == 2

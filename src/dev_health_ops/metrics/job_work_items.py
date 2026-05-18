@@ -26,7 +26,6 @@ from dev_health_ops.metrics.schemas import (
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.work_items import (
     fetch_github_project_v2_items,
-    fetch_github_work_items,
     fetch_gitlab_work_items,
     fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
@@ -174,10 +173,6 @@ def run_work_items_sync_job(
         # AI attribution records collected across all provider batches.
         # Populated when providers emit attribution signals (GitHub PRs).
         # Written to sink via write_ai_attribution() at end of sync loop.
-        # NOTE: The legacy fetch_github_work_items() path used below for GitHub
-        # does not yet return attribution records. Full attribution flow for GitHub
-        # requires refactoring the GitHub sync to use GitHubProvider.iter_ingest()
-        # per discovered repo. See CHAOS-1580 follow-up.
         ai_attributions: list[Any] = []
 
         if "jira" in provider_set:
@@ -202,15 +197,36 @@ def run_work_items_sync_job(
             sprints.extend(sprint_rows)
 
         if "github" in provider_set:
-            items, tr = fetch_github_work_items(
-                repos=discovered_repos,
-                since=since_dt,
+            from uuid import UUID
+
+            from dev_health_ops.providers.base import IngestionContext, IngestionWindow
+            from dev_health_ops.providers.github.provider import GitHubProvider
+
+            github_provider = GitHubProvider(
                 status_mapping=status_mapping,
                 identity=identity,
-                include_issue_events=True,
             )
-            work_items.extend(items)
-            transitions.extend(tr)
+            github_org_id = UUID(org_id) if org_id else None
+            for discovered_repo in discovered_repos:
+                if discovered_repo.source != "github":
+                    continue
+                ctx = IngestionContext(
+                    window=IngestionWindow(
+                        updated_since=since_dt,
+                        active_until=until_dt,
+                    ),
+                    repo=discovered_repo.full_name,
+                    repo_id=discovered_repo.repo_id,
+                    org_id=github_org_id,
+                )
+                for batch in github_provider.iter_ingest(ctx):
+                    work_items.extend(batch.work_items)
+                    transitions.extend(batch.status_transitions)
+                    dependencies.extend(batch.dependencies)
+                    reopen_events.extend(batch.reopen_events)
+                    interactions.extend(batch.interactions)
+                    sprints.extend(batch.sprints)
+                    ai_attributions.extend(batch.ai_attributions)
 
             projects = parse_github_projects_v2_env()
             if projects:
@@ -256,6 +272,7 @@ def run_work_items_sync_job(
             ctx = IngestionContext(
                 window=IngestionWindow(updated_since=since_dt, active_until=until_dt),
                 repo=None,
+                org_id=uuid.UUID(org_id) if org_id else None,
             )
             fetched_items = 0
             fetched_transitions = 0

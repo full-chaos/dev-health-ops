@@ -27,7 +27,9 @@ async def test_ai_impact_query_qualifies_computed_at(monkeypatch: pytest.MonkeyP
         captured["query"] = query
         return []
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     await AIImpactClickHouseLoader(MagicMock(), org_id="org-a").load_ai_impact_metrics(
         start_day=date(2026, 5, 1),
@@ -50,7 +52,9 @@ async def test_ai_opportunity_query_qualifies_computed_at(
             captured["query"] = query
         return []
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
 

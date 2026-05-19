@@ -32,16 +32,16 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 ## GitHub PR workflow override
 
 - Use the `github-gh` skill for GitHub operations.
-- Prefer `gh pr create`/`gh pct` for PR creation, but do **not** assume it will push an unpublished branch.
-- If PR creation reports that the branch must be pushed first, push with an explicit refspec:
+- Prefer `gh pr create --fill` or `gh pct --fill` for unpublished branches; `--fill` lets GitHub CLI derive the title/body from commits and push the branch as part of PR creation.
+- If you need a custom title/body, use `--fill` first and then edit the PR with `gh pr edit` rather than omitting `--fill` on an unpublished branch.
+- If PR creation still reports that the branch must be pushed first, push with an explicit refspec and retry with `--head`:
 
   ```bash
+  gh pct --fill --base main
+
+  # Fallback only when --fill still cannot publish the branch:
   GIT_MASTER=1 git push origin <branch>:<branch>
-  gh pct "<title>" --base main --head <branch> --body "$(cat <<'EOF'
-  ## Summary
-  ...
-  EOF
-  )"
+  gh pct "<title>" --base main --head <branch> --body "..."
   ```
 
 - Never use a bare `git push` from a worktree; worktree upstreams can point at `main` and trigger branch-protection failures.

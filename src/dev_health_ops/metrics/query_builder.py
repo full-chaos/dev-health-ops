@@ -40,6 +40,26 @@ class OrgScopedQuery:
         col = f"{alias}.org_id" if alias else "org_id"
         return f" AND {col} = {{org_id:String}}"
 
+    def expression(self, *, alias: str = "") -> str:
+        """Return ``"{alias?.}org_id = {org_id:String}"`` or ``""``.
+
+        Companion to :meth:`filter` for callers that build a list of filter
+        clauses and join them with ``" AND "``. Using :meth:`filter` in that
+        context would produce ``"... AND  AND org_id = ..."`` because
+        :meth:`filter` carries the connecting ``" AND "`` prefix.
+
+        Same identifier safety check as :meth:`filter`.
+        """
+        if alias and not alias.isidentifier():
+            raise ValueError(
+                "OrgScopedQuery.expression: alias must be a valid identifier, "
+                f"got {alias!r}"
+            )
+        if not self.org_id:
+            return ""
+        col = f"{alias}.org_id" if alias else "org_id"
+        return f"{col} = {{org_id:String}}"
+
     def inject(self, params: dict[str, Any]) -> dict[str, Any]:
         """Return a new params dict with ``org_id`` added when set.
 

@@ -117,9 +117,9 @@ class AIImpactClickHouseLoader:
             params["work_type"] = work_type
             filters.append("work_type = {work_type:String}")
         params = self._scope.inject(params)
-        org_filter = self._scope.filter()
-        if org_filter:
-            filters.append(org_filter.removeprefix("AND "))
+        org_expr = self._scope.expression()
+        if org_expr:
+            filters.append(org_expr)
         where_clause = " AND ".join(filters)
         query = f"""
         SELECT

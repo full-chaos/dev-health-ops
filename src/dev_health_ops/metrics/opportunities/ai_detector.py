@@ -111,9 +111,9 @@ class AIOpportunityDetector:
             filters.append("team_id = {team_id:String}")
         org_scope = OrgScopedQuery(org_id)
         params = org_scope.inject(params)
-        org_filter = org_scope.filter()
-        if org_filter:
-            filters.append(org_filter.removeprefix("AND "))
+        org_expr = org_scope.expression()
+        if org_expr:
+            filters.append(org_expr)
         where_clause = " AND ".join(filters)
         query = f"""
         SELECT
@@ -287,9 +287,9 @@ class AIOpportunityDetector:
             filters.append("pr.repo_id = {repo_id:UUID}")
         org_scope = OrgScopedQuery(org_id)
         params = org_scope.inject(params)
-        org_filter = org_scope.filter(alias="attr")
-        if org_filter:
-            filters.append(org_filter.removeprefix("AND "))
+        org_expr = org_scope.expression(alias="attr")
+        if org_expr:
+            filters.append(org_expr)
         where_clause = " AND ".join(filters)
         query = f"""
         SELECT

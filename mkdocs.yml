@@ -84,6 +84,7 @@ nav:
       - Reports: user-guide/reports.md
   - API:
       - GraphQL Overview: api/graphql-overview.md
+      - AI Workflow Analytics: api/graphql-ai.md
       - GraphQL Security: api/graphql-security.md
       - Persisted Queries: api/persisted-queries.md
       - View Mapping: api/view-mapping.md

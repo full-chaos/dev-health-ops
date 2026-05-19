@@ -28,6 +28,7 @@ from dev_health_ops.metrics.ai_impact import (
     AttributionBucket,
 )
 from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
+from dev_health_ops.metrics.opportunities.ai_detector import AIOpportunityDetector
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -490,7 +491,7 @@ async def resolve_ai_risk_breakdown(
 
 
 # =============================================================================
-# resolve_ai_opportunities (stable empty contract until CHAOS-1586)
+# resolve_ai_opportunities
 # =============================================================================
 
 
@@ -499,14 +500,21 @@ async def resolve_ai_opportunities(
     scope: AIScopeInput | None = None,
     limit: int = 25,
 ) -> AIOpportunitiesResult:
+    """Return rule-based AI automation opportunities.
+
+    First release decision: inline detection. The resolver reads existing
+    ClickHouse rollups synchronously via ``AIOpportunityDetector`` and does not
+    persist recommendations yet, keeping the detector pure-read and avoiding a
+    second materialization path until noisy-recommendation dismissal lands.
+    """
+
     org_id = require_org_id(context)
-    # Detector is not implemented yet (CHAOS-1586). Returning an empty,
-    # stable result keeps the GraphQL contract usable by the frontend
-    # today and avoids a breaking change when the detector lands.
+    client = _require_client(context)
+    detector = AIOpportunityDetector(client)
     return AIOpportunitiesResult(
         org_id=org_id,
-        recommendations=[],
-        detector_ready=False,
+        recommendations=await detector.detect(org_id=org_id, scope=scope, limit=limit),
+        detector_ready=True,
     )
 
 

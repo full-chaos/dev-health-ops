@@ -66,6 +66,7 @@ nav:
       - Inventory: metrics-inventory.md
       - Canonical Metrics (API Mapping): canonical-metrics.md
       - Canonical Metrics (PRD): computations/canonical-metrics-prd.md
+      - AI Opportunity Detector: computations/ai-opportunity-detector.md
       - Metric Calculations: computations/metric-calculations.md
       - Computations Index: computations/index.md
       - Views Index: user-guide/views-index.md

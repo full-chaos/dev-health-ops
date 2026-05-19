@@ -29,6 +29,8 @@ from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.models.ai import (
     AIAttributionBucketInput,
     AIDateRangeInput,
+    AIOpportunity,
+    AIOpportunityKind,
     AIScopeInput,
     AIWorkflowRootTypeInput,
 )
@@ -373,17 +375,50 @@ async def test_risk_breakdown_populated_computes_rates():
 
 
 # -----------------------------------------------------------------------------
-# aiOpportunities (stable empty contract until CHAOS-1586)
+# aiOpportunities
 # -----------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_opportunities_returns_stable_empty_contract():
-    result = await resolve_ai_opportunities(_ctx())
+async def test_opportunities_returns_ready_empty_contract():
+    detector = MagicMock()
+    detector.detect = AsyncMock(return_value=[])
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.ai.AIOpportunityDetector",
+        return_value=detector,
+    ):
+        result = await resolve_ai_opportunities(_ctx())
 
     assert result.org_id == ORG_ID
     assert result.recommendations == []
-    assert result.detector_ready is False
+    assert result.detector_ready is True
+
+
+@pytest.mark.asyncio
+async def test_opportunities_delegates_scope_limit_and_returns_evidence():
+    opportunity = AIOpportunity(
+        opportunity_id="stable-id",
+        kind=AIOpportunityKind.HIGH_REWORK,
+        repo_id=str(REPO_ID),
+        team_id=TEAM_ID,
+        title="High AI rework in repo",
+        rationale="AI-assisted PRs had a 33% rework rate vs 10% for human PRs.",
+        score=0.8,
+        evidence_refs=[f"ai_impact_metrics_daily:rework_rate:{REPO_ID}"],
+    )
+    detector = MagicMock()
+    detector.detect = AsyncMock(return_value=[opportunity])
+    scope = AIScopeInput(repo_id=str(REPO_ID), team_id=TEAM_ID)
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.ai.AIOpportunityDetector",
+        return_value=detector,
+    ):
+        result = await resolve_ai_opportunities(_ctx(), scope=scope, limit=1)
+
+    detector.detect.assert_awaited_once_with(org_id=ORG_ID, scope=scope, limit=1)
+    assert result.detector_ready is True
+    assert result.recommendations == [opportunity]
+    assert result.recommendations[0].evidence_refs
 
 
 # -----------------------------------------------------------------------------

@@ -247,6 +247,11 @@ class WorkGraphNodeTypeInput(Enum):
     FILE = "file"
     RELEASE = "release"
     FEATURE_FLAG = "feature_flag"
+    AI_WORKFLOW_RUN = "ai_workflow_run"
+    DIFF = "diff"
+    REVIEW_OUTCOME = "review_outcome"
+    DEPLOYMENT = "deployment"
+    INCIDENT = "incident"
 
 
 @strawberry.enum
@@ -270,6 +275,11 @@ class WorkGraphEdgeTypeInput(Enum):
     CONFIG_CHANGED_BY = "config_changed_by"
     GUARDS = "guards"
     IMPACTS = "impacts"
+    HAS_AI_WORKFLOW = "has_ai_workflow"
+    GENERATES = "generates"
+    HAS_REVIEW_OUTCOME = "has_review_outcome"
+    DEPLOYS = "deploys"
+    LINKED_INCIDENT = "linked_incident"
 
 
 @strawberry.input

@@ -19,6 +19,11 @@ class NodeType(str, Enum):
     FILE = "file"
     RELEASE = "release"
     FEATURE_FLAG = "feature_flag"
+    AI_WORKFLOW_RUN = "ai_workflow_run"
+    DIFF = "diff"
+    REVIEW_OUTCOME = "review_outcome"
+    DEPLOYMENT = "deployment"
+    INCIDENT = "incident"
 
 
 class EdgeType(str, Enum):
@@ -54,6 +59,13 @@ class EdgeType(str, Enum):
 
     # Cross-cutting impact relationships
     IMPACTS = "impacts"  # release/flag → telemetry signal
+
+    # AI workflow evidence relationships
+    HAS_AI_WORKFLOW = "has_ai_workflow"  # issue → AI workflow run
+    GENERATES = "generates"  # AI workflow run → diff/PR
+    HAS_REVIEW_OUTCOME = "has_review_outcome"  # PR → review outcome
+    DEPLOYS = "deploys"  # PR → deployment
+    LINKED_INCIDENT = "linked_incident"  # deployment → incident
 
 
 class Provenance(str, Enum):

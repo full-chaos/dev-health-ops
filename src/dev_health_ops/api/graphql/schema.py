@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 
 import strawberry
-from strawberry.extensions import AddValidationRules
 from strawberry.types import Info
 
 from .context import GraphQLContext
-from .extensions import OrgIdAuthExtension
+from .extensions import ConfiguredValidationRules, OrgIdAuthExtension
 from .models.ai import (
     AIComparison,
     AIDateRangeInput,
@@ -70,7 +69,6 @@ from .resolvers.reports import (
     resolve_trigger_report,
     resolve_update_saved_report,
 )
-from .security import get_graphql_validation_rules
 from .subscriptions import Subscription
 
 logger = logging.getLogger(__name__)
@@ -423,14 +421,8 @@ schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
     subscription=Subscription,
-    # AddValidationRules is a SchemaExtension subclass; instantiating it with
-    # configured rules is the documented strawberry pattern. Newer strawberry
-    # stubs narrowed the `extensions` parameter to a
-    # `type[SchemaExtension] | Callable[[], SchemaExtension]` union that
-    # rejects bare instances, while older stubs still accept them. Suppress
-    # both shapes so mypy passes on either stub revision.
     extensions=[
         OrgIdAuthExtension,
-        AddValidationRules(get_graphql_validation_rules()),  # type: ignore[list-item,unused-ignore]
+        ConfiguredValidationRules,
     ],
 )

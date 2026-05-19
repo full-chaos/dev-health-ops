@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import logging
 
-from strawberry.extensions import SchemaExtension
+from strawberry.extensions import AddValidationRules, SchemaExtension
 
 from .errors import AuthorizationError
+from .security import get_graphql_validation_rules
 
 logger = logging.getLogger(__name__)
+
+
+class ConfiguredValidationRules(AddValidationRules):
+    """Strawberry validation rules pre-bound to the dev-health policy."""
+
+    def __init__(self, *, execution_context: object | None = None) -> None:
+        super().__init__(get_graphql_validation_rules())
 
 
 class OrgIdAuthExtension(SchemaExtension):

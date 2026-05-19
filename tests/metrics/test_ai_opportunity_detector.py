@@ -38,7 +38,9 @@ async def test_detector_emits_metric_opportunities(monkeypatch: pytest.MonkeyPat
             },
         ]
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     result = await AIOpportunityDetector(MagicMock()).detect(
         "org-a", AIScopeInput(team_id="team-a"), limit=10
@@ -53,7 +55,9 @@ async def test_detector_emits_metric_opportunities(monkeypatch: pytest.MonkeyPat
     assert "4.2 reviews vs 2.0" in by_kind[AIOpportunityKind.HIGH_REVIEW_LOAD].rationale
     assert "33% rework rate vs 10%" in by_kind[AIOpportunityKind.HIGH_REWORK].rationale
     assert "30.0 cycle hours vs 20.0" in by_kind[AIOpportunityKind.SLOW_CYCLE].rationale
-    assert "58% test gap rate" in by_kind[AIOpportunityKind.UNCOVERED_TEST_AREA].rationale
+    assert (
+        "58% test gap rate" in by_kind[AIOpportunityKind.UNCOVERED_TEST_AREA].rationale
+    )
     assert all(item.repo_id == REPO_ID for item in result)
     assert all(item.team_id == "team-a" for item in result)
     assert all(item.evidence_refs for item in result)
@@ -90,7 +94,9 @@ async def test_detector_honors_scope_and_limit(monkeypatch: pytest.MonkeyPatch):
             },
         ]
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     result = await AIOpportunityDetector(MagicMock()).detect(
         "org-a", AIScopeInput(repo_id=REPO_ID), limit=1
@@ -112,11 +118,15 @@ async def test_detector_emits_repetitive_change(monkeypatch: pytest.MonkeyPatch)
                 "team_id": "",
                 "prs_total": 6,
                 "title_prefix": "bump deps",
-                "pr_refs": [f"git_pull_requests:{REPO_ID}:{number}" for number in range(1, 7)],
+                "pr_refs": [
+                    f"git_pull_requests:{REPO_ID}:{number}" for number in range(1, 7)
+                ],
             }
         ]
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     result = await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
 
@@ -159,7 +169,9 @@ async def test_detector_clamps_limit_to_one_hundred(monkeypatch: pytest.MonkeyPa
             )
         return rows
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     result = await AIOpportunityDetector(MagicMock()).detect("org-a", limit=500)
 
@@ -171,7 +183,9 @@ async def test_detector_empty_data_returns_empty_list(monkeypatch: pytest.Monkey
     async def fake_query_dicts(_client, _query, _params):
         return []
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
     result = await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
 

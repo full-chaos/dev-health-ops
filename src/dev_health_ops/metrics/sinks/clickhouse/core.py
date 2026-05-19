@@ -353,14 +353,14 @@ class ClickHouseCore(BaseMetricsSink):
         SELECT
           repo_id,
           day,
-          argMax(commits_count, computed_at) AS commits_count,
-          argMax(total_loc_touched, computed_at) AS total_loc_touched,
-          argMax(avg_commit_size_loc, computed_at) AS avg_commit_size_loc,
-          argMax(large_commit_ratio, computed_at) AS large_commit_ratio,
-          argMax(prs_merged, computed_at) AS prs_merged,
-          argMax(median_pr_cycle_hours, computed_at) AS median_pr_cycle_hours,
-          max(computed_at) AS computed_at
-        FROM repo_metrics_daily
+          argMax(commits_count, metrics.computed_at) AS commits_count,
+          argMax(total_loc_touched, metrics.computed_at) AS total_loc_touched,
+          argMax(avg_commit_size_loc, metrics.computed_at) AS avg_commit_size_loc,
+          argMax(large_commit_ratio, metrics.computed_at) AS large_commit_ratio,
+          argMax(prs_merged, metrics.computed_at) AS prs_merged,
+          argMax(median_pr_cycle_hours, metrics.computed_at) AS median_pr_cycle_hours,
+          max(metrics.computed_at) AS computed_at
+        FROM repo_metrics_daily AS metrics
         {where_clause}
         GROUP BY repo_id, day
         ORDER BY repo_id, day

@@ -81,6 +81,10 @@ nav:
           - Flame Diagrams: user-guide/views/flame-diagrams.md
           - Capacity Planning: user-guide/views/capacity-planning.md
           - Work Graph View: user-guide/views/work-graph.md
+          - AI Impact: user-guide/views/ai-impact.md
+          - AI Review Load: user-guide/views/ai-review-load.md
+          - AI Risk: user-guide/views/ai-risk.md
+          - AI Attribution: user-guide/views/ai-attribution.md
       - Work Graph: user-guide/work-graph.md
       - Reports: user-guide/reports.md
   - API:

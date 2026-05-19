@@ -29,6 +29,23 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 - UX-time LLM is **explanation only** and must not recompute categories/edges/weights.
 - Persistence goes through **sinks** only (no file exports, no debug dumps).
 
+## GitHub PR workflow override
+
+- Use the `github-gh` skill for GitHub operations.
+- Prefer `gh pr create`/`gh pct` for PR creation, but do **not** assume it will push an unpublished branch.
+- If PR creation reports that the branch must be pushed first, push with an explicit refspec:
+
+  ```bash
+  GIT_MASTER=1 git push origin <branch>:<branch>
+  gh pct "<title>" --base main --head <branch> --body "$(cat <<'EOF'
+  ## Summary
+  ...
+  EOF
+  )"
+  ```
+
+- Never use a bare `git push` from a worktree; worktree upstreams can point at `main` and trigger branch-protection failures.
+
 ## Provider boundary
 - New provider integrations live under `src/dev_health_ops/providers/<provider>/`.
 - Use the canonical provider contracts in `src/dev_health_ops/providers/base.py`;

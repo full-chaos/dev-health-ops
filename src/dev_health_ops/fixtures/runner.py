@@ -243,21 +243,77 @@ def validate_work_unit_investment_density_and_coverage(
 
 
 async def _seed_auth_data(session, user_data: dict) -> None:
-    """Merge users, organizations, memberships, and licenses into PostgreSQL."""
+    """Merge orgs/users, upsert memberships, replace licenses into Postgres.
+
+    Idempotent against re-runs. Memberships use an explicit
+    ``INSERT ... ON CONFLICT (user_id, org_id) DO NOTHING`` because
+    ``session.merge(membership)`` interacts badly with the
+    ``cascade='all, delete-orphan'`` declared on
+    :attr:`User.memberships` / :attr:`Organization.memberships` and the
+    ``uq_membership_user_org`` constraint: SQLAlchemy autoflushes a
+    pending INSERT inside the merge's SELECT, which races the constraint
+    even though the merging row has a deterministic id (CHAOS-1717).
+    Existing licenses already use a delete + add idempotency dance for
+    similar reasons.
+    """
+    from sqlalchemy import delete
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    from dev_health_ops.models.licensing import OrgLicense
+    from dev_health_ops.models.users import Membership
+
+    bind = await session.connection()
+    dialect = bind.dialect.name
+
     for org in user_data["organizations"]:
         await session.merge(org)
     await session.commit()
+
     for user in user_data["users"]:
         await session.merge(user)
     await session.commit()
-    for membership in user_data["memberships"]:
-        await session.merge(membership)
+
+    memberships = user_data.get("memberships") or []
+    if memberships:
+        rows = [
+            {
+                "id": m.id,
+                "user_id": m.user_id,
+                "org_id": m.org_id,
+                "role": m.role,
+                "invited_by_id": getattr(m, "invited_by_id", None),
+                "joined_at": m.joined_at,
+            }
+            for m in memberships
+        ]
+        # Execute the dialect-specific upsert inside each branch — the
+        # postgresql and sqlite ``insert`` builders return incompatible
+        # ``Insert`` subclasses, so sharing a single ``stmt`` variable
+        # confuses mypy's type narrowing (CHAOS-1717).
+        if dialect == "sqlite":
+            await session.execute(
+                sqlite_insert(Membership)
+                .values(rows)
+                .on_conflict_do_nothing(
+                    index_elements=["user_id", "org_id"],
+                )
+            )
+        elif dialect in ("postgres", "postgresql"):
+            await session.execute(
+                pg_insert(Membership)
+                .values(rows)
+                .on_conflict_do_nothing(
+                    index_elements=["user_id", "org_id"],
+                )
+            )
+        else:
+            raise RuntimeError(
+                f"_seed_auth_data: unsupported SQL dialect for upsert: {dialect!r}"
+            )
     await session.commit()
+
     for org_license in user_data.get("licenses", []):
-        from sqlalchemy import delete
-
-        from dev_health_ops.models.licensing import OrgLicense
-
         await session.execute(
             delete(OrgLicense).where(OrgLicense.org_id == org_license.org_id)
         )

@@ -423,5 +423,14 @@ schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
     subscription=Subscription,
-    extensions=[OrgIdAuthExtension, AddValidationRules(get_graphql_validation_rules())],
+    # AddValidationRules is a SchemaExtension subclass; instantiating it with
+    # configured rules is the documented strawberry pattern. Newer strawberry
+    # stubs narrowed the `extensions` parameter to a
+    # `type[SchemaExtension] | Callable[[], SchemaExtension]` union that
+    # rejects bare instances, while older stubs still accept them. Suppress
+    # both shapes so mypy passes on either stub revision.
+    extensions=[
+        OrgIdAuthExtension,
+        AddValidationRules(get_graphql_validation_rules()),  # type: ignore[list-item,unused-ignore]
+    ],
 )

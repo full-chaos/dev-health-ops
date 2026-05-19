@@ -123,13 +123,13 @@ class AIOpportunityDetector:
             work_type,
             day,
             attribution_bucket,
-            argMax(prs_total, computed_at) AS prs_total,
-            argMax(reviews_per_pr, computed_at) AS reviews_per_pr,
-            argMax(cycle_time_avg_hours, computed_at) AS cycle_time_avg_hours,
-            argMax(rework_prs, computed_at) AS rework_prs,
-            argMax(test_gap_prs, computed_at) AS test_gap_prs,
-            max(computed_at) AS computed_at
-        FROM ai_impact_metrics_daily
+            argMax(prs_total, metrics.computed_at) AS prs_total,
+            argMax(reviews_per_pr, metrics.computed_at) AS reviews_per_pr,
+            argMax(cycle_time_avg_hours, metrics.computed_at) AS cycle_time_avg_hours,
+            argMax(rework_prs, metrics.computed_at) AS rework_prs,
+            argMax(test_gap_prs, metrics.computed_at) AS test_gap_prs,
+            max(metrics.computed_at) AS computed_at
+        FROM ai_impact_metrics_daily AS metrics
         WHERE {where_clause}
         GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket
         """

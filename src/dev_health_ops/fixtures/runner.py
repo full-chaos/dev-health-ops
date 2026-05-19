@@ -565,6 +565,19 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 allow_parallel=allow_parallel_inserts,
             )
 
+            if sink is not None and hasattr(sink, "write_ai_attribution"):
+                ai_attributions = generator.generate_ai_attributions(
+                    prs,
+                    org_id=org_id,
+                )
+                if ai_attributions:
+                    sink.write_ai_attribution(ai_attributions)
+                    logging.info(
+                        "Wrote %d synthetic AI attribution records for repo %s.",
+                        len(ai_attributions),
+                        r_name,
+                    )
+
             pr_commit_links = generator.generate_pr_commits(prs, commits, org_id=org_id)
             if hasattr(store, "insert_work_graph_pr_commit"):
                 await _insert_batches(

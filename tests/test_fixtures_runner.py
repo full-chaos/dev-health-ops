@@ -1,4 +1,5 @@
 import argparse
+import uuid
 
 import pytest
 
@@ -8,6 +9,7 @@ from dev_health_ops.fixtures.runner import (
     _build_repo_team_assignments,
     run_fixtures_generation,
 )
+from dev_health_ops.models.ai_attribution import AIAttributionKind
 from dev_health_ops.storage import SQLAlchemyStore
 
 
@@ -71,6 +73,24 @@ async def test_fixtures_generation_minimal_no_metrics(tmp_path):
     result = await run_fixtures_generation(ns)
     assert result == 0
     assert db_file.exists()
+
+
+def test_pr_fixture_generator_emits_ai_attribution_records():
+    org_id = str(uuid.uuid4())
+    generator = SyntheticDataGenerator(repo_name="test/ai-fixtures", seed=42)
+    pr_data = generator.generate_prs(count=6)
+    prs = [item["pr"] for item in pr_data]
+
+    records = generator.generate_ai_attributions(prs, org_id=org_id)
+
+    assert records
+    assert {record.org_id for record in records} == {uuid.UUID(org_id)}
+    assert {record.repo_id for record in records} == {generator.repo_id}
+    assert {record.subject_type for record in records} == {"pull_request"}
+    assert {record.kind for record in records} >= {
+        AIAttributionKind.AI_ASSISTED,
+        AIAttributionKind.AGENT_CREATED,
+    }
 
 
 @pytest.mark.asyncio

@@ -259,13 +259,13 @@ SELECT
     team_id,
     repo_id,
     day,
-    argMax(ai_artifacts, computed_at) AS ai_artifacts,
-    argMax(declared_artifacts, computed_at) AS declared_artifacts,
-    argMax(human_reviewed_prs, computed_at) AS human_reviewed_prs,
-    argMax(security_scanned_prs, computed_at) AS security_scanned_prs,
-    argMax(in_policy_artifacts, computed_at) AS in_policy_artifacts,
-    max(computed_at) AS computed_at
-FROM ai_governance_coverage_daily
+    argMax(ai_artifacts, coverage.computed_at) AS ai_artifacts,
+    argMax(declared_artifacts, coverage.computed_at) AS declared_artifacts,
+    argMax(human_reviewed_prs, coverage.computed_at) AS human_reviewed_prs,
+    argMax(security_scanned_prs, coverage.computed_at) AS security_scanned_prs,
+    argMax(in_policy_artifacts, coverage.computed_at) AS in_policy_artifacts,
+    max(coverage.computed_at) AS computed_at
+FROM ai_governance_coverage_daily AS coverage
 WHERE org_id = {org_id:String}
   AND day >= {start_day:Date}
   AND day <= {end_day:Date}

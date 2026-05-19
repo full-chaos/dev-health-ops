@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import random
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
+from dev_health_ops.models.ai_attribution import (
+    AIAttributionKind,
+    AIAttributionRecord,
+    AIAttributionSource,
+)
 from dev_health_ops.models.git import GitPullRequest, GitPullRequestReview
 from dev_health_ops.models.work_items import WorkItem
 
@@ -152,6 +158,69 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
                 )
             )
         return reviews
+
+    def generate_ai_attributions(
+        self,
+        prs: list[GitPullRequest],
+        *,
+        org_id: str,
+    ) -> list[AIAttributionRecord]:
+        """Generate synthetic AI attribution signals for a subset of PRs."""
+        if not prs:
+            return []
+
+        attribution_variants = (
+            (
+                AIAttributionKind.AI_ASSISTED,
+                AIAttributionSource.PR_LABEL,
+                "ai-assisted",
+                "Claude Code",
+            ),
+            (
+                AIAttributionKind.AGENT_CREATED,
+                AIAttributionSource.BOT_AUTHOR,
+                "agent-created",
+                "claude-code[bot]",
+            ),
+            (
+                AIAttributionKind.AI_REVIEW,
+                AIAttributionSource.PR_BODY,
+                "ai-review",
+                "Code Review Agent",
+            ),
+        )
+        org_uuid = uuid.UUID(str(org_id))
+        records: list[AIAttributionRecord] = []
+
+        for index, pr in enumerate(prs):
+            if index % 3 == 2:
+                continue
+
+            kind, source, label, actor = attribution_variants[
+                index % len(attribution_variants)
+            ]
+            records.append(
+                AIAttributionRecord(
+                    org_id=org_uuid,
+                    provider=self.provider,
+                    subject_type="pull_request",
+                    subject_id=str(pr.number),
+                    repo_id=pr.repo_id,
+                    kind=kind,
+                    source=source,
+                    confidence=0.9,
+                    actor=actor,
+                    evidence={
+                        "source": "synthetic_fixture",
+                        "label": label,
+                        "tool_name": "claude-code",
+                        "model_name": "claude",
+                    },
+                    observed_at=pr.merged_at or pr.created_at,
+                )
+            )
+
+        return records
 
     def generate_issue_pr_links(
         self,

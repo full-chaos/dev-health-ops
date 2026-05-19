@@ -6,13 +6,13 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
 from dev_health_ops.metrics.loaders.base import (
     DataLoader,
     naive_utc,
     parse_uuid,
     to_dataclass,
 )
-from dev_health_ops.metrics.query_builder import OrgScopedQuery
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
     DeploymentRow,
@@ -44,7 +44,7 @@ async def _clickhouse_query_dicts(
     return await query_dicts(client, query, params)
 
 
-class ClickHouseDataLoader(DataLoader):
+class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
     """DataLoader implementation for ClickHouse backend.
 
     Args:
@@ -54,9 +54,7 @@ class ClickHouseDataLoader(DataLoader):
     """
 
     def __init__(self, client: Any, org_id: str = "") -> None:
-        self.client = client
-        self.org_id = org_id
-        self._scope = OrgScopedQuery(org_id)
+        super().__init__(client, org_id=org_id)
 
     def _org_filter(self, *, alias: str = "") -> str:
         """Return an ``AND org_id = …`` clause when *org_id* is set."""

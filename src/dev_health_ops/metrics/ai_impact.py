@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from enum import StrEnum
 
 from dev_health_ops.metrics.schemas import (
     AIImpactMetricsDailyRecord,
@@ -18,9 +19,35 @@ from dev_health_ops.metrics.schemas import (
 
 TeamResolver = Callable[[str, str | None, str | None], tuple[str | None, str | None]]
 
-AI_BUCKETS = {"ai_assisted", "agent_created", "ai_review"}
-NON_AI_BUCKET = "human"
-UNKNOWN_BUCKET = "unknown"
+
+class AttributionBucket(StrEnum):
+    """Canonical buckets for AI workflow impact rollups.
+
+    The metrics layer slots every PR (and every reviewed artifact) into
+    exactly one bucket so the per-bucket aggregates remain disjoint and
+    sum to the row total. Bucket string values are also the storage
+    representation in ClickHouse (``ai_impact_metrics_daily.attribution_bucket``).
+    """
+
+    AI_ASSISTED = "ai_assisted"
+    AGENT_CREATED = "agent_created"
+    AI_REVIEW = "ai_review"
+    HUMAN = "human"
+    UNKNOWN = "unknown"
+
+
+#: AI-coded variants of :class:`AttributionBucket`.
+AI_BUCKETS: frozenset[AttributionBucket] = frozenset(
+    {
+        AttributionBucket.AI_ASSISTED,
+        AttributionBucket.AGENT_CREATED,
+        AttributionBucket.AI_REVIEW,
+    }
+)
+#: Non-AI baseline bucket. Imported by job_daily for backward compatibility.
+NON_AI_BUCKET: AttributionBucket = AttributionBucket.HUMAN
+#: Fallback bucket when attribution cannot be determined.
+UNKNOWN_BUCKET: AttributionBucket = AttributionBucket.UNKNOWN
 
 
 @dataclass(frozen=True)

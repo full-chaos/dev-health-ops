@@ -10,6 +10,18 @@ from strawberry.types import Info
 
 from .context import GraphQLContext
 from .extensions import OrgIdAuthExtension
+from .models.ai import (
+    AIComparison,
+    AIDateRangeInput,
+    AIGovernanceSummary,
+    AIImpactSummary,
+    AIOpportunitiesResult,
+    AIReviewLoadResult,
+    AIRiskBreakdownResult,
+    AIScopeInput,
+    AIWorkflowDrilldownResult,
+    AIWorkflowRootTypeInput,
+)
 from .models.inputs import (
     AnalyticsRequestInput,
     CapacityForecastFilterInput,
@@ -29,6 +41,15 @@ from .models.outputs import (
     SecurityAlertConnection,
     SecurityOverview,
     WorkGraphEdgesResult,
+)
+from .resolvers.ai import (
+    resolve_ai_comparison,
+    resolve_ai_governance_summary,
+    resolve_ai_impact_summary,
+    resolve_ai_opportunities,
+    resolve_ai_review_load,
+    resolve_ai_risk_breakdown,
+    resolve_ai_workflow_drilldown,
 )
 from .resolvers.analytics import resolve_analytics
 from .resolvers.catalog import resolve_catalog
@@ -241,6 +262,112 @@ class Query:
 
         context = get_context(info)
         return await resolve_capacity_forecasts(context, filters)
+
+    @strawberry.field(
+        description="AI workflow impact summary across the requested time range."
+    )
+    async def ai_impact_summary(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIScopeInput | None = None,
+    ) -> AIImpactSummary:
+        context = get_context(info)
+        return await resolve_ai_impact_summary(context, date_range, scope)
+
+    @strawberry.field(
+        description="Side-by-side AI-assisted vs non-AI baseline comparison."
+    )
+    async def ai_comparison(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIScopeInput | None = None,
+    ) -> AIComparison:
+        context = get_context(info)
+        return await resolve_ai_comparison(context, date_range, scope)
+
+    @strawberry.field(
+        description="Per-bucket AI review-load breakdown with amplification."
+    )
+    async def ai_review_load(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIScopeInput | None = None,
+    ) -> AIReviewLoadResult:
+        context = get_context(info)
+        return await resolve_ai_review_load(context, date_range, scope)
+
+    @strawberry.field(
+        description="Per-bucket AI risk breakdown (rework, revert, test gaps, incidents)."
+    )
+    async def ai_risk_breakdown(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIScopeInput | None = None,
+    ) -> AIRiskBreakdownResult:
+        context = get_context(info)
+        return await resolve_ai_risk_breakdown(context, date_range, scope)
+
+    @strawberry.field(
+        description=(
+            "AI automation opportunity recommendations. "
+            "Returns an empty, stable contract until the detector "
+            "ships (CHAOS-1586)."
+        )
+    )
+    async def ai_opportunities(
+        self,
+        info: Info,
+        org_id: str,
+        scope: AIScopeInput | None = None,
+        limit: int = 25,
+    ) -> AIOpportunitiesResult:
+        context = get_context(info)
+        return await resolve_ai_opportunities(context, scope, limit)
+
+    @strawberry.field(
+        description="AI governance coverage and recent policy violations."
+    )
+    async def ai_governance_summary(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIScopeInput | None = None,
+        violation_limit: int = 100,
+    ) -> AIGovernanceSummary:
+        context = get_context(info)
+        return await resolve_ai_governance_summary(
+            context, date_range, scope, violation_limit
+        )
+
+    @strawberry.field(
+        description=(
+            "Drilldown into AI workflow evidence rooted at an issue, "
+            "PR, or work_unit. Returns Work Graph nodes and edges with "
+            "provenance and short evidence references."
+        )
+    )
+    async def ai_workflow_drilldown(
+        self,
+        info: Info,
+        org_id: str,
+        root_type: AIWorkflowRootTypeInput,
+        root_id: str,
+        depth: int = 3,
+        limit: int = 100,
+    ) -> AIWorkflowDrilldownResult:
+        context = get_context(info)
+        return await resolve_ai_workflow_drilldown(
+            context, root_type, root_id, depth, limit
+        )
 
 
 @strawberry.type

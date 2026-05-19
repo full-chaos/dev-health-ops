@@ -1,0 +1,651 @@
+"""Resolvers for AI workflow analytics GraphQL queries.
+
+This resolver layer is purely **read-only** and never performs persistence.
+Each function:
+
+1. Validates ``org_id`` and the optional scope.
+2. Loads pre-computed AI rows from ClickHouse via the existing
+   ``AIImpactClickHouseLoader`` and ``AIGovernanceLoader`` helpers.
+3. Aggregates, projects, and returns Strawberry types.
+
+Categorisation and metric computation never happen at request time — the
+loaders only read from ``ai_impact_metrics_daily``, ``ai_governance_*`` and
+``ai_workflow_*`` tables that the metrics/governance jobs already populate.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any
+
+from dev_health_ops.metrics.ai_impact import (
+    AI_BUCKETS as AI_ATTRIBUTION_BUCKETS,
+)
+from dev_health_ops.metrics.ai_impact import (
+    AttributionBucket,
+)
+from dev_health_ops.metrics.loaders.ai_impact import AIImpactClickHouseLoader
+
+from ..authz import require_org_id
+from ..context import GraphQLContext
+from ..models.ai import (
+    AIComparison,
+    AIComparisonDelta,
+    AIComparisonSide,
+    AIDateRangeInput,
+    AIGovernanceCoverageRow,
+    AIGovernanceSummary,
+    AIGovernanceViolationRow,
+    AIImpactBucketRow,
+    AIImpactBucketTotals,
+    AIImpactSummary,
+    AILeverageComponents,
+    AIOpportunitiesResult,
+    AIReviewLoadResult,
+    AIReviewLoadRow,
+    AIRiskBreakdownResult,
+    AIRiskBreakdownRow,
+    AIScopeInput,
+    AIWorkflowDrilldownResult,
+    AIWorkflowGraphEdgeOut,
+    AIWorkflowGraphNodeOut,
+    AIWorkflowRootTypeInput,
+)
+
+logger = logging.getLogger(__name__)
+
+_BASELINE_BUCKET: AttributionBucket = AttributionBucket.HUMAN
+
+
+def _require_client(context: GraphQLContext) -> Any:
+    if context.client is None:
+        raise RuntimeError("Database client not available for AI analytics resolver")
+    return context.client
+
+
+def _parse_uuid(value: str | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (TypeError, ValueError) as exc:
+        logger.debug("Invalid UUID %r in AI analytics scope: %s", value, exc)
+        return None
+
+
+def _normalize_scope(
+    scope: AIScopeInput | None,
+) -> tuple[uuid.UUID | None, str | None, str | None]:
+    if scope is None:
+        return None, None, None
+    return (
+        _parse_uuid(scope.repo_id),
+        scope.team_id or None,
+        scope.work_type or None,
+    )
+
+
+def _validate_date_range(date_range: AIDateRangeInput) -> None:
+    if date_range.end_date < date_range.start_date:
+        raise ValueError(
+            "AI analytics date range end_date must be >= start_date "
+            f"(got start={date_range.start_date}, "
+            f"end={date_range.end_date})"
+        )
+
+
+async def _load_daily_records(
+    context: GraphQLContext,
+    org_id: str,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None,
+) -> list[Any]:
+    """Load daily AI impact records honoring the scope filter."""
+
+    _validate_date_range(date_range)
+    repo_id, team_id, work_type = _normalize_scope(scope)
+    loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
+    return await loader.load_ai_impact_metrics(
+        start_day=date_range.start_date,
+        end_day=date_range.end_date,
+        repo_id=repo_id,
+        team_id=team_id,
+        work_type=work_type,
+    )
+
+
+def _ratio(numerator: float, denominator: float) -> float | None:
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def _weighted_avg(
+    pairs: list[tuple[float | None, float]],
+) -> float | None:
+    """Combine per-day averages weighted by sample size."""
+    total_weight = 0.0
+    total_value = 0.0
+    for value, weight in pairs:
+        if value is None or weight <= 0:
+            continue
+        total_weight += weight
+        total_value += value * weight
+    if total_weight == 0:
+        return None
+    return total_value / total_weight
+
+
+def _bucket_filter(
+    rows: list[Any], buckets: list[AttributionBucket] | None
+) -> list[Any]:
+    """Drop rows whose ``attribution_bucket`` is outside ``buckets``."""
+    if not buckets:
+        return list(rows)
+    bucket_set = {bucket.value for bucket in buckets}
+    return [row for row in rows if row.attribution_bucket in bucket_set]
+
+
+def _empty_leverage() -> AILeverageComponents:
+    return AILeverageComponents(prs_component=0.0)
+
+
+def _row_to_impact_daily(row: Any) -> AIImpactBucketRow:
+    test_gap_rate = row.test_gap_rate
+    return AIImpactBucketRow(
+        bucket=row.attribution_bucket,
+        prs_total=row.prs_total,
+        prs_merged=row.prs_merged,
+        cycle_time_avg_hours=row.cycle_time_avg_hours,
+        reviews_per_pr=row.reviews_per_pr,
+        changes_requested_per_pr=row.changes_requested_per_pr,
+        rework_prs=row.rework_prs,
+        rework_rate=row.rework_drag_rate,
+        revert_prs=row.revert_prs,
+        revert_rate=row.revert_rate,
+        incidents_count=row.incidents_count,
+        incident_rate=row.incident_drag_rate,
+        test_gap_prs=row.test_gap_prs,
+        test_gap_rate=test_gap_rate,
+    )
+
+
+def _aggregate_bucket_totals(rows: list[Any]) -> dict[str, AIImpactBucketTotals]:
+    by_bucket: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        by_bucket[row.attribution_bucket].append(row)
+
+    totals: dict[str, AIImpactBucketTotals] = {}
+    for bucket, bucket_rows in by_bucket.items():
+        prs_total = sum(r.prs_total for r in bucket_rows)
+        prs_merged = sum(r.prs_merged for r in bucket_rows)
+
+        agent_created_prs = sum(r.agent_created_prs for r in bucket_rows)
+
+        cycle_pairs = [(r.cycle_time_avg_hours, r.prs_merged) for r in bucket_rows]
+        cycle_delta_pairs = [
+            (r.ai_cycle_time_delta_hours, r.prs_merged) for r in bucket_rows
+        ]
+        review_amp_pairs = [
+            (r.ai_review_amplification, r.prs_total) for r in bucket_rows
+        ]
+        rework_pairs = [(r.rework_drag_rate, r.prs_total) for r in bucket_rows]
+        revert_pairs = [(r.revert_rate, r.prs_total) for r in bucket_rows]
+        incident_pairs = [(r.incident_drag_rate, r.prs_total) for r in bucket_rows]
+        test_pairs = [(r.test_gap_rate, r.prs_total) for r in bucket_rows]
+        ratio_pairs = [(r.ai_assisted_pr_ratio, r.prs_total) for r in bucket_rows]
+
+        # Aggregate leverage components by averaging per-day values weighted
+        # by PR volume — the underlying metric is already a ratio.
+        prs_component = (
+            _weighted_avg(
+                [(r.leverage.prs_component, r.prs_total) for r in bucket_rows]
+            )
+            or 0.0
+        )
+        leverage = AILeverageComponents(
+            prs_component=prs_component,
+            cycle_time_component=_weighted_avg(
+                [(r.leverage.cycle_time_component, r.prs_merged) for r in bucket_rows]
+            ),
+            review_component=_weighted_avg(
+                [(r.leverage.review_component, r.prs_total) for r in bucket_rows]
+            ),
+            rework_component=_weighted_avg(
+                [(r.leverage.rework_component, r.prs_total) for r in bucket_rows]
+            ),
+            test_component=_weighted_avg(
+                [(r.leverage.test_component, r.prs_total) for r in bucket_rows]
+            ),
+            incident_component=_weighted_avg(
+                [(r.leverage.incident_component, r.prs_total) for r in bucket_rows]
+            ),
+        )
+
+        totals[bucket] = AIImpactBucketTotals(
+            bucket=bucket,
+            prs_total=prs_total,
+            prs_merged=prs_merged,
+            ai_assisted_pr_ratio=_weighted_avg(ratio_pairs),
+            # Sum of agent-created PRs that landed inside this bucket's group.
+            agent_created_pr_count=agent_created_prs,
+            cycle_time_avg_hours=_weighted_avg(cycle_pairs),
+            ai_cycle_time_delta_hours=_weighted_avg(cycle_delta_pairs),
+            ai_review_amplification=_weighted_avg(review_amp_pairs),
+            rework_drag_rate=_weighted_avg(rework_pairs),
+            revert_rate=_weighted_avg(revert_pairs),
+            incident_drag_rate=_weighted_avg(incident_pairs),
+            test_gap_rate=_weighted_avg(test_pairs),
+            leverage=leverage,
+        )
+    return totals
+
+
+# =============================================================================
+# resolve_ai_impact_summary
+# =============================================================================
+
+
+async def resolve_ai_impact_summary(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None = None,
+) -> AIImpactSummary:
+    org_id = require_org_id(context)
+    rows = await _load_daily_records(context, org_id, date_range, scope)
+    rows = _bucket_filter(
+        rows,
+        [AttributionBucket(b.value) for b in scope.buckets]
+        if scope and scope.buckets
+        else None,
+    )
+
+    by_bucket = _aggregate_bucket_totals(rows)
+    daily = [_row_to_impact_daily(row) for row in rows]
+
+    total_prs = sum(r.prs_total for r in rows)
+    ai_assisted = sum(r.ai_assisted_prs for r in rows)
+    agent_created = sum(r.agent_created_prs for r in rows)
+    human = sum(r.human_prs for r in rows)
+    unknown = sum(r.unknown_prs for r in rows)
+
+    computed_at = max((row.computed_at for row in rows), default=None)
+
+    return AIImpactSummary(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        total_prs=total_prs,
+        ai_assisted_prs=ai_assisted,
+        agent_created_prs=agent_created,
+        human_prs=human,
+        unknown_prs=unknown,
+        ai_assisted_pr_ratio=_ratio(ai_assisted, total_prs),
+        by_bucket=sorted(by_bucket.values(), key=lambda r: r.bucket),
+        daily=daily,
+        data_available=bool(rows),
+        computed_at=computed_at,
+    )
+
+
+# =============================================================================
+# resolve_ai_comparison
+# =============================================================================
+
+
+def _empty_side(bucket: str) -> AIComparisonSide:
+    return AIComparisonSide(
+        bucket=bucket,
+        prs_total=0,
+        prs_merged=0,
+        cycle_time_avg_hours=None,
+        reviews_per_pr=None,
+        rework_rate=None,
+        revert_rate=None,
+        test_gap_rate=None,
+        incident_rate=None,
+    )
+
+
+def _aggregate_side(rows: list[Any], bucket_label: str) -> AIComparisonSide:
+    if not rows:
+        return _empty_side(bucket_label)
+    prs_total = sum(r.prs_total for r in rows)
+    prs_merged = sum(r.prs_merged for r in rows)
+    return AIComparisonSide(
+        bucket=bucket_label,
+        prs_total=prs_total,
+        prs_merged=prs_merged,
+        cycle_time_avg_hours=_weighted_avg(
+            [(r.cycle_time_avg_hours, r.prs_merged) for r in rows]
+        ),
+        reviews_per_pr=_weighted_avg([(r.reviews_per_pr, r.prs_total) for r in rows]),
+        rework_rate=_weighted_avg([(r.rework_drag_rate, r.prs_total) for r in rows]),
+        revert_rate=_weighted_avg([(r.revert_rate, r.prs_total) for r in rows]),
+        test_gap_rate=_weighted_avg([(r.test_gap_rate, r.prs_total) for r in rows]),
+        incident_rate=_weighted_avg(
+            [(r.incident_drag_rate, r.prs_total) for r in rows]
+        ),
+    )
+
+
+def _delta(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None:
+        return None
+    return a - b
+
+
+async def resolve_ai_comparison(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None = None,
+) -> AIComparison:
+    org_id = require_org_id(context)
+    all_rows = await _load_daily_records(context, org_id, date_range, scope)
+
+    ai_rows = [r for r in all_rows if r.attribution_bucket in AI_ATTRIBUTION_BUCKETS]
+    baseline_rows = [r for r in all_rows if r.attribution_bucket == _BASELINE_BUCKET]
+
+    ai_side = _aggregate_side(ai_rows, "ai")  # synthetic label for the aggregated side
+    baseline_side = _aggregate_side(baseline_rows, _BASELINE_BUCKET.value)
+    delta = AIComparisonDelta(
+        cycle_time_delta_hours=_delta(
+            ai_side.cycle_time_avg_hours, baseline_side.cycle_time_avg_hours
+        ),
+        reviews_per_pr_delta=_delta(
+            ai_side.reviews_per_pr, baseline_side.reviews_per_pr
+        ),
+        rework_rate_delta=_delta(ai_side.rework_rate, baseline_side.rework_rate),
+        revert_rate_delta=_delta(ai_side.revert_rate, baseline_side.revert_rate),
+        test_gap_rate_delta=_delta(ai_side.test_gap_rate, baseline_side.test_gap_rate),
+        incident_rate_delta=_delta(ai_side.incident_rate, baseline_side.incident_rate),
+    )
+    return AIComparison(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        ai_side=ai_side,
+        baseline_side=baseline_side,
+        delta=delta,
+        data_available=bool(ai_rows or baseline_rows),
+    )
+
+
+# =============================================================================
+# resolve_ai_review_load
+# =============================================================================
+
+
+def _review_total_for_row(row: Any) -> int:
+    reviews_per_pr = row.reviews_per_pr or 0.0
+    return int(round(reviews_per_pr * row.prs_total))
+
+
+async def resolve_ai_review_load(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None = None,
+) -> AIReviewLoadResult:
+    org_id = require_org_id(context)
+    rows = await _load_daily_records(context, org_id, date_range, scope)
+
+    daily = [
+        AIReviewLoadRow(
+            bucket=row.attribution_bucket,
+            prs_total=row.prs_total,
+            reviews_total=_review_total_for_row(row),
+            reviews_per_pr=row.reviews_per_pr,
+            changes_requested_per_pr=row.changes_requested_per_pr,
+            review_amplification=row.ai_review_amplification,
+        )
+        for row in rows
+    ]
+
+    by_bucket_acc: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        by_bucket_acc[row.attribution_bucket].append(row)
+
+    by_bucket: list[AIReviewLoadRow] = []
+    for bucket, bucket_rows in by_bucket_acc.items():
+        prs_total = sum(r.prs_total for r in bucket_rows)
+        reviews_total = sum(_review_total_for_row(r) for r in bucket_rows)
+        by_bucket.append(
+            AIReviewLoadRow(
+                bucket=bucket,
+                prs_total=prs_total,
+                reviews_total=reviews_total,
+                reviews_per_pr=_weighted_avg(
+                    [(r.reviews_per_pr, r.prs_total) for r in bucket_rows]
+                ),
+                changes_requested_per_pr=_weighted_avg(
+                    [(r.changes_requested_per_pr, r.prs_total) for r in bucket_rows]
+                ),
+                review_amplification=_weighted_avg(
+                    [(r.ai_review_amplification, r.prs_total) for r in bucket_rows]
+                ),
+            )
+        )
+    by_bucket.sort(key=lambda r: r.bucket)
+
+    return AIReviewLoadResult(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        by_bucket=by_bucket,
+        daily=daily,
+        data_available=bool(rows),
+    )
+
+
+# =============================================================================
+# resolve_ai_risk_breakdown
+# =============================================================================
+
+
+async def resolve_ai_risk_breakdown(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None = None,
+) -> AIRiskBreakdownResult:
+    org_id = require_org_id(context)
+    rows = await _load_daily_records(context, org_id, date_range, scope)
+
+    by_bucket_acc: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        by_bucket_acc[row.attribution_bucket].append(row)
+
+    by_bucket: list[AIRiskBreakdownRow] = []
+    for bucket, bucket_rows in by_bucket_acc.items():
+        prs_total = sum(r.prs_total for r in bucket_rows)
+        rework_prs = sum(r.rework_prs for r in bucket_rows)
+        revert_prs = sum(r.revert_prs for r in bucket_rows)
+        test_gap_prs = sum(r.test_gap_prs for r in bucket_rows)
+        incidents = sum(r.incidents_count for r in bucket_rows)
+        by_bucket.append(
+            AIRiskBreakdownRow(
+                bucket=bucket,
+                prs_total=prs_total,
+                rework_prs=rework_prs,
+                rework_rate=_ratio(rework_prs, prs_total),
+                revert_prs=revert_prs,
+                revert_rate=_ratio(revert_prs, prs_total),
+                test_gap_prs=test_gap_prs,
+                test_gap_rate=_ratio(test_gap_prs, prs_total),
+                incidents_count=incidents,
+                incident_rate=_ratio(incidents, prs_total),
+            )
+        )
+    by_bucket.sort(key=lambda r: r.bucket)
+
+    return AIRiskBreakdownResult(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        by_bucket=by_bucket,
+        data_available=bool(rows),
+    )
+
+
+# =============================================================================
+# resolve_ai_opportunities (stable empty contract until CHAOS-1586)
+# =============================================================================
+
+
+async def resolve_ai_opportunities(
+    context: GraphQLContext,
+    scope: AIScopeInput | None = None,
+    limit: int = 25,
+) -> AIOpportunitiesResult:
+    org_id = require_org_id(context)
+    # Detector is not implemented yet (CHAOS-1586). Returning an empty,
+    # stable result keeps the GraphQL contract usable by the frontend
+    # today and avoids a breaking change when the detector lands.
+    return AIOpportunitiesResult(
+        org_id=org_id,
+        recommendations=[],
+        detector_ready=False,
+    )
+
+
+# =============================================================================
+# resolve_ai_governance_summary
+# =============================================================================
+
+
+async def resolve_ai_governance_summary(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None = None,
+    violation_limit: int = 100,
+) -> AIGovernanceSummary:
+    from dev_health_ops.audit.ai_governance.loaders import AIGovernanceLoader
+
+    org_id = require_org_id(context)
+    _validate_date_range(date_range)
+    repo_id, team_id, _work_type = _normalize_scope(scope)
+    client = _require_client(context)
+
+    loader = AIGovernanceLoader(client)
+    coverage = loader.load_coverage(
+        org_id=org_id,
+        start_day=date_range.start_date,
+        end_day=date_range.end_date,
+        team_id=team_id,
+        repo_id=repo_id,
+    )
+    violations = loader.load_violations(
+        org_id=org_id,
+        start_day=date_range.start_date,
+        end_day=date_range.end_date,
+        team_id=team_id,
+        repo_id=repo_id,
+        limit=max(0, int(violation_limit)),
+    )
+
+    coverage_rows = [
+        AIGovernanceCoverageRow(
+            day=row.day,
+            team_id=row.team_id,
+            repo_id=str(row.repo_id) if row.repo_id is not None else None,
+            ai_artifacts=row.ai_artifacts,
+            declared_artifacts=row.declared_artifacts,
+            human_reviewed_prs=row.human_reviewed_prs,
+            security_scanned_prs=row.security_scanned_prs,
+            in_policy_artifacts=row.in_policy_artifacts,
+            declaration_coverage=row.declaration_coverage,
+            human_review_coverage=row.human_review_coverage,
+            security_scan_coverage=row.security_scan_coverage,
+            in_policy_coverage=row.in_policy_coverage,
+        )
+        for row in coverage
+    ]
+
+    violation_rows = [
+        AIGovernanceViolationRow(
+            rule_id=v.rule_id,
+            severity=v.severity,
+            subject_type=v.subject_type,
+            subject_id=v.subject_id,
+            team_id=v.team_id,
+            repo_id=str(v.repo_id) if v.repo_id is not None else None,
+            observed_at=_to_aware(v.observed_at),
+            evidence=v.evidence,
+        )
+        for v in violations
+    ]
+
+    return AIGovernanceSummary(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        coverage=coverage_rows,
+        recent_violations=violation_rows,
+        data_available=bool(coverage_rows or violation_rows),
+    )
+
+
+def _to_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+# =============================================================================
+# resolve_ai_workflow_drilldown
+# =============================================================================
+
+
+async def resolve_ai_workflow_drilldown(
+    context: GraphQLContext,
+    root_type: AIWorkflowRootTypeInput,
+    root_id: str,
+    depth: int = 3,
+    limit: int = 100,
+) -> AIWorkflowDrilldownResult:
+    from dev_health_ops.work_graph.ai_workflow import load_ai_workflow_graph
+
+    org_id = require_org_id(context)
+    if not root_id:
+        raise ValueError("root_id is required for AI workflow drilldown")
+
+    traversal = await load_ai_workflow_graph(
+        _require_client(context),
+        org_id,
+        root_type.value,
+        root_id,
+        depth=max(0, int(depth)),
+        limit=max(0, int(limit)),
+    )
+
+    nodes = [
+        AIWorkflowGraphNodeOut(node_type=node.node_type, node_id=node.node_id)
+        for node in traversal.nodes
+    ]
+    edges = [
+        AIWorkflowGraphEdgeOut(
+            edge_id=edge.edge_id,
+            source_type=edge.source_type,
+            source_id=edge.source_id,
+            target_type=edge.target_type,
+            target_id=edge.target_id,
+            edge_type=edge.edge_type,
+            confidence=edge.confidence,
+            source=edge.source,
+            evidence=edge.evidence,
+            provider=edge.provider,
+            repo_id=edge.repo_id,
+        )
+        for edge in traversal.edges
+    ]
+    return AIWorkflowDrilldownResult(
+        org_id=org_id,
+        root_type=traversal.root_type,
+        root_id=traversal.root_id,
+        nodes=nodes,
+        edges=edges,
+        partial=traversal.partial,
+        data_available=bool(edges),
+    )

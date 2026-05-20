@@ -21,6 +21,7 @@ from .models.ai import (
     AIWorkflowDrilldownResult,
     AIWorkflowRootTypeInput,
 )
+from .models.data_health import DataHealth
 from .models.inputs import (
     AnalyticsRequestInput,
     CapacityForecastFilterInput,
@@ -56,6 +57,7 @@ from .resolvers.ai import (
 )
 from .resolvers.analytics import resolve_analytics
 from .resolvers.catalog import resolve_catalog
+from .resolvers.data_health import resolve_data_health
 from .resolvers.reports import (
     CloneSavedReportInput,
     CreateSavedReportInput,
@@ -288,6 +290,15 @@ class Query:
 
         context = get_context(info)
         return await resolve_operating_review(context, input)
+
+    @strawberry.field(description="Operator data-health and trust surface")
+    async def data_health(
+        self,
+        info: Info,
+        team: strawberry.ID,
+    ) -> DataHealth:
+        context = get_context(info)
+        return await resolve_data_health(context, str(team))
 
     @strawberry.field(
         description="AI workflow impact summary across the requested time range."

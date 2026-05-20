@@ -93,8 +93,7 @@ _RULES: tuple[RuleDef, ...] = (
             "change pressure, compounding architectural risk."
         ),
         success_criterion=(
-            "Complexity delta in hotspot files drops below threshold within "
-            "2 cycles."
+            "Complexity delta in hotspot files drops below threshold within 2 cycles."
         ),
         severity="critical",
         theme="maintenance-tech-debt",
@@ -135,9 +134,7 @@ def get_rule(rule_id: str) -> RuleDef:
         return _INDEX[rule_id]
     except KeyError:
         known = ", ".join(repr(r) for r in _INDEX)
-        raise KeyError(
-            f"Unknown rule id {rule_id!r}. Known ids: {known}"
-        ) from None
+        raise KeyError(f"Unknown rule id {rule_id!r}. Known ids: {known}") from None
 
 
 def all_rules() -> tuple[RuleDef, ...]:

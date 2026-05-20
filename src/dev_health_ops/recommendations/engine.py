@@ -21,7 +21,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from dev_health_ops.recommendations.snapshot import (  # noqa: F401 (re-export for rules)
+from dev_health_ops.recommendations.snapshot import (
     MetricsSnapshot,
     RecommendationRecord,
 )
@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from dev_health_ops.recommendations.schema import Recommendation
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["MetricsSnapshot", "RecommendationRecord", "RuleEngine"]
 
 
 def _parse_window(window: int | str) -> int:
@@ -77,6 +79,7 @@ class RuleEngine:
             from dev_health_ops.recommendations.rules import (
                 RULE_EVALUATORS,  # noqa: PLC0415
             )
+
             self._evaluators = dict(RULE_EVALUATORS)
 
     # ------------------------------------------------------------------
@@ -113,12 +116,16 @@ class RuleEngine:
             try:
                 rec = fn(snapshot, self._now)
             except Exception:
-                logger.exception("Rule %r raised for team=%r; skipping.", rule_id, team_id)
+                logger.exception(
+                    "Rule %r raised for team=%r; skipping.", rule_id, team_id
+                )
                 continue
             if rec is not None:
                 results.append(rec)
 
-        logger.debug("evaluate team=%r fired=%d/%d", team_id, len(results), len(self._evaluators))
+        logger.debug(
+            "evaluate team=%r fired=%d/%d", team_id, len(results), len(self._evaluators)
+        )
         return results
 
     def evaluate_all(
@@ -134,8 +141,12 @@ class RuleEngine:
         days = _parse_window(window)
         window_end = self._now.date()
         window_start = window_end - timedelta(days=days)
-        return self.evaluate(team_id=team_id, org_id=org_id,
-                             window_start=window_start, window_end=window_end)
+        return self.evaluate(
+            team_id=team_id,
+            org_id=org_id,
+            window_start=window_start,
+            window_end=window_end,
+        )
 
     def evaluate_one(
         self,
@@ -157,7 +168,9 @@ class RuleEngine:
         window_end = self._now.date()
         window_start = window_end - timedelta(days=days)
         snapshot = self._loader.load_team_metrics_window(
-            team_id=team_id, org_id=org_id,
-            window_start=window_start, window_end=window_end,
+            team_id=team_id,
+            org_id=org_id,
+            window_start=window_start,
+            window_end=window_end,
         )
         return self._evaluators[rule_id](snapshot, self._now)

@@ -59,7 +59,7 @@ class MetricsLoader(Protocol):
 
         Missing data fields are ``None`` / empty list — never raised.
         """
-        ...  # pragma: no cover
+        raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +310,12 @@ class ClickHouseMetricsLoader:
         if org_id:
             self._org_id = org_id
         try:
-            wip, throughput = self._load_wip_throughput(team_id, window_start, window_end)
-            rev_lat, rev_gini = self._load_review_signals(team_id, window_start, window_end)
+            wip, throughput = self._load_wip_throughput(
+                team_id, window_start, window_end
+            )
+            rev_lat, rev_gini = self._load_review_signals(
+                team_id, window_start, window_end
+            )
             rework = self._load_rework_ratio(team_id, window_start, window_end)
             after_hours, cycle_times = self._load_sustainability_signals(
                 team_id, window_start, window_end

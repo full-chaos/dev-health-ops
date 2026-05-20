@@ -56,7 +56,7 @@ def _window_to_dates(window: WindowInput) -> tuple[date, date]:
     unit/value pair.  A *cycle* is treated as 14 days (two-week sprint).
     """
     today = datetime.now(tz=timezone.utc).date()
-    days: int
+    days = window.value * 7
     match window.unit:
         case WindowUnit.DAY:
             days = window.value
@@ -64,8 +64,6 @@ def _window_to_dates(window: WindowInput) -> tuple[date, date]:
             days = window.value * 7
         case WindowUnit.CYCLE:
             days = window.value * 14
-        case _:  # pragma: no cover
-            days = window.value * 7
     return today - timedelta(days=days), today
 
 
@@ -99,7 +97,9 @@ def _parse_evidence(raw: str | list[Any] | None) -> list[EvidenceRef]:
                 EvidenceRef(
                     team_id=str(ev.get("team_id", "")),
                     metric_table=str(ev.get("metric_table", "")),
-                    window_start=date.fromisoformat(str(ws_raw)) if ws_raw else date.min,
+                    window_start=date.fromisoformat(str(ws_raw))
+                    if ws_raw
+                    else date.min,
                     window_end=date.fromisoformat(str(we_raw)) if we_raw else date.min,
                     field=str(ev.get("field", "")),
                     value=float(ev.get("value", 0.0)),
@@ -155,6 +155,7 @@ def _row_to_recommendation(row: dict[str, Any]) -> Recommendation | None:
     except (KeyError, ValueError, TypeError):
         logger.warning("Skipping malformed recommendation row: %r", row)
         return None
+
 
 async def resolve_recommendations(
     context: GraphQLContext,

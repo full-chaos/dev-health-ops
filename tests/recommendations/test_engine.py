@@ -48,8 +48,12 @@ def test_engine_evaluate_returns_expected_rules() -> None:
         window_end=date(2026, 4, 14),
     )
 
-    assert loader.calls == [("team-alpha", "org-1", date(2026, 4, 1), date(2026, 4, 14))]
-    assert [item.rule_id for item in recommendations] == [rule.id for rule in registry.all_rules()]
+    assert loader.calls == [
+        ("team-alpha", "org-1", date(2026, 4, 1), date(2026, 4, 14))
+    ]
+    assert [item.rule_id for item in recommendations] == [
+        rule.id for rule in registry.all_rules()
+    ]
     assert {item.computed_at for item in recommendations} == {now}
 
 

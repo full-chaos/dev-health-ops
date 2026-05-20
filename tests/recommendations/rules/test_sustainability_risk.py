@@ -12,12 +12,9 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-
 from dev_health_ops.recommendations.rules.sustainability_risk import (
     RULE_ID,
     SUCCESS_CRITERION,
-    _linear_slope,
     evaluate_sustainability_risk,
 )
 from dev_health_ops.recommendations.thresholds import (

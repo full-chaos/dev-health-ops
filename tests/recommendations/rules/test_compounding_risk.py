@@ -12,8 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-
 from dev_health_ops.recommendations.rules.compounding_risk import (
     RULE_ID,
     SUCCESS_CRITERION,
@@ -25,7 +23,6 @@ from dev_health_ops.recommendations.thresholds import (
 )
 
 from .conftest import NOW, make_snapshot
-
 
 # ---------------------------------------------------------------------------
 # 1. Positive trigger

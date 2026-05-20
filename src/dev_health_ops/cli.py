@@ -119,6 +119,7 @@ async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
     )
     return 0
 
+
 # ---------------------------------------------------------------------------
 # Recommendations commands
 # ---------------------------------------------------------------------------
@@ -128,6 +129,7 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     """Compute rule-based recommendations for a team and persist via ClickHouse sink."""
     import json
     from datetime import date, datetime, timezone
+
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.recommendations import registry as recommendations_registry
     from dev_health_ops.recommendations.engine import RuleEngine
@@ -175,12 +177,18 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     log = logging.getLogger(__name__)
     log.info(
         "recommendations compute: team=%r window=%s fired=%d",
-        team_id, window, len(recommendations),
+        team_id,
+        window,
+        len(recommendations),
     )
     if getattr(ns, "output_json", False):
         import sys
         from dataclasses import asdict
-        print(json.dumps([asdict(r) for r in recommendations], default=str), file=sys.stdout)
+
+        print(
+            json.dumps([asdict(r) for r in recommendations], default=str),
+            file=sys.stdout,
+        )
     return 0
 
 
@@ -213,6 +221,7 @@ def _register_recommendations_commands(subparsers: argparse._SubParsersAction) -
         help="Print fired recommendations as JSON to stdout.",
     )
     compute.set_defaults(func=_cmd_recommendations_compute)
+
 
 _GLOBAL_FLAG_SPECS: tuple[tuple[tuple[str, ...], dict[str, object]], ...] = (
     (

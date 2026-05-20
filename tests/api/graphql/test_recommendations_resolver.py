@@ -91,7 +91,10 @@ FIXTURE_ROWS = [
 @pytest.mark.anyio
 async def test_resolve_recommendations_returns_list(mock_context):
     """Resolver returns a non-empty list when rows are present."""
-    from dev_health_ops.api.graphql.models.recommendations import WindowInput, WindowUnit
+    from dev_health_ops.api.graphql.models.recommendations import (
+        WindowInput,
+        WindowUnit,
+    )
     from dev_health_ops.api.graphql.resolvers.recommendations import (
         resolve_recommendations,
     )
@@ -149,7 +152,10 @@ async def test_resolve_recommendations_field_mapping(mock_context):
 @pytest.mark.anyio
 async def test_resolve_recommendations_evidence_references_resolve(mock_context):
     """Evidence list is deserialised; each EvidenceRef carries required fields."""
-    from dev_health_ops.api.graphql.models.recommendations import WindowInput, WindowUnit
+    from dev_health_ops.api.graphql.models.recommendations import (
+        WindowInput,
+        WindowUnit,
+    )
     from dev_health_ops.api.graphql.resolvers.recommendations import (
         resolve_recommendations,
     )
@@ -180,7 +186,10 @@ async def test_resolve_recommendations_evidence_references_resolve(mock_context)
 @pytest.mark.anyio
 async def test_resolve_recommendations_empty_on_no_rows(mock_context):
     """Resolver returns an empty list when the query returns nothing."""
-    from dev_health_ops.api.graphql.models.recommendations import WindowInput, WindowUnit
+    from dev_health_ops.api.graphql.models.recommendations import (
+        WindowInput,
+        WindowUnit,
+    )
     from dev_health_ops.api.graphql.resolvers.recommendations import (
         resolve_recommendations,
     )
@@ -202,7 +211,10 @@ async def test_resolve_recommendations_empty_on_no_rows(mock_context):
 @pytest.mark.anyio
 async def test_resolve_recommendations_tolerates_db_error(mock_context):
     """Resolver swallows DB exceptions and returns an empty list (graceful degradation)."""
-    from dev_health_ops.api.graphql.models.recommendations import WindowInput, WindowUnit
+    from dev_health_ops.api.graphql.models.recommendations import (
+        WindowInput,
+        WindowUnit,
+    )
     from dev_health_ops.api.graphql.resolvers.recommendations import (
         resolve_recommendations,
     )
@@ -224,7 +236,10 @@ async def test_resolve_recommendations_tolerates_db_error(mock_context):
 @pytest.mark.anyio
 async def test_resolve_recommendations_multiple_rules(mock_context):
     """All fired rules within the window are returned."""
-    from dev_health_ops.api.graphql.models.recommendations import WindowInput, WindowUnit
+    from dev_health_ops.api.graphql.models.recommendations import (
+        WindowInput,
+        WindowUnit,
+    )
     from dev_health_ops.api.graphql.resolvers.recommendations import (
         resolve_recommendations,
     )
@@ -276,7 +291,10 @@ async def test_resolve_recommendations_unknown_severity_falls_back(mock_context)
 @pytest.mark.anyio
 async def test_resolve_recommendations_raises_without_client(mock_context):
     """RuntimeError is raised when context.client is None (misconfigured server)."""
-    from dev_health_ops.api.graphql.models.recommendations import WindowInput, WindowUnit
+    from dev_health_ops.api.graphql.models.recommendations import (
+        WindowInput,
+        WindowUnit,
+    )
     from dev_health_ops.api.graphql.resolvers.recommendations import (
         resolve_recommendations,
     )

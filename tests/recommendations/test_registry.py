@@ -11,14 +11,12 @@ Covers:
 
 from __future__ import annotations
 
-import importlib
-import sys
 import types
 
 import pytest
 
 from dev_health_ops.recommendations.registry import all_rules, get_rule
-from dev_health_ops.recommendations.schema import RuleDef, Severity, Theme
+from dev_health_ops.recommendations.schema import RuleDef
 
 # ---------------------------------------------------------------------------
 # Expected canonical rule ids (per plan §Canonical Rules)
@@ -49,7 +47,9 @@ VALID_THEMES: set[str] = {
 
 def test_all_five_canonical_ids_present() -> None:
     ids = {rule.id for rule in all_rules()}
-    assert ids == CANONICAL_IDS, f"Missing or extra ids: {ids.symmetric_difference(CANONICAL_IDS)}"
+    assert ids == CANONICAL_IDS, (
+        f"Missing or extra ids: {ids.symmetric_difference(CANONICAL_IDS)}"
+    )
 
 
 def test_all_rules_returns_tuple() -> None:
@@ -122,7 +122,7 @@ def test_ruledef_is_frozen(rule: RuleDef) -> None:
 def test_ruledef_is_hashable(rule: RuleDef) -> None:
     """Frozen dataclasses must be hashable."""
     assert hash(rule) is not None
-    {rule}  # can be placed in a set
+    assert rule in {rule}
 
 
 def test_all_rules_tuple_is_immutable() -> None:
@@ -167,10 +167,9 @@ def test_duplicate_id_guard_raises_on_import() -> None:
     # Build a fake registry module with a duplicate rule
     fake_mod_name = "dev_health_ops.recommendations._fake_registry_dup"
     fake_mod = types.ModuleType(fake_mod_name)
-    fake_mod.__spec__ = None  # type: ignore[attr-defined]
+    fake_mod.__spec__ = None
 
-    dup_rule = get_rule("saturation")
-    fake_rules_source = f"""
+    fake_rules_source = """
 from dev_health_ops.recommendations.schema import RuleDef
 
 _RULES = (

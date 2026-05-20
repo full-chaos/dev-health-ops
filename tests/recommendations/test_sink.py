@@ -8,11 +8,13 @@ and column list.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from unittest.mock import MagicMock, patch
-
-import pytest
+from typing import TYPE_CHECKING, cast
+from unittest.mock import MagicMock
 
 from dev_health_ops.recommendations.snapshot import RecommendationRecord
+
+if TYPE_CHECKING:
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +52,7 @@ def _make_record(
 
 
 class TestRecommendationsMixin:
-    def _make_sink(self) -> "any":
+    def _make_sink(self) -> ClickHouseMetricsSink:
         """Build a ClickHouseMetricsSink with a mocked client."""
         from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
@@ -58,16 +60,17 @@ class TestRecommendationsMixin:
         sink = ClickHouseMetricsSink.__new__(ClickHouseMetricsSink)
         sink.client = mock_client
         sink.org_id = ""
-        sink._insert_rows = MagicMock()
+        object.__setattr__(sink, "_insert_rows", MagicMock())
         return sink
 
     def test_write_recommendations_calls_insert_rows(self) -> None:
         sink = self._make_sink()
+        insert_rows = cast(MagicMock, sink._insert_rows)
         records = [_make_record()]
         sink.write_recommendations(records)
 
-        sink._insert_rows.assert_called_once()
-        call_args = sink._insert_rows.call_args
+        insert_rows.assert_called_once()
+        call_args = insert_rows.call_args
         table_name = call_args[0][0]
         columns = call_args[0][1]
 
@@ -80,8 +83,9 @@ class TestRecommendationsMixin:
 
     def test_write_recommendations_empty_is_noop(self) -> None:
         sink = self._make_sink()
+        insert_rows = cast(MagicMock, sink._insert_rows)
         sink.write_recommendations([])
-        sink._insert_rows.assert_not_called()
+        insert_rows.assert_not_called()
 
     def test_write_recommendations_multiple_records(self) -> None:
         sink = self._make_sink()
@@ -91,15 +95,17 @@ class TestRecommendationsMixin:
             _make_record(rule_id="review-concentration"),
         ]
         sink.write_recommendations(records)
-        sink._insert_rows.assert_called_once()
+        insert_rows = cast(MagicMock, sink._insert_rows)
+        insert_rows.assert_called_once()
         # Rows passed are the records
-        passed_rows = sink._insert_rows.call_args[0][2]
+        passed_rows = insert_rows.call_args[0][2]
         assert len(passed_rows) == 3
 
     def test_write_recommendations_includes_rule_version(self) -> None:
         sink = self._make_sink()
         sink.write_recommendations([_make_record()])
-        columns = sink._insert_rows.call_args[0][1]
+        insert_rows = cast(MagicMock, sink._insert_rows)
+        columns = insert_rows.call_args[0][1]
         assert "rule_version" in columns
 
 
@@ -111,6 +117,7 @@ class TestRecommendationsMixin:
 class TestRecommendationToRecord:
     def test_converts_recommendation_to_record(self) -> None:
         from datetime import date, datetime, timezone
+
         from dev_health_ops.recommendations.loader import recommendation_to_record
         from dev_health_ops.recommendations.schema import EvidenceRef, Recommendation
 
@@ -144,6 +151,7 @@ class TestRecommendationToRecord:
 
     def test_evidence_serialised_as_json(self) -> None:
         import json
+
         from dev_health_ops.recommendations.loader import recommendation_to_record
         from dev_health_ops.recommendations.schema import EvidenceRef, Recommendation
 

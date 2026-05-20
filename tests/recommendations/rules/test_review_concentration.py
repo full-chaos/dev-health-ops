@@ -27,7 +27,6 @@ from dev_health_ops.recommendations.thresholds import (
 
 from .conftest import NOW, make_snapshot
 
-
 # ---------------------------------------------------------------------------
 # 1. Positive trigger
 # ---------------------------------------------------------------------------

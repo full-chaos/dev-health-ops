@@ -19,9 +19,6 @@ from dev_health_ops.recommendations.schema import (
     EvidenceRef,
     Recommendation,
     RuleDef,
-    Severity,
-    Theme,
-    WindowUnit,
 )
 
 # ---------------------------------------------------------------------------
@@ -94,7 +91,7 @@ class TestEvidenceRef:
     def test_is_hashable(self) -> None:
         ev = make_evidence()
         assert hash(ev) is not None
-        {ev}
+        assert ev in {ev}
 
     def test_equality(self) -> None:
         assert make_evidence() == make_evidence()
@@ -142,7 +139,7 @@ class TestRuleDef:
     def test_is_hashable(self) -> None:
         rd = make_rule_def()
         assert hash(rd) is not None
-        {rd}
+        assert rd in {rd}
 
     def test_equality(self) -> None:
         assert make_rule_def() == make_rule_def()
@@ -163,7 +160,7 @@ class TestRuleDef:
                 title="T",
                 description="D",
                 success_criterion="S",
-                severity=sev,  # type: ignore[arg-type]
+                severity=sev,
                 theme="operational-support",
             )
             assert rd.severity == sev
@@ -238,7 +235,7 @@ class TestRecommendation:
     def test_is_hashable(self) -> None:
         rec = make_recommendation()
         assert hash(rec) is not None
-        {rec}
+        assert rec in {rec}
 
     def test_equality(self) -> None:
         assert make_recommendation() == make_recommendation()

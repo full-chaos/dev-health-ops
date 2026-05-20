@@ -58,7 +58,10 @@ def evaluate_compounding_risk(
     Returns:
         A Recommendation if the rule fires, else None.
     """
-    if snapshot.hotspot_complexity_delta is None or snapshot.hotspot_churn_overlap is None:
+    if (
+        snapshot.hotspot_complexity_delta is None
+        or snapshot.hotspot_churn_overlap is None
+    ):
         return None
 
     complexity_delta: float = snapshot.hotspot_complexity_delta

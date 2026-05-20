@@ -68,9 +68,13 @@ async def test_connectors_reads_existing_sync_history(monkeypatch: pytest.Monkey
     run = JobRun(job_id=UUID("00000000-0000-0000-0000-000000000001"))
     run.completed_at = datetime(2026, 5, 20, 1, tzinfo=UTC)
     run.result = {"stage": "fetch"}
-    monkeypatch.setattr(data_health, "_latest_job_run", lambda *_args: _async_value(run))
+    monkeypatch.setattr(
+        data_health, "_latest_job_run", lambda *_args: _async_value(run)
+    )
 
-    result = await data_health.resolve_connectors(_context(db_session=_Session([config])))
+    result = await data_health.resolve_connectors(
+        _context(db_session=_Session([config]))
+    )
 
     assert len(result) == 1
     assert result[0].provider == "github"
@@ -84,7 +88,9 @@ async def test_connectors_reads_existing_sync_history(monkeypatch: pytest.Monkey
 async def test_identity_mapping_surfaces_unmapped_and_alias_suggestions(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    async def fake_query_dicts(_context: GraphQLContext, _sql: str, _params: dict[str, Any]):
+    async def fake_query_dicts(
+        _context: GraphQLContext, _sql: str, _params: dict[str, Any]
+    ):
         return [
             {
                 "provider": "git",
@@ -111,7 +117,9 @@ async def test_identity_mapping_surfaces_unmapped_and_alias_suggestions(
     ]
 
     monkeypatch.setattr(data_health, "_query_dicts", fake_query_dicts)
-    monkeypatch.setattr(data_health, "_mapped_identities", lambda *_args, **_kw: _async_value(mapped))
+    monkeypatch.setattr(
+        data_health, "_mapped_identities", lambda *_args, **_kw: _async_value(mapped)
+    )
 
     result = await data_health.resolve_identity_mapping(_context(), "team-a")
 
@@ -156,9 +164,13 @@ async def test_metric_lineage_uses_registry_and_argmax(monkeypatch: pytest.Monke
         assert params["org_id"] == "org-1"
         return [{"computed_at": datetime(2026, 5, 20, 2, tzinfo=UTC), "row_count": 9}]
 
-    monkeypatch.setattr("dev_health_ops.api.queries.client.query_dicts", fake_query_dicts)
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
 
-    result = await data_health.resolve_metric_lineage(_context(), "team-a", "throughput")
+    result = await data_health.resolve_metric_lineage(
+        _context(), "team-a", "throughput"
+    )
 
     assert result is not None
     assert result.metric_id == "throughput"

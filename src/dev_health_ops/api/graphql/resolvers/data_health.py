@@ -7,7 +7,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-import strawberry
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -33,7 +32,7 @@ from ..models.data_health import (
     MetricLineage,
     MissingMapping,
     UnmappedIdentity,
-    WindowSpec,
+    compute_metric_lineage,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,20 +42,6 @@ MAX_ALIAS_SUGGESTIONS = 25
 
 # TODO(CHAOS-1631): promote sync_configurations/job_runs into a dedicated
 # sync-run read model with rows-ingested/stage fields for connector health.
-
-METRIC_LINEAGE_REGISTRY: dict[str, tuple[list[str], WindowSpec]] = {
-    "throughput": (["work_item_metrics_daily"], WindowSpec(kind="daily")),
-    "cycle_time": (["work_item_metrics_daily"], WindowSpec(kind="daily")),
-    "lead_time": (["work_item_metrics_daily"], WindowSpec(kind="daily")),
-    "wip": (["work_item_metrics_daily"], WindowSpec(kind="daily")),
-    "review_load": (["repo_metrics_daily"], WindowSpec(kind="daily")),
-    "review_latency": (["repo_metrics_daily"], WindowSpec(kind="daily")),
-    "deployment_frequency": (["repo_metrics_daily"], WindowSpec(kind="daily")),
-    "change_failure_rate": (["repo_metrics_daily"], WindowSpec(kind="daily")),
-    "after_hours_ratio": (["team_metrics_daily"], WindowSpec(kind="daily")),
-    "weekend_ratio": (["team_metrics_daily"], WindowSpec(kind="daily")),
-    "investment_mix": (["work_unit_investments"], WindowSpec(kind="rolling", duration_days=30)),
-}
 
 
 async def resolve_data_health(context: GraphQLContext, team: str) -> DataHealth:
@@ -96,7 +81,9 @@ async def resolve_connectors(context: GraphQLContext) -> list[ConnectorStatus]:
 
     stmt = (
         select(SyncConfiguration)
-        .where(SyncConfiguration.org_id == org_id, SyncConfiguration.is_active.is_(True))
+        .where(
+            SyncConfiguration.org_id == org_id, SyncConfiguration.is_active.is_(True)
+        )
         .options(selectinload(SyncConfiguration.children))
         .order_by(SyncConfiguration.provider, SyncConfiguration.name)
     )
@@ -322,7 +309,9 @@ async def _coverage_rows(
     deployments = await _query_dicts(
         context, deployments_sql, {"org_id": org_id, "team": team}
     )
-    work_items = await _query_dicts(context, work_items_sql, {"org_id": org_id, "team": team})
+    work_items = await _query_dicts(
+        context, work_items_sql, {"org_id": org_id, "team": team}
+    )
     return deployments, work_items
 
 
@@ -347,54 +336,7 @@ def _coverage_stat(rows: Iterable[Mapping[str, Any]], reason: str) -> CoverageSt
 async def resolve_metric_lineage(
     context: GraphQLContext, team: str, metric_id: str
 ) -> MetricLineage | None:
-    org_id = require_org_id(context)
-    registry_entry = METRIC_LINEAGE_REGISTRY.get(metric_id)
-    if registry_entry is None:
-        return None
-    source_tables, window = registry_entry
-    computed_at, row_count = await _lineage_freshness(
-        context, org_id=org_id, team=team, tables=source_tables
-    )
-    if computed_at is None:
-        return None
-    return MetricLineage(
-        metric_id=strawberry.ID(metric_id),
-        source_tables=source_tables,
-        compute_window=window,
-        computed_at=computed_at,
-        row_count=row_count,
-    )
-
-
-async def _lineage_freshness(
-    context: GraphQLContext, *, org_id: str, team: str, tables: Sequence[str]
-) -> tuple[datetime | None, int | None]:
-    computed_values: list[datetime] = []
-    total_rows = 0
-    for table in tables:
-        if not _safe_table_name(table):
-            continue
-        sql = f"""
-            SELECT argMax(computed_at, computed_at) AS computed_at, count() AS row_count
-            FROM {table}
-            WHERE org_id = %(org_id)s
-        """
-        rows = await _query_dicts(context, sql, {"org_id": org_id, "team": team})
-        if not rows:
-            continue
-        row = rows[0]
-        computed = row.get("computed_at")
-        if isinstance(computed, datetime):
-            computed_values.append(computed)
-        elif computed:
-            try:
-                computed_values.append(datetime.fromisoformat(str(computed)))
-            except ValueError:
-                logger.debug("Ignoring unparsable computed_at %r for %s", computed, table)
-        total_rows += _int(row.get("row_count"))
-    if not computed_values:
-        return None, None
-    return max(computed_values), total_rows
+    return await compute_metric_lineage(context, team, metric_id)
 
 
 async def _query_dicts(
@@ -446,7 +388,3 @@ def _email_local(value: str | None) -> str | None:
     if "@" in normalized:
         return normalized.split("@", 1)[0]
     return normalized or None
-
-
-def _safe_table_name(table: str) -> bool:
-    return table.replace("_", "").isalnum()

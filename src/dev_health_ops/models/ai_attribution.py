@@ -44,6 +44,7 @@ class AIAttributionKind(StrEnum):
     AGENT_CREATED = "agent_created"  # autonomous agent produced this artifact
     AI_REVIEW = "ai_review"  # AI performed the review
     UNKNOWN = "unknown"  # signal detected but kind unclear — do NOT guess
+    HUMAN = "human"  # explicit human attribution (e.g., manual override / fixture)
 
 
 # ---------------------------------------------------------------------------

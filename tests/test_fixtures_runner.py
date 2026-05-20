@@ -95,7 +95,25 @@ def test_pr_fixture_generator_emits_ai_attribution_records():
     assert {record.kind for record in records} >= {
         AIAttributionKind.AI_ASSISTED,
         AIAttributionKind.AGENT_CREATED,
+        AIAttributionKind.HUMAN,
     }
+    assert any(r.kind is AIAttributionKind.HUMAN for r in records), (
+        "need human-bucket attributions so AI baseline deltas can compute"
+    )
+
+
+def test_pr_fixture_generator_emits_revert_shaped_prs():
+    generator = SyntheticDataGenerator(repo_name="test/ai-reverts", seed=11)
+    pr_data = generator.generate_prs(count=21)
+    prs = [item["pr"] for item in pr_data]
+    reverts = [
+        pr
+        for pr in prs
+        if pr.title.startswith("Revert ")
+        and (pr.deletions or 0) > (pr.additions or 0) * 2
+        and (pr.deletions or 0) >= 50
+    ]
+    assert reverts, "expected revert-shaped PRs to drive revert_rate signal"
 
 
 def test_ai_workflow_generator_emits_runs_and_edges():

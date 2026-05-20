@@ -90,9 +90,19 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
             elif state == "closed":
                 closed_at = created_at + timedelta(days=random.randint(1, 14))
 
+            is_revert = i % 7 == 0
             summary = random.choice(pr_titles)
             keywords = random.sample(pr_keywords, 2)
-            title = f"[{keywords[0]}] {summary}"
+            if is_revert:
+                title = f'Revert "[{keywords[0]}] {summary}"'
+                additions = random.randint(2, 20)
+                deletions = random.randint(80, 300)
+                changed_files = random.randint(2, 8)
+            else:
+                title = f"[{keywords[0]}] {summary}"
+                additions = random.randint(10, 500)
+                deletions = random.randint(5, 200)
+                changed_files = random.randint(1, 10)
             if issue_ref is not None:
                 title = f"{title} (Fixes #{issue_ref})"
             body = (
@@ -117,9 +127,9 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
                         closed_at=closed_at,
                         head_branch=f"feature/{i}",
                         base_branch="main",
-                        additions=random.randint(10, 500),
-                        deletions=random.randint(5, 200),
-                        changed_files=random.randint(1, 10),
+                        additions=additions,
+                        deletions=deletions,
+                        changed_files=changed_files,
                         first_review_at=first_review_at,
                         first_comment_at=first_comment_at,
                         reviews_count=reviews_count,
@@ -194,6 +204,25 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
 
         for index, pr in enumerate(prs):
             if index % 3 == 2:
+                records.append(
+                    AIAttributionRecord(
+                        org_id=org_uuid,
+                        provider=self.provider,
+                        subject_type="pull_request",
+                        subject_id=str(pr.number),
+                        repo_id=pr.repo_id,
+                        kind=AIAttributionKind.HUMAN,
+                        source=AIAttributionSource.MANUAL,
+                        confidence=1.0,
+                        actor=pr.author_email,
+                        evidence={
+                            "source": "synthetic_fixture",
+                            "label": "human-authored",
+                            "reason": "baseline_for_ai_comparison",
+                        },
+                        observed_at=pr.merged_at or pr.created_at,
+                    )
+                )
                 continue
 
             kind, source, label, actor = attribution_variants[

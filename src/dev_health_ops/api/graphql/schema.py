@@ -29,6 +29,7 @@ from .models.inputs import (
     FilterInput,
     SecurityAlertFilterInput,
     SecurityPaginationInput,
+    ThroughputForecastInput,
     WorkGraphEdgeFilterInput,
 )
 from .models.outputs import (
@@ -39,6 +40,7 @@ from .models.outputs import (
     HomeResult,
     SecurityAlertConnection,
     SecurityOverview,
+    ThroughputForecast,
     WorkGraphEdgesResult,
 )
 from .resolvers.ai import (
@@ -260,6 +262,18 @@ class Query:
 
         context = get_context(info)
         return await resolve_capacity_forecasts(context, filters)
+
+    @strawberry.field(description="Compute throughput-based capacity forecast")
+    async def throughput_forecast(
+        self,
+        info: Info,
+        org_id: str,
+        input: ThroughputForecastInput,
+    ) -> ThroughputForecast | None:
+        from .resolvers.forecast import resolve_throughput_forecast
+
+        context = get_context(info)
+        return await resolve_throughput_forecast(context, input)
 
     @strawberry.field(
         description="AI workflow impact summary across the requested time range."

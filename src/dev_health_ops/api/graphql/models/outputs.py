@@ -451,6 +451,7 @@ class CapacityForecastConnection:
     total_count: int
 
 
+
 @strawberry.type
 class ThroughputRollingWindow:
     """Rolling weekly throughput summary for a forecast window."""
@@ -492,6 +493,56 @@ class ThroughputForecast:
     review_bottleneck: ThroughputRiskOverlay
     incident_load: ThroughputRiskOverlay
     insufficient_history: bool
+
+
+
+
+@strawberry.type
+class OperatingReviewDelta:
+    """Week-over-week delta for an operating review metric."""
+
+    value: float
+    prior_value: float
+    absolute: float
+    percent: float | None
+    status: str
+
+
+@strawberry.type
+class OperatingReviewMetric:
+    """A single metric in a weekly operating review section."""
+
+    key: str
+    label: str
+    value: float
+    unit: str
+    delta: OperatingReviewDelta
+
+
+@strawberry.type
+class OperatingReviewSection:
+    """Fixed weekly operating review section."""
+
+    key: str
+    title: str
+    metrics: list[OperatingReviewMetric]
+    changed: list[str]
+    improved: list[str]
+    worsened: list[str]
+
+
+@strawberry.type
+class OperatingReview:
+    """Weekly Engineering Operating Review for a team/week tuple."""
+
+    org_id: str
+    team_id: str
+    week_start: date
+    prior_week_start: date
+    sections: list[OperatingReviewSection]
+    recommendations: list[str]
+    recommendations_empty_state: str
+
 
 
 # =============================================================================

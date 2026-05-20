@@ -451,7 +451,6 @@ class CapacityForecastConnection:
     total_count: int
 
 
-
 @strawberry.type
 class ThroughputRollingWindow:
     """Rolling weekly throughput summary for a forecast window."""
@@ -493,8 +492,6 @@ class ThroughputForecast:
     review_bottleneck: ThroughputRiskOverlay
     incident_load: ThroughputRiskOverlay
     insufficient_history: bool
-
-
 
 
 @strawberry.type
@@ -542,7 +539,6 @@ class OperatingReview:
     sections: list[OperatingReviewSection]
     recommendations: list[str]
     recommendations_empty_state: str
-
 
 
 # =============================================================================

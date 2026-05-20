@@ -317,7 +317,6 @@ class CapacityForecastFilterInput:
     limit: int = 10
 
 
-
 @strawberry.input
 class ThroughputForecastInput:
     """Input for throughput-based capacity forecast computation."""
@@ -328,15 +327,12 @@ class ThroughputForecastInput:
     history_weeks: int = 12
 
 
-
-
 @strawberry.input
 class OperatingReviewInput:
     """Input for a weekly engineering operating review."""
 
     team_id: str
     week_start: date
-
 
 
 # =============================================================================

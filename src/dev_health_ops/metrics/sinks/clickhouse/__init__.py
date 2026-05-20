@@ -7,6 +7,23 @@ Public API (stable — do not remove):
 The single `ClickHouseMetricsSink` class is built by composing mixin classes,
 each responsible for one table family:
 
+  ClickHouseCore            — connection, schema, shared _insert_rows helper
+  CIMixin                   — CI/CD, deploy, incident, testops pipeline/test/coverage,
+                              release confidence, feature flags, telemetry, release impact
+  DoraMixin                 — DORA metrics, period comparisons, benchmarks
+  WellbeingMixin            — user metrics, quality drag, pipeline stability
+  InvestmentMixin           — investment classifications/metrics, work-unit investments
+  WorkGraphMixin            — work graph edges, work items, git/repo/file metrics, forecasts
+  AIAttributionMixin        — AI attribution records (ai_attribution table)
+  AIImpactMixin             — AI workflow impact daily rollups
+  RecommendationsMixin      — recommendations_daily (CHAOS-1622)
+
+Public API (stable — do not remove):
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+The single `ClickHouseMetricsSink` class is built by composing mixin classes,
+each responsible for one table family:
+
   ClickHouseCore        — connection, schema, shared _insert_rows helper
   CIMixin               — CI/CD, deploy, incident, testops pipeline/test/coverage,
                           release confidence, feature flags, telemetry, release impact
@@ -28,6 +45,7 @@ from dev_health_ops.metrics.sinks.clickhouse.ci import CIMixin
 from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
 from dev_health_ops.metrics.sinks.clickhouse.dora import DoraMixin
 from dev_health_ops.metrics.sinks.clickhouse.investment import InvestmentMixin
+from dev_health_ops.metrics.sinks.clickhouse.recommendations import RecommendationsMixin
 from dev_health_ops.metrics.sinks.clickhouse.wellbeing import WellbeingMixin
 from dev_health_ops.metrics.sinks.clickhouse.work_graph import WorkGraphMixin
 
@@ -40,6 +58,7 @@ class ClickHouseMetricsSink(
     AIAttributionMixin,
     AIImpactMixin,
     CIMixin,
+    RecommendationsMixin,
     DoraMixin,
     WellbeingMixin,
     InvestmentMixin,

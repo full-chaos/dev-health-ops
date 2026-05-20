@@ -119,6 +119,100 @@ async def _cmd_maintenance_cleanup_all(_ns: argparse.Namespace) -> int:
     )
     return 0
 
+# ---------------------------------------------------------------------------
+# Recommendations commands
+# ---------------------------------------------------------------------------
+
+
+def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
+    """Compute rule-based recommendations for a team and persist via ClickHouse sink."""
+    import json
+    from datetime import date, datetime, timezone
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+    from dev_health_ops.recommendations import registry as recommendations_registry
+    from dev_health_ops.recommendations.engine import RuleEngine
+    from dev_health_ops.recommendations.loader import ClickHouseMetricsLoader
+
+    analytics_db = getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI", "")
+    if not analytics_db:
+        logging.getLogger(__name__).error(
+            "--analytics-db / CLICKHOUSE_URI is required for recommendations compute"
+        )
+        return 1
+
+    team_id: str = ns.team
+    window: str = ns.window
+    org_id: str = getattr(ns, "org", None) or ""
+    now = datetime.now(timezone.utc)
+
+    # Override window bounds if --since / --until supplied
+    if getattr(ns, "since", None) and getattr(ns, "until", None):
+        since_date = date.fromisoformat(ns.since)
+        until_date = date.fromisoformat(ns.until)
+        window_days = (until_date - since_date).days
+        now = datetime(
+            until_date.year, until_date.month, until_date.day, tzinfo=timezone.utc
+        )
+        window = str(window_days)
+
+    sink = ClickHouseMetricsSink(dsn=analytics_db)
+    loader = ClickHouseMetricsLoader(client=sink.client, org_id=org_id)
+    engine = RuleEngine(registry=recommendations_registry, loader=loader, now=now)
+
+    try:
+        recommendations = engine.evaluate_all(
+            team_id=team_id, window=window, org_id=org_id
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "Recommendations evaluation failed for team=%r: %s", team_id, exc
+        )
+        return 1
+
+    sink.write_recommendations(recommendations)
+    sink.close()
+
+    log = logging.getLogger(__name__)
+    log.info(
+        "recommendations compute: team=%r window=%s fired=%d",
+        team_id, window, len(recommendations),
+    )
+    if getattr(ns, "output_json", False):
+        import sys
+        from dataclasses import asdict
+        print(json.dumps([asdict(r) for r in recommendations], default=str), file=sys.stdout)
+    return 0
+
+
+def _register_recommendations_commands(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    compute = subparsers.add_parser(
+        "compute",
+        help="Evaluate recommendation rules for a team and write results to ClickHouse.",
+    )
+    compute.add_argument("--team", required=True, help="Team ID to evaluate.")
+    compute.add_argument(
+        "--window",
+        default="7d",
+        help="Evaluation window, e.g. '7d' or '14d'. Default: 7d.",
+    )
+    compute.add_argument(
+        "--since",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Override window start (exclusive end = --until).",
+    )
+    compute.add_argument(
+        "--until",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Override window end (inclusive). Requires --since.",
+    )
+    compute.add_argument(
+        "--output-json",
+        action="store_true",
+        help="Print fired recommendations as JSON to stdout.",
+    )
+    compute.set_defaults(func=_cmd_recommendations_compute)
 
 _GLOBAL_FLAG_SPECS: tuple[tuple[tuple[str, ...], dict[str, object]], ...] = (
     (
@@ -279,6 +373,15 @@ def build_parser() -> argparse.ArgumentParser:
     work_graph_runner.register_commands(sub)
 
     backfill_cli.register_backfill_commands(sub)
+
+    # ---- recommendations ----
+    rec_parser = sub.add_parser(
+        "recommendations", help="Compute and persist rule-based recommendations."
+    )
+    rec_subparsers = rec_parser.add_subparsers(
+        dest="recommendations_command", required=True
+    )
+    _register_recommendations_commands(rec_subparsers)
 
     # ---- migrate ----
     migrate_mod.register_commands(sub)

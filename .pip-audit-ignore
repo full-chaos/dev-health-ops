@@ -8,4 +8,4 @@
 # Example:
 # PYSEC-2024-123 some-package Accepted risk, no fix available yet. Review by 2025-06-01.
 #
-# Currently no CVEs are acknowledged/ignored.
+PYSEC-2025-183 pyjwt Disputed advisory; upstream (jpadilla) rejects as application-config issue (key length is caller's responsibility). pyjwt 2.12.1 is the latest release and no fix version exists. Tracked in CHAOS-1731. Review by 2026-11-20.

@@ -27,6 +27,7 @@ from .models.inputs import (
     CapacityForecastInput,
     DimensionInput,
     FilterInput,
+    OperatingReviewInput,
     SecurityAlertFilterInput,
     SecurityPaginationInput,
     ThroughputForecastInput,
@@ -38,6 +39,7 @@ from .models.outputs import (
     CapacityForecastConnection,
     CatalogResult,
     HomeResult,
+    OperatingReview,
     SecurityAlertConnection,
     SecurityOverview,
     ThroughputForecast,
@@ -274,6 +276,18 @@ class Query:
 
         context = get_context(info)
         return await resolve_throughput_forecast(context, input)
+
+    @strawberry.field(description="Weekly Engineering Operating Review")
+    async def operating_review(
+        self,
+        info: Info,
+        org_id: str,
+        input: OperatingReviewInput,
+    ) -> OperatingReview:
+        from .resolvers.operating_review import resolve_operating_review
+
+        context = get_context(info)
+        return await resolve_operating_review(context, input)
 
     @strawberry.field(
         description="AI workflow impact summary across the requested time range."

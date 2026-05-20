@@ -327,6 +327,14 @@ class ThroughputForecastInput:
     history_weeks: int = 12
 
 
+@strawberry.input
+class OperatingReviewInput:
+    """Input for a weekly engineering operating review."""
+
+    team_id: str
+    week_start: date
+
+
 # =============================================================================
 # Security alert types
 # =============================================================================

@@ -317,6 +317,16 @@ class CapacityForecastFilterInput:
     limit: int = 10
 
 
+@strawberry.input
+class ThroughputForecastInput:
+    """Input for throughput-based capacity forecast computation."""
+
+    team_id: str
+    work_scope_id: str | None = None
+    backlog_size: int
+    history_weeks: int = 12
+
+
 # =============================================================================
 # Security alert types
 # =============================================================================

@@ -451,6 +451,49 @@ class CapacityForecastConnection:
     total_count: int
 
 
+@strawberry.type
+class ThroughputRollingWindow:
+    """Rolling weekly throughput summary for a forecast window."""
+
+    window_weeks: int
+    mean_weekly_throughput: float
+    sample_count: int
+    insufficient_history: bool
+
+
+@strawberry.type
+class ThroughputRiskOverlay:
+    """Risk overlay shown with a throughput forecast."""
+
+    kind: str
+    score: float
+    label: str
+    value: float
+    threshold: float
+    active: bool
+
+
+@strawberry.type
+class ThroughputForecast:
+    """Throughput-based capacity forecast result."""
+
+    forecast_id: str
+    computed_at: str
+    team_id: str
+    work_scope_id: str | None = None
+    backlog_size: int
+    history_weeks: int
+    p50_weeks: int | None
+    p75_weeks: int | None
+    p90_weeks: int | None
+    rolling_windows: list[ThroughputRollingWindow]
+    primary_risk: ThroughputRiskOverlay
+    wip_congestion: ThroughputRiskOverlay
+    review_bottleneck: ThroughputRiskOverlay
+    incident_load: ThroughputRiskOverlay
+    insufficient_history: bool
+
+
 # =============================================================================
 # Security alert output types
 # =============================================================================

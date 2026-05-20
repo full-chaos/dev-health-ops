@@ -136,7 +136,10 @@ Notes:
 - `dev-hops` is available after `pip install dev-health-ops` or `pip install -e .`.
 - Synthetic teams are inserted automatically.
 - `--with-metrics` writes the same derived tables as `metrics daily`, plus
-  complexity snapshots and hotspot risk metrics for demo dashboards.
+  complexity snapshots and hotspot risk metrics for demo dashboards. It also
+  seeds AI workflow intelligence (`ai_attribution`, `ai_workflow_runs`,
+  `ai_workflow_artifact_edges`, `ai_workflow_issue_edges`) so the AI impact,
+  governance, and policy-event rollups populate end-to-end.
 
 ## Performance tuning
 

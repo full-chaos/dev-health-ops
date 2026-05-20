@@ -5,6 +5,7 @@ into domain-focused mixin classes. The composer in ``generator.py`` inherits
 from all mixins so the public API (``SyntheticDataGenerator``) is unchanged.
 """
 
+from dev_health_ops.fixtures.generators.ai_workflow import AiWorkflowGeneratorMixin
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
 from dev_health_ops.fixtures.generators.commits import CommitsGeneratorMixin
 from dev_health_ops.fixtures.generators.incidents import IncidentsGeneratorMixin
@@ -17,6 +18,7 @@ from dev_health_ops.fixtures.generators.work_items import WorkItemsGeneratorMixi
 
 __all__ = [
     "BaseGeneratorMixin",
+    "AiWorkflowGeneratorMixin",
     "CommitsGeneratorMixin",
     "IncidentsGeneratorMixin",
     "InteractionsGeneratorMixin",

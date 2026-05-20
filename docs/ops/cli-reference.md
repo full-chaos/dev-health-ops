@@ -359,6 +359,12 @@ dev-hops fixtures generate \
 
 Database type is auto-detected from the sink URI.
 
+When `--with-metrics` is enabled against ClickHouse, AI workflow intelligence
+tables are also seeded: `ai_attribution`, `ai_workflow_runs`,
+`ai_workflow_artifact_edges`, and `ai_workflow_issue_edges`. The daily metrics
+job then computes `ai_impact_metrics_daily`, `ai_governance_coverage_daily`,
+and `ai_policy_events` from those source rows.
+
 ### `fixtures validate`
 
 Validate that fixture data is sufficient for work graph and investment analysis.
@@ -372,7 +378,8 @@ dev-hops fixtures validate --sink "clickhouse://localhost:8123/default"
 |--------|-------------|
 | `--sink` | Analytics sink URI (required, ClickHouse only) |
 
-Checks raw data counts, team mappings, cycle time metrics, work graph edges, connected components, and evidence bundle quality.
+Checks raw data counts, team mappings, cycle time metrics, work graph edges,
+connected components, AI fixture/rollup tables, and evidence bundle quality.
 
 ---
 

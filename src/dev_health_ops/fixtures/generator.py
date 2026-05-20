@@ -12,6 +12,7 @@ import random
 import uuid
 
 from dev_health_ops.fixtures.generators import (
+    AiWorkflowGeneratorMixin,
     BaseGeneratorMixin,
     CommitsGeneratorMixin,
     IncidentsGeneratorMixin,
@@ -28,6 +29,7 @@ __all__ = ["SyntheticDataGenerator"]
 
 
 class SyntheticDataGenerator(
+    AiWorkflowGeneratorMixin,
     CommitsGeneratorMixin,
     PrsGeneratorMixin,
     PipelinesGeneratorMixin,

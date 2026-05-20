@@ -10,6 +10,11 @@ from dev_health_ops.fixtures.runner import (
     run_fixtures_generation,
 )
 from dev_health_ops.models.ai_attribution import AIAttributionKind
+from dev_health_ops.models.ai_workflow import (
+    AIWorkflowArtifactType,
+    AIWorkflowRunKind,
+    AIWorkflowRunStatus,
+)
 from dev_health_ops.storage import SQLAlchemyStore
 
 
@@ -91,6 +96,55 @@ def test_pr_fixture_generator_emits_ai_attribution_records():
         AIAttributionKind.AI_ASSISTED,
         AIAttributionKind.AGENT_CREATED,
     }
+
+
+def test_ai_workflow_generator_emits_runs_and_edges():
+    org_id = str(uuid.uuid4())
+    generator = SyntheticDataGenerator(repo_name="test/ai-workflow", seed=7)
+    pr_data = generator.generate_prs(count=6, issue_numbers=[101, 202])
+    prs = [item["pr"] for item in pr_data]
+    work_items = generator.generate_work_items(days=2)
+
+    runs = generator.generate_ai_workflow_runs(prs, org_id=org_id)
+    assert runs, "expected at least one synthetic AI workflow run"
+    assert {run.org_id for run in runs} == {uuid.UUID(org_id)}
+    assert all(run.prompts_redacted for run in runs)
+    assert all(run.prompt_hash and len(run.prompt_hash) == 64 for run in runs)
+    assert {run.run_kind for run in runs} >= {
+        AIWorkflowRunKind.CHAT_ASSISTED,
+        AIWorkflowRunKind.AGENT_AUTONOMOUS,
+    }
+    pr_runs = [
+        run for run in runs if run.metadata.get("subject_type") == "pull_request"
+    ]
+    assert pr_runs, "expected at least one PR-linked run"
+    autonomous_runs = [
+        run for run in runs if run.run_kind is AIWorkflowRunKind.AGENT_AUTONOMOUS
+    ]
+    assert any(run.status is AIWorkflowRunStatus.FAILED for run in autonomous_runs)
+
+    artifact_edges = generator.generate_ai_workflow_artifact_edges(
+        runs, prs, org_id=org_id
+    )
+    assert artifact_edges, "expected artifact edges linking runs to PRs"
+    edge_run_ids = {edge.run_id for edge in artifact_edges}
+    pr_run_ids = {run.run_id for run in pr_runs}
+    assert edge_run_ids.issubset({run.run_id for run in runs})
+    assert edge_run_ids & pr_run_ids, "artifact edges must reference PR runs"
+    assert {edge.artifact_type for edge in artifact_edges} >= {
+        AIWorkflowArtifactType.PULL_REQUEST,
+    }
+    assert all(edge.repo_id == generator.repo_id for edge in artifact_edges)
+
+    issue_edges = generator.generate_ai_workflow_issue_edges(
+        runs, prs, work_items, org_id=org_id
+    )
+    assert issue_edges, "expected issue edges to be generated"
+    assert {edge.run_id for edge in issue_edges}.issubset(
+        {run.run_id for run in pr_runs}
+    )
+    assert all(edge.issue_id for edge in issue_edges)
+    assert all(edge.confidence > 0 for edge in issue_edges)
 
 
 @pytest.mark.asyncio
@@ -276,6 +330,56 @@ def test_work_unit_investment_validation_rejects_low_repo_or_team_coverage():
         )
         is False
     )
+
+
+class _AiValidationClient:
+    """Stub ClickHouse client that returns canned counts for AI fixture tables."""
+
+    def __init__(self, counts: dict[str, int], linked_runs: int = 5):
+        self.counts = counts
+        self.linked_runs = linked_runs
+
+    def query(self, sql: str):
+        normalized = " ".join(sql.split())
+        for table, value in self.counts.items():
+            if f"FROM {table}" in normalized and "ai_workflow_runs r" not in normalized:
+                return _QueryResult(value)
+        if "ai_workflow_runs r" in normalized:
+            return _QueryResult(self.linked_runs)
+        raise AssertionError(f"Unexpected query: {normalized}")
+
+
+def _all_ai_tables_exist(name: str) -> bool:
+    return name in set(runner.AI_FIXTURE_TABLES)
+
+
+def test_validate_ai_fixture_tables_accepts_populated_state():
+    counts = {table: 42 for table in runner.AI_FIXTURE_TABLES}
+    client = _AiValidationClient(counts)
+    assert runner._validate_ai_fixture_tables(client, _all_ai_tables_exist) is True
+
+
+def test_validate_ai_fixture_tables_rejects_empty_table():
+    counts = {table: 10 for table in runner.AI_FIXTURE_TABLES}
+    counts["ai_workflow_runs"] = 0
+    client = _AiValidationClient(counts)
+    assert runner._validate_ai_fixture_tables(client, _all_ai_tables_exist) is False
+
+
+def test_validate_ai_fixture_tables_rejects_missing_table():
+    counts = {table: 10 for table in runner.AI_FIXTURE_TABLES}
+    client = _AiValidationClient(counts)
+    present = set(runner.AI_FIXTURE_TABLES) - {"ai_workflow_artifact_edges"}
+    assert (
+        runner._validate_ai_fixture_tables(client, lambda name: name in present)
+        is False
+    )
+
+
+def test_validate_ai_fixture_tables_rejects_unlinked_runs():
+    counts = {table: 10 for table in runner.AI_FIXTURE_TABLES}
+    client = _AiValidationClient(counts, linked_runs=0)
+    assert runner._validate_ai_fixture_tables(client, _all_ai_tables_exist) is False
 
 
 class TestGenerateUsersRespectsOrgId:

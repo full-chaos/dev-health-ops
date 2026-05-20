@@ -578,6 +578,43 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         r_name,
                     )
 
+            if sink is not None and hasattr(sink, "write_ai_workflow_runs"):
+                ai_workflow_runs = generator.generate_ai_workflow_runs(
+                    prs,
+                    org_id=org_id,
+                )
+                if ai_workflow_runs:
+                    sink.write_ai_workflow_runs(ai_workflow_runs)
+                    logging.info(
+                        "Wrote %d synthetic AI workflow runs for repo %s.",
+                        len(ai_workflow_runs),
+                        r_name,
+                    )
+
+                    if hasattr(sink, "write_ai_workflow_artifact_edges"):
+                        artifact_edges = generator.generate_ai_workflow_artifact_edges(
+                            ai_workflow_runs, prs, org_id=org_id
+                        )
+                        if artifact_edges:
+                            sink.write_ai_workflow_artifact_edges(artifact_edges)
+                            logging.info(
+                                "Wrote %d AI workflow artifact edges for repo %s.",
+                                len(artifact_edges),
+                                r_name,
+                            )
+
+                    if hasattr(sink, "write_ai_workflow_issue_edges"):
+                        issue_edges = generator.generate_ai_workflow_issue_edges(
+                            ai_workflow_runs, prs, work_items, org_id=org_id
+                        )
+                        if issue_edges:
+                            sink.write_ai_workflow_issue_edges(issue_edges)
+                            logging.info(
+                                "Wrote %d AI workflow issue edges for repo %s.",
+                                len(issue_edges),
+                                r_name,
+                            )
+
             pr_commit_links = generator.generate_pr_commits(prs, commits, org_id=org_id)
             if hasattr(store, "insert_work_graph_pr_commit"):
                 await _insert_batches(
@@ -1167,6 +1204,64 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
     return 0
 
 
+AI_FIXTURE_TABLES: tuple[str, ...] = (
+    "ai_attribution",
+    "ai_workflow_runs",
+    "ai_workflow_artifact_edges",
+    "ai_workflow_issue_edges",
+    "ai_impact_metrics_daily",
+    "ai_governance_coverage_daily",
+    "ai_policy_events",
+)
+
+
+def _validate_ai_fixture_tables(client: Any, table_exists) -> bool:
+    """Verify every AI fixture/rollup table is present and non-empty."""
+    counts: dict[str, int] = {}
+    for table in AI_FIXTURE_TABLES:
+        if not table_exists(table):
+            logging.error(
+                "FAIL: AI fixture table %s missing (run fixtures with --with-metrics).",
+                table,
+            )
+            return False
+        try:
+            counts[table] = _query_int(client, f"SELECT count() FROM {table}")
+        except Exception as exc:
+            logging.error("FAIL: Could not count %s rows: %s", table, exc)
+            return False
+        if counts[table] == 0:
+            logging.error(
+                "FAIL: AI fixture table %s is empty (regression in --with-metrics).",
+                table,
+            )
+            return False
+
+    try:
+        linked_runs = _query_int(
+            client,
+            """
+            SELECT count(DISTINCT r.run_id)
+            FROM ai_workflow_runs r
+            INNER JOIN ai_workflow_artifact_edges a USING (org_id, run_id)
+            """,
+        )
+    except Exception as exc:
+        logging.error("FAIL: Could not validate workflow run linkage: %s", exc)
+        return False
+    if linked_runs == 0:
+        logging.error(
+            "FAIL: ai_workflow_runs has no rows linked via ai_workflow_artifact_edges."
+        )
+        return False
+
+    logging.info(
+        "AI fixture tables: "
+        + ", ".join(f"{name}={counts[name]}" for name in AI_FIXTURE_TABLES)
+    )
+    return True
+
+
 def run_fixtures_validation(ns: argparse.Namespace) -> int:
     """Validate that fixture data is sufficient for work graph and investment."""
     import clickhouse_connect
@@ -1468,6 +1563,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
 
     except Exception as e:
         logging.error(f"FAIL: Could not validate work graph investment coverage: {e}")
+        return 1
+
+    if not _validate_ai_fixture_tables(client, _table_exists):
         return 1
 
     # 4. Evidence sanity (sample bundles)

@@ -133,7 +133,10 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.recommendations import registry as recommendations_registry
     from dev_health_ops.recommendations.engine import RuleEngine
-    from dev_health_ops.recommendations.loader import ClickHouseMetricsLoader
+    from dev_health_ops.recommendations.loader import (
+        ClickHouseMetricsLoader,
+        recommendation_to_record,
+    )
 
     analytics_db = getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI", "")
     if not analytics_db:
@@ -171,7 +174,9 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
         )
         return 1
 
-    sink.write_recommendations(recommendations)
+    sink.write_recommendations(
+        [recommendation_to_record(rec) for rec in recommendations]
+    )
     sink.close()
 
     log = logging.getLogger(__name__)
@@ -192,7 +197,7 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     return 0
 
 
-def _register_recommendations_commands(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+def _register_recommendations_commands(subparsers: argparse._SubParsersAction) -> None:
     compute = subparsers.add_parser(
         "compute",
         help="Evaluate recommendation rules for a team and write results to ClickHouse.",

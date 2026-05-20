@@ -78,6 +78,12 @@
             "description": "Fetch generic sankey flow visualization",
             "schema_version": "1.0",
             "query": "query SankeyFlow($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { sankey { nodes { id label dimension value } edges { source target value } coverage { teamCoverage repoCoverage } } } }"
+        },
+        {
+            "id": "team-recommendations",
+            "description": "Fetch latest rule-based recommendations for a team",
+            "schema_version": "1.0",
+            "query": "query TeamRecommendations($orgId: String!, $team: ID!, $window: WindowInput!) { recommendations(orgId: $orgId, team: $team, window: $window) { ruleId teamId orgId computedAt windowStart windowEnd severity title rationale successCriterion evidence { teamId metricTable windowStart windowEnd field value } } }"
         }
     ]
 }

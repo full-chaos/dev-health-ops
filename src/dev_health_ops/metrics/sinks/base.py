@@ -454,3 +454,16 @@ class BaseMetricsSink(ABC):
     def write_worklogs(self, rows: Sequence[Worklog]) -> None:
         """Write raw worklog records."""
         pass
+
+    # -------------------------------------------------------------------------
+    # Recommendations
+    # -------------------------------------------------------------------------
+
+    def write_recommendations(self, rows: Sequence[Any]) -> None:
+        """Write recommendation evaluation results to ``recommendations_daily``.
+
+        Default implementation is a no-op so existing sink subclasses that
+        have not yet been updated continue to work.  Override in
+        ``RecommendationsMixin``.
+        """
+        pass

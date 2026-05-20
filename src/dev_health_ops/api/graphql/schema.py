@@ -46,6 +46,10 @@ from .models.outputs import (
     ThroughputForecast,
     WorkGraphEdgesResult,
 )
+from .models.recommendations import (
+    Recommendation,
+    WindowInput,
+)
 from .resolvers.ai import (
     resolve_ai_comparison,
     resolve_ai_governance_summary,
@@ -299,6 +303,21 @@ class Query:
     ) -> DataHealth:
         context = get_context(info)
         return await resolve_data_health(context, str(team))
+
+    @strawberry.field(
+        description="Latest rule-based recommendations for a team within a lookback window."
+    )
+    async def recommendations(
+        self,
+        info: Info,
+        org_id: str,
+        team: strawberry.ID,
+        window: WindowInput,
+    ) -> list[Recommendation]:
+        from .resolvers.recommendations import resolve_recommendations
+
+        context = get_context(info)
+        return await resolve_recommendations(context, str(team), window)
 
     @strawberry.field(
         description="AI workflow impact summary across the requested time range."

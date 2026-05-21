@@ -54,13 +54,13 @@ def _severity_from_str(value: Any) -> CompoundingRiskSeverity:
 
 
 # NOTE: ClickHouse access goes through the canonical async helper
-    # ``query_dicts(sink, query, params)`` from ``api.queries.client`` —
-    # ``context.client`` is a ``ClickHouseMetricsSink`` wrapper, not a raw
-    # ``clickhouse_connect`` client. Earlier revisions of this resolver
-    # carried a private ``_query_dicts(client, ...)`` that called
-    # ``client.query(...)`` directly; that path raised
-        # ``AttributeError: 'ClickHouseMetricsSink' object has no attribute 'query'``
-    # at runtime against the live sink and is replaced with the canonical helper.
+# ``query_dicts(sink, query, params)`` from ``api.queries.client`` —
+# ``context.client`` is a ``ClickHouseMetricsSink`` wrapper, not a raw
+# ``clickhouse_connect`` client. Earlier revisions of this resolver
+# carried a private ``_query_dicts(client, ...)`` that called
+# ``client.query(...)`` directly; that path raised
+# ``AttributeError: 'ClickHouseMetricsSink' object has no attribute 'query'``
+# at runtime against the live sink and is replaced with the canonical helper.
 
 
 async def _latest_day_for_org(client: Any, org_id: str) -> date | None:
@@ -321,7 +321,8 @@ def _aggregate_repo_rows_to_team(
                 components=components,
                 weights=_weights_from_row(first),
                 thresholds=thresholds,
-                computed_at=first.get("latest_computed_at") or datetime.now(timezone.utc),
+                computed_at=first.get("latest_computed_at")
+                or datetime.now(timezone.utc),
             )
         )
     # Sort by score desc, nulls last.
@@ -337,10 +338,10 @@ async def _load_repo_labels(
     rows = await query_dicts(
         client,
         """
-        SELECT toString(repo_id) AS repo_id, full_name
+        SELECT toString(id) AS repo_id, repo AS full_name
         FROM repos
         WHERE org_id = {org_id:String}
-          AND toString(repo_id) IN {repo_ids:Array(String)}
+          AND toString(id) IN {repo_ids:Array(String)}
         """,
         {"org_id": org_id, "repo_ids": repo_ids},
     )

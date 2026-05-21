@@ -201,6 +201,56 @@ class AIImpactClickHouseLoader:
         raw_rows = await query_dicts(self.client, query, params)
         return [_to_record(raw) for raw in raw_rows]
 
+    async def load_reviewer_concentration(
+        self,
+        *,
+        start_day: date,
+        end_day: date,
+        repo_id: uuid.UUID | None = None,
+        team_id: str | None = None,
+    ) -> tuple[float | None, int]:
+        """Load aggregate-only reviewer concentration for AI Review Load.
+
+        The query intentionally returns only the distribution summary inputs.
+        Reviewer identities are used inside the aggregation boundary and are not
+        returned from this loader or exposed through GraphQL.
+        """
+
+        from dev_health_ops.api.queries.client import query_dicts
+
+        params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
+        filters = ["day >= {start_day:Date}", "day <= {end_day:Date}"]
+        if repo_id is not None:
+            params["repo_id"] = str(repo_id)
+            filters.append("repo_id = {repo_id:UUID}")
+        if team_id is not None:
+            params["team_id"] = team_id
+            filters.append("team_id = {team_id:String}")
+        params = self._scope.inject(params)
+        org_expr = self._scope.expression()
+        if org_expr:
+            filters.append(org_expr)
+        where_clause = " AND ".join(filters)
+        query = f"""
+        SELECT sum(reviews_given) AS reviews_given
+        FROM (
+            SELECT
+                repo_id,
+                author_email,
+                day,
+                argMax(reviews_given, computed_at) AS reviews_given
+            FROM user_metrics_daily
+            WHERE {where_clause}
+            GROUP BY repo_id, author_email, day
+        )
+        GROUP BY author_email
+        """
+        rows = await query_dicts(self.client, query, params)
+        review_loads = [float(row.get("reviews_given") or 0.0) for row in rows]
+        if not review_loads:
+            return None, 0
+        return _gini(review_loads), len(review_loads)
+
 
 def _to_record(raw: dict[str, Any]) -> AIImpactMetricsDailyRecord:
     repo_id = parse_uuid(raw.get("repo_id"))
@@ -247,3 +297,15 @@ def _to_record(raw: dict[str, Any]) -> AIImpactMetricsDailyRecord:
         ),
         computed_at=raw["computed_at"],
     )
+
+
+def _gini(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    total = sum(values)
+    if total == 0.0:
+        return 0.0
+    sorted_values = sorted(values)
+    count = len(sorted_values)
+    weighted_sum = sum((index + 1) * value for index, value in enumerate(sorted_values))
+    return (2.0 * weighted_sum) / (count * total) - (count + 1.0) / count

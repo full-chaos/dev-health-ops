@@ -75,6 +75,15 @@ class AIScopeInput:
 
 
 @strawberry.type
+class AIMissingState:
+    """Visible guidance for intentionally missing or incomplete AI signals."""
+
+    key: str
+    title: str
+    guidance: str
+
+
+@strawberry.type
 class AILeverageComponents:
     """Decomposed Operating Leverage components.
 
@@ -145,6 +154,7 @@ class AIImpactSummary:
     ai_assisted_pr_ratio: float | None
     by_bucket: list[AIImpactBucketTotals]
     daily: list[AIImpactBucketRow]
+    missing_states: list[AIMissingState]
     data_available: bool
     computed_at: datetime | None = None
 
@@ -199,6 +209,21 @@ class AIReviewLoadRow:
     reviews_per_pr: float | None
     changes_requested_per_pr: float | None
     review_amplification: float | None
+    post_first_review_pushes_count: int
+    post_first_review_pushes_per_pr: float | None
+
+
+@strawberry.type
+class AIReviewerConcentrationSummary:
+    """Aggregate-only reviewer distribution signal.
+
+    This intentionally exposes only distribution-level values. It never
+    includes reviewer identities, counts by person, or ranking fields.
+    """
+
+    data_available: bool
+    reviewer_count: int
+    reviewer_gini: float | None = None
 
 
 @strawberry.type
@@ -210,6 +235,8 @@ class AIReviewLoadResult:
     end_date: date
     by_bucket: list[AIReviewLoadRow]
     daily: list[AIReviewLoadRow]
+    reviewer_concentration: AIReviewerConcentrationSummary
+    missing_states: list[AIMissingState]
     data_available: bool
 
 
@@ -237,6 +264,7 @@ class AIRiskBreakdownResult:
     start_date: date
     end_date: date
     by_bucket: list[AIRiskBreakdownRow]
+    missing_states: list[AIMissingState]
     data_available: bool
 
 

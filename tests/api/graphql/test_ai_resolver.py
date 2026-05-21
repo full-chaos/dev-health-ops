@@ -100,6 +100,7 @@ def _record(
     ai_review_amplification: float | None = None,
     ai_cycle_time_delta_hours: float | None = None,
     ai_assisted_pr_ratio: float | None = None,
+    followup_commits_count: int = 0,
 ) -> AIImpactMetricsDailyRecord:
     return AIImpactMetricsDailyRecord(
         org_id=ORG_ID,
@@ -125,7 +126,7 @@ def _record(
         changes_requested_per_pr=0.3,
         rework_prs=int(prs_total * (rework_drag_rate or 0)),
         rework_drag_rate=rework_drag_rate,
-        followup_commits_count=0,
+        followup_commits_count=followup_commits_count,
         revert_prs=int(prs_total * (revert_rate or 0)),
         revert_rate=revert_rate,
         incidents_count=int(prs_total * (incident_drag_rate or 0)),
@@ -149,6 +150,7 @@ def _populated_rows() -> list[AIImpactMetricsDailyRecord]:
             ai_assisted_pr_ratio=0.5,
             ai_review_amplification=1.4,
             ai_cycle_time_delta_hours=-3.0,
+            followup_commits_count=6,
         ),
         _record(
             bucket=AttributionBucket.AGENT_CREATED,
@@ -202,6 +204,18 @@ def _patch_loader(rows: list[AIImpactMetricsDailyRecord]) -> Any:
     )
 
 
+def _patch_reviewer_concentration(
+    reviewer_gini: float | None,
+    reviewer_count: int,
+) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_impact."
+        "AIImpactClickHouseLoader.load_reviewer_concentration",
+        new_callable=AsyncMock,
+        return_value=(reviewer_gini, reviewer_count),
+    )
+
+
 def _range() -> AIDateRangeInput:
     return AIDateRangeInput(start_date=DAY_START, end_date=DAY_END)
 
@@ -222,6 +236,7 @@ async def test_impact_summary_empty_state_returns_stable_contract():
     assert result.ai_assisted_pr_ratio is None
     assert result.by_bucket == []
     assert result.daily == []
+    assert result.missing_states == []
     assert result.data_available is False
     assert result.computed_at is None
 
@@ -257,6 +272,9 @@ async def test_impact_summary_populated_aggregates_all_buckets():
     assert result.human_prs == 12
     assert result.unknown_prs == 2
     assert result.total_prs == 20 + 4 + 12 + 2
+    assert [state.key for state in result.missing_states] == [
+        "unknown_attribution"
+    ]
     # ai_assisted_pr_ratio is the volume-weighted average across all rows.
     assert result.ai_assisted_pr_ratio is not None
     assert result.computed_at == COMPUTED_AT
@@ -324,17 +342,22 @@ async def test_comparison_populated_emits_delta():
 
 @pytest.mark.asyncio
 async def test_review_load_empty_state():
-    with _patch_loader([]):
+    with _patch_loader([]), _patch_reviewer_concentration(None, 0):
         result = await resolve_ai_review_load(_ctx(), _range())
 
     assert result.data_available is False
     assert result.by_bucket == []
     assert result.daily == []
+    assert result.reviewer_concentration.data_available is False
+    assert result.reviewer_concentration.reviewer_count == 0
+    assert [state.key for state in result.missing_states] == [
+        "reviewer_concentration"
+    ]
 
 
 @pytest.mark.asyncio
 async def test_review_load_populated_aggregates_by_bucket():
-    with _patch_loader(_populated_rows()):
+    with _patch_loader(_populated_rows()), _patch_reviewer_concentration(0.42, 5):
         result = await resolve_ai_review_load(_ctx(), _range())
 
     assert result.data_available is True
@@ -345,6 +368,16 @@ async def test_review_load_populated_aggregates_by_bucket():
     assert bucket_lookup[
         AttributionBucket.AI_ASSISTED.value
     ].review_amplification == pytest.approx(1.4)
+    assert bucket_lookup[
+        AttributionBucket.AI_ASSISTED.value
+    ].post_first_review_pushes_count == 6
+    assert bucket_lookup[
+        AttributionBucket.AI_ASSISTED.value
+    ].post_first_review_pushes_per_pr == pytest.approx(0.3)
+    assert result.reviewer_concentration.data_available is True
+    assert result.reviewer_concentration.reviewer_count == 5
+    assert result.reviewer_concentration.reviewer_gini == pytest.approx(0.42)
+    assert result.missing_states == []
 
 
 # -----------------------------------------------------------------------------
@@ -359,6 +392,10 @@ async def test_risk_breakdown_empty_state():
 
     assert result.data_available is False
     assert result.by_bucket == []
+    assert {state.key for state in result.missing_states} == {
+        "hotspot_overlap",
+        "complexity_overlap",
+    }
 
 
 @pytest.mark.asyncio
@@ -373,6 +410,10 @@ async def test_risk_breakdown_populated_computes_rates():
     assert ai_row.rework_rate == pytest.approx(0.1)
     assert ai_row.revert_rate == pytest.approx(0.05)
     assert ai_row.test_gap_rate == pytest.approx(0.2)
+    assert {state.key for state in result.missing_states} == {
+        "hotspot_overlap",
+        "complexity_overlap",
+    }
 
 
 # -----------------------------------------------------------------------------

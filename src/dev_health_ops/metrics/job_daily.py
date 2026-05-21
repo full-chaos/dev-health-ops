@@ -485,15 +485,19 @@ async def run_daily_metrics_job(
         repo_to_team_map: dict[str, str] = {}
         try:
             for row in result.repo_metrics:
-                repo_id = getattr(row, "repo_id", None)
-                if repo_id is None:
+                # NOTE: use a distinct name here — the function parameter
+                # ``repo_id`` is reused later in the loop iteration
+                # (e.g. by load_testops_pipeline_data) and must stay None
+                # when the daily job was invoked without a per-repo filter.
+                row_repo_id = getattr(row, "repo_id", None)
+                if row_repo_id is None:
                     continue
-                full_name = repo_names_by_id.get(repo_id)
+                full_name = repo_names_by_id.get(row_repo_id)
                 if not full_name:
                     continue
                 team_id, _ = repo_team_resolver.resolve(full_name)
                 if team_id:
-                    repo_to_team_map[str(repo_id)] = team_id
+                    repo_to_team_map[str(row_repo_id)] = team_id
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("repo_team_resolver failed for compounding risk: %s", exc)
 

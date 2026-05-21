@@ -25,6 +25,8 @@ class AIImpactClickHouseLoader:
         start: datetime,
         end: datetime,
         repo_id: uuid.UUID | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[AIPullRequestAttributionRow]:
         from dev_health_ops.api.queries.client import query_dicts
 
@@ -39,57 +41,86 @@ class AIImpactClickHouseLoader:
         params = self._scope.inject(params)
         org_filter_attr = self._scope.filter(alias="attr")
         org_filter_pr = self._scope.filter(alias="pr")
+        limit_clause = ""
+        if limit is not None and int(limit) > 0:
+            params["limit"] = int(limit)
+            params["offset"] = max(0, int(offset))
+            limit_clause = "LIMIT {limit:UInt32} OFFSET {offset:UInt32}"
         query = f"""
         SELECT
-            pr.repo_id AS repo_id,
-            pr.number AS number,
-            attr.kind AS kind,
-            coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type,
-            CAST('', 'String') AS team_id
-        FROM git_pull_requests AS pr
-        INNER JOIN work_graph_issue_pr AS link
-            ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
-        INNER JOIN ai_attribution_resolved AS attr
-            ON attr.subject_type = 'pull_request'
-            AND attr.subject_id = link.work_item_id
-        LEFT JOIN work_items AS wi
-            ON wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
-        WHERE ((pr.created_at >= {{start:DateTime}} AND pr.created_at < {{end:DateTime}})
-            OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {{start:DateTime}} AND pr.merged_at < {{end:DateTime}}))
-          {repo_filter}
-          {org_filter_pr}
-          {org_filter_attr}
-        UNION ALL
-        SELECT
-            pr.repo_id AS repo_id,
-            pr.number AS number,
-            attr.kind AS kind,
-            'pull_request' AS work_type,
-            CAST('', 'String') AS team_id
-        FROM git_pull_requests AS pr
-        INNER JOIN ai_attribution_resolved AS attr
-            ON attr.subject_type = 'pull_request'
-            AND attr.repo_id = pr.repo_id
-            AND (attr.subject_id = toString(pr.number) OR attr.subject_id = concat(toString(pr.repo_id), '#', toString(pr.number)))
-        WHERE ((pr.created_at >= {{start:DateTime}} AND pr.created_at < {{end:DateTime}})
-            OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {{start:DateTime}} AND pr.merged_at < {{end:DateTime}}))
-          {repo_filter}
-          {org_filter_pr}
-          {org_filter_attr}
+            repo_id,
+            number,
+            kind,
+            work_type,
+            team_id,
+            title,
+            merged_at
+        FROM (
+            SELECT
+                pr.repo_id AS repo_id,
+                pr.number AS number,
+                attr.kind AS kind,
+                coalesce(nullIf(wi.type, ''), 'pull_request') AS work_type,
+                CAST('', 'String') AS team_id,
+                pr.title AS title,
+                pr.merged_at AS merged_at
+            FROM git_pull_requests AS pr
+            INNER JOIN work_graph_issue_pr AS link
+                ON link.repo_id = pr.repo_id AND link.pr_number = pr.number
+            INNER JOIN ai_attribution_resolved AS attr
+                ON attr.subject_type = 'pull_request'
+                AND attr.subject_id = link.work_item_id
+            LEFT JOIN work_items AS wi
+                ON wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
+            WHERE ((pr.created_at >= {{start:DateTime}} AND pr.created_at < {{end:DateTime}})
+                OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {{start:DateTime}} AND pr.merged_at < {{end:DateTime}}))
+              {repo_filter}
+              {org_filter_pr}
+              {org_filter_attr}
+            UNION ALL
+            SELECT
+                pr.repo_id AS repo_id,
+                pr.number AS number,
+                attr.kind AS kind,
+                'pull_request' AS work_type,
+                CAST('', 'String') AS team_id,
+                pr.title AS title,
+                pr.merged_at AS merged_at
+            FROM git_pull_requests AS pr
+            INNER JOIN ai_attribution_resolved AS attr
+                ON attr.subject_type = 'pull_request'
+                AND attr.repo_id = pr.repo_id
+                AND (attr.subject_id = toString(pr.number) OR attr.subject_id = concat(toString(pr.repo_id), '#', toString(pr.number)))
+            WHERE ((pr.created_at >= {{start:DateTime}} AND pr.created_at < {{end:DateTime}})
+                OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {{start:DateTime}} AND pr.merged_at < {{end:DateTime}}))
+              {repo_filter}
+              {org_filter_pr}
+              {org_filter_attr}
+        )
+        ORDER BY merged_at DESC NULLS LAST, repo_id, number DESC
+        {limit_clause}
         """
         raw_rows = await query_dicts(self.client, query, params)
         rows: list[AIPullRequestAttributionRow] = []
+        seen: set[tuple[str, int]] = set()
         for raw in raw_rows:
             parsed_repo_id = parse_uuid(raw.get("repo_id"))
             if parsed_repo_id is None:
                 continue
+            number = int(raw.get("number") or 0)
+            dedupe_key = (str(parsed_repo_id), number)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
             rows.append(
                 {
                     "repo_id": parsed_repo_id,
-                    "number": int(raw.get("number") or 0),
+                    "number": number,
                     "kind": raw.get("kind"),
                     "work_type": raw.get("work_type"),
                     "team_id": raw.get("team_id") or None,
+                    "title": raw.get("title"),
+                    "merged_at": raw.get("merged_at"),
                 }
             )
         return rows

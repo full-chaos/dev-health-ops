@@ -18,8 +18,10 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from typing import Any
+
+import strawberry
 
 from dev_health_ops.metrics.ai_impact import (
     AI_BUCKETS as AI_ATTRIBUTION_BUCKETS,
@@ -33,6 +35,8 @@ from dev_health_ops.metrics.opportunities.ai_detector import AIOpportunityDetect
 from ..authz import require_org_id
 from ..context import GraphQLContext
 from ..models.ai import (
+    AiAttributedPr,
+    AiAttributedPrsResult,
     AIComparison,
     AIComparisonDelta,
     AIComparisonSide,
@@ -656,4 +660,84 @@ async def resolve_ai_workflow_drilldown(
         edges=edges,
         partial=traversal.partial,
         data_available=bool(edges),
+    )
+
+
+# =============================================================================
+# resolve_ai_attributed_prs
+# =============================================================================
+
+
+_MAX_AI_ATTRIBUTED_PRS_PAGE = 200
+
+
+async def resolve_ai_attributed_prs(
+    context: GraphQLContext,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> AiAttributedPrsResult:
+    """List AI-attributed pull requests for drilldown selection.
+
+    Reads ``ai_attribution_resolved`` joined to ``git_pull_requests`` and
+    returns the unaggregated PRs that drive the AI Review Load and AI Risk
+    dashboards. The UI passes a chosen ``(repo_id, number)`` to
+    ``aiWorkflowDrilldown`` to retrieve evidence graphs.
+
+    No fabrication: every returned row corresponds to a persisted attribution.
+    """
+
+    org_id = require_org_id(context)
+    _validate_date_range(date_range)
+    repo_id, team_id, work_type = _normalize_scope(scope)
+
+    page_size = max(1, min(int(limit), _MAX_AI_ATTRIBUTED_PRS_PAGE))
+    page_offset = max(0, int(offset))
+
+    start_dt = datetime.combine(date_range.start_date, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(date_range.end_date, time.max, tzinfo=timezone.utc)
+
+    loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
+    # Fetch one extra row so we can report has_more without a COUNT(*) round-trip.
+    raw_rows = await loader.load_ai_pr_attributions(
+        start=start_dt,
+        end=end_dt,
+        repo_id=repo_id,
+        limit=page_size + 1,
+        offset=page_offset,
+    )
+
+    has_more = len(raw_rows) > page_size
+    page_rows = raw_rows[:page_size]
+
+    # team_id / work_type filtering happens here because the loader treats
+    # them as projections, not WHERE-clause inputs. The PR universe is bounded
+    # by date_range + repo_id so in-memory filtering is safe at this scale.
+    if team_id:
+        page_rows = [row for row in page_rows if (row.get("team_id") or "") == team_id]
+    if work_type:
+        page_rows = [row for row in page_rows if (row.get("work_type") or "") == work_type]
+
+    rows = [
+        AiAttributedPr(
+            repo_id=strawberry.ID(str(row["repo_id"])),
+            number=int(row["number"]),
+            title=row.get("title"),
+            kind=row.get("kind"),
+            work_type=row.get("work_type"),
+            team_id=row.get("team_id") or None,
+            merged_at=_to_aware(row["merged_at"]) if row.get("merged_at") else None,
+        )
+        for row in page_rows
+    ]
+
+    return AiAttributedPrsResult(
+        org_id=org_id,
+        start_date=date_range.start_date,
+        end_date=date_range.end_date,
+        rows=rows,
+        total=len(rows),
+        has_more=has_more,
+        data_available=bool(rows),
     )

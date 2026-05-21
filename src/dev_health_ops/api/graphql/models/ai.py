@@ -369,3 +369,34 @@ class AIWorkflowDrilldownResult:
     edges: list[AIWorkflowGraphEdgeOut]
     partial: bool
     data_available: bool
+
+
+@strawberry.type
+class AiAttributedPr:
+    """A single AI-attributed pull request candidate for drilldown selection.
+
+    Rows are sourced directly from ``ai_attribution_resolved`` joined to
+    ``git_pull_requests``. No aggregation, no fabrication — just the PRs that
+    have an AI attribution signal in the requested window.
+    """
+
+    repo_id: strawberry.ID
+    number: int
+    title: str | None = None
+    kind: str | None = None
+    work_type: str | None = None
+    team_id: str | None = None
+    merged_at: datetime | None = None
+
+
+@strawberry.type
+class AiAttributedPrsResult:
+    """Paginated list of AI-attributed PRs in the requested window."""
+
+    org_id: str
+    start_date: date
+    end_date: date
+    rows: list[AiAttributedPr]
+    total: int
+    has_more: bool
+    data_available: bool

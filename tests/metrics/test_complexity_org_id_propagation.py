@@ -62,13 +62,11 @@ def test_build_snapshots_propagates_org_id_to_file_snapshots() -> None:
     assert len(snapshots) == 2
     for snap in snapshots:
         assert snap.org_id == ORG, (
-            f"FileComplexitySnapshot.org_id must equal {ORG!r}, "
-            f"got {snap.org_id!r}."
+            f"FileComplexitySnapshot.org_id must equal {ORG!r}, got {snap.org_id!r}."
         )
 
 
 def test_fixtures_generator_propagates_org_id() -> None:
-    repo_id = uuid.uuid4()
     gen = SyntheticDataGenerator(repo_name="acme/demo-app", seed=42)
     data = gen.generate_complexity_metrics(days=2, org_id=ORG)
 
@@ -183,9 +181,7 @@ def test_load_complexity_delta_isolates_orgs() -> None:
 
     for i in range(30):
         d = DAY.fromordinal(DAY.toordinal() - 29 + i)
-        sink.add(
-            repo_id=str(repo_id), day=d, cpk=100.0 + i, org_id=ORG
-        )
+        sink.add(repo_id=str(repo_id), day=d, cpk=100.0 + i, org_id=ORG)
 
     # Same data tagged for ORG; another org querying must see nothing.
     delta_other = load_repo_complexity_delta_30d(

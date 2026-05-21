@@ -55,7 +55,9 @@ import os
 from typing import Any
 
 import pytest
-from _sql_explain_helpers import CapturingSink  # type: ignore[import-not-found]  # noqa: E402
+from _sql_explain_helpers import (
+    CapturingSink,  # type: ignore[import-not-found]  # noqa: E402
+)
 from sql_explain_fixtures import (  # type: ignore[import-not-found]  # noqa: E402
     ALL_RESOLVER_SQL_FIXTURES,
     ResolverSQLFixture,

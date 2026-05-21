@@ -46,7 +46,6 @@ from .models.outputs import (
     ThroughputForecast,
     WorkGraphEdgesResult,
 )
-from .types.bus_factor import BusFactorResult, BusFactorScopeInput
 from .models.recommendations import (
     Recommendation,
     WindowInput,
@@ -61,9 +60,9 @@ from .resolvers.ai import (
     resolve_ai_workflow_drilldown,
 )
 from .resolvers.analytics import resolve_analytics
+from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.catalog import resolve_catalog
 from .resolvers.data_health import resolve_data_health
-from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.reports import (
     CloneSavedReportInput,
     CreateSavedReportInput,
@@ -82,6 +81,7 @@ from .resolvers.reports import (
     resolve_update_saved_report,
 )
 from .subscriptions import Subscription
+from .types.bus_factor import BusFactor, BusFactorScopeInput
 
 logger = logging.getLogger(__name__)
 
@@ -314,7 +314,7 @@ class Query:
         info: Info,
         org_id: str,
         scope: BusFactorScopeInput | None = None,
-    ) -> BusFactorResult:
+    ) -> BusFactor:
         context = get_context(info)
         return await resolve_bus_factor(context, org_id, scope)
 

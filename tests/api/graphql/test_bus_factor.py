@@ -10,6 +10,7 @@ import pytest
 from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.resolvers.bus_factor import resolve_bus_factor
 from dev_health_ops.api.graphql.types.bus_factor import BusFactorScopeInput
+from dev_health_ops.metrics.loaders.ownership import OwnershipWindow
 from dev_health_ops.metrics.schemas import CommitStatRow
 
 ORG_ID = "org-test"
@@ -39,62 +40,67 @@ def _row(repo_id: UUID, commit_hash: str, author: str, churn: int) -> CommitStat
     }
 
 
-def _db_row(row: CommitStatRow, repo_name: str) -> dict[str, Any]:
-    return {**row, "repo_name": repo_name}
-
-
-def _patch_query(rows: list[dict[str, Any]]) -> Any:
+def _patch_loader(window: OwnershipWindow) -> Any:
     return patch(
-        "dev_health_ops.api.graphql.resolvers.bus_factor.query_dicts",
+        "dev_health_ops.metrics.loaders.ownership."
+        "OwnershipClickHouseLoader.load_commit_ownership_stats",
         new_callable=AsyncMock,
-        return_value=rows,
+        return_value=window,
     )
 
 
 @pytest.mark.asyncio
 async def test_bus_factor_empty_state_returns_stable_contract():
-    with _patch_query([]):
+    with _patch_loader(OwnershipWindow(stats=[], repo_names={})):
         result = await resolve_bus_factor(_ctx(), ORG_ID)
 
-    assert result.scope_value == 0
+    assert result.org_id == ORG_ID
+    assert result.value == 0
     assert result.evidence_sample_count == 0
     assert result.top_maintainers == []
-    assert result.per_repo == []
+    assert result.repos == []
 
 
 @pytest.mark.asyncio
 async def test_bus_factor_populates_scope_and_repo_rollups():
-    rows = [
-        _db_row(_row(REPO_A, "a1", "maintainer-a@example.com", 80), "backend"),
-        _db_row(_row(REPO_A, "a2", "maintainer-b@example.com", 20), "backend"),
-        _db_row(_row(REPO_B, "b1", "maintainer-c@example.com", 90), "frontend"),
-        _db_row(_row(REPO_B, "b2", "maintainer-a@example.com", 10), "frontend"),
-    ]
+    window = OwnershipWindow(
+        stats=[
+            _row(REPO_A, "a1", "maintainer-a@example.com", 80),
+            _row(REPO_A, "a2", "maintainer-b@example.com", 20),
+            _row(REPO_B, "b1", "maintainer-c@example.com", 90),
+            _row(REPO_B, "b2", "maintainer-a@example.com", 10),
+        ],
+        repo_names={REPO_A: "backend", REPO_B: "frontend"},
+    )
 
-    with _patch_query(rows):
+    with _patch_loader(window):
         result = await resolve_bus_factor(_ctx(), ORG_ID)
 
-    assert result.scope_value == 2
+    assert result.value == 2
     assert result.evidence_sample_count == 4
     assert [share.author for share in result.top_maintainers[:2]] == [
         "maintainer-a@example.com",
         "maintainer-c@example.com",
     ]
-    assert [repo.repo_name for repo in result.per_repo] == ["backend", "frontend"]
-    assert [repo.value for repo in result.per_repo] == [1, 1]
-    assert result.per_repo[0].top_maintainers[0].author == "maintainer-a@example.com"
-    assert result.per_repo[1].top_maintainers[0].author == "maintainer-c@example.com"
+    assert [repo.repo_name for repo in result.repos] == ["backend", "frontend"]
+    assert [repo.value for repo in result.repos] == [1, 1]
+    assert result.repos[0].top_maintainers[0].author == "maintainer-a@example.com"
+    assert result.repos[1].top_maintainers[0].author == "maintainer-c@example.com"
 
 
 @pytest.mark.asyncio
-async def test_bus_factor_passes_repo_scope_to_loader():
-    rows = [_db_row(_row(REPO_A, "a1", "maintainer-a@example.com", 100), "backend")]
+async def test_bus_factor_passes_scope_to_loader():
+    window = OwnershipWindow(
+        stats=[_row(REPO_A, "a1", "maintainer-a@example.com", 100)],
+        repo_names={REPO_A: "backend"},
+    )
 
-    with _patch_query(rows) as query:
+    with _patch_loader(window) as loader:
         result = await resolve_bus_factor(
-            _ctx(), ORG_ID, BusFactorScopeInput(repo_id=str(REPO_A))
+            _ctx(), ORG_ID, BusFactorScopeInput(repo_id=str(REPO_A), team_id="team-a")
         )
 
-    params = query.await_args.args[2]
-    assert params["repo_id"] == str(REPO_A)
-    assert result.scope_value == 1
+    loader.assert_awaited_once_with(repo_id=REPO_A, team_id="team-a")
+    assert result.scope.repo_id == str(REPO_A)
+    assert result.scope.team_id == "team-a"
+    assert result.value == 1

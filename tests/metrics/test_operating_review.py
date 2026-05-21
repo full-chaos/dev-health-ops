@@ -210,12 +210,20 @@ def test_compute_operating_review_all_teams_mode_emits_null_team_id() -> None:
         current=OperatingReviewRows(
             work_items=[
                 # Two teams worth of rows in the same period.
-                {"items_completed": 14, "items_started": 18,
-                 "wip_count_end_of_day": 8, "cycle_time_p50_hours": 30.0,
-                 "wip_age_p90_hours": 70.0},
-                {"items_completed": 11, "items_started": 9,
-                 "wip_count_end_of_day": 5, "cycle_time_p50_hours": 24.0,
-                 "wip_age_p90_hours": 60.0},
+                {
+                    "items_completed": 14,
+                    "items_started": 18,
+                    "wip_count_end_of_day": 8,
+                    "cycle_time_p50_hours": 30.0,
+                    "wip_age_p90_hours": 70.0,
+                },
+                {
+                    "items_completed": 11,
+                    "items_started": 9,
+                    "wip_count_end_of_day": 5,
+                    "cycle_time_p50_hours": 24.0,
+                    "wip_age_p90_hours": 60.0,
+                },
             ],
             state_durations=[{"duration_hours": 30.0, "items_touched": 2}],
             repo_metrics=[],

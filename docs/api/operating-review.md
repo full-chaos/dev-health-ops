@@ -65,6 +65,21 @@ cross-team behavior per metric.
 |------------|--------------------------|-------|
 | `ktlo_units` / `new_value_units` / `security_units` / `infra_units` (`delivery_units`) | **SUM** | Total org investment per area. |
 
+### AI Workflow Intelligence
+
+| Metric key | Aggregation across teams | Notes |
+|------------|--------------------------|-------|
+| `ai_adoption_ratio` | **SUM AI-attributed PRs / SUM total PRs** | Uses persisted AI attribution buckets. Unknown remains in the denominator. |
+| `ai_cycle_time_delta_hours` | **AVG** | AI-attributed cycle-time delta from `ai_impact_metrics_daily`. Negative values mean lower AI-side cycle time. |
+| `ai_review_amplification` | **AVG** | Review-pressure ratio from AI impact rollups. |
+| `ai_risk_drag` | **AVG of available risk rates** | Combines rework, test-gap, and incident drag rates without creating a synthetic person score. |
+| `ai_governance_coverage` | **AVG coverage** | Averages declaration, human-review, security-scan, and in-policy coverage from governance rollups. |
+| `ai_opportunity_signals` | **Rule count** | Counts evidence-backed opportunity conditions for the week; clients should drill into `aiOpportunities` and `aiWorkflowDrilldown` for artifacts. |
+
+The section is a weekly operating cadence for AI adoption: adoption mix,
+delivery impact, review pressure, risk drag, governance, and opportunities.
+It does not recompute attribution or inspect raw prompt/session data.
+
 ## Improved / Worsened / Changed callouts
 
 Computed exactly as in single-team mode: per-metric, comparing the
@@ -108,5 +123,8 @@ No special-cased thresholds for aggregate mode.
 
 - **CHAOS-1755**: Introduced "All Teams" mode by making `team_id`
   optional and documenting per-metric aggregation rules.
+- **CHAOS-1722**: Added the AI Workflow Intelligence section to the weekly
+  operating review and documented evidence handoff to AI recommendations /
+  Work Graph drilldowns.
 - **CHAOS-1751**: Established `teams` as the source of truth for the
   TEAM dimension catalog (separate from this contract).

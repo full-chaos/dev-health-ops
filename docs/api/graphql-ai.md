@@ -110,6 +110,12 @@ Stable contract — `recommendations: []`, `detectorReady: false` —
 until CHAOS-1586 lands the detector.  Clients can render an empty
 state today and gain population without a schema change.
 
+Recommendations include metric `evidenceRefs`. When those refs point to PR
+artifacts, the response also includes `workGraphDrilldowns` so clients can
+open `aiWorkflowDrilldown(rootType: PR, rootId: ...)` and inspect the
+underlying Work Graph evidence instead of treating a recommendation as a
+standalone dashboard card.
+
 ### `aiGovernanceSummary`
 
 Coverage rollups (`declarationCoverage`, `humanReviewCoverage`,

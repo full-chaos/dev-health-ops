@@ -285,6 +285,15 @@ class AIOpportunityKind(Enum):
 
 
 @strawberry.type
+class AIWorkGraphDrilldownRef:
+    """Reference that lets clients open Work Graph evidence for an AI rec."""
+
+    root_type: str
+    root_id: str
+    label: str
+
+
+@strawberry.type
 class AIOpportunity:
     """A single AI automation candidate."""
 
@@ -296,6 +305,7 @@ class AIOpportunity:
     rationale: str
     score: float
     evidence_refs: list[str]
+    work_graph_drilldowns: list[AIWorkGraphDrilldownRef]
 
 
 @strawberry.type

@@ -64,6 +64,7 @@ from .resolvers.ai import (
 from .resolvers.analytics import resolve_analytics
 from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.catalog import resolve_catalog
+from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.reports import (
@@ -85,6 +86,12 @@ from .resolvers.reports import (
 )
 from .subscriptions import Subscription
 from .types.bus_factor import BusFactor, BusFactorScopeInput
+from .types.complexity import (
+    ComplexityTimeseriesInput,
+    ComplexityTimeseriesResult,
+    HotspotsInput,
+    HotspotsResult,
+)
 from .types.compounding_risk import (
     CompoundingRiskFilterInput,
     CompoundingRiskResult,
@@ -340,6 +347,36 @@ class Query:
     ) -> CompoundingRiskResult:
         context = get_context(info)
         return await resolve_compounding_risk(context, org_id, filter)
+
+    @strawberry.field(
+        description=(
+            "Cyclomatic complexity trend by repo or file. Reads from "
+            "append-only ``repo_complexity_daily`` / ``file_complexity_snapshots`` "
+            "tables — no recomputation, pure surface of persisted data."
+        )
+    )
+    async def complexity_timeseries(
+        self,
+        info: Info,
+        input: ComplexityTimeseriesInput,  # noqa: A002
+    ) -> ComplexityTimeseriesResult:
+        context = get_context(info)
+        return await resolve_complexity_timeseries(context, input)
+
+    @strawberry.field(
+        description=(
+            "Top file hotspots ranked by risk_score (churn x complexity x "
+            "ownership concentration). Reads from the append-only "
+            "``file_hotspot_daily`` table."
+        )
+    )
+    async def hotspots(
+        self,
+        info: Info,
+        input: HotspotsInput,  # noqa: A002
+    ) -> HotspotsResult:
+        context = get_context(info)
+        return await resolve_hotspots(context, input)
 
     @strawberry.field(
         description="Latest rule-based recommendations for a team within a lookback window."

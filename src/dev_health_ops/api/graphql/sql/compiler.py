@@ -13,8 +13,8 @@ from ..authz import enforce_org_scope
 from .filter_translation import translate_filters
 from .templates import (
     breakdown_template,
-    catalog_values_template,
     catalog_values_team_template,
+    catalog_values_template,
     flow_matrix_repo_edges_template,
     flow_matrix_repo_nodes_template,
     flow_matrix_team_edges_template,
@@ -459,9 +459,7 @@ def compile_catalog_values(
         filter_clause, filter_params = translate_filters(
             filters, use_investment=ctx.get("use_investment", False)
         )
-        sql = catalog_values_template(
-            dimension, filter_clause=filter_clause, **ctx
-        )
+        sql = catalog_values_template(dimension, filter_clause=filter_clause, **ctx)
         params.update(filter_params)
 
     params = enforce_org_scope(org_id, params)

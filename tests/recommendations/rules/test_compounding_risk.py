@@ -144,3 +144,81 @@ def test_compounding_risk_rationale_mentions_both_thresholds() -> None:
     assert result is not None
     assert str(COMPLEXITY_DELTA_THRESHOLD) in result.rationale
     assert str(HOTSPOT_CHURN_OVERLAP_THRESHOLD) in result.rationale
+
+
+# ---------------------------------------------------------------------------
+# 8. Persisted Compounding Risk path (CHAOS-1641)
+# ---------------------------------------------------------------------------
+
+
+def test_persisted_high_severity_fires_with_critical_severity() -> None:
+    """When the snapshot carries persisted Compounding Risk = high, the rule
+    fires with severity='critical' and cites compounding_risk_daily."""
+    snap = make_snapshot(
+        compounding_risk_score=0.75,
+        compounding_risk_severity="high",
+        # Legacy proxy explicitly below threshold to prove preference.
+        hotspot_complexity_delta=0.0,
+        hotspot_churn_overlap=0.0,
+    )
+    result = evaluate_compounding_risk(snap, NOW)
+    assert result is not None
+    assert result.severity == "critical"
+    assert result.rule_id == RULE_ID
+    assert result.success_criterion == SUCCESS_CRITERION
+    # Evidence cites the new table.
+    assert any(
+        ev.metric_table == "compounding_risk_daily" for ev in result.evidence
+    )
+
+
+def test_persisted_elevated_severity_fires_with_warning_severity() -> None:
+    snap = make_snapshot(
+        compounding_risk_score=0.50,
+        compounding_risk_severity="elevated",
+    )
+    result = evaluate_compounding_risk(snap, NOW)
+    assert result is not None
+    assert result.severity == "warning"
+
+
+def test_persisted_low_severity_does_not_fire_alone() -> None:
+    snap = make_snapshot(
+        compounding_risk_score=0.20,
+        compounding_risk_severity="low",
+    )
+    result = evaluate_compounding_risk(snap, NOW)
+    assert result is None
+
+
+def test_persisted_unknown_severity_falls_through_to_legacy_path() -> None:
+    """When the persisted score is missing/unknown, the legacy hotspot proxy
+    still drives the decision — ensures back-compat during backfill warmup."""
+    snap = make_snapshot(
+        compounding_risk_score=None,
+        compounding_risk_severity=None,
+        hotspot_complexity_delta=COMPLEXITY_DELTA_THRESHOLD + 0.05,
+        hotspot_churn_overlap=HOTSPOT_CHURN_OVERLAP_THRESHOLD + 0.05,
+    )
+    result = evaluate_compounding_risk(snap, NOW)
+    assert result is not None
+    # Legacy path uses the file_complexity_snapshots evidence trail.
+    assert any(
+        ev.metric_table == "file_complexity_snapshots" for ev in result.evidence
+    )
+
+
+def test_persisted_score_takes_precedence_over_legacy_proxy() -> None:
+    """Even if the legacy proxy would NOT fire, a persisted high score fires."""
+    snap = make_snapshot(
+        compounding_risk_score=0.80,
+        compounding_risk_severity="high",
+        hotspot_complexity_delta=0.0,  # below threshold
+        hotspot_churn_overlap=0.0,     # below threshold
+    )
+    result = evaluate_compounding_risk(snap, NOW)
+    assert result is not None
+    assert result.severity == "critical"
+    assert "compounding_risk_daily" in {
+        ev.metric_table for ev in result.evidence
+    }

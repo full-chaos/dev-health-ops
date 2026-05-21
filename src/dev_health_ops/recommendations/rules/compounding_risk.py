@@ -58,6 +58,52 @@ def evaluate_compounding_risk(
     Returns:
         A Recommendation if the rule fires, else None.
     """
+    # Preferred path (CHAOS-1641): use the persisted Compounding Risk
+    # composite when available. ``severity`` is the canonical signal.
+    if snapshot.compounding_risk_severity in ("elevated", "high"):
+        score = snapshot.compounding_risk_score
+        rationale = (
+            (
+                f"Compounding Risk score is {score:.3f} "
+                f"(severity: {snapshot.compounding_risk_severity}). "
+                "Churn, complexity trend, ownership concentration, and review "
+                "latency are compounding above their tuned thresholds."
+            )
+            if score is not None
+            else (
+                f"Compounding Risk severity is "
+                f"{snapshot.compounding_risk_severity}."
+            )
+        )
+        evidence: tuple[EvidenceRef, ...] = (
+            EvidenceRef(
+                team_id=snapshot.team_id,
+                metric_table="compounding_risk_daily",
+                window_start=snapshot.window_start,
+                window_end=snapshot.window_end,
+                field="compounding_risk",
+                value=round(score, 4) if score is not None else 0.0,
+            ),
+        )
+        return Recommendation(
+            rule_id=RULE_ID,
+            team_id=snapshot.team_id,
+            org_id=snapshot.org_id,
+            computed_at=now,
+            window_start=snapshot.window_start,
+            window_end=snapshot.window_end,
+            severity=(
+                "critical"
+                if snapshot.compounding_risk_severity == "high"
+                else "warning"
+            ),
+            title="Code risk is compounding where change pressure is highest.",
+            rationale=rationale,
+            success_criterion=SUCCESS_CRITERION,
+            evidence=evidence,
+        )
+
+    # Fallback (pre-1641 / backfill warmup): legacy hotspot proxy.
     if (
         snapshot.hotspot_complexity_delta is None
         or snapshot.hotspot_churn_overlap is None
@@ -72,7 +118,7 @@ def evaluate_compounding_risk(
     if churn_overlap < HOTSPOT_CHURN_OVERLAP_THRESHOLD:
         return None
 
-    evidence: tuple[EvidenceRef, ...] = (
+    evidence = (
         EvidenceRef(
             team_id=snapshot.team_id,
             metric_table="file_complexity_snapshots",

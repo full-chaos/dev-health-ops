@@ -14,6 +14,7 @@ from dev_health_ops.audit.ai_governance.loaders import build_governance_rows_for
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.ai_impact import compute_ai_impact_metrics_daily
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
+from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
@@ -475,6 +476,38 @@ async def run_daily_metrics_job(
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if all_file_metrics:
                 s.write_file_metrics(all_file_metrics)
+
+        # Compounding Risk composite (CHAOS-1641). Computed AFTER
+        # ``write_repo_metrics`` so the inputs are persisted, then read
+        # back as needed (complexity delta) by the orchestrator.  Team
+        # rows are aggregated from the repo inputs using the
+        # ``repo_team_resolver`` already in scope.
+        repo_to_team_map: dict[str, str] = {}
+        try:
+            for row in result.repo_metrics:
+                repo_id = getattr(row, "repo_id", None)
+                if repo_id is None:
+                    continue
+                full_name = repo_names_by_id.get(repo_id)
+                if not full_name:
+                    continue
+                team_id, _ = repo_team_resolver.resolve(full_name)
+                if team_id:
+                    repo_to_team_map[str(repo_id)] = team_id
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("repo_team_resolver failed for compounding risk: %s", exc)
+
+        compounding_rows = build_compounding_risk_rows_for_day(
+            sink=primary_sink,
+            day=d,
+            org_id=org_id,
+            repo_metrics_rows=result.repo_metrics,
+            computed_at=computed_at,
+            repo_to_team=repo_to_team_map or None,
+        )
+        if compounding_rows:
+            for s in sinks:
+                s.write_compounding_risk_daily(compounding_rows)
 
         # TestOps risk metrics (release confidence, quality drag, pipeline stability)
         release_conf = compute_release_confidence(

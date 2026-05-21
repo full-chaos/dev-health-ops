@@ -94,7 +94,9 @@ async def resolve_bus_factor(
 
     repo_id = _parse_repo_id(scope.repo_id if scope else None)
     team_id = scope.team_id if scope else None
-    loader = OwnershipClickHouseLoader(_require_client(context), org_id=authorized_org_id)
+    loader = OwnershipClickHouseLoader(
+        _require_client(context), org_id=authorized_org_id
+    )
     window = await loader.load_commit_ownership_stats(repo_id=repo_id, team_id=team_id)
 
     by_repo: dict[uuid.UUID, list[CommitStatRow]] = defaultdict(list)
@@ -114,13 +116,16 @@ async def resolve_bus_factor(
     repos.sort(key=lambda item: (item.value, item.repo_name))
 
     scope_repo_id = repo_id or uuid.uuid5(
-        uuid.NAMESPACE_URL, f"dev-health:bus-factor:{authorized_org_id}:{team_id or 'all'}"
+        uuid.NAMESPACE_URL,
+        f"dev-health:bus-factor:{authorized_org_id}:{team_id or 'all'}",
     )
     scoped_rows = window.stats if repo_id else _scope_rows(window.stats, scope_repo_id)
 
     return BusFactor(
         org_id=authorized_org_id,
-        scope=BusFactorScope(repo_id=str(repo_id) if repo_id else None, team_id=team_id),
+        scope=BusFactorScope(
+            repo_id=str(repo_id) if repo_id else None, team_id=team_id
+        ),
         value=_bus_factor(scope_repo_id, scoped_rows),
         top_maintainers=_top_maintainers(window.stats, limit=5),
         repos=repos,

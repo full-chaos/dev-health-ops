@@ -155,7 +155,7 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
                 argMax(duration_hours, computed_at) AS duration_hours,
                 argMax(items_touched, computed_at) AS items_touched,
                 argMax(avg_wip, computed_at) AS avg_wip
-              FROM work_item_state_duration_daily
+              FROM work_item_state_durations_daily
               WHERE org_id = %(org_id)s
                 AND team_id = %(team_id)s
                 AND day >= %(start)s AND day < %(end)s
@@ -196,19 +196,19 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
         OperatingReviewQuery(
             "hotspots",
             """
-            SELECT avg(risk_score) AS risk_score, count() AS hotspots_count
+            SELECT avg(latest_risk_score) AS risk_score, count() AS hotspots_count
             FROM (
               SELECT
                 day,
                 repo_id,
                 file_path,
-                argMax(risk_score, computed_at) AS risk_score
+                argMax(risk_score, computed_at) AS latest_risk_score
               FROM file_hotspot_daily
               WHERE org_id = %(org_id)s
                 AND day >= %(start)s AND day < %(end)s
               GROUP BY day, repo_id, file_path
+              HAVING latest_risk_score > 0
             )
-            WHERE risk_score > 0
             """,
         ),
         OperatingReviewQuery(

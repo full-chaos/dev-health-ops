@@ -91,6 +91,7 @@ jobs:
       - name: Run tiered test contract
         env:
           DATABASE_URI: clickhouse://ch:ch@localhost:8123/default
+          CLICKHOUSE_URI: clickhouse://ch:ch@localhost:8123/default
           POSTGRES_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           SECONDARY_DATABASE_URI: mongodb://localhost:27017
           COVERAGE_THRESHOLD: "70"

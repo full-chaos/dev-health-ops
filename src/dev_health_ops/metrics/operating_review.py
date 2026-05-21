@@ -51,7 +51,7 @@ class OperatingReviewSection:
 @dataclass(frozen=True)
 class OperatingReview:
     org_id: str
-    team_id: str
+    team_id: str | None
     week_start: date
     prior_week_start: date
     sections: list[OperatingReviewSection]
@@ -96,17 +96,31 @@ def prior_week_start(week_start: date) -> date:
     return week_start - timedelta(days=7)
 
 
-def build_operating_review_queries() -> list[OperatingReviewQuery]:
+def build_operating_review_queries(
+    *, team_id: str | None = None
+) -> list[OperatingReviewQuery]:
     """Return ClickHouse queries for daily rollups used by the review.
 
-    Parameters expected by every query: org_id, team_id, start, end.
+    Parameters expected by every query: ``org_id``, ``start``, ``end``.
+
+    When ``team_id`` is provided, queries also bind ``team_id`` and filter
+    to a single team. When ``team_id`` is ``None`` (cross-team "All Teams"
+    mode, CHAOS-1755), queries omit the team predicate and add ``team_id``
+    to the inner ``GROUP BY`` so per-team rows are not collapsed by
+    ``argMax`` mid-aggregation. Counts then ``SUM`` correctly across
+    teams, percentiles ``AVG`` across teams. See
+    ``docs/api/operating-review.md`` for the full aggregation contract.
+
     Queries select the latest append-only value per day/dimension with argMax.
     """
+
+    team_filter = "AND team_id = %(team_id)s" if team_id is not None else ""
+    team_group = ", team_id" if team_id is None else ""
 
     return [
         OperatingReviewQuery(
             "work_items",
-            """
+            f"""
             SELECT
               day,
               sum(items_started) AS items_started,
@@ -130,9 +144,9 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
                 argMax(wip_age_p90_hours, computed_at) AS wip_age_p90_hours
               FROM work_item_metrics_daily
               WHERE org_id = %(org_id)s
-                AND team_id = %(team_id)s
+                {team_filter}
                 AND day >= %(start)s AND day < %(end)s
-              GROUP BY day, provider, work_scope_id
+              GROUP BY day, provider, work_scope_id{team_group}
             )
             GROUP BY day
             ORDER BY day
@@ -140,7 +154,7 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
         ),
         OperatingReviewQuery(
             "state_durations",
-            """
+            f"""
             SELECT
               status,
               sum(items_touched) AS items_touched,
@@ -157,9 +171,9 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
                 argMax(avg_wip, computed_at) AS avg_wip
               FROM work_item_state_durations_daily
               WHERE org_id = %(org_id)s
-                AND team_id = %(team_id)s
+                {team_filter}
                 AND day >= %(start)s AND day < %(end)s
-              GROUP BY day, provider, work_scope_id, status
+              GROUP BY day, provider, work_scope_id, status{team_group}
             )
             GROUP BY status
             """,
@@ -265,7 +279,7 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
         ),
         OperatingReviewQuery(
             "investment",
-            """
+            f"""
             SELECT investment_area, sum(delivery_units) AS delivery_units
             FROM (
               SELECT
@@ -276,9 +290,9 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
                 argMax(delivery_units, computed_at) AS delivery_units
               FROM investment_metrics_daily
               WHERE org_id = %(org_id)s
-                AND team_id = %(team_id)s
+                {team_filter}
                 AND day >= %(start)s AND day < %(end)s
-              GROUP BY day, repo_id, investment_area, project_stream
+              GROUP BY day, repo_id, investment_area, project_stream{team_group}
             )
             GROUP BY investment_area
             """,
@@ -289,12 +303,19 @@ def build_operating_review_queries() -> list[OperatingReviewQuery]:
 def compute_operating_review(
     *,
     org_id: str,
-    team_id: str,
+    team_id: str | None,
     week_start: date,
     current: OperatingReviewRows,
     prior: OperatingReviewRows,
 ) -> OperatingReview:
-    """Compute the weekly review payload from current/prior rollup rows."""
+    """Compute the weekly review payload from current/prior rollup rows.
+
+    ``team_id=None`` selects cross-team "All Teams" mode (CHAOS-1755): the
+    rows are expected to come from queries built without a team filter
+    (see :func:`build_operating_review_queries`). The returned payload
+    carries ``team_id=None`` so callers can render an explicit aggregate
+    label rather than pretend a single team was chosen.
+    """
 
     sections = [
         _delivery_section(current, prior),

@@ -68,13 +68,15 @@ async def _fetch_period_rows(
     query_dicts: Any,
     *,
     org_id: str,
-    team_id: str,
+    team_id: str | None,
     start: Any,
 ) -> OperatingReviewRows:
     end = week_bounds(start)[1]
-    params = {"org_id": org_id, "team_id": team_id, "start": start, "end": end}
+    params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
+    if team_id is not None:
+        params["team_id"] = team_id
     rows: dict[str, list[dict[str, Any]]] = {}
-    for query in build_operating_review_queries():
+    for query in build_operating_review_queries(team_id=team_id):
         try:
             rows[query.key] = await query_dicts(client, query.sql, params)
         except Exception:

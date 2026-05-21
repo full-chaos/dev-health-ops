@@ -329,9 +329,15 @@ class ThroughputForecastInput:
 
 @strawberry.input
 class OperatingReviewInput:
-    """Input for a weekly engineering operating review."""
+    """Input for a weekly engineering operating review.
 
-    team_id: str
+    ``team_id`` is optional: when omitted, the resolver returns a
+    cross-team aggregate ("All Teams" mode, CHAOS-1755) with documented
+    per-metric aggregation rules. When provided, the report is scoped to
+    that single team.
+    """
+
+    team_id: str | None = None
     week_start: date
 
 

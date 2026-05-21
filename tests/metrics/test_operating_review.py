@@ -152,3 +152,88 @@ def test_operating_review_renders_for_empty_team_week() -> None:
         for section in review.sections
         for metric in section.metrics
     )
+
+
+def test_build_operating_review_queries_single_team_mode() -> None:
+    """Per-team mode binds team_id and filters in the WHERE clause."""
+    from dev_health_ops.metrics.operating_review import build_operating_review_queries
+
+    queries = {q.key: q.sql for q in build_operating_review_queries(team_id="team-a")}
+
+    for key in ("work_items", "state_durations", "investment"):
+        assert "AND team_id = %(team_id)s" in queries[key], (
+            f"single-team query {key!r} must filter by team_id"
+        )
+
+    # repo_metrics is repo-scoped (no team_id column in WHERE) — unchanged.
+    assert "team_id" not in queries["repo_metrics"], (
+        "repo_metrics should never reference team_id"
+    )
+
+
+def test_build_operating_review_queries_all_teams_mode() -> None:
+    """All-teams mode drops the team predicate and pushes team_id into the
+    inner GROUP BY so per-team rows aren't collapsed by argMax mid-aggregation.
+    """
+    from dev_health_ops.metrics.operating_review import build_operating_review_queries
+
+    queries = {q.key: q.sql for q in build_operating_review_queries(team_id=None)}
+
+    # work_items / state_durations / investment must NOT filter by team
+    # in all-teams mode, and MUST keep team_id in inner GROUP BY so the
+    # outer SUM/AVG aggregates correctly across teams.
+    for key in ("work_items", "state_durations", "investment"):
+        sql = queries[key]
+        assert "AND team_id = %(team_id)s" not in sql, (
+            f"all-teams query {key!r} must not filter by team_id"
+        )
+        assert "team_id" in sql, (
+            f"all-teams query {key!r} must keep team_id in inner GROUP BY"
+        )
+
+    # The argMax-by-computed_at idiom must remain — otherwise we'd
+    # combine across recomputes within a single team.
+    for key in ("work_items", "state_durations", "investment"):
+        assert "argMax(" in queries[key], (
+            f"all-teams query {key!r} must keep argMax-by-computed_at"
+        )
+
+
+def test_compute_operating_review_all_teams_mode_emits_null_team_id() -> None:
+    """In cross-team aggregate mode the payload carries team_id=None so callers
+    can render an explicit "All Teams" label rather than pretend a single
+    team was chosen."""
+    review = compute_operating_review(
+        org_id="org-1",
+        team_id=None,
+        week_start=date(2026, 5, 11),
+        current=OperatingReviewRows(
+            work_items=[
+                # Two teams worth of rows in the same period.
+                {"items_completed": 14, "items_started": 18,
+                 "wip_count_end_of_day": 8, "cycle_time_p50_hours": 30.0,
+                 "wip_age_p90_hours": 70.0},
+                {"items_completed": 11, "items_started": 9,
+                 "wip_count_end_of_day": 5, "cycle_time_p50_hours": 24.0,
+                 "wip_age_p90_hours": 60.0},
+            ],
+            state_durations=[{"duration_hours": 30.0, "items_touched": 2}],
+            repo_metrics=[],
+            hotspots=[],
+            complexity=[],
+            deployments=[{"deployments_count": 5, "failed_deployments_count": 1}],
+            incidents=[{"incidents_count": 1, "mttr_p50_hours": 4.0}],
+            investment=[
+                {"investment_area": "ktlo", "delivery_units": 8},
+                {"investment_area": "new value", "delivery_units": 12},
+            ],
+        ),
+        prior=OperatingReviewRows(),
+    )
+
+    assert review.team_id is None, (
+        "cross-team aggregate must surface team_id=None, not a sentinel value"
+    )
+    # Throughput sums across the two team rows (SUM aggregation contract).
+    delivery = review.section("delivery_movement")
+    assert delivery.metric("throughput").value == 14 + 11

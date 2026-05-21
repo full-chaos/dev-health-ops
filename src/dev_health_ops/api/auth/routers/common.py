@@ -97,7 +97,9 @@ def _expiry_to_utc(value: object) -> datetime | None:
 
 
 def _membership_joined_sort_value(membership: Membership) -> datetime:
-    joined_at = membership.joined_at or membership.created_at
+    joined_at = getattr(membership, "joined_at", None) or getattr(
+        membership, "created_at", None
+    )
     if joined_at is None:
         return datetime.min.replace(tzinfo=timezone.utc)
     if joined_at.tzinfo is None:
@@ -242,7 +244,7 @@ async def _issue_membership_tokens(
     db,
     request: Request,
     db_user: User,
-    membership: Membership,
+    membership: Membership | None,
 ):
     from dev_health_ops.api.auth.router import (
         create_refresh_token_record,
@@ -250,11 +252,13 @@ async def _issue_membership_tokens(
     )
 
     auth_service = get_auth_service()
+    org_id = str(membership.org_id) if membership is not None else ""
+    role = str(membership.role) if membership is not None else "member"
     token_pair = auth_service.create_token_pair(
         user_id=str(db_user.id),
         email=str(db_user.email),
-        org_id=str(membership.org_id),
-        role=str(membership.role),
+        org_id=org_id,
+        role=role,
         is_superuser=bool(db_user.is_superuser),
         username=str(db_user.username) if db_user.username is not None else None,
         full_name=str(db_user.full_name) if db_user.full_name is not None else None,
@@ -263,13 +267,13 @@ async def _issue_membership_tokens(
     refresh_payload = auth_service.validate_token(
         token_pair.refresh_token, token_type="refresh"
     )
-    if refresh_payload and refresh_payload.get("jti"):
+    if membership is not None and refresh_payload and refresh_payload.get("jti"):
         expires_at = _expiry_to_utc(refresh_payload.get("exp"))
         if expires_at is not None:
             await create_refresh_token_record(
                 db=db,
                 user_id=str(db_user.id),
-                org_id=str(membership.org_id),
+                org_id=org_id,
                 token_hash=str(refresh_payload["jti"]),
                 family_id=str(refresh_payload.get("family_id") or uuid_mod.uuid4()),
                 expires_at=expires_at,

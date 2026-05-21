@@ -291,17 +291,13 @@ async def login(
 
         await db.commit()
 
-        token_pair = (
-            await _issue_membership_tokens(db, request, user, membership)
-            if membership
-            else None
-        )
+        token_pair = await _issue_membership_tokens(db, request, user, membership)
 
         return LoginResponse(
-            access_token=token_pair.access_token if token_pair else "",
-            refresh_token=token_pair.refresh_token if token_pair else "",
-            token_type=token_pair.token_type if token_pair else "bearer",
-            expires_in=token_pair.expires_in if token_pair else 0,
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+            token_type=token_pair.token_type,
+            expires_in=token_pair.expires_in,
             needs_onboarding=needs_onboarding,
             user=_to_user_info(user, membership),
         )

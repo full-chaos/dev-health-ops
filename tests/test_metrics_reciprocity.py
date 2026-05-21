@@ -97,6 +97,9 @@ def test_review_reciprocity():
     assert alice_metric.reviews_given == 1
     assert alice_metric.reviews_received == 2
     assert alice_metric.review_reciprocity == 0.5
+    assert alice_metric.review_request_load == 1
+    assert alice_metric.pr_interruption_load == 1
+    assert alice_metric.context_spread_count == 1
 
     # Bob:
     #   Authored PR 2.
@@ -106,6 +109,9 @@ def test_review_reciprocity():
     bob_metric = next(u for u in result.user_metrics if u.author_email == bob)
     assert bob_metric.reviews_given == 1
     assert bob_metric.reviews_received == 1
+    assert bob_metric.review_request_load == 1
+    assert bob_metric.pr_interruption_load == 1
+    assert bob_metric.context_spread_count == 1
     # Note: min(1,1)/max(1,1) = 1.0.
     # If reviews_received was 0, it would be min(1,0)/max(1,1) = 0.0
     assert bob_metric.review_reciprocity == 1.0

@@ -124,6 +124,8 @@ class _UserAgg:
     changes_requested_given: int = 0
     reviews_received: int = 0
     activity_timestamps: list[datetime] = None  # type: ignore[assignment]
+    reviewed_pr_numbers: set[int] = None  # type: ignore[assignment]
+    received_review_pr_numbers: set[int] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.files is None:
@@ -138,6 +140,10 @@ class _UserAgg:
             self.pr_pickup_times = []
         if self.activity_timestamps is None:
             self.activity_timestamps = []
+        if self.reviewed_pr_numbers is None:
+            self.reviewed_pr_numbers = set()
+        if self.received_review_pr_numbers is None:
+            self.received_review_pr_numbers = set()
 
 
 def compute_daily_metrics(
@@ -366,18 +372,25 @@ def compute_daily_metrics(
 
             rua.reviews_given += 1
             rua.activity_timestamps.append(submitted_at)
+            # Track distinct PRs reviewed (pr_interruption_load).
+            rua.reviewed_pr_numbers.add(review["number"])
             if review["state"] == "CHANGES_REQUESTED":
                 rua.changes_requested_given += 1
 
-            # Count review as received for the PR author
             pr_author = pr_author_map.get((review["repo_id"], review["number"]))
             if pr_author:
                 aua = user_aggs.get((review["repo_id"], pr_author))
                 if aua:
                     aua.reviews_received += 1
+                    aua.received_review_pr_numbers.add(review["number"])
 
             reviewers = repo_reviewers.setdefault(review["repo_id"], {})
             reviewers[reviewer_identity] = int(reviewers.get(reviewer_identity, 0)) + 1
+
+    _author_repo_ids: dict[str, set[uuid.UUID]] = {}
+    for (_rid, _aid) in user_aggs:
+        _author_repo_ids.setdefault(_aid, set()).add(_rid)
+
 
     # 4) Finalize user metrics records.
     user_metrics: list[UserMetricsDailyRecord] = []
@@ -442,6 +455,10 @@ def compute_daily_metrics(
         if active_hours > 0 and day.weekday() >= 5:
             weekend_days = 1
 
+        pr_interruption_load = int(len(ua.reviewed_pr_numbers))
+        context_spread_count = int(len(_author_repo_ids.get(author_identity, set())))
+        review_request_load = int(len(ua.received_review_pr_numbers))
+
         user_metrics.append(
             UserMetricsDailyRecord(
                 repo_id=repo_id,
@@ -479,6 +496,9 @@ def compute_daily_metrics(
                     min(ua.reviews_given, ua.reviews_received)
                     / max(1, max(ua.reviews_given, ua.reviews_received))
                 ),
+                pr_interruption_load=pr_interruption_load,
+                context_spread_count=context_spread_count,
+                review_request_load=review_request_load,
                 team_id=team_id,
                 team_name=team_name,
                 active_hours=float(active_hours),

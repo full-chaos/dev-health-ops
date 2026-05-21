@@ -24,6 +24,7 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
         self,
         count: int = 20,
         issue_numbers: list[int] | None = None,
+        days: int = 60,
     ) -> list[dict[str, Any]]:
         prs = []
         end_date = datetime.now(timezone.utc)
@@ -53,11 +54,13 @@ class PrsGeneratorMixin(BaseGeneratorMixin):
             "Cleanup Z",
         ]
 
+        fixture_days = max(1, int(days))
+
         for i in range(1, count + 1):
             author_name, author_email = random.choice(self.repo_authors)
-            # PRs created over the last 60 days
+            created_day_offset = (i - 1) % fixture_days
             created_at = end_date - timedelta(
-                days=random.randint(0, 60), hours=random.randint(0, 23)
+                days=created_day_offset, hours=random.randint(0, 23)
             )
             issue_ref = None
             if issue_numbers and random.random() > 0.3:

@@ -547,7 +547,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             # 5. PRs & Reviews
             pr_data = generator.generate_prs(
-                count=ns.pr_count, issue_numbers=issue_numbers
+                count=max(ns.pr_count, ns.days * 2),
+                issue_numbers=issue_numbers,
+                days=ns.days,
             )
             prs = [p["pr"] for p in pr_data]
             await _insert_batches(

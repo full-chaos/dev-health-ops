@@ -12,7 +12,7 @@ human-only baseline on the same scope and time window.
 
 ## What this view shows
 
-Five metric cards plus one trend, all bucketed by `AI_ASSISTED` vs `HUMAN`:
+Six metric cards plus one trend, all bucketed by `AI_ASSISTED` vs `HUMAN`:
 
 | Card                       | What it answers                                                             |
 | -------------------------- | --------------------------------------------------------------------------- |
@@ -21,22 +21,22 @@ Five metric cards plus one trend, all bucketed by `AI_ASSISTED` vs `HUMAN`:
 | Change request rate        | Average change-request comments per PR.                                     |
 | Approval friction          | Derived: `changesRequestedPerPr / reviewsPerPr` per bucket.                 |
 | Review amplification       | Review volume on AI-attributed PRs vs the baseline.                         |
+| Push iterations after first review | Persisted follow-up push count after review activity starts.         |
 | Review amplification trend | Daily series showing whether amplification is trending up or down.          |
 
 ### Intentional gaps
 
-Two panels are explicitly **missing** today and rendered as missing-data
-cards so the gap stays visible instead of being silently absent:
+One panel remains explicitly **aggregate-only** and renders as a missing-data
+card until the distribution summary is available:
 
 | Missing card                         | Why it is missing                                                                                |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| Push iterations after first review   | The schema does not yet expose post-first-review push events.                                    |
-| Reviewer concentration               | **Intentionally deferred** until aggregate-only reviewer distribution ships without per-person ranking. |
+| Reviewer concentration               | Render only aggregate reviewer distribution (`reviewerGini`, `reviewerCount`), never names or rankings. |
 
-Reviewer concentration is the most important of these to call out. The
-*data exists* — we could compute it. We choose **not to ship it as an
-individual-leveled metric**. When it ships, it will land as bucketed
-distribution (top quartile vs the rest), not as a leaderboard with names.
+Reviewer concentration is intentionally constrained. The API may use reviewer
+identities inside the aggregation boundary, but it exposes only distribution
+values. It does **not** ship individual-leveled metrics, leaderboard rows, or
+reviewer names.
 
 ---
 
@@ -84,7 +84,7 @@ not a reviewer scoreboard.
 
 ## Data sources and freshness
 
-- Cards read from `aiReviewLoad` (per-bucket review rollups).
+- Cards read from `aiReviewLoad` (per-bucket review rollups plus aggregate-only reviewer concentration).
 - Deltas come from `aiComparison` (same scope, same window).
 - Both queries return `dataAvailable: Boolean!` — `false` triggers the
   missing-data UX rather than a silently empty dashboard.

@@ -13,6 +13,8 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from dev_health_ops.api.queries.client import query_dicts
+
 from ..authz import require_org_id
 from ..context import GraphQLContext
 from ..types.compounding_risk import (
@@ -51,18 +53,18 @@ def _severity_from_str(value: Any) -> CompoundingRiskSeverity:
         return CompoundingRiskSeverity.UNKNOWN
 
 
-def _query_dicts(client: Any, query: str, params: dict) -> list[dict[str, Any]]:
-    """Run a parameterized ClickHouse query and return list-of-dicts."""
-    result = client.query(query, parameters=params)
-    columns = list(getattr(result, "column_names", []) or [])
-    rows = list(getattr(result, "result_rows", []) or [])
-    if not columns or not rows:
-        return []
-    return [dict(zip(columns, row)) for row in rows]
+# NOTE: ClickHouse access goes through the canonical async helper
+# ``query_dicts(sink, query, params)`` from ``api.queries.client`` —
+# ``context.client`` is a ``ClickHouseMetricsSink`` wrapper, not a raw
+# ``clickhouse_connect`` client. Earlier revisions of this resolver
+# carried a private ``_query_dicts(client, ...)`` that called
+# ``client.query(...)`` directly; that path raised
+# ``AttributeError: 'ClickHouseMetricsSink' object has no attribute 'query'``
+# at runtime against the live sink and is replaced with the canonical helper.
 
 
-def _latest_day_for_org(client: Any, org_id: str) -> date | None:
-    rows = _query_dicts(
+async def _latest_day_for_org(client: Any, org_id: str) -> date | None:
+    rows = await query_dicts(
         client,
         """
         SELECT max(day) AS day
@@ -81,7 +83,7 @@ def _latest_day_for_org(client: Any, org_id: str) -> date | None:
     return None
 
 
-def _fetch_latest_rows(
+async def _fetch_latest_rows(
     client: Any,
     *,
     org_id: str,
@@ -116,7 +118,7 @@ def _fetch_latest_rows(
             argMax(w_review,            computed_at) AS w_review,
             argMax(threshold_elevated,  computed_at) AS threshold_elevated,
             argMax(threshold_high,      computed_at) AS threshold_high,
-            max(computed_at)                          AS computed_at
+            max(computed_at)                          AS latest_computed_at
         FROM compounding_risk_daily
         WHERE org_id = {org_id:String}
           AND scope = {scope:String}
@@ -128,10 +130,10 @@ def _fetch_latest_rows(
         query += "\n  AND scope_id IN {scope_ids:Array(String)}"
         params["scope_ids"] = bounded
     query += f"\nGROUP BY scope_id\nORDER BY score DESC NULLS LAST\nLIMIT {MAX_ROWS}"
-    return _query_dicts(client, query, params)
+    return await query_dicts(client, query, params)
 
 
-def _fetch_repo_trend(
+async def _fetch_repo_trend(
     client: Any,
     org_id: str,
     end_day: date,
@@ -166,7 +168,7 @@ def _fetch_repo_trend(
         )
         GROUP BY day ORDER BY day
     """
-    return _query_dicts(client, query, params)
+    return await query_dicts(client, query, params)
 
 
 def _components_from_row(row: dict[str, Any]) -> CompoundingRiskComponents:
@@ -219,7 +221,7 @@ def _point_from_repo_row(
         components=_components_from_row(row),
         weights=_weights_from_row(row),
         thresholds=_thresholds_from_row(row),
-        computed_at=row.get("computed_at") or datetime.now(timezone.utc),
+        computed_at=row.get("latest_computed_at") or datetime.now(timezone.utc),
     )
 
 
@@ -238,7 +240,7 @@ def _point_from_team_row(
         components=_components_from_row(row),
         weights=_weights_from_row(row),
         thresholds=_thresholds_from_row(row),
-        computed_at=row.get("computed_at") or datetime.now(timezone.utc),
+        computed_at=row.get("latest_computed_at") or datetime.now(timezone.utc),
     )
 
 
@@ -319,7 +321,8 @@ def _aggregate_repo_rows_to_team(
                 components=components,
                 weights=_weights_from_row(first),
                 thresholds=thresholds,
-                computed_at=first.get("computed_at") or datetime.now(timezone.utc),
+                computed_at=first.get("latest_computed_at")
+                or datetime.now(timezone.utc),
             )
         )
     # Sort by score desc, nulls last.
@@ -332,13 +335,13 @@ async def _load_repo_labels(
 ) -> dict[str, str]:
     if not repo_ids:
         return {}
-    rows = _query_dicts(
+    rows = await query_dicts(
         client,
         """
-        SELECT toString(repo_id) AS repo_id, full_name
+        SELECT toString(id) AS repo_id, repo AS full_name
         FROM repos
         WHERE org_id = {org_id:String}
-          AND toString(repo_id) IN {repo_ids:Array(String)}
+          AND toString(id) IN {repo_ids:Array(String)}
         """,
         {"org_id": org_id, "repo_ids": repo_ids},
     )
@@ -354,7 +357,7 @@ async def _load_team_assignments(
     the resolver simply returns no team rows rather than erroring.
     """
     try:
-        team_rows = _query_dicts(
+        team_rows = await query_dicts(
             client,
             """
             SELECT id, name, repo_patterns
@@ -396,7 +399,7 @@ async def resolve_compounding_risk(
     breakout = filt.breakout
     trend_days = max(1, min(filt.trend_days, MAX_TREND_DAYS))
 
-    day = filt.day or _latest_day_for_org(client, authorized_org_id)
+    day = filt.day or await _latest_day_for_org(client, authorized_org_id)
     if day is None:
         return CompoundingRiskResult(
             org_id=authorized_org_id,
@@ -408,7 +411,7 @@ async def resolve_compounding_risk(
 
     points: list[CompoundingRiskPoint]
     if breakout == CompoundingRiskScope.REPO:
-        repo_rows = _fetch_latest_rows(
+        repo_rows = await _fetch_latest_rows(
             client,
             org_id=authorized_org_id,
             day=day,
@@ -423,7 +426,7 @@ async def resolve_compounding_risk(
         # aggregation only when the team rows are missing (back-compat
         # with deployments that haven't yet caught up to the orchestrator
         # change).
-        team_rows = _fetch_latest_rows(
+        team_rows = await _fetch_latest_rows(
             client,
             org_id=authorized_org_id,
             day=day,
@@ -435,7 +438,7 @@ async def resolve_compounding_risk(
             points = [_point_from_team_row(r, day, team_labels) for r in team_rows]
         else:
             # Fallback path: aggregate from the repo rows.
-            repo_rows = _fetch_latest_rows(
+            repo_rows = await _fetch_latest_rows(
                 client,
                 org_id=authorized_org_id,
                 day=day,
@@ -453,7 +456,7 @@ async def resolve_compounding_risk(
                 day=day,
             )
 
-    trend_rows = _fetch_repo_trend(
+    trend_rows = await _fetch_repo_trend(
         client, authorized_org_id, day, trend_days, filt.repo_ids
     )
     trend = [

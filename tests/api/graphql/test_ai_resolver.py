@@ -272,9 +272,7 @@ async def test_impact_summary_populated_aggregates_all_buckets():
     assert result.human_prs == 12
     assert result.unknown_prs == 2
     assert result.total_prs == 20 + 4 + 12 + 2
-    assert [state.key for state in result.missing_states] == [
-        "unknown_attribution"
-    ]
+    assert [state.key for state in result.missing_states] == ["unknown_attribution"]
     # ai_assisted_pr_ratio is the volume-weighted average across all rows.
     assert result.ai_assisted_pr_ratio is not None
     assert result.computed_at == COMPUTED_AT
@@ -350,9 +348,7 @@ async def test_review_load_empty_state():
     assert result.daily == []
     assert result.reviewer_concentration.data_available is False
     assert result.reviewer_concentration.reviewer_count == 0
-    assert [state.key for state in result.missing_states] == [
-        "reviewer_concentration"
-    ]
+    assert [state.key for state in result.missing_states] == ["reviewer_concentration"]
 
 
 @pytest.mark.asyncio
@@ -368,9 +364,12 @@ async def test_review_load_populated_aggregates_by_bucket():
     assert bucket_lookup[
         AttributionBucket.AI_ASSISTED.value
     ].review_amplification == pytest.approx(1.4)
-    assert bucket_lookup[
-        AttributionBucket.AI_ASSISTED.value
-    ].post_first_review_pushes_count == 6
+    assert (
+        bucket_lookup[
+            AttributionBucket.AI_ASSISTED.value
+        ].post_first_review_pushes_count
+        == 6
+    )
     assert bucket_lookup[
         AttributionBucket.AI_ASSISTED.value
     ].post_first_review_pushes_per_pr == pytest.approx(0.3)

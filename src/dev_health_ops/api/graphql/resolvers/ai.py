@@ -300,7 +300,9 @@ async def resolve_ai_impact_summary(
 
     computed_at = max((row.computed_at for row in rows), default=None)
     missing_states = [
-        state for state in [_unknown_attribution_missing_state(unknown)] if state is not None
+        state
+        for state in [_unknown_attribution_missing_state(unknown)]
+        if state is not None
     ]
 
     return AIImpactSummary(

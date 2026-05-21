@@ -822,7 +822,12 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                         dict[str, Any], fixture_data["feature_flag_contexts"][i]
                     )
                     metric_gen = SyntheticDataGenerator(
-                        repo_name=r_name, seed=seed_value
+                        repo_name=r_name,
+                        seed=seed_value,
+                        # CHAOS-1751: align event-table team_ids with the
+                        # semantic teams.id namespace so the catalog
+                        # picker surfaces meaningful counts.
+                        assigned_teams=fixture_data["teams"] or None,
                     )
 
                     dora_records = metric_gen.generate_dora_metrics(days=ns.days)

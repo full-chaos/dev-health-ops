@@ -95,6 +95,7 @@ nav:
       - View Mapping: api/view-mapping.md
       - Web GraphQL Client: api/web-graphql-client.md
       - Web Investment Queries: api/web-graphql-investment.md
+      - Team Catalog Source of Truth: api/team-catalog-source-of-truth.md
   - Visualizations: visualizations/patterns.md
   - LLM: llm/categorization-contract.md
   - Task Trackers: task_trackers.md

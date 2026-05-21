@@ -226,11 +226,15 @@ class TestCompileSankey:
         # Check nodes query
         nodes_sql, nodes_params = nodes_queries[0]
         assert "UNION ALL" in nodes_sql
-        assert "work_item_type" in nodes_sql  # work_type column
+        # WORK_TYPE auto-routes through use_investment=True (CHAOS-1752 — the
+        # investment_metrics_daily rollup has no work_item_type column, so the
+        # compiler now sources WORK_TYPE from the work_unit_investments table
+        # using its work_unit_type column).
+        assert "work_unit_type" in nodes_sql  # work_type column on investment table
         assert "repo_id" in nodes_sql
         assert "team_id" in nodes_sql
         assert nodes_params["org_id"] == org_id
-        assert "investment_metrics_daily" in nodes_sql
+        assert "work_unit_investments" in nodes_sql
 
         # Check edges queries
         for edge_sql, edge_params in edges_queries:

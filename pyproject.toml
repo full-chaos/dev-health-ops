@@ -201,3 +201,13 @@ module = [
   "motor.*",
 ]
 ignore_missing_imports = true
+
+# Sibling test modules imported by ``tests/api/graphql/test_resolver_sql_explain.py``
+# under pytest's rootdir/sys.path discovery (no ``tests/api/graphql/__init__.py``).
+# Mypy can't resolve them as top-level modules but pytest can.
+[[tool.mypy.overrides]]
+module = [
+  "_sql_explain_helpers",
+  "sql_explain_fixtures",
+]
+ignore_missing_imports = true

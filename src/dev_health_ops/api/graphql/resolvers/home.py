@@ -38,7 +38,7 @@ async def resolve_home(
     # Get freshness data
     freshness_sql = """
         SELECT
-            max(ingested_at) as last_ingested_at
+            max(computed_at) as last_ingested_at
         FROM investment_metrics_daily
         WHERE day >= today() - 30
           AND org_id = %(org_id)s

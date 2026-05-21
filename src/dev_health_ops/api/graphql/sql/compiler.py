@@ -106,7 +106,11 @@ def _get_context_params(
     needs_team_join: bool = False,
 ) -> dict[str, Any]:
     """Determine source table and extra clauses based on dimensions."""
-    investment_dims = {Dimension.THEME, Dimension.SUBCATEGORY}
+    # WORK_TYPE belongs to the investment-side ``work_unit_investments`` table —
+    # the ``investment_metrics_daily`` rollup has no ``work_item_type`` column,
+    # so a non-investment WORK_TYPE query is structurally invalid. Treat it as
+    # an investment dimension so the compiler auto-routes to the right source.
+    investment_dims = {Dimension.THEME, Dimension.SUBCATEGORY, Dimension.WORK_TYPE}
     auto_use_investment = any(d in investment_dims for d in dimensions)
     use_investment = (
         force_investment if force_investment is not None else auto_use_investment

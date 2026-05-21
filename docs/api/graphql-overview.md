@@ -305,3 +305,51 @@ See also: [Persisted Queries](persisted-queries.md).
 ## Web client
 
 See: [Web GraphQL Client](web-graphql-client.md).
+
+
+---
+
+## Resolver SQL Validation Contract (CHAOS-1752)
+
+Every GraphQL resolver that emits ClickHouse SQL **must** register a fixture
+in `tests/api/graphql/sql_explain_fixtures.py`. The fixture exercises each
+SQL-emitting helper with representative arguments; `tests/api/graphql/`
+`test_resolver_sql_explain.py` replays the captured queries through
+`EXPLAIN PLAN` against a real ClickHouse with production DDL applied.
+
+EXPLAIN PLAN validates:
+
+- SQL parse
+- Table existence
+- Column existence (catches mistyped column references)
+- Function signature resolution
+- Aggregation legality (catches alias-collision bugs like CHAOS-1751 #2)
+- Parameter binding shape
+
+It does **not** execute the data path, so the full suite runs in <30s.
+
+### Adding coverage for a new resolver
+
+1. Implement the resolver. Keep SQL-emitting work in helper functions or
+   compile functions that accept a sink/client — not embedded in HTTP
+   handlers.
+2. Add a fixture entry to `ALL_RESOLVER_SQL_FIXTURES`:
+
+   ```python
+   async def _fixture_<name>(sink: CapturingSink) -> None:
+       context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
+       await my_resolver_helper(context, ...representative args...)
+       # Cover every WHERE/JOIN branch the helper can produce.
+
+   ALL_RESOLVER_SQL_FIXTURES = [
+       ...,
+       ("<name>", _fixture_<name>),
+   ]
+   ```
+
+3. Run the test locally with `CLICKHOUSE_URI` pointed at a fresh
+   ClickHouse container: `pytest tests/api/graphql/test_resolver_sql_explain.py`.
+
+If `EXPLAIN PLAN` rejects a query, the resolver has a latent bug that
+would surface as a 500 in production. Fix it before merge; do not silence
+the test.

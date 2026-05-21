@@ -29,22 +29,22 @@ _RECOMMENDATIONS_SQL = """\
     team_id,
     org_id,
     rule_id,
-    argMax(fired,               computed_at) AS fired,
-    argMax(severity,            computed_at) AS severity,
-    argMax(title,               computed_at) AS title,
-    argMax(rationale,           computed_at) AS rationale,
-    argMax(success_criterion,   computed_at) AS success_criterion,
-    argMax(evidence_json,       computed_at) AS evidence_json,
-    argMax(window_start,        computed_at) AS window_start,
-    argMax(window_end,          computed_at) AS window_end,
-    max(computed_at)                         AS computed_at
+    argMax(fired,               computed_at) AS latest_fired,
+    argMax(severity,            computed_at) AS latest_severity,
+    argMax(title,               computed_at) AS latest_title,
+    argMax(rationale,           computed_at) AS latest_rationale,
+    argMax(success_criterion,   computed_at) AS latest_success_criterion,
+    argMax(evidence_json,       computed_at) AS latest_evidence_json,
+    argMax(window_start,        computed_at) AS latest_window_start,
+    argMax(window_end,          computed_at) AS latest_window_end,
+    max(computed_at)                         AS latest_computed_at
 FROM recommendations_daily
 WHERE team_id  = {team_id:String}
   AND org_id   = {org_id:String}
   AND window_end >= {window_start:Date}
   AND window_end <= {window_end:Date}
 GROUP BY org_id, team_id, rule_id, window_end
-HAVING argMax(fired, computed_at) = true
+HAVING latest_fired = true
 ORDER BY window_end DESC, rule_id
 """
 
@@ -116,14 +116,16 @@ def _row_to_recommendation(row: dict[str, Any]) -> Recommendation | None:
     Returns None for rows that cannot be safely coerced (logged as warnings).
     """
     try:
-        raw_sev = str(row.get("severity", "warning")).lower()
+        raw_sev = str(
+            row.get("latest_severity") or row.get("severity", "warning")
+        ).lower()
         try:
             severity = Severity(raw_sev)
         except ValueError:
             severity = Severity.WARNING
 
-        raw_ws = row.get("window_start")
-        raw_we = row.get("window_end")
+        raw_ws = row.get("latest_window_start") or row.get("window_start")
+        raw_we = row.get("latest_window_end") or row.get("window_end")
         window_start = (
             raw_ws if isinstance(raw_ws, date) else date.fromisoformat(str(raw_ws))
         )
@@ -131,7 +133,7 @@ def _row_to_recommendation(row: dict[str, Any]) -> Recommendation | None:
             raw_we if isinstance(raw_we, date) else date.fromisoformat(str(raw_we))
         )
 
-        raw_cat = row.get("computed_at")
+        raw_cat = row.get("latest_computed_at") or row.get("computed_at")
         if isinstance(raw_cat, datetime):
             computed_at = raw_cat
         else:
@@ -147,10 +149,14 @@ def _row_to_recommendation(row: dict[str, Any]) -> Recommendation | None:
             window_start=window_start,
             window_end=window_end,
             severity=severity,
-            title=str(row.get("title", "")),
-            rationale=str(row.get("rationale", "")),
-            success_criterion=str(row.get("success_criterion", "")),
-            evidence=_parse_evidence(row.get("evidence_json")),
+            title=str(row.get("latest_title") or row.get("title", "")),
+            rationale=str(row.get("latest_rationale") or row.get("rationale", "")),
+            success_criterion=str(
+                row.get("latest_success_criterion") or row.get("success_criterion", "")
+            ),
+            evidence=_parse_evidence(
+                row.get("latest_evidence_json") or row.get("evidence_json")
+            ),
         )
     except (KeyError, ValueError, TypeError):
         logger.warning("Skipping malformed recommendation row: %r", row)

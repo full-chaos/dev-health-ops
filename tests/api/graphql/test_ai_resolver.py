@@ -656,9 +656,7 @@ async def test_ai_attributed_prs_reports_has_more_and_pages():
     # Loader returns limit+1 rows to signal more pages.
     rows = [_attribution_row(number=200 + i) for i in range(51)]
     with _patch_pr_loader(rows) as mock_load:
-        result = await resolve_ai_attributed_prs(
-            _ctx(), _range(), limit=50, offset=0
-        )
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), limit=50, offset=0)
 
     assert mock_load.await_args.kwargs["limit"] == 51
     assert mock_load.await_args.kwargs["offset"] == 0

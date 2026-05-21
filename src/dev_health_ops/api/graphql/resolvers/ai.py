@@ -717,7 +717,9 @@ async def resolve_ai_attributed_prs(
     if team_id:
         page_rows = [row for row in page_rows if (row.get("team_id") or "") == team_id]
     if work_type:
-        page_rows = [row for row in page_rows if (row.get("work_type") or "") == work_type]
+        page_rows = [
+            row for row in page_rows if (row.get("work_type") or "") == work_type
+        ]
 
     rows = [
         AiAttributedPr(

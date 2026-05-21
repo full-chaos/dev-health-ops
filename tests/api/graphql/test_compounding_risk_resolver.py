@@ -36,7 +36,11 @@ DAY = date(2026, 5, 20)
 
 def _ctx() -> GraphQLContext:
     ctx = GraphQLContext(org_id=ORG_ID, db_url="clickhouse://localhost:8123/d")
-    ctx.client = MagicMock()
+    # ``spec=["query"]`` restricts the mock so ``api.queries.client.query_dicts``
+    # skips the dsn-based per-thread client path AND the ``sink.query_dicts``
+    # path and falls through to ``sink.query(query, parameters=params)`` —
+    # the surface these tests have always asserted against.
+    ctx.client = MagicMock(spec=["query"])
     return ctx
 
 
@@ -82,7 +86,7 @@ async def test_uses_filter_day_when_provided_and_skips_latest_lookup() -> None:
                     "scope_id",
                     "score",
                     "severity",
-                    "computed_at",
+                    "latest_computed_at",
                     "w_churn",
                     "w_complexity",
                     "w_ownership",
@@ -136,7 +140,7 @@ async def test_repo_breakout_surfaces_full_audit_trail() -> None:
         "w_review",
         "threshold_elevated",
         "threshold_high",
-        "computed_at",
+        "latest_computed_at",
     ]
     repo_row = [
         "repo-1",
@@ -210,7 +214,7 @@ async def test_null_score_maps_to_unknown_severity() -> None:
         "w_review",
         "threshold_elevated",
         "threshold_high",
-        "computed_at",
+        "latest_computed_at",
     ]
     _setup_client(
         ctx.client,
@@ -258,7 +262,7 @@ async def test_team_breakout_averages_repos_via_repo_to_team_map() -> None:
         "w_review",
         "threshold_elevated",
         "threshold_high",
-        "computed_at",
+        "latest_computed_at",
     ]
     base_weights = [0.30, 0.30, 0.20, 0.20]
     thresholds = [0.40, 0.65]
@@ -345,7 +349,7 @@ async def test_team_breakout_filters_by_team_ids() -> None:
         "w_review",
         "threshold_elevated",
         "threshold_high",
-        "computed_at",
+        "latest_computed_at",
     ]
     base = [0.30, 0.30, 0.20, 0.20, 0.40, 0.65]
     rows = [
@@ -402,7 +406,7 @@ async def test_team_breakout_uses_persisted_team_rows_when_available() -> None:
         "w_review",
         "threshold_elevated",
         "threshold_high",
-        "computed_at",
+        "latest_computed_at",
     ]
     base_weights = [0.30, 0.30, 0.20, 0.20]
     thresholds = [0.40, 0.65]
@@ -475,7 +479,7 @@ async def test_trend_window_is_bounded() -> None:
         "w_review",
         "threshold_elevated",
         "threshold_high",
-        "computed_at",
+        "latest_computed_at",
     ]
     base = [0.30, 0.30, 0.20, 0.20, 0.40, 0.65]
     _setup_client(

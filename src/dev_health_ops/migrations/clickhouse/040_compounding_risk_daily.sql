@@ -8,7 +8,7 @@
 --   ownership   (max of single_owner_file_ratio_30d, code_ownership_gini)
 --   review      (review-latency p90 hours (pr_first_review_p90_hours), normalized against REVIEW_REF)
 --
--- One row per (org_id, day, scope, scope_id) per computed_at. Append-only;
+-- One row per (org_id, day, scope, scope_id) per computed_at. Append-only,
 -- read latest with `argMax(..., computed_at)`.
 --
 -- Inspectability: raw inputs, normalized components, weights actually used,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS compounding_risk_daily
     w_ownership         Float64,
     w_review            Float64,
 
-    -- severity thresholds used (audit trail; historical rows stay bucketed
+    -- severity thresholds used (audit trail — historical rows stay bucketed
     -- under the thresholds in force at compute time)
     threshold_elevated  Float64,
     threshold_high      Float64,

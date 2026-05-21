@@ -5,7 +5,11 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from dev_health_ops.api.graphql.models.ai import AIOpportunity, AIOpportunityKind
+from dev_health_ops.api.graphql.models.ai import (
+    AIOpportunity,
+    AIOpportunityKind,
+    AIWorkGraphDrilldownRef,
+)
 from dev_health_ops.metrics.ai_impact import AI_BUCKETS, AttributionBucket
 from dev_health_ops.metrics.loaders.base import parse_uuid
 from dev_health_ops.metrics.query_builder import OrgScopedQuery
@@ -373,7 +377,25 @@ def _opportunity(
         rationale=rationale,
         score=_clamp(score),
         evidence_refs=evidence_refs,
+        work_graph_drilldowns=_work_graph_refs(evidence_refs),
     )
+
+
+def _work_graph_refs(evidence_refs: list[str]) -> list[AIWorkGraphDrilldownRef]:
+    refs: list[AIWorkGraphDrilldownRef] = []
+    for evidence_ref in evidence_refs:
+        parts = evidence_ref.split(":")
+        if len(parts) != 3 or parts[0] != "git_pull_requests":
+            continue
+        repo_id, number = parts[1], parts[2]
+        refs.append(
+            AIWorkGraphDrilldownRef(
+                root_type="pr",
+                root_id=f"{repo_id}#{number}",
+                label=f"PR {number}",
+            )
+        )
+    return refs
 
 
 def _stable_id(kind: AIOpportunityKind, repo_id: str, team_id: str | None) -> str:

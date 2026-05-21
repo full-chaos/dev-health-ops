@@ -133,6 +133,8 @@ async def test_detector_emits_repetitive_change(monkeypatch: pytest.MonkeyPatch)
     assert len(result) == 1
     assert result[0].kind is AIOpportunityKind.REPETITIVE_CHANGE
     assert result[0].evidence_refs[0].startswith("git_pull_requests:")
+    assert result[0].work_graph_drilldowns[0].root_type == "pr"
+    assert result[0].work_graph_drilldowns[0].root_id == f"{REPO_ID}#1"
 
 
 @pytest.mark.asyncio

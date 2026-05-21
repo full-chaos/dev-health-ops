@@ -406,6 +406,7 @@ async def test_opportunities_delegates_scope_limit_and_returns_evidence():
         rationale="AI-assisted PRs had a 33% rework rate vs 10% for human PRs.",
         score=0.8,
         evidence_refs=[f"ai_impact_metrics_daily:rework_rate:{REPO_ID}"],
+        work_graph_drilldowns=[],
     )
     detector = MagicMock()
     detector.detect = AsyncMock(return_value=[opportunity])

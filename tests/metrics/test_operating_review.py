@@ -54,6 +54,37 @@ def test_operating_review_computes_sections_and_week_over_week_deltas() -> None:
                 {"investment_area": "security", "delivery_units": 2},
                 {"investment_area": "infra", "delivery_units": 3},
             ],
+            ai_impact=[
+                {
+                    "attribution_bucket": "ai_assisted",
+                    "prs_total": 10,
+                    "ai_assisted_prs": 10,
+                    "agent_created_prs": 0,
+                    "human_prs": 0,
+                    "unknown_prs": 0,
+                    "ai_cycle_time_delta_hours": -4.0,
+                    "ai_review_amplification": 1.2,
+                    "rework_drag_rate": 0.12,
+                    "test_gap_rate": 0.20,
+                    "incident_drag_rate": 0.02,
+                },
+                {
+                    "attribution_bucket": "human",
+                    "prs_total": 15,
+                    "ai_assisted_prs": 0,
+                    "agent_created_prs": 0,
+                    "human_prs": 15,
+                    "unknown_prs": 0,
+                },
+            ],
+            ai_governance=[
+                {
+                    "declaration_coverage": 0.9,
+                    "human_review_coverage": 0.8,
+                    "security_scan_coverage": 0.7,
+                    "in_policy_coverage": 0.9,
+                }
+            ],
         ),
         prior=OperatingReviewRows(
             work_items=[
@@ -87,6 +118,30 @@ def test_operating_review_computes_sections_and_week_over_week_deltas() -> None:
                 {"investment_area": "security", "delivery_units": 1},
                 {"investment_area": "infra", "delivery_units": 4},
             ],
+            ai_impact=[
+                {
+                    "attribution_bucket": "ai_assisted",
+                    "prs_total": 6,
+                    "ai_assisted_prs": 6,
+                    "agent_created_prs": 0,
+                    "human_prs": 0,
+                    "unknown_prs": 0,
+                    "ai_cycle_time_delta_hours": 2.0,
+                    "ai_review_amplification": 1.8,
+                    "rework_drag_rate": 0.30,
+                    "test_gap_rate": 0.40,
+                    "incident_drag_rate": 0.04,
+                },
+                {"attribution_bucket": "human", "prs_total": 14, "human_prs": 14},
+            ],
+            ai_governance=[
+                {
+                    "declaration_coverage": 0.7,
+                    "human_review_coverage": 0.6,
+                    "security_scan_coverage": 0.5,
+                    "in_policy_coverage": 0.7,
+                }
+            ],
         ),
     )
 
@@ -98,6 +153,7 @@ def test_operating_review_computes_sections_and_week_over_week_deltas() -> None:
         "risk",
         "reliability",
         "investment",
+        "ai_workflow_intelligence",
     ]
 
     delivery = review.section("delivery_movement")
@@ -126,6 +182,13 @@ def test_operating_review_computes_sections_and_week_over_week_deltas() -> None:
     investment = review.section("investment")
     assert investment.metric("new_value_units").value == 12
     assert investment.metric("ktlo_units").delta.status == "improved"
+
+    ai_workflow = review.section("ai_workflow_intelligence")
+    assert ai_workflow.metric("ai_adoption_ratio").value == pytest.approx(0.4)
+    assert ai_workflow.metric("ai_cycle_time_delta_hours").delta.status == "improved"
+    assert ai_workflow.metric("ai_review_amplification").delta.status == "improved"
+    assert ai_workflow.metric("ai_governance_coverage").value == pytest.approx(0.825)
+    assert ai_workflow.metric("ai_opportunity_signals").value == 0
 
     assert review.recommendations == []
     assert (
@@ -160,7 +223,7 @@ def test_build_operating_review_queries_single_team_mode() -> None:
 
     queries = {q.key: q.sql for q in build_operating_review_queries(team_id="team-a")}
 
-    for key in ("work_items", "state_durations", "investment"):
+    for key in ("work_items", "state_durations", "investment", "ai_impact", "ai_governance"):
         assert "AND team_id = %(team_id)s" in queries[key], (
             f"single-team query {key!r} must filter by team_id"
         )
@@ -182,7 +245,7 @@ def test_build_operating_review_queries_all_teams_mode() -> None:
     # work_items / state_durations / investment must NOT filter by team
     # in all-teams mode, and MUST keep team_id in inner GROUP BY so the
     # outer SUM/AVG aggregates correctly across teams.
-    for key in ("work_items", "state_durations", "investment"):
+    for key in ("work_items", "state_durations", "investment", "ai_impact", "ai_governance"):
         sql = queries[key]
         assert "AND team_id = %(team_id)s" not in sql, (
             f"all-teams query {key!r} must not filter by team_id"

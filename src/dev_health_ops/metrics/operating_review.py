@@ -75,6 +75,8 @@ class OperatingReviewRows:
     deployments: Sequence[Mapping[str, Any]] = field(default_factory=list)
     incidents: Sequence[Mapping[str, Any]] = field(default_factory=list)
     investment: Sequence[Mapping[str, Any]] = field(default_factory=list)
+    ai_impact: Sequence[Mapping[str, Any]] = field(default_factory=list)
+    ai_governance: Sequence[Mapping[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -297,6 +299,72 @@ def build_operating_review_queries(
             GROUP BY investment_area
             """,
         ),
+        OperatingReviewQuery(
+            "ai_impact",
+            f"""
+            SELECT
+              attribution_bucket,
+              sum(prs_total) AS prs_total,
+              sum(ai_assisted_prs) AS ai_assisted_prs,
+              sum(agent_created_prs) AS agent_created_prs,
+              sum(human_prs) AS human_prs,
+              sum(unknown_prs) AS unknown_prs,
+              avg(ai_cycle_time_delta_hours) AS ai_cycle_time_delta_hours,
+              avg(ai_review_amplification) AS ai_review_amplification,
+              avg(rework_drag_rate) AS rework_drag_rate,
+              avg(test_gap_rate) AS test_gap_rate,
+              avg(incident_drag_rate) AS incident_drag_rate
+            FROM (
+              SELECT
+                day,
+                repo_id,
+                team_id,
+                work_type,
+                attribution_bucket,
+                argMax(prs_total, computed_at) AS prs_total,
+                argMax(ai_assisted_prs, computed_at) AS ai_assisted_prs,
+                argMax(agent_created_prs, computed_at) AS agent_created_prs,
+                argMax(human_prs, computed_at) AS human_prs,
+                argMax(unknown_prs, computed_at) AS unknown_prs,
+                argMax(ai_cycle_time_delta_hours, computed_at) AS ai_cycle_time_delta_hours,
+                argMax(ai_review_amplification, computed_at) AS ai_review_amplification,
+                argMax(rework_drag_rate, computed_at) AS rework_drag_rate,
+                argMax(test_gap_rate, computed_at) AS test_gap_rate,
+                argMax(incident_drag_rate, computed_at) AS incident_drag_rate
+              FROM ai_impact_metrics_daily
+              WHERE org_id = %(org_id)s
+                {team_filter}
+                AND day >= %(start)s AND day < %(end)s
+              GROUP BY day, repo_id, team_id, work_type, attribution_bucket
+            )
+            GROUP BY attribution_bucket
+            """,
+        ),
+        OperatingReviewQuery(
+            "ai_governance",
+            f"""
+            SELECT
+              avg(declaration_coverage) AS declaration_coverage,
+              avg(human_review_coverage) AS human_review_coverage,
+              avg(security_scan_coverage) AS security_scan_coverage,
+              avg(in_policy_coverage) AS in_policy_coverage
+            FROM (
+              SELECT
+                day,
+                team_id,
+                repo_id,
+                argMax(declaration_coverage, computed_at) AS declaration_coverage,
+                argMax(human_review_coverage, computed_at) AS human_review_coverage,
+                argMax(security_scan_coverage, computed_at) AS security_scan_coverage,
+                argMax(in_policy_coverage, computed_at) AS in_policy_coverage
+              FROM ai_governance_coverage_daily
+              WHERE org_id = %(org_id)s
+                {team_filter}
+                AND day >= %(start)s AND day < %(end)s
+              GROUP BY day, team_id, repo_id
+            )
+            """,
+        ),
     ]
 
 
@@ -323,6 +391,7 @@ def compute_operating_review(
         _risk_section(current, prior),
         _reliability_section(current, prior),
         _investment_section(current, prior),
+        _ai_workflow_section(current, prior),
     ]
     return OperatingReview(
         org_id=org_id,
@@ -544,6 +613,65 @@ def _investment_section(
     )
 
 
+def _ai_workflow_section(
+    current: OperatingReviewRows, prior: OperatingReviewRows
+) -> OperatingReviewSection:
+    return _section(
+        key="ai_workflow_intelligence",
+        title="AI Workflow Intelligence",
+        metrics=[
+            _metric(
+                "ai_adoption_ratio",
+                "AI adoption mix",
+                _ai_adoption_ratio(current.ai_impact),
+                _ai_adoption_ratio(prior.ai_impact),
+                "ratio",
+                NEUTRAL,
+            ),
+            _metric(
+                "ai_cycle_time_delta_hours",
+                "AI delivery impact",
+                _avg(current.ai_impact, "ai_cycle_time_delta_hours"),
+                _avg(prior.ai_impact, "ai_cycle_time_delta_hours"),
+                "hours",
+                LOWER_IS_BETTER,
+            ),
+            _metric(
+                "ai_review_amplification",
+                "AI review pressure",
+                _avg(current.ai_impact, "ai_review_amplification"),
+                _avg(prior.ai_impact, "ai_review_amplification"),
+                "ratio",
+                LOWER_IS_BETTER,
+            ),
+            _metric(
+                "ai_risk_drag",
+                "AI risk drag",
+                _ai_risk_drag(current.ai_impact),
+                _ai_risk_drag(prior.ai_impact),
+                "ratio",
+                LOWER_IS_BETTER,
+            ),
+            _metric(
+                "ai_governance_coverage",
+                "AI governance coverage",
+                _ai_governance_coverage(current.ai_governance),
+                _ai_governance_coverage(prior.ai_governance),
+                "ratio",
+                HIGHER_IS_BETTER,
+            ),
+            _metric(
+                "ai_opportunity_signals",
+                "AI opportunity signals",
+                _ai_opportunity_signals(current.ai_impact, current.ai_governance),
+                _ai_opportunity_signals(prior.ai_impact, prior.ai_governance),
+                "signals",
+                LOWER_IS_BETTER,
+            ),
+        ],
+    )
+
+
 def _section(
     *, key: str, title: str, metrics: list[OperatingReviewMetric]
 ) -> OperatingReviewSection:
@@ -672,6 +800,55 @@ def _change_failure_rate(rows: OperatingReviewRows) -> float:
     if deployments > 0:
         return failed / deployments
     return _avg(rows.repo_metrics, "change_failure_rate")
+
+
+def _ai_adoption_ratio(rows: Iterable[Mapping[str, Any]]) -> float:
+    totals = _sum(rows, "prs_total")
+    if totals == 0:
+        return 0.0
+    ai_prs = _sum(rows, "ai_assisted_prs") + _sum(rows, "agent_created_prs")
+    return ai_prs / totals
+
+
+def _ai_risk_drag(rows: Iterable[Mapping[str, Any]]) -> float:
+    rates = [
+        _avg(rows, "rework_drag_rate"),
+        _avg(rows, "test_gap_rate"),
+        _avg(rows, "incident_drag_rate"),
+    ]
+    present = [rate for rate in rates if rate > 0]
+    if not present:
+        return 0.0
+    return sum(present) / len(present)
+
+
+def _ai_governance_coverage(rows: Iterable[Mapping[str, Any]]) -> float:
+    coverage = [
+        _avg(rows, "declaration_coverage"),
+        _avg(rows, "human_review_coverage"),
+        _avg(rows, "security_scan_coverage"),
+        _avg(rows, "in_policy_coverage"),
+    ]
+    present = [value for value in coverage if value > 0]
+    if not present:
+        return 0.0
+    return sum(present) / len(present)
+
+
+def _ai_opportunity_signals(
+    impact_rows: Iterable[Mapping[str, Any]],
+    governance_rows: Iterable[Mapping[str, Any]],
+) -> float:
+    signals = 0.0
+    if _avg(impact_rows, "ai_review_amplification") >= 1.5:
+        signals += 1.0
+    if _avg(impact_rows, "rework_drag_rate") >= 0.25:
+        signals += 1.0
+    if _avg(impact_rows, "test_gap_rate") >= 0.50:
+        signals += 1.0
+    if 0.0 < _ai_governance_coverage(governance_rows) < 0.80:
+        signals += 1.0
+    return signals
 
 
 def _first_non_zero(*values: float) -> float:

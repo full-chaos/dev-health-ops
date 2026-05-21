@@ -91,6 +91,8 @@ async def _fetch_period_rows(
         deployments=rows.get("deployments", []),
         incidents=rows.get("incidents", []),
         investment=rows.get("investment", []),
+        ai_impact=rows.get("ai_impact", []),
+        ai_governance=rows.get("ai_governance", []),
     )
 
 

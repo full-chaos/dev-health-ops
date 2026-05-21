@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS user_metrics_daily (
   changes_requested_given UInt32,
   reviews_received UInt32,
   review_reciprocity Float64,
+  pr_interruption_load UInt32 DEFAULT 0,
+  context_spread_count UInt32 DEFAULT 0,
+  review_request_load UInt32 DEFAULT 0,
   team_id Nullable(String),
   team_name Nullable(String),
   computed_at DateTime('UTC')
@@ -202,6 +205,9 @@ ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS reviews_given UInt32;
 ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS changes_requested_given UInt32;
 ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS reviews_received UInt32;
 ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS review_reciprocity Float64;
+ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS pr_interruption_load UInt32 DEFAULT 0;
+ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS context_spread_count UInt32 DEFAULT 0;
+ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS review_request_load UInt32 DEFAULT 0;
 ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS team_id Nullable(String);
 ALTER TABLE user_metrics_daily ADD COLUMN IF NOT EXISTS team_name Nullable(String);
 

@@ -189,6 +189,9 @@ class UserMetricsDailyRecord:
     changes_requested_given: int = 0
     reviews_received: int = 0
     review_reciprocity: float = 0.0
+    pr_interruption_load: int = 0
+    context_spread_count: int = 0
+    review_request_load: int = 0
 
     # Burnout / Activity signals.
     active_hours: float = 0.0

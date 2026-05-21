@@ -223,7 +223,13 @@ def test_build_operating_review_queries_single_team_mode() -> None:
 
     queries = {q.key: q.sql for q in build_operating_review_queries(team_id="team-a")}
 
-    for key in ("work_items", "state_durations", "investment", "ai_impact", "ai_governance"):
+    for key in (
+        "work_items",
+        "state_durations",
+        "investment",
+        "ai_impact",
+        "ai_governance",
+    ):
         assert "AND team_id = %(team_id)s" in queries[key], (
             f"single-team query {key!r} must filter by team_id"
         )
@@ -245,7 +251,13 @@ def test_build_operating_review_queries_all_teams_mode() -> None:
     # work_items / state_durations / investment must NOT filter by team
     # in all-teams mode, and MUST keep team_id in inner GROUP BY so the
     # outer SUM/AVG aggregates correctly across teams.
-    for key in ("work_items", "state_durations", "investment", "ai_impact", "ai_governance"):
+    for key in (
+        "work_items",
+        "state_durations",
+        "investment",
+        "ai_impact",
+        "ai_governance",
+    ):
         sql = queries[key]
         assert "AND team_id = %(team_id)s" not in sql, (
             f"all-teams query {key!r} must not filter by team_id"

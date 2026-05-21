@@ -98,7 +98,7 @@ class AiWorkflowGeneratorMixin(BaseGeneratorMixin):
                     metadata={
                         "source": "synthetic_fixture",
                         "subject_type": "pull_request",
-                        "subject_id": str(pr.number),
+                        "subject_id": f"{self.repo_id}:{pr.number}",
                     },
                 )
             )
@@ -151,7 +151,7 @@ class AiWorkflowGeneratorMixin(BaseGeneratorMixin):
             return []
 
         org_uuid = uuid.UUID(str(org_id))
-        pr_lookup: dict[str, GitPullRequest] = {str(pr.number): pr for pr in prs}
+        pr_lookup: dict[str, GitPullRequest] = {f"{self.repo_id}:{pr.number}": pr for pr in prs}
         edges: list[AIWorkflowArtifactEdge] = []
 
         for run in runs:
@@ -224,7 +224,7 @@ class AiWorkflowGeneratorMixin(BaseGeneratorMixin):
             return []
 
         org_uuid = uuid.UUID(str(org_id))
-        pr_lookup: dict[str, GitPullRequest] = {str(pr.number): pr for pr in prs}
+        pr_lookup: dict[str, GitPullRequest] = {f"{self.repo_id}:{pr.number}": pr for pr in prs}
         edges: list[AIWorkflowIssueEdge] = []
 
         issue_by_repo: dict[uuid.UUID | None, list[str]] = {}

@@ -70,6 +70,7 @@ class AIImpactClickHouseLoader:
             INNER JOIN ai_attribution_resolved AS attr
                 ON attr.subject_type = 'pull_request'
                 AND attr.subject_id = link.work_item_id
+                AND attr.kind IN ('ai_assisted', 'agent_created', 'ai_review')
             LEFT JOIN work_items AS wi
                 ON wi.repo_id = link.repo_id AND wi.work_item_id = link.work_item_id
             WHERE ((pr.created_at >= {{start:DateTime}} AND pr.created_at < {{end:DateTime}})
@@ -91,6 +92,7 @@ class AIImpactClickHouseLoader:
                 ON attr.subject_type = 'pull_request'
                 AND attr.repo_id = pr.repo_id
                 AND (attr.subject_id = toString(pr.number) OR attr.subject_id = concat(toString(pr.repo_id), '#', toString(pr.number)))
+                AND attr.kind IN ('ai_assisted', 'agent_created', 'ai_review')
             WHERE ((pr.created_at >= {{start:DateTime}} AND pr.created_at < {{end:DateTime}})
                 OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {{start:DateTime}} AND pr.merged_at < {{end:DateTime}}))
               {repo_filter}

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import uuid as uuid_mod
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import Request
@@ -12,6 +15,12 @@ from sqlalchemy import select
 from dev_health_ops.models.users import Membership, Organization, User
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OrganizationActivity:
+    has_data: bool = False
+    last_metrics_at: datetime | None = None
 
 
 class UserInfo(BaseModel):
@@ -31,6 +40,17 @@ class LoginResponse(BaseModel):
     expires_in: int
     needs_onboarding: bool = False
     user: UserInfo
+
+
+class OrganizationMembershipInfo(BaseModel):
+    id: str
+    slug: str
+    name: str
+    tier: str | None = None
+    role: str
+    joined_at: datetime | None = None
+    has_data: bool = False
+    last_metrics_at: datetime | None = None
 
 
 class VerifyEmailResponse(BaseModel):
@@ -74,6 +94,126 @@ def _expiry_to_utc(value: object) -> datetime | None:
     if isinstance(value, int | float):
         return datetime.fromtimestamp(value, tz=timezone.utc)
     return None
+
+
+def _membership_joined_sort_value(membership: Membership) -> datetime:
+    joined_at = membership.joined_at or membership.created_at
+    if joined_at is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if joined_at.tzinfo is None:
+        return joined_at.replace(tzinfo=timezone.utc)
+    return joined_at.astimezone(timezone.utc)
+
+
+def _select_active_membership(
+    memberships: Sequence[Membership],
+    requested_org_id: uuid_mod.UUID | None,
+    activity_by_org: dict[uuid_mod.UUID, OrganizationActivity],
+) -> Membership | None:
+    if requested_org_id is not None:
+        return next(
+            (
+                membership
+                for membership in memberships
+                if membership.org_id == requested_org_id
+            ),
+            None,
+        )
+
+    if not memberships:
+        return None
+
+    def sort_key(membership: Membership) -> tuple[bool, float, datetime]:
+        org_id = _require_uuid(membership.org_id, "membership.org_id")
+        activity = activity_by_org.get(org_id, OrganizationActivity())
+        last_metrics_at = activity.last_metrics_at or datetime.min.replace(
+            tzinfo=timezone.utc
+        )
+        return (
+            not activity.has_data,
+            -last_metrics_at.timestamp(),
+            _membership_joined_sort_value(membership),
+        )
+
+    return min(
+        memberships,
+        key=sort_key,
+    )
+
+
+def _load_org_activity(
+    org_ids: Iterable[uuid_mod.UUID],
+) -> dict[uuid_mod.UUID, OrganizationActivity]:
+    ids = list(dict.fromkeys(org_ids))
+    dsn = os.environ.get("CLICKHOUSE_URI") or os.environ.get("DEV_HEALTH_SINK")
+    if not ids or not dsn:
+        return {org_id: OrganizationActivity() for org_id in ids}
+
+    try:
+        from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+    except ImportError as exc:
+        logger.debug("ClickHouse unavailable for org activity lookup: %s", exc)
+        return {org_id: OrganizationActivity() for org_id in ids}
+
+    sink = None
+    activity = {org_id: OrganizationActivity() for org_id in ids}
+    metric_tables = (
+        "repo_metrics_daily",
+        "user_metrics_daily",
+        "team_metrics_daily",
+        "work_item_metrics_daily",
+    )
+    try:
+        sink = ClickHouseMetricsSink(dsn=dsn)
+        for org_id in ids:
+            last_metrics_at: datetime | None = None
+            has_data = False
+            for table in metric_tables:
+                try:
+                    result = sink.client.query(
+                        f"""
+                        SELECT count() AS row_count, max(computed_at) AS last_metrics_at
+                        FROM {table}
+                        WHERE org_id = {{org_id:String}}
+                        """,
+                        parameters={"org_id": str(org_id)},
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Skipping org activity lookup for table %s: %s", table, exc
+                    )
+                    continue
+
+                row = (getattr(result, "result_rows", None) or [(0, None)])[0]
+                row_count = int(row[0] or 0)
+                table_last_metrics_at = _expiry_to_utc(row[1])
+                has_data = has_data or row_count > 0
+                if table_last_metrics_at is not None and (
+                    last_metrics_at is None or table_last_metrics_at > last_metrics_at
+                ):
+                    last_metrics_at = table_last_metrics_at
+            activity[org_id] = OrganizationActivity(
+                has_data=has_data,
+                last_metrics_at=last_metrics_at,
+            )
+    except Exception as exc:
+        logger.debug("Org activity lookup unavailable: %s", exc)
+    finally:
+        if sink is not None:
+            sink.close()
+    return activity
+
+
+def _to_user_info(user: User, membership: Membership | None) -> UserInfo:
+    return UserInfo(
+        id=str(user.id),
+        email=str(user.email),
+        username=str(user.username) if user.username is not None else None,
+        full_name=str(user.full_name) if user.full_name is not None else None,
+        org_id=str(membership.org_id) if membership else None,
+        role=str(membership.role) if membership else "member",
+        is_superuser=bool(user.is_superuser),
+    )
 
 
 async def _resolve_login_audit_org_id(
@@ -161,16 +301,21 @@ def _extract_unverified_org_and_subject(
 
 __all__ = [
     "LoginResponse",
+    "OrganizationActivity",
+    "OrganizationMembershipInfo",
     "UserInfo",
     "VerifyEmailResponse",
     "_coerce_uuid",
     "_expiry_to_utc",
     "_extract_unverified_org_and_subject",
     "_issue_membership_tokens",
+    "_load_org_activity",
     "_optional_uuid",
     "_parse_uuid",
     "_require_uuid",
     "_resolve_login_audit_org_id",
+    "_select_active_membership",
     "_slugify_org_name",
+    "_to_user_info",
     "logger",
 ]

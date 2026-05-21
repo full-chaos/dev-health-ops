@@ -52,7 +52,12 @@ def _user(
 
 
 def _membership(org_id: uuid.UUID | None = None) -> SimpleNamespace:
-    return SimpleNamespace(org_id=org_id or uuid.uuid4(), role="owner")
+    return SimpleNamespace(
+        org_id=org_id or uuid.uuid4(),
+        role="owner",
+        joined_at=None,
+        created_at=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -126,6 +131,7 @@ async def test_verified_local_user_can_login(app):
             result.scalar_one_or_none.return_value = None
         elif call_count == 5:
             result.scalar_one_or_none.return_value = membership
+            result.scalars.return_value.all.return_value = [membership]
         else:
             raise AssertionError("Unexpected DB execute call")
         return result
@@ -181,6 +187,7 @@ async def test_oauth_user_bypasses_verification(app):
             result.scalar_one_or_none.return_value = None
         elif call_count == 5:
             result.scalar_one_or_none.return_value = membership
+            result.scalars.return_value.all.return_value = [membership]
         else:
             raise AssertionError("Unexpected DB execute call")
         return result

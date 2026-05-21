@@ -29,12 +29,14 @@ from dev_health_ops.models.users import Membership, User
 
 from .common import (
     LoginResponse,
-    UserInfo,
-    _expiry_to_utc,
+    _issue_membership_tokens,
+    _load_org_activity,
     _optional_uuid,
     _parse_uuid,
     _require_uuid,
     _resolve_login_audit_org_id,
+    _select_active_membership,
+    _to_user_info,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,8 +71,6 @@ async def login(
     request: Request,
 ) -> LoginResponse | EmailVerificationRequiredResponse:
     from dev_health_ops.api.auth.router import (
-        create_refresh_token_record,
-        get_auth_service,
         get_postgres_session,
     )
 
@@ -231,21 +231,28 @@ async def login(
                 message="Please verify your email address before logging in",
             )
 
-        membership_stmt = select(Membership).where(Membership.user_id == user.id)
-
-        if payload.org_id:
-            membership_stmt = membership_stmt.where(Membership.org_id == payload.org_id)
-
+        membership_stmt = (
+            select(Membership)
+            .where(Membership.user_id == user.id)
+            .order_by(Membership.joined_at.asc(), Membership.created_at.asc())
+        )
         membership_result = await db.execute(membership_stmt)
-        membership = membership_result.scalar_one_or_none()
+        memberships = list(membership_result.scalars().all())
+        requested_org_id = _parse_uuid(payload.org_id)
+        activity_by_org = _load_org_activity(
+            _require_uuid(membership.org_id, "membership.org_id")
+            for membership in memberships
+        )
+        membership = _select_active_membership(
+            memberships,
+            requested_org_id,
+            activity_by_org,
+        )
 
         needs_onboarding = membership is None and not bool(user.is_superuser)
 
         if payload.org_id and not membership:
-            any_membership_result = await db.execute(
-                select(Membership.id).where(Membership.user_id == user.id)
-            )
-            if any_membership_result.first() is not None:
+            if memberships:
                 raise HTTPException(
                     status_code=401,
                     detail=error_detail(
@@ -278,47 +285,13 @@ async def login(
 
         await db.commit()
 
-        auth_service = get_auth_service()
-        token_pair = auth_service.create_token_pair(
-            user_id=str(user.id),
-            email=str(user.email),
-            org_id=str(membership.org_id) if membership else "",
-            role=str(membership.role) if membership else "member",
-            is_superuser=bool(user.is_superuser),
-            username=str(user.username) if user.username is not None else None,
-            full_name=str(user.full_name) if user.full_name is not None else None,
-        )
-
-        refresh_payload = auth_service.validate_token(
-            token_pair.refresh_token, token_type="refresh"
-        )
-        if refresh_payload and membership and refresh_payload.get("jti"):
-            expires_at = _expiry_to_utc(refresh_payload.get("exp"))
-            if expires_at is not None:
-                await create_refresh_token_record(
-                    db=db,
-                    user_id=str(user.id),
-                    org_id=str(membership.org_id),
-                    token_hash=str(refresh_payload["jti"]),
-                    family_id=str(refresh_payload.get("family_id") or uuid_mod.uuid4()),
-                    expires_at=expires_at,
-                    ip_address=request.client.host if request.client else None,
-                    user_agent=request.headers.get("user-agent"),
-                )
+        token_pair = await _issue_membership_tokens(db, request, user, membership) if membership else None
 
         return LoginResponse(
-            access_token=token_pair.access_token,
-            refresh_token=token_pair.refresh_token,
-            token_type=token_pair.token_type,
-            expires_in=token_pair.expires_in,
+            access_token=token_pair.access_token if token_pair else "",
+            refresh_token=token_pair.refresh_token if token_pair else "",
+            token_type=token_pair.token_type if token_pair else "bearer",
+            expires_in=token_pair.expires_in if token_pair else 0,
             needs_onboarding=needs_onboarding,
-            user=UserInfo(
-                id=str(user.id),
-                email=str(user.email),
-                username=str(user.username) if user.username is not None else None,
-                full_name=str(user.full_name) if user.full_name is not None else None,
-                org_id=str(membership.org_id) if membership else None,
-                role=str(membership.role) if membership else "member",
-                is_superuser=bool(user.is_superuser),
-            ),
+            user=_to_user_info(user, membership),
         )

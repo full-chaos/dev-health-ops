@@ -48,7 +48,9 @@ from ..models.ai import (
     AIImpactBucketTotals,
     AIImpactSummary,
     AILeverageComponents,
+    AIMissingState,
     AIOpportunitiesResult,
+    AIReviewerConcentrationSummary,
     AIReviewLoadResult,
     AIReviewLoadRow,
     AIRiskBreakdownResult,
@@ -156,6 +158,25 @@ def _bucket_filter(
 
 def _empty_leverage() -> AILeverageComponents:
     return AILeverageComponents(prs_component=0.0)
+
+
+def _missing_state(key: str, title: str, guidance: str) -> AIMissingState:
+    return AIMissingState(key=key, title=title, guidance=guidance)
+
+
+def _unknown_attribution_missing_state(unknown_prs: int) -> AIMissingState | None:
+    if unknown_prs <= 0:
+        return None
+    return _missing_state(
+        "unknown_attribution",
+        "Unknown attribution needs follow-up",
+        (
+            "Some PRs could not be attributed to AI-assisted, agent-created, "
+            "AI-reviewed, or human buckets. Treat this as a coverage gap for "
+            "labels, trailers, bot identities, or CI annotations, not as a "
+            "person-level usage signal."
+        ),
+    )
 
 
 def _row_to_impact_daily(row: Any) -> AIImpactBucketRow:
@@ -278,6 +299,11 @@ async def resolve_ai_impact_summary(
     unknown = sum(r.unknown_prs for r in rows)
 
     computed_at = max((row.computed_at for row in rows), default=None)
+    missing_states = [
+        state
+        for state in [_unknown_attribution_missing_state(unknown)]
+        if state is not None
+    ]
 
     return AIImpactSummary(
         org_id=org_id,
@@ -291,6 +317,7 @@ async def resolve_ai_impact_summary(
         ai_assisted_pr_ratio=_ratio(ai_assisted, total_prs),
         by_bucket=sorted(by_bucket.values(), key=lambda r: r.bucket),
         daily=daily,
+        missing_states=missing_states,
         data_available=bool(rows),
         computed_at=computed_at,
     )
@@ -389,6 +416,27 @@ def _review_total_for_row(row: Any) -> int:
     return int(round(reviews_per_pr * row.prs_total))
 
 
+async def _load_reviewer_concentration(
+    context: GraphQLContext,
+    org_id: str,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None,
+) -> AIReviewerConcentrationSummary:
+    repo_id, team_id, _work_type = _normalize_scope(scope)
+    loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
+    reviewer_gini, reviewer_count = await loader.load_reviewer_concentration(
+        start_day=date_range.start_date,
+        end_day=date_range.end_date,
+        repo_id=repo_id,
+        team_id=team_id,
+    )
+    return AIReviewerConcentrationSummary(
+        data_available=reviewer_gini is not None,
+        reviewer_count=reviewer_count,
+        reviewer_gini=reviewer_gini,
+    )
+
+
 async def resolve_ai_review_load(
     context: GraphQLContext,
     date_range: AIDateRangeInput,
@@ -405,6 +453,10 @@ async def resolve_ai_review_load(
             reviews_per_pr=row.reviews_per_pr,
             changes_requested_per_pr=row.changes_requested_per_pr,
             review_amplification=row.ai_review_amplification,
+            post_first_review_pushes_count=row.followup_commits_count,
+            post_first_review_pushes_per_pr=_ratio(
+                row.followup_commits_count, row.prs_total
+            ),
         )
         for row in rows
     ]
@@ -417,6 +469,7 @@ async def resolve_ai_review_load(
     for bucket, bucket_rows in by_bucket_acc.items():
         prs_total = sum(r.prs_total for r in bucket_rows)
         reviews_total = sum(_review_total_for_row(r) for r in bucket_rows)
+        post_first_review_pushes = sum(r.followup_commits_count for r in bucket_rows)
         by_bucket.append(
             AIReviewLoadRow(
                 bucket=bucket,
@@ -431,9 +484,30 @@ async def resolve_ai_review_load(
                 review_amplification=_weighted_avg(
                     [(r.ai_review_amplification, r.prs_total) for r in bucket_rows]
                 ),
+                post_first_review_pushes_count=post_first_review_pushes,
+                post_first_review_pushes_per_pr=_ratio(
+                    post_first_review_pushes, prs_total
+                ),
             )
         )
     by_bucket.sort(key=lambda r: r.bucket)
+
+    reviewer_concentration = await _load_reviewer_concentration(
+        context, org_id, date_range, scope
+    )
+    missing_states = []
+    if not reviewer_concentration.data_available:
+        missing_states.append(
+            _missing_state(
+                "reviewer_concentration",
+                "Reviewer concentration needs aggregate coverage",
+                (
+                    "Reviewer concentration is only shown as an aggregate "
+                    "distribution signal. No reviewer names, rankings, or "
+                    "person-level review counts are exposed."
+                ),
+            )
+        )
 
     return AIReviewLoadResult(
         org_id=org_id,
@@ -441,6 +515,8 @@ async def resolve_ai_review_load(
         end_date=date_range.end_date,
         by_bucket=by_bucket,
         daily=daily,
+        reviewer_concentration=reviewer_concentration,
+        missing_states=missing_states,
         data_available=bool(rows),
     )
 
@@ -490,6 +566,26 @@ async def resolve_ai_risk_breakdown(
         start_date=date_range.start_date,
         end_date=date_range.end_date,
         by_bucket=by_bucket,
+        missing_states=[
+            _missing_state(
+                "hotspot_overlap",
+                "Hotspot overlap detector not yet wired",
+                (
+                    "AI-attributed PRs are not yet joined to hotspot file "
+                    "overlap. Keep this visible as detector follow-up rather "
+                    "than treating missing overlap as no risk."
+                ),
+            ),
+            _missing_state(
+                "complexity_overlap",
+                "Complexity overlap detector not yet wired",
+                (
+                    "AI-attributed PRs are not yet joined to high-complexity "
+                    "file overlap. Drill into PR and Work Graph evidence when "
+                    "available; do not infer person-level quality from this gap."
+                ),
+            ),
+        ],
         data_available=bool(rows),
     )
 

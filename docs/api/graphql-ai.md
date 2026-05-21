@@ -24,6 +24,9 @@ can consume without bespoke joins or recomputation.
 - **Empty / partial / populated states are first-class.** Every result
   carries `dataAvailable: Boolean!` so the UI can render the correct
   state without ad-hoc null probing.
+- **Intentional missing states are explicit.** AI Impact, AI Review Load,
+  and AI Risk expose `missingStates` guidance when a coverage gap should be
+  visible follow-up work instead of a silent omission.
 - **Provenance accompanies every metric.** `computedAt` and bucketed
   evidence references travel with the response so the UI can show
   freshness and drill into the underlying artifacts.
@@ -96,13 +99,16 @@ Side-by-side aggregation of the AI-attributed buckets against the
 ### `aiReviewLoad`
 
 Review-load breakdown per bucket: `reviewsPerPr`,
-`changesRequestedPerPr`, and the persisted `reviewAmplification` from
-CHAOS-1581.
+`changesRequestedPerPr`, post-first-review push counts, and the persisted
+`reviewAmplification` from CHAOS-1581. Reviewer concentration is exposed
+only as an aggregate distribution summary (`reviewerGini` and
+`reviewerCount`), never as reviewer names, rankings, or person-level counts.
 
 ### `aiRiskBreakdown`
 
 Per-bucket rework / revert / test-gap / incident rates.  Computed from
-persisted counts, no weighting.
+persisted counts, no weighting. `missingStates` keeps hotspot and
+high-complexity overlap visible until those file-overlap detectors are wired.
 
 ### `aiOpportunities`
 

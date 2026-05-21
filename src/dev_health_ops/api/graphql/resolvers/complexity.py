@@ -53,9 +53,7 @@ MAX_HOTSPOTS_ROWS: int = 500
 
 def _require_client(context: GraphQLContext) -> Any:
     if context.client is None:
-        raise RuntimeError(
-            "Database client not available for Complexity resolver"
-        )
+        raise RuntimeError("Database client not available for Complexity resolver")
     return context.client
 
 
@@ -326,7 +324,7 @@ async def resolve_complexity_timeseries(
                     point_date=day_val,
                     scope_id=scope_id,
                     scope_name=file_path or scope_id,
-                    loc_total=None,         # not stored per-file in v1 schema
+                    loc_total=None,  # not stored per-file in v1 schema
                     cyclomatic_per_kloc=None,  # not stored per-file in v1 schema
                     cyclomatic_total=_nint(row, "cyclomatic_total"),
                     cyclomatic_avg=_nfloat(row, "cyclomatic_avg"),

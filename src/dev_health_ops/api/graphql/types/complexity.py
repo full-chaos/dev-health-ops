@@ -79,9 +79,7 @@ class ComplexityPoint:
     cyclomatic_total: int | None = strawberry.field(
         default=None, name="cyclomaticTotal"
     )
-    cyclomatic_avg: float | None = strawberry.field(
-        default=None, name="cyclomaticAvg"
-    )
+    cyclomatic_avg: float | None = strawberry.field(default=None, name="cyclomaticAvg")
     high_complexity_functions: int | None = strawberry.field(
         default=None, name="highComplexityFunctions"
     )

@@ -308,7 +308,7 @@ async def test_timeseries_file_scope_maps_columns_correctly() -> None:
     assert pt.point_date == DAY
     assert pt.scope_id == "repo-1/src/auth/login.py"
     assert pt.scope_name == "src/auth/login.py"
-    assert pt.loc_total is None       # not in file_complexity_snapshots
+    assert pt.loc_total is None  # not in file_complexity_snapshots
     assert pt.cyclomatic_per_kloc is None  # not in file_complexity_snapshots
     assert pt.cyclomatic_total == 120
     assert pt.cyclomatic_avg == pytest.approx(6.5)
@@ -533,7 +533,9 @@ async def test_hotspots_limit_is_clamped_to_max_hotspots_rows() -> None:
     ctx = _ctx()
     _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
 
-    result = await resolve_hotspots(ctx, _hotspots_input(limit=MAX_HOTSPOTS_ROWS + 99999))
+    result = await resolve_hotspots(
+        ctx, _hotspots_input(limit=MAX_HOTSPOTS_ROWS + 99999)
+    )
 
     first_call_query: str = ctx.client.query.call_args_list[0].args[0]
     assert f"LIMIT {MAX_HOTSPOTS_ROWS}" in first_call_query

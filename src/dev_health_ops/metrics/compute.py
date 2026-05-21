@@ -388,9 +388,8 @@ def compute_daily_metrics(
             reviewers[reviewer_identity] = int(reviewers.get(reviewer_identity, 0)) + 1
 
     _author_repo_ids: dict[str, set[uuid.UUID]] = {}
-    for (_rid, _aid) in user_aggs:
+    for _rid, _aid in user_aggs:
         _author_repo_ids.setdefault(_aid, set()).add(_rid)
-
 
     # 4) Finalize user metrics records.
     user_metrics: list[UserMetricsDailyRecord] = []

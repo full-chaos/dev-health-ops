@@ -9,18 +9,13 @@ Fields under test (added in migration 016_cognitive_load_metrics.sql):
 Data sources used: PR rows, PR review rows, commit stat rows only.
 No IDE / keystroke / session telemetry involved.
 """
+
 from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from dev_health_ops.metrics.compute import compute_daily_metrics
-from dev_health_ops.metrics.schemas import (
-    CommitStatRow,
-    PullRequestReviewRow,
-    PullRequestRow,
-)
-
 
 _DAY = date(2026, 1, 15)
 _START = datetime(_DAY.year, _DAY.month, _DAY.day, tzinfo=timezone.utc)
@@ -235,7 +230,9 @@ def test_context_spread_multiple_repos_via_reviews_and_commits() -> None:
         include_commit_metrics=False,
     )
     # dev@example.com appears as (repo_a, dev) and (repo_b, dev)
-    dev_records = [m for m in result.user_metrics if m.author_email == "dev@example.com"]
+    dev_records = [
+        m for m in result.user_metrics if m.author_email == "dev@example.com"
+    ]
     # context_spread_count is identical across all rows for the same identity
     assert len(dev_records) == 2
     for rec in dev_records:
@@ -275,7 +272,9 @@ def test_context_spread_author_pr_activity_in_repo_counts() -> None:
         computed_at=_COMPUTED_AT,
         include_commit_metrics=False,
     )
-    dev_records = [m for m in result.user_metrics if m.author_email == "dev@example.com"]
+    dev_records = [
+        m for m in result.user_metrics if m.author_email == "dev@example.com"
+    ]
     for rec in dev_records:
         assert rec.context_spread_count == 2
 
@@ -472,4 +471,6 @@ def test_cognitive_load_combined_scenario() -> None:
     alice_b = by_key[(repo_b, "alice@example.com")]
     assert alice_b.pr_interruption_load == 1  # 1 distinct PR reviewed
     assert alice_b.context_spread_count == 2  # active in both repos
-    assert alice_b.review_request_load == 0  # no authored PRs in repo_b received reviews
+    assert (
+        alice_b.review_request_load == 0
+    )  # no authored PRs in repo_b received reviews

@@ -55,6 +55,8 @@ class AIPullRequestAttributionRow(TypedDict):
     kind: str | None
     work_type: str | None
     team_id: str | None
+    title: NotRequired[str | None]
+    merged_at: NotRequired[datetime | None]
 
 
 class PullRequestCommentRow(TypedDict):

@@ -10,6 +10,7 @@ from strawberry.types import Info
 from .context import GraphQLContext
 from .extensions import ConfiguredValidationRules, OrgIdAuthExtension
 from .models.ai import (
+    AiAttributedPrsResult,
     AIComparison,
     AIDateRangeInput,
     AIGovernanceSummary,
@@ -51,6 +52,7 @@ from .models.recommendations import (
     WindowInput,
 )
 from .resolvers.ai import (
+    resolve_ai_attributed_prs,
     resolve_ai_comparison,
     resolve_ai_governance_summary,
     resolve_ai_impact_summary,
@@ -437,6 +439,28 @@ class Query:
         context = get_context(info)
         return await resolve_ai_workflow_drilldown(
             context, root_type, root_id, depth, limit
+        )
+
+    @strawberry.field(
+        description=(
+            "List AI-attributed pull requests in the requested window so "
+            "the UI can offer a concrete drilldown selector. Rows come "
+            "from ai_attribution_resolved joined to git_pull_requests; "
+            "no aggregation, no fabrication."
+        )
+    )
+    async def ai_attributed_prs(
+        self,
+        info: Info,
+        org_id: str,
+        date_range: AIDateRangeInput,
+        scope: AIScopeInput | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> AiAttributedPrsResult:
+        context = get_context(info)
+        return await resolve_ai_attributed_prs(
+            context, date_range, scope, limit, offset
         )
 
 

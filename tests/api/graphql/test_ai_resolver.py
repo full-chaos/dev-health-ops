@@ -35,6 +35,7 @@ from dev_health_ops.api.graphql.models.ai import (
     AIWorkflowRootTypeInput,
 )
 from dev_health_ops.api.graphql.resolvers.ai import (
+    resolve_ai_attributed_prs,
     resolve_ai_comparison,
     resolve_ai_governance_summary,
     resolve_ai_impact_summary,
@@ -577,3 +578,128 @@ async def test_impact_summary_rejects_reversed_date_range():
 async def test_workflow_drilldown_rejects_empty_root_id():
     with pytest.raises(ValueError, match="root_id is required"):
         await resolve_ai_workflow_drilldown(_ctx(), AIWorkflowRootTypeInput.ISSUE, "")
+
+
+# -----------------------------------------------------------------------------
+# aiAttributedPrs
+# -----------------------------------------------------------------------------
+
+
+def _attribution_row(
+    *,
+    number: int,
+    kind: str = "copilot",
+    work_type: str = "pull_request",
+    team_id: str | None = None,
+    title: str | None = None,
+    merged_at: datetime | None = None,
+):
+    return {
+        "repo_id": REPO_ID,
+        "number": number,
+        "kind": kind,
+        "work_type": work_type,
+        "team_id": team_id,
+        "title": title,
+        "merged_at": merged_at,
+    }
+
+
+def _patch_pr_loader(rows: list[dict[str, Any]]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_impact.AIImpactClickHouseLoader.load_ai_pr_attributions",
+        new_callable=AsyncMock,
+        return_value=rows,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_empty_state():
+    with _patch_pr_loader([]):
+        result = await resolve_ai_attributed_prs(_ctx(), _range())
+
+    assert result.org_id == ORG_ID
+    assert result.rows == []
+    assert result.total == 0
+    assert result.has_more is False
+    assert result.data_available is False
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_populated_maps_fields():
+    merged = datetime(2026, 5, 4, 9, tzinfo=timezone.utc)
+    rows = [
+        _attribution_row(
+            number=101,
+            kind="copilot",
+            title="Add feature flag",
+            merged_at=merged,
+        ),
+        _attribution_row(number=102, kind="cursor", title="Refactor auth"),
+    ]
+    with _patch_pr_loader(rows):
+        result = await resolve_ai_attributed_prs(_ctx(), _range())
+
+    assert result.data_available is True
+    assert result.has_more is False
+    assert result.total == 2
+    assert [r.number for r in result.rows] == [101, 102]
+    assert result.rows[0].repo_id == str(REPO_ID)
+    assert result.rows[0].title == "Add feature flag"
+    assert result.rows[0].kind == "copilot"
+    assert result.rows[0].merged_at == merged
+    assert result.rows[1].merged_at is None
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_reports_has_more_and_pages():
+    # Loader returns limit+1 rows to signal more pages.
+    rows = [_attribution_row(number=200 + i) for i in range(51)]
+    with _patch_pr_loader(rows) as mock_load:
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), limit=50, offset=0)
+
+    assert mock_load.await_args.kwargs["limit"] == 51
+    assert mock_load.await_args.kwargs["offset"] == 0
+    assert len(result.rows) == 50
+    assert result.has_more is True
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_passes_repo_scope_to_loader():
+    scope = AIScopeInput(repo_id=str(REPO_ID))
+    with _patch_pr_loader([]) as mock_load:
+        await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    assert mock_load.await_args.kwargs["repo_id"] == REPO_ID
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_filters_by_work_type_in_memory():
+    rows = [
+        _attribution_row(number=1, work_type="bug"),
+        _attribution_row(number=2, work_type="feature"),
+        _attribution_row(number=3, work_type="bug"),
+    ]
+    scope = AIScopeInput(work_type="bug")
+    with _patch_pr_loader(rows):
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    assert [r.number for r in result.rows] == [1, 3]
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_clamps_oversize_limit():
+    rows = [_attribution_row(number=i) for i in range(10)]
+    with _patch_pr_loader(rows) as mock_load:
+        await resolve_ai_attributed_prs(_ctx(), _range(), limit=5000, offset=-5)
+
+    # Limit is clamped to _MAX_AI_ATTRIBUTED_PRS_PAGE (200) plus 1 for has_more probe.
+    assert mock_load.await_args.kwargs["limit"] == 201
+    assert mock_load.await_args.kwargs["offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_rejects_reversed_date_range():
+    bad_range = AIDateRangeInput(start_date=DAY_END, end_date=DAY_START)
+    with pytest.raises(ValueError, match="end_date must be >= start_date"):
+        await resolve_ai_attributed_prs(_ctx(), bad_range)

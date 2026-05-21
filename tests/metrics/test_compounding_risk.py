@@ -234,9 +234,7 @@ def test_computed_at_is_passed_through_unchanged() -> None:
 
 def test_custom_weights_change_score_predictably() -> None:
     # Put 100% weight on churn; only churn input is nonzero ⇒ score = churn_norm.
-    weights = CompoundingWeights(
-        churn=1.0, complexity=0.0, ownership=0.0, review=0.0
-    )
+    weights = CompoundingWeights(churn=1.0, complexity=0.0, ownership=0.0, review=0.0)
     inputs = _inputs(rework_churn=REFERENCE_VALUES["churn_ref"])  # saturates → 1.0
     row = compute_compounding_risk(
         day=DAY,
@@ -279,6 +277,9 @@ from dev_health_ops.metrics.compounding_risk import (  # noqa: E402
     build_compounding_risk_rows_for_day,
     load_repo_complexity_delta_30d,
 )
+from dev_health_ops.metrics.schemas import (  # noqa: E402
+    CompoundingRiskDailyRecord,
+)
 
 
 @dataclass
@@ -294,7 +295,10 @@ class _FakeRepoMetrics:
 class _FakeSink:
     """Stand-in for the ClickHouse sink. Returns canned ``query_dicts`` results."""
 
-    def __init__(self, complexity_by_repo: dict[str, dict[str, float] | None]):
+    def __init__(
+        self,
+        complexity_by_repo: dict[str, dict[str, float | None] | None],
+    ):
         self._data = complexity_by_repo
         self.calls: list[dict] = []
 
@@ -307,25 +311,25 @@ class _FakeSink:
 
 def test_load_repo_complexity_delta_returns_relative_change() -> None:
     sink = _FakeSink({"r1": {"first_half": 100.0, "second_half": 130.0}})
-    delta = load_repo_complexity_delta_30d(
-        sink, repo_id="r1", day=DAY, org_id="acme"
-    )
+    delta = load_repo_complexity_delta_30d(sink, repo_id="r1", day=DAY, org_id="acme")
     assert delta is not None
     assert delta == pytest.approx(0.30)
 
 
 def test_load_repo_complexity_delta_returns_none_when_either_half_missing() -> None:
     sink = _FakeSink({"r1": {"first_half": 100.0, "second_half": None}})
-    assert load_repo_complexity_delta_30d(
-        sink, repo_id="r1", day=DAY, org_id="acme"
-    ) is None
+    assert (
+        load_repo_complexity_delta_30d(sink, repo_id="r1", day=DAY, org_id="acme")
+        is None
+    )
 
 
 def test_load_repo_complexity_delta_returns_none_when_no_rows() -> None:
     sink = _FakeSink({})
-    assert load_repo_complexity_delta_30d(
-        sink, repo_id="missing", day=DAY, org_id="acme"
-    ) is None
+    assert (
+        load_repo_complexity_delta_30d(sink, repo_id="missing", day=DAY, org_id="acme")
+        is None
+    )
 
 
 def test_load_repo_complexity_delta_rejects_too_small_window() -> None:
@@ -339,10 +343,12 @@ def test_load_repo_complexity_delta_rejects_too_small_window() -> None:
 def test_orchestrator_produces_one_row_per_repo() -> None:
     repo_a = uuid.uuid4()
     repo_b = uuid.uuid4()
-    sink = _FakeSink({
-        str(repo_a): {"first_half": 100.0, "second_half": 130.0},
-        str(repo_b): {"first_half": 100.0, "second_half": 100.0},
-    })
+    sink = _FakeSink(
+        {
+            str(repo_a): {"first_half": 100.0, "second_half": 130.0},
+            str(repo_b): {"first_half": 100.0, "second_half": 100.0},
+        }
+    )
     repo_rows = [
         _FakeRepoMetrics(
             repo_id=repo_a,
@@ -430,10 +436,12 @@ def test_orchestrator_emits_unknown_severity_when_inputs_missing() -> None:
 def test_orchestrator_emits_team_rows_when_repo_to_team_map_provided() -> None:
     repo_a = uuid.uuid4()
     repo_b = uuid.uuid4()
-    sink = _FakeSink({
-        str(repo_a): {"first_half": 100.0, "second_half": 130.0},  # +30%
-        str(repo_b): {"first_half": 100.0, "second_half": 100.0},  #   0%
-    })
+    sink = _FakeSink(
+        {
+            str(repo_a): {"first_half": 100.0, "second_half": 130.0},  # +30%
+            str(repo_b): {"first_half": 100.0, "second_half": 100.0},  #   0%
+        }
+    )
     repo_rows = [
         _FakeRepoMetrics(
             repo_id=repo_a,
@@ -463,7 +471,7 @@ def test_orchestrator_emits_team_rows_when_repo_to_team_map_provided() -> None:
 
     # 2 repo rows + 1 team row
     assert len(out) == 3
-    by_scope = {r.scope: [] for r in out}
+    by_scope: dict[str, list[CompoundingRiskDailyRecord]] = {r.scope: [] for r in out}
     for r in out:
         by_scope[r.scope].append(r)
     assert len(by_scope["repo"]) == 2
@@ -484,9 +492,11 @@ def test_orchestrator_emits_team_rows_when_repo_to_team_map_provided() -> None:
 
 def test_orchestrator_team_row_omitted_when_no_repos_in_team() -> None:
     repo_a = uuid.uuid4()
-    sink = _FakeSink({
-        str(repo_a): {"first_half": 100.0, "second_half": 110.0},
-    })
+    sink = _FakeSink(
+        {
+            str(repo_a): {"first_half": 100.0, "second_half": 110.0},
+        }
+    )
     repo_rows = [
         _FakeRepoMetrics(
             repo_id=repo_a,
@@ -512,9 +522,11 @@ def test_orchestrator_team_row_omitted_when_no_repos_in_team() -> None:
 
 def test_orchestrator_team_rows_inherit_weights_and_thresholds() -> None:
     repo_a = uuid.uuid4()
-    sink = _FakeSink({
-        str(repo_a): {"first_half": 100.0, "second_half": 110.0},
-    })
+    sink = _FakeSink(
+        {
+            str(repo_a): {"first_half": 100.0, "second_half": 110.0},
+        }
+    )
     repo_rows = [
         _FakeRepoMetrics(
             repo_id=repo_a,

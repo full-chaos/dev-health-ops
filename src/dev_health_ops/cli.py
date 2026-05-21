@@ -365,11 +365,6 @@ def build_parser() -> argparse.ArgumentParser:
     job_ff_validation.register_commands(metrics_subparsers)
     job_compounding_risk.register_commands(metrics_subparsers)
 
-
-
-
-
-
     # ---- audit ----
     audit_parser = sub.add_parser("audit", help="Run diagnostic audits.")
     audit_subparsers = audit_parser.add_subparsers(dest="audit_command", required=True)

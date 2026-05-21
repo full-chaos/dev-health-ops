@@ -500,12 +500,12 @@ class CompoundingRiskDailyRecord:
     """
 
     day: date
-    scope: str                       # 'repo' | 'team'
-    scope_id: str                    # repo_id (uuid str) or team_id
+    scope: str  # 'repo' | 'team'
+    scope_id: str  # repo_id (uuid str) or team_id
 
     # composite
-    compounding_risk: float | None   # 0..1, None when any required input missing
-    severity: str                    # 'unknown' | 'low' | 'elevated' | 'high'
+    compounding_risk: float | None  # 0..1, None when any required input missing
+    severity: str  # 'unknown' | 'low' | 'elevated' | 'high'
 
     # normalized components (0..1, None when input missing)
     churn_norm: float | None

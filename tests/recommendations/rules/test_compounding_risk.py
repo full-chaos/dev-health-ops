@@ -167,9 +167,7 @@ def test_persisted_high_severity_fires_with_critical_severity() -> None:
     assert result.rule_id == RULE_ID
     assert result.success_criterion == SUCCESS_CRITERION
     # Evidence cites the new table.
-    assert any(
-        ev.metric_table == "compounding_risk_daily" for ev in result.evidence
-    )
+    assert any(ev.metric_table == "compounding_risk_daily" for ev in result.evidence)
 
 
 def test_persisted_elevated_severity_fires_with_warning_severity() -> None:
@@ -203,9 +201,7 @@ def test_persisted_unknown_severity_falls_through_to_legacy_path() -> None:
     result = evaluate_compounding_risk(snap, NOW)
     assert result is not None
     # Legacy path uses the file_complexity_snapshots evidence trail.
-    assert any(
-        ev.metric_table == "file_complexity_snapshots" for ev in result.evidence
-    )
+    assert any(ev.metric_table == "file_complexity_snapshots" for ev in result.evidence)
 
 
 def test_persisted_score_takes_precedence_over_legacy_proxy() -> None:
@@ -214,11 +210,9 @@ def test_persisted_score_takes_precedence_over_legacy_proxy() -> None:
         compounding_risk_score=0.80,
         compounding_risk_severity="high",
         hotspot_complexity_delta=0.0,  # below threshold
-        hotspot_churn_overlap=0.0,     # below threshold
+        hotspot_churn_overlap=0.0,  # below threshold
     )
     result = evaluate_compounding_risk(snap, NOW)
     assert result is not None
     assert result.severity == "critical"
-    assert "compounding_risk_daily" in {
-        ev.metric_table for ev in result.evidence
-    }
+    assert "compounding_risk_daily" in {ev.metric_table for ev in result.evidence}

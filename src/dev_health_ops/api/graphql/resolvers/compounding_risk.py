@@ -270,15 +270,18 @@ def _aggregate_repo_rows_to_team(
 
     out: list[CompoundingRiskPoint] = []
     for team_id, rows in by_team.items():
-        scores = [r.get("score") for r in rows if r.get("score") is not None]
+        score_values: list[float] = [
+            float(r["score"]) for r in rows if r.get("score") is not None
+        ]
         avg_score: float | None = (
-            sum(float(s) for s in scores) / len(scores) if scores else None
+            sum(score_values) / len(score_values) if score_values else None
         )
-        # Average each component independently — missing values skipped.
 
-        def _avg(key: str) -> float | None:
-            vals = [r.get(key) for r in rows if r.get(key) is not None]
-            return sum(float(v) for v in vals) / len(vals) if vals else None
+        def _avg(key: str, source_rows: list[dict[str, Any]] = rows) -> float | None:
+            vals: list[float] = [
+                float(r[key]) for r in source_rows if r.get(key) is not None
+            ]
+            return sum(vals) / len(vals) if vals else None
 
         first = rows[0]
         components = CompoundingRiskComponents(
@@ -316,8 +319,7 @@ def _aggregate_repo_rows_to_team(
                 components=components,
                 weights=_weights_from_row(first),
                 thresholds=thresholds,
-                computed_at=first.get("computed_at")
-                or datetime.now(timezone.utc),
+                computed_at=first.get("computed_at") or datetime.now(timezone.utc),
             )
         )
     # Sort by score desc, nulls last.
@@ -429,12 +431,8 @@ async def resolve_compounding_risk(
             scope_ids=filt.team_ids,
         )
         if team_rows:
-            _, team_labels = await _load_team_assignments(
-                client, authorized_org_id
-            )
-            points = [
-                _point_from_team_row(r, day, team_labels) for r in team_rows
-            ]
+            _, team_labels = await _load_team_assignments(client, authorized_org_id)
+            points = [_point_from_team_row(r, day, team_labels) for r in team_rows]
         else:
             # Fallback path: aggregate from the repo rows.
             repo_rows = _fetch_latest_rows(

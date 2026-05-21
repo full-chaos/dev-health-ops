@@ -34,9 +34,7 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
     return [end_day - timedelta(days=i) for i in range(backfill_days, -1, -1)]
 
 
-def _fetch_repo_metrics_for_day(
-    sink: Any, org_id: str, day: date
-) -> list[Any]:
+def _fetch_repo_metrics_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
     """Read the latest ``repo_metrics_daily`` rows for ``day`` as plain dicts.
 
     Returned objects are duck-typed enough to satisfy
@@ -57,14 +55,10 @@ def _fetch_repo_metrics_for_day(
         def __init__(self, d: dict[str, Any]) -> None:
             self.repo_id = d.get("repo_id")
             self.rework_churn_ratio_30d = d.get("rework_churn_ratio_30d")
-            self.single_owner_file_ratio_30d = d.get(
-                "single_owner_file_ratio_30d"
-            )
+            self.single_owner_file_ratio_30d = d.get("single_owner_file_ratio_30d")
             self.code_ownership_gini = d.get("code_ownership_gini")
             self.bus_factor = d.get("bus_factor")
-            self.pr_first_review_p90_hours = d.get(
-                "pr_first_review_p90_hours"
-            )
+            self.pr_first_review_p90_hours = d.get("pr_first_review_p90_hours")
 
     query = """
         SELECT

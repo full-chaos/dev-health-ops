@@ -44,9 +44,9 @@ from dev_health_ops.metrics.schemas import CompoundingRiskDailyRecord
 #: defaults — they are persisted on every row so historical rows remain
 #: inspectable even if defaults change.
 REFERENCE_VALUES: Final[dict[str, float]] = {
-    "churn_ref": 0.30,          # rework_churn_ratio of 0.30 == saturation
-    "complexity_ref": 0.20,     # 20% rise in cyclomatic_per_kloc == saturation
-    "review_ref": 48.0,         # 48h pr_first_review_p90_hours == saturation
+    "churn_ref": 0.30,  # rework_churn_ratio of 0.30 == saturation
+    "complexity_ref": 0.20,  # 20% rise in cyclomatic_per_kloc == saturation
+    "review_ref": 48.0,  # 48h pr_first_review_p90_hours == saturation
 }
 
 
@@ -63,9 +63,7 @@ class CompoundingWeights:
         total = self.churn + self.complexity + self.ownership + self.review
         # Allow tiny float drift but reject anything materially off.
         if abs(total - 1.0) > 1e-9:
-            raise ValueError(
-                f"CompoundingWeights must sum to 1.0, got {total!r}"
-            )
+            raise ValueError(f"CompoundingWeights must sum to 1.0, got {total!r}")
 
 
 @dataclass(frozen=True)
@@ -161,9 +159,7 @@ def _normalize_ownership(
     ownership_gini: float | None,
 ) -> float | None:
     """Concentration norm = max(single_owner_ratio, gini). Already in [0,1]."""
-    candidates = [
-        v for v in (single_owner_ratio, ownership_gini) if v is not None
-    ]
+    candidates = [v for v in (single_owner_ratio, ownership_gini) if v is not None]
     if not candidates:
         return None
     return _clamp01(max(candidates))

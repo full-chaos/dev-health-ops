@@ -70,10 +70,7 @@ def evaluate_compounding_risk(
                 "latency are compounding above their tuned thresholds."
             )
             if score is not None
-            else (
-                f"Compounding Risk severity is "
-                f"{snapshot.compounding_risk_severity}."
-            )
+            else (f"Compounding Risk severity is {snapshot.compounding_risk_severity}.")
         )
         evidence: tuple[EvidenceRef, ...] = (
             EvidenceRef(

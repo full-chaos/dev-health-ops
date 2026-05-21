@@ -78,9 +78,18 @@ async def test_uses_filter_day_when_provided_and_skips_latest_lookup() -> None:
         ctx.client,
         [
             _qresult(  # repo rows for the explicit day
-                ["scope_id", "score", "severity", "computed_at",
-                 "w_churn", "w_complexity", "w_ownership", "w_review",
-                 "threshold_elevated", "threshold_high"],
+                [
+                    "scope_id",
+                    "score",
+                    "severity",
+                    "computed_at",
+                    "w_churn",
+                    "w_complexity",
+                    "w_ownership",
+                    "w_review",
+                    "threshold_elevated",
+                    "threshold_high",
+                ],
                 [["repo-1", 0.5, "elevated", NOW, 0.3, 0.3, 0.2, 0.2, 0.4, 0.65]],
             ),
             _qresult([], []),  # repos label lookup
@@ -108,20 +117,47 @@ async def test_uses_filter_day_when_provided_and_skips_latest_lookup() -> None:
 async def test_repo_breakout_surfaces_full_audit_trail() -> None:
     ctx = _ctx()
     columns = [
-        "scope_id", "score", "severity",
-        "churn_norm", "complexity_norm", "ownership_norm", "review_norm",
-        "rework_churn", "complexity_delta", "bus_factor",
-        "ownership_gini", "single_owner_ratio", "review_latency_p90h",
-        "w_churn", "w_complexity", "w_ownership", "w_review",
-        "threshold_elevated", "threshold_high",
+        "scope_id",
+        "score",
+        "severity",
+        "churn_norm",
+        "complexity_norm",
+        "ownership_norm",
+        "review_norm",
+        "rework_churn",
+        "complexity_delta",
+        "bus_factor",
+        "ownership_gini",
+        "single_owner_ratio",
+        "review_latency_p90h",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
         "computed_at",
     ]
     repo_row = [
-        "repo-1", 0.72, "high",
-        0.8, 0.7, 0.6, 0.5,
-        0.18, 0.12, 4.0, 0.55, 0.65, 30.0,
-        0.30, 0.30, 0.20, 0.20,
-        0.40, 0.65,
+        "repo-1",
+        0.72,
+        "high",
+        0.8,
+        0.7,
+        0.6,
+        0.5,
+        0.18,
+        0.12,
+        4.0,
+        0.55,
+        0.65,
+        30.0,
+        0.30,
+        0.30,
+        0.20,
+        0.20,
+        0.40,
+        0.65,
         NOW,
     ]
     _setup_client(
@@ -150,8 +186,13 @@ async def test_repo_breakout_surfaces_full_audit_trail() -> None:
     assert row.components.complexity_delta == pytest.approx(0.12)
     assert row.components.review_latency_p90h == pytest.approx(30.0)
     # Audit trail
-    assert row.weights.churn + row.weights.complexity + row.weights.ownership + \
-        row.weights.review == pytest.approx(1.0)
+    assert (
+        row.weights.churn
+        + row.weights.complexity
+        + row.weights.ownership
+        + row.weights.review
+        == pytest.approx(1.0)
+    )
     assert row.thresholds.elevated == pytest.approx(0.40)
     assert row.thresholds.high == pytest.approx(0.65)
 
@@ -160,9 +201,16 @@ async def test_repo_breakout_surfaces_full_audit_trail() -> None:
 async def test_null_score_maps_to_unknown_severity() -> None:
     ctx = _ctx()
     columns = [
-        "scope_id", "score", "severity",
-        "w_churn", "w_complexity", "w_ownership", "w_review",
-        "threshold_elevated", "threshold_high", "computed_at",
+        "scope_id",
+        "score",
+        "severity",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "computed_at",
     ]
     _setup_client(
         ctx.client,
@@ -191,22 +239,66 @@ async def test_null_score_maps_to_unknown_severity() -> None:
 async def test_team_breakout_averages_repos_via_repo_to_team_map() -> None:
     ctx = _ctx()
     columns = [
-        "scope_id", "score", "severity",
-        "churn_norm", "complexity_norm", "ownership_norm", "review_norm",
-        "rework_churn", "complexity_delta", "bus_factor",
-        "ownership_gini", "single_owner_ratio", "review_latency_p90h",
-        "w_churn", "w_complexity", "w_ownership", "w_review",
-        "threshold_elevated", "threshold_high", "computed_at",
+        "scope_id",
+        "score",
+        "severity",
+        "churn_norm",
+        "complexity_norm",
+        "ownership_norm",
+        "review_norm",
+        "rework_churn",
+        "complexity_delta",
+        "bus_factor",
+        "ownership_gini",
+        "single_owner_ratio",
+        "review_latency_p90h",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "computed_at",
     ]
     base_weights = [0.30, 0.30, 0.20, 0.20]
     thresholds = [0.40, 0.65]
     rows = [
-        ["repo-1", 0.80, "high", 0.9, 0.7, 0.8, 0.6,
-         0.20, 0.15, 3.0, 0.6, 0.7, 50.0,
-         *base_weights, *thresholds, NOW],
-        ["repo-2", 0.40, "elevated", 0.5, 0.4, 0.4, 0.3,
-         0.10, 0.05, 5.0, 0.4, 0.4, 20.0,
-         *base_weights, *thresholds, NOW],
+        [
+            "repo-1",
+            0.80,
+            "high",
+            0.9,
+            0.7,
+            0.8,
+            0.6,
+            0.20,
+            0.15,
+            3.0,
+            0.6,
+            0.7,
+            50.0,
+            *base_weights,
+            *thresholds,
+            NOW,
+        ],
+        [
+            "repo-2",
+            0.40,
+            "elevated",
+            0.5,
+            0.4,
+            0.4,
+            0.3,
+            0.10,
+            0.05,
+            5.0,
+            0.4,
+            0.4,
+            20.0,
+            *base_weights,
+            *thresholds,
+            NOW,
+        ],
     ]
     teams_rows = [["team-A", "Platform", ["repo-1", "repo-2"]]]
     _setup_client(
@@ -215,15 +307,15 @@ async def test_team_breakout_averages_repos_via_repo_to_team_map() -> None:
             _qresult(["day"], [[DAY]]),
             _qresult([], []),  # team-scope query returns empty → fallback to repo agg
             _qresult(columns, rows),  # repo rows for the fallback aggregation
-            _qresult(["id", "name", "repo_patterns"], teams_rows),  # teams for repo→team map
+            _qresult(
+                ["id", "name", "repo_patterns"], teams_rows
+            ),  # teams for repo→team map
             _qresult(["day", "avg_score"], [[DAY, 0.6]]),  # trend
         ],
     )
 
     result = await resolve_compounding_risk(
-        ctx, ORG_ID, CompoundingRiskFilterInput(
-            breakout=CompoundingRiskScope.TEAM
-        )
+        ctx, ORG_ID, CompoundingRiskFilterInput(breakout=CompoundingRiskScope.TEAM)
     )
 
     assert len(result.rows) == 1
@@ -244,9 +336,16 @@ async def test_team_breakout_averages_repos_via_repo_to_team_map() -> None:
 async def test_team_breakout_filters_by_team_ids() -> None:
     ctx = _ctx()
     columns = [
-        "scope_id", "score", "severity",
-        "w_churn", "w_complexity", "w_ownership", "w_review",
-        "threshold_elevated", "threshold_high", "computed_at",
+        "scope_id",
+        "score",
+        "severity",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "computed_at",
     ]
     base = [0.30, 0.30, 0.20, 0.20, 0.40, 0.65]
     rows = [
@@ -284,19 +383,48 @@ async def test_team_breakout_uses_persisted_team_rows_when_available() -> None:
     surfaces them directly instead of aggregating from repo rows."""
     ctx = _ctx()
     columns = [
-        "scope_id", "score", "severity",
-        "churn_norm", "complexity_norm", "ownership_norm", "review_norm",
-        "rework_churn", "complexity_delta", "bus_factor",
-        "ownership_gini", "single_owner_ratio", "review_latency_p90h",
-        "w_churn", "w_complexity", "w_ownership", "w_review",
-        "threshold_elevated", "threshold_high", "computed_at",
+        "scope_id",
+        "score",
+        "severity",
+        "churn_norm",
+        "complexity_norm",
+        "ownership_norm",
+        "review_norm",
+        "rework_churn",
+        "complexity_delta",
+        "bus_factor",
+        "ownership_gini",
+        "single_owner_ratio",
+        "review_latency_p90h",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "computed_at",
     ]
     base_weights = [0.30, 0.30, 0.20, 0.20]
     thresholds = [0.40, 0.65]
     persisted_team_rows = [
-        ["team-X", 0.55, "elevated", 0.7, 0.5, 0.4, 0.3,
-         0.12, 0.08, 4.0, 0.5, 0.55, 36.0,
-         *base_weights, *thresholds, NOW],
+        [
+            "team-X",
+            0.55,
+            "elevated",
+            0.7,
+            0.5,
+            0.4,
+            0.3,
+            0.12,
+            0.08,
+            4.0,
+            0.5,
+            0.55,
+            36.0,
+            *base_weights,
+            *thresholds,
+            NOW,
+        ],
     ]
     _setup_client(
         ctx.client,
@@ -312,9 +440,7 @@ async def test_team_breakout_uses_persisted_team_rows_when_available() -> None:
     )
 
     result = await resolve_compounding_risk(
-        ctx, ORG_ID, CompoundingRiskFilterInput(
-            breakout=CompoundingRiskScope.TEAM
-        )
+        ctx, ORG_ID, CompoundingRiskFilterInput(breakout=CompoundingRiskScope.TEAM)
     )
 
     assert len(result.rows) == 1
@@ -340,9 +466,16 @@ async def test_team_breakout_uses_persisted_team_rows_when_available() -> None:
 async def test_trend_window_is_bounded() -> None:
     ctx = _ctx()
     columns = [
-        "scope_id", "score", "severity",
-        "w_churn", "w_complexity", "w_ownership", "w_review",
-        "threshold_elevated", "threshold_high", "computed_at",
+        "scope_id",
+        "score",
+        "severity",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "computed_at",
     ]
     base = [0.30, 0.30, 0.20, 0.20, 0.40, 0.65]
     _setup_client(

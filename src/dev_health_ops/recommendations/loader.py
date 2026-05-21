@@ -353,9 +353,7 @@ class ClickHouseMetricsLoader:
                 team_id, window_start, window_end
             )
             compounding_score, compounding_severity = (
-                self._load_compounding_risk_persisted(
-                    team_id, window_start, window_end
-                )
+                self._load_compounding_risk_persisted(team_id, window_start, window_end)
             )
         finally:
             self._org_id = prev_org

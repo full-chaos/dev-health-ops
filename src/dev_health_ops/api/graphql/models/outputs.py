@@ -530,10 +530,13 @@ class OperatingReviewSection:
 
 @strawberry.type
 class OperatingReview:
-    """Weekly Engineering Operating Review for a team/week tuple."""
+    """Weekly Engineering Operating Review for a team or org-wide aggregate.
+
+    ``team_id`` is ``None`` when the report covers all teams (CHAOS-1755).
+    """
 
     org_id: str
-    team_id: str
+    team_id: str | None
     week_start: date
     prior_week_start: date
     sections: list[OperatingReviewSection]

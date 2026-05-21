@@ -33,10 +33,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 
-from _sql_explain_helpers import (  # type: ignore[import-not-found]
-    CapturingSink,
-    FakeGraphQLContext,
-)
+from _sql_explain_helpers import CapturingSink, FakeGraphQLContext
 
 SAMPLE_ORG_ID = "00000000-0000-0000-0000-000000000001"
 SAMPLE_TEAM_ID = "team-alpha"

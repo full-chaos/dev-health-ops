@@ -729,7 +729,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             # 8. Metrics
             if ns.with_metrics and sink:
-                comp_data = generator.generate_complexity_metrics(days=ns.days)
+                comp_data = generator.generate_complexity_metrics(days=ns.days, org_id=org_id)
                 if hasattr(sink, "write_file_complexity_snapshots"):
                     if comp_data["snapshots"]:
                         sink.write_file_complexity_snapshots(comp_data["snapshots"])

@@ -256,27 +256,45 @@ class TestCompileSankey:
 class TestCompileCatalogValues:
     """Tests for compile_catalog_values."""
 
-    def test_basic_catalog_values(self):
-        """Test basic catalog values compilation."""
-        request = CatalogValuesRequest(
-            dimension="team",
-            limit=100,
-        )
+    def test_team_catalog_uses_teams_table_as_source_of_truth(self):
+        """CHAOS-1751: TEAM catalog must come from the semantic `teams`
+        table (LEFT JOIN counts from the event table) so the picker
+        surfaces the active roster including teams with count=0."""
+        request = CatalogValuesRequest(dimension="team", limit=100)
         org_id = "test-org"
 
         sql, params = compile_catalog_values(request, org_id)
 
-        # Check SQL structure
+        # Source of truth is `teams FINAL`, not the event table.
+        assert "teams FINAL" in sql
+        assert "is_active = 1" in sql
+        # Activity counts come from the event table via LEFT JOIN.
+        assert "LEFT JOIN" in sql
+        assert "COALESCE(activity.count, 0)" in sql
+        assert "investment_metrics_daily" in sql
+        # Teams with zero activity must still surface honestly.
+        assert "GROUP BY team_id" in sql
+        assert "LIMIT" in sql
+
+        assert params["org_id"] == org_id
+        assert params["limit"] == 100
+
+    def test_non_team_catalog_uses_event_table_directly(self):
+        """REPO and other non-team dimensions retain the original
+        event-table catalog behavior."""
+        request = CatalogValuesRequest(dimension="repo", limit=100)
+        org_id = "test-org"
+
+        sql, _ = compile_catalog_values(request, org_id)
+
         assert "SELECT" in sql
-        assert "team_id" in sql
+        assert "repo_id" in sql
         assert "COUNT(*)" in sql
         assert "GROUP BY" in sql
         assert "investment_metrics_daily" in sql
-        assert "LIMIT" in sql
-
-        # Check params
-        assert params["org_id"] == org_id
-        assert params["limit"] == 100
+        # No teams FINAL or LEFT JOIN for non-team dimensions.
+        assert "teams FINAL" not in sql
+        assert "LEFT JOIN" not in sql
 
     def test_org_id_always_in_params(self):
         """Test that org_id is always included in params."""

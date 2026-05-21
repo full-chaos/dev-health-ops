@@ -394,3 +394,44 @@ ORDER BY count DESC
 LIMIT %(limit)s
 SETTINGS max_execution_time = %(timeout)s
 """
+
+
+def catalog_values_team_template(
+    count_source_table: str = "investment_metrics_daily",
+    **kwargs: Any,
+) -> str:
+    """Generate SQL template for catalog values of the TEAM dimension.
+
+    CHAOS-1751: The semantic ``teams`` table is the source of truth for
+    the team-dimension catalog. Activity counts are looked up from an
+    event table via LEFT JOIN so teams with zero activity still appear
+    (with ``count = 0``) and the picker reflects the org's actual roster
+    rather than the synthetic event-table namespace.
+
+    See ``docs/api/team-catalog-source-of-truth.md`` for the contract.
+    """
+    return f"""
+SELECT
+    t.id AS value,
+    COALESCE(activity.count, 0) AS count
+FROM (
+    SELECT id, name
+    FROM teams FINAL
+    WHERE org_id = %(org_id)s
+      AND is_active = 1
+      AND id != ''
+) AS t
+LEFT JOIN (
+    SELECT
+        toString(team_id) AS team_id,
+        COUNT(*) AS count
+    FROM {count_source_table}
+    WHERE team_id IS NOT NULL
+      AND {count_source_table}.org_id = %(org_id)s
+      AND toString(team_id) != ''
+    GROUP BY team_id
+) AS activity ON activity.team_id = t.id
+ORDER BY count DESC, t.name ASC
+LIMIT %(limit)s
+SETTINGS max_execution_time = %(timeout)s
+"""

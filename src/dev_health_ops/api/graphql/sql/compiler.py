@@ -13,6 +13,7 @@ from ..authz import enforce_org_scope
 from .filter_translation import translate_filters
 from .templates import (
     breakdown_template,
+    catalog_values_team_template,
     catalog_values_template,
     flow_matrix_repo_edges_template,
     flow_matrix_repo_nodes_template,
@@ -428,6 +429,12 @@ def compile_catalog_values(
 ) -> tuple[str, dict[str, Any]]:
     """
     Compile a catalog values request to parameterized SQL.
+
+    CHAOS-1751: The TEAM dimension uses the semantic ``teams`` table as
+    the source of truth (LEFT JOINed to an event table for activity
+    counts) so the picker reflects the org's actual roster, including
+    teams with zero recorded activity. All other dimensions continue to
+    derive distinct values from the event table directly.
     """
     dimension = validate_dimension(request.dimension)
 
@@ -436,18 +443,25 @@ def compile_catalog_values(
         needs_team_join=_needs_team_join(filters),
     )
 
-    # Translate filters to SQL clause
-    filter_clause, filter_params = translate_filters(
-        filters, use_investment=ctx.get("use_investment", False)
-    )
-
-    sql = catalog_values_template(dimension, filter_clause=filter_clause, **ctx)
-
     params: dict[str, Any] = {
         "limit": request.limit,
         "timeout": timeout,
     }
-    params.update(filter_params)
+
+    if dimension == Dimension.TEAM:
+        # Filter scope/category clauses target event-table columns, which
+        # do not apply when listing teams from the semantic source of
+        # truth. The picker always exposes the full active roster.
+        sql = catalog_values_team_template(
+            count_source_table=ctx["source_table"],
+        )
+    else:
+        filter_clause, filter_params = translate_filters(
+            filters, use_investment=ctx.get("use_investment", False)
+        )
+        sql = catalog_values_template(dimension, filter_clause=filter_clause, **ctx)
+        params.update(filter_params)
+
     params = enforce_org_scope(org_id, params)
 
     return sql, params

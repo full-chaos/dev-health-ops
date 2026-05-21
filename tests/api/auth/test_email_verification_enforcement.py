@@ -11,13 +11,15 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from dev_health_ops.api.auth.router import router
+from dev_health_ops.api.middleware.rate_limit import limiter as rate_limiter
 from dev_health_ops.api.services.auth import AuthService
 
 
 @pytest.fixture
-def app():
+def app(monkeypatch: pytest.MonkeyPatch):
     _app = FastAPI()
     _app.include_router(router)
+    monkeypatch.setattr(rate_limiter, "enabled", False)
     return _app
 
 
@@ -52,7 +54,12 @@ def _user(
 
 
 def _membership(org_id: uuid.UUID | None = None) -> SimpleNamespace:
-    return SimpleNamespace(org_id=org_id or uuid.uuid4(), role="owner")
+    return SimpleNamespace(
+        org_id=org_id or uuid.uuid4(),
+        role="owner",
+        joined_at=None,
+        created_at=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -126,6 +133,7 @@ async def test_verified_local_user_can_login(app):
             result.scalar_one_or_none.return_value = None
         elif call_count == 5:
             result.scalar_one_or_none.return_value = membership
+            result.scalars.return_value.all.return_value = [membership]
         else:
             raise AssertionError("Unexpected DB execute call")
         return result
@@ -181,6 +189,7 @@ async def test_oauth_user_bypasses_verification(app):
             result.scalar_one_or_none.return_value = None
         elif call_count == 5:
             result.scalar_one_or_none.return_value = membership
+            result.scalars.return_value.all.return_value = [membership]
         else:
             raise AssertionError("Unexpected DB execute call")
         return result

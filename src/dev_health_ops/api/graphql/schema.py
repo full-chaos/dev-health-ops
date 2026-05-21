@@ -46,6 +46,7 @@ from .models.outputs import (
     ThroughputForecast,
     WorkGraphEdgesResult,
 )
+from .types.bus_factor import BusFactorResult, BusFactorScopeInput
 from .models.recommendations import (
     Recommendation,
     WindowInput,
@@ -62,6 +63,7 @@ from .resolvers.ai import (
 from .resolvers.analytics import resolve_analytics
 from .resolvers.catalog import resolve_catalog
 from .resolvers.data_health import resolve_data_health
+from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.reports import (
     CloneSavedReportInput,
     CreateSavedReportInput,
@@ -303,6 +305,18 @@ class Query:
     ) -> DataHealth:
         context = get_context(info)
         return await resolve_data_health(context, str(team))
+
+    @strawberry.field(
+        description="Repository ownership concentration and bus-factor summary."
+    )
+    async def bus_factor(
+        self,
+        info: Info,
+        org_id: str,
+        scope: BusFactorScopeInput | None = None,
+    ) -> BusFactorResult:
+        context = get_context(info)
+        return await resolve_bus_factor(context, org_id, scope)
 
     @strawberry.field(
         description="Latest rule-based recommendations for a team within a lookback window."

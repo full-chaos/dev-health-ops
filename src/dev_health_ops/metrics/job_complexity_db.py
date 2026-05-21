@@ -302,7 +302,7 @@ def run_complexity_db_job(
             for d in days:
                 computed_at = datetime.now(timezone.utc)
                 snapshots, repo_daily = _build_snapshots(
-                    repo_uuid, d, ref_value, file_results, computed_at
+                    repo_uuid, d, ref_value, file_results, computed_at, org_id
                 )
 
                 if not snapshots:
@@ -325,6 +325,7 @@ def _build_snapshots(
     ref_value: str,
     file_results: list[FileComplexity],
     computed_at: datetime,
+    org_id: str,
 ) -> tuple[list[FileComplexitySnapshot], RepoComplexityDaily]:
     snapshots: list[FileComplexitySnapshot] = []
     total_loc = 0
@@ -347,6 +348,7 @@ def _build_snapshots(
                 high_complexity_functions=f.high_complexity_functions,
                 very_high_complexity_functions=f.very_high_complexity_functions,
                 computed_at=computed_at,
+                org_id=org_id,
             )
         )
 
@@ -366,6 +368,7 @@ def _build_snapshots(
         high_complexity_functions=total_high,
         very_high_complexity_functions=total_very_high,
         computed_at=computed_at,
+        org_id=org_id,
     )
 
     return snapshots, repo_daily

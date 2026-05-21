@@ -27,6 +27,7 @@ def run_complexity_scan_job(
     backfill_days: int = 1,
     ref: str = "HEAD",
     sink: Any | None = None,
+    org_id: str = "",
 ) -> None:
     if not db_url and not sink:
         raise ValueError("DB connection string or sink is required.")
@@ -115,6 +116,7 @@ def run_complexity_scan_job(
                         high_complexity_functions=f.high_complexity_functions,
                         very_high_complexity_functions=f.very_high_complexity_functions,
                         computed_at=computed_at,
+                        org_id=org_id,
                     )
                 )
 
@@ -134,6 +136,7 @@ def run_complexity_scan_job(
                 high_complexity_functions=total_high,
                 very_high_complexity_functions=total_very_high,
                 computed_at=computed_at,
+                org_id=org_id,
             )
 
             logger.info(f"Writing {len(snapshots)} file snapshots for {d}...")

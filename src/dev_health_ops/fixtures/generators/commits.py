@@ -101,7 +101,9 @@ class CommitsGeneratorMixin(BaseGeneratorMixin):
                 )
         return stats
 
-    def generate_complexity_metrics(self, days: int = 30) -> dict[str, list[Any]]:
+    def generate_complexity_metrics(
+        self, days: int = 30, *, org_id: str = ""
+    ) -> dict[str, list[Any]]:
         from dev_health_ops.metrics.schemas import (
             FileComplexitySnapshot,
             RepoComplexityDaily,
@@ -148,6 +150,7 @@ class CommitsGeneratorMixin(BaseGeneratorMixin):
                         high_complexity_functions=high,
                         very_high_complexity_functions=very_high,
                         computed_at=computed_at,
+                        org_id=org_id,
                     )
                 )
 
@@ -168,6 +171,7 @@ class CommitsGeneratorMixin(BaseGeneratorMixin):
                     high_complexity_functions=total_high,
                     very_high_complexity_functions=total_very_high,
                     computed_at=computed_at,
+                    org_id=org_id,
                 )
             )
 

@@ -721,18 +721,20 @@ async def resolve_ai_attributed_prs(
             row for row in page_rows if (row.get("work_type") or "") == work_type
         ]
 
-    rows = [
-        AiAttributedPr(
-            repo_id=strawberry.ID(str(row["repo_id"])),
-            number=int(row["number"]),
-            title=row.get("title"),
-            kind=row.get("kind"),
-            work_type=row.get("work_type"),
-            team_id=row.get("team_id") or None,
-            merged_at=_to_aware(row["merged_at"]) if row.get("merged_at") else None,
+    rows: list[AiAttributedPr] = []
+    for row in page_rows:
+        merged_at_raw = row.get("merged_at")
+        rows.append(
+            AiAttributedPr(
+                repo_id=strawberry.ID(str(row["repo_id"])),
+                number=int(row["number"]),
+                title=row.get("title"),
+                kind=row.get("kind"),
+                work_type=row.get("work_type"),
+                team_id=row.get("team_id") or None,
+                merged_at=_to_aware(merged_at_raw) if merged_at_raw else None,
+            )
         )
-        for row in page_rows
-    ]
 
     return AiAttributedPrsResult(
         org_id=org_id,

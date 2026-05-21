@@ -11,13 +11,15 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from dev_health_ops.api.auth.router import router
+from dev_health_ops.api.middleware.rate_limit import limiter as rate_limiter
 from dev_health_ops.api.services.auth import AuthService
 
 
 @pytest.fixture
-def app():
+def app(monkeypatch: pytest.MonkeyPatch):
     _app = FastAPI()
     _app.include_router(router)
+    monkeypatch.setattr(rate_limiter, "enabled", False)
     return _app
 
 

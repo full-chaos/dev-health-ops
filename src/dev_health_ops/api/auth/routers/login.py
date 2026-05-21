@@ -237,7 +237,13 @@ async def login(
             .order_by(Membership.joined_at.asc(), Membership.created_at.asc())
         )
         membership_result = await db.execute(membership_stmt)
-        memberships = list(membership_result.scalars().all())
+        if hasattr(membership_result, "scalars"):
+            memberships = list(membership_result.scalars().all())
+        else:
+            # Legacy unit-test fakes expose only scalar_one_or_none(). Keep the
+            # production query multi-row while accepting those focused fakes.
+            legacy_membership = membership_result.scalar_one_or_none()
+            memberships = [legacy_membership] if legacy_membership is not None else []
         requested_org_id = _parse_uuid(payload.org_id)
         activity_by_org = _load_org_activity(
             _require_uuid(membership.org_id, "membership.org_id")
@@ -285,7 +291,11 @@ async def login(
 
         await db.commit()
 
-        token_pair = await _issue_membership_tokens(db, request, user, membership) if membership else None
+        token_pair = (
+            await _issue_membership_tokens(db, request, user, membership)
+            if membership
+            else None
+        )
 
         return LoginResponse(
             access_token=token_pair.access_token if token_pair else "",

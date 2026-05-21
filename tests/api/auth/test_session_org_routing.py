@@ -64,9 +64,7 @@ async def seeded_state(session_maker):
     empty_org = Organization(
         id=uuid.uuid4(), slug="empty", name="Empty Org", tier="community"
     )
-    data_org = Organization(
-        id=uuid.uuid4(), slug="data", name="Data Org", tier="team"
-    )
+    data_org = Organization(id=uuid.uuid4(), slug="data", name="Data Org", tier="team")
     now = datetime.now(timezone.utc)
     async with session_maker() as session:
         session.add_all([user, empty_org, data_org])
@@ -119,16 +117,18 @@ async def client(monkeypatch: pytest.MonkeyPatch, session_maker, seeded_state):
     async def _noop_refresh(*args, **kwargs):
         return None
 
-    app.dependency_overrides[auth_router_module.get_current_user] = lambda: current_user[
-        "value"
-    ]
+    app.dependency_overrides[auth_router_module.get_current_user] = lambda: (
+        current_user["value"]
+    )
     monkeypatch.setattr(auth_router_module, "get_postgres_session", _session_override)
     monkeypatch.setattr(
         auth_router_module,
         "get_auth_service",
         lambda: AuthService(secret_key="session-org-routing-test-secret"),
     )
-    monkeypatch.setattr(auth_router_module, "create_refresh_token_record", _noop_refresh)
+    monkeypatch.setattr(
+        auth_router_module, "create_refresh_token_record", _noop_refresh
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as async_client:

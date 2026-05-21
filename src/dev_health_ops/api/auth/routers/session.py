@@ -97,7 +97,9 @@ async def get_my_organizations(
 
     user_id = _parse_uuid(user.user_id)
     if user_id is None:
-        raise HTTPException(status_code=401, detail=error_detail("Invalid token claims"))
+        raise HTTPException(
+            status_code=401, detail=error_detail("Invalid token claims")
+        )
 
     async with get_postgres_session() as db:
         result = await db.execute(
@@ -149,7 +151,9 @@ async def switch_org(
     user_id = _parse_uuid(user.user_id)
     org_id = _parse_uuid(payload.org_id)
     if user_id is None or org_id is None:
-        raise HTTPException(status_code=400, detail=error_detail("Invalid organization ID"))
+        raise HTTPException(
+            status_code=400, detail=error_detail("Invalid organization ID")
+        )
 
     async with get_postgres_session() as db:
         result = await db.execute(
@@ -167,7 +171,9 @@ async def switch_org(
         if row is None:
             raise HTTPException(
                 status_code=403,
-                detail=error_detail("User is not a member of the selected organization"),
+                detail=error_detail(
+                    "User is not a member of the selected organization"
+                ),
             )
         db_user, membership = row
 

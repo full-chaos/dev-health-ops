@@ -44,6 +44,7 @@ from dev_health_ops.metrics.identity import (
     init_team_resolver,
     load_team_map,
 )
+from dev_health_ops.metrics.job_compounding_risk import _fetch_repo_metrics_for_day
 from dev_health_ops.metrics.knowledge import (
     compute_bus_factor,
     compute_code_ownership_gini,
@@ -144,6 +145,68 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
+
+
+def _repo_to_team_map_for_compounding_risk(
+    *,
+    repo_metrics_rows: list[Any],
+    repo_names_by_id: dict[uuid.UUID, str],
+    repo_team_resolver: Any,
+) -> dict[str, str]:
+    repo_to_team_map: dict[str, str] = {}
+    for row in repo_metrics_rows:
+        row_repo_id = getattr(row, "repo_id", None)
+        if row_repo_id is None:
+            continue
+        full_name = repo_names_by_id.get(row_repo_id)
+        if not full_name:
+            continue
+        team_id, _ = repo_team_resolver.resolve(full_name)
+        if team_id:
+            repo_to_team_map[str(row_repo_id)] = team_id
+    return repo_to_team_map
+
+
+def _write_compounding_risk_for_day(
+    *,
+    sinks: list[Any],
+    primary_sink: Any,
+    day: date,
+    org_id: str,
+    repo_metrics_rows: list[Any],
+    computed_at: datetime,
+    repo_names_by_id: dict[uuid.UUID, str],
+    repo_team_resolver: Any,
+) -> int:
+    rows_for_compounding = list(repo_metrics_rows)
+    if not rows_for_compounding:
+        rows_for_compounding = _fetch_repo_metrics_for_day(primary_sink, org_id, day)
+    if not rows_for_compounding:
+        return 0
+
+    try:
+        repo_to_team_map = _repo_to_team_map_for_compounding_risk(
+            repo_metrics_rows=rows_for_compounding,
+            repo_names_by_id=repo_names_by_id,
+            repo_team_resolver=repo_team_resolver,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("repo_team_resolver failed for compounding risk: %s", exc)
+        repo_to_team_map = {}
+
+    compounding_rows = build_compounding_risk_rows_for_day(
+        sink=primary_sink,
+        day=day,
+        org_id=org_id,
+        repo_metrics_rows=rows_for_compounding,
+        computed_at=computed_at,
+        repo_to_team=repo_to_team_map or None,
+    )
+    if not compounding_rows:
+        return 0
+    for s in sinks:
+        s.write_compounding_risk_daily(compounding_rows)
+    return len(compounding_rows)
 
 
 def _secondary_uri_from_env() -> str:
@@ -477,41 +540,16 @@ async def run_daily_metrics_job(
             if all_file_metrics:
                 s.write_file_metrics(all_file_metrics)
 
-        # Compounding Risk composite (CHAOS-1641). Computed AFTER
-        # ``write_repo_metrics`` so the inputs are persisted, then read
-        # back as needed (complexity delta) by the orchestrator.  Team
-        # rows are aggregated from the repo inputs using the
-        # ``repo_team_resolver`` already in scope.
-        repo_to_team_map: dict[str, str] = {}
-        try:
-            for row in result.repo_metrics:
-                # NOTE: use a distinct name here — the function parameter
-                # ``repo_id`` is reused later in the loop iteration
-                # (e.g. by load_testops_pipeline_data) and must stay None
-                # when the daily job was invoked without a per-repo filter.
-                row_repo_id = getattr(row, "repo_id", None)
-                if row_repo_id is None:
-                    continue
-                full_name = repo_names_by_id.get(row_repo_id)
-                if not full_name:
-                    continue
-                team_id, _ = repo_team_resolver.resolve(full_name)
-                if team_id:
-                    repo_to_team_map[str(row_repo_id)] = team_id
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("repo_team_resolver failed for compounding risk: %s", exc)
-
-        compounding_rows = build_compounding_risk_rows_for_day(
-            sink=primary_sink,
+        _write_compounding_risk_for_day(
+            sinks=sinks,
+            primary_sink=primary_sink,
             day=d,
             org_id=org_id,
             repo_metrics_rows=result.repo_metrics,
             computed_at=computed_at,
-            repo_to_team=repo_to_team_map or None,
+            repo_names_by_id=repo_names_by_id,
+            repo_team_resolver=repo_team_resolver,
         )
-        if compounding_rows:
-            for s in sinks:
-                s.write_compounding_risk_daily(compounding_rows)
 
         # TestOps risk metrics (release confidence, quality drag, pipeline stability)
         release_conf = compute_release_confidence(

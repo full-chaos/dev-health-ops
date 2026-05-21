@@ -20,6 +20,7 @@ from dev_health_ops.fixtures import runner as fixtures_runner
 from dev_health_ops.metrics import (
     job_capacity,
     job_complexity_db,
+    job_compounding_risk,
     job_daily,
     job_dora,
     job_ff_validation,
@@ -362,6 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     job_capacity.register_commands(metrics_subparsers)
     job_release_impact.register_commands(metrics_subparsers)
     job_ff_validation.register_commands(metrics_subparsers)
+    job_compounding_risk.register_commands(metrics_subparsers)
 
     # ---- audit ----
     audit_parser = sub.add_parser("audit", help="Run diagnostic audits.")

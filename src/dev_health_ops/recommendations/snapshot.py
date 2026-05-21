@@ -106,6 +106,11 @@ class MetricsSnapshot:
     # compounding-risk
     hotspot_complexity_delta: float | None
     hotspot_churn_overlap: float | None
+    # Persisted Compounding Risk composite (CHAOS-1641). When set, the
+    # ``compounding-risk`` rule consumes these instead of the legacy
+    # hotspot_complexity_delta / hotspot_churn_overlap proxy.
+    compounding_risk_score: float | None = None
+    compounding_risk_severity: str | None = None
 
 
 # ---------------------------------------------------------------------------

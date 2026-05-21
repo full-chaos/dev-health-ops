@@ -64,6 +64,7 @@ from .resolvers.ai import (
 from .resolvers.analytics import resolve_analytics
 from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.catalog import resolve_catalog
+from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
 from .resolvers.reports import (
     CloneSavedReportInput,
@@ -84,6 +85,10 @@ from .resolvers.reports import (
 )
 from .subscriptions import Subscription
 from .types.bus_factor import BusFactor, BusFactorScopeInput
+from .types.compounding_risk import (
+    CompoundingRiskFilterInput,
+    CompoundingRiskResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +324,22 @@ class Query:
     ) -> BusFactor:
         context = get_context(info)
         return await resolve_bus_factor(context, org_id, scope)
+
+    @strawberry.field(
+        description=(
+            "Compounding Risk composite: churn × complexity × ownership "
+            "× review-latency. Inspectable score with persisted weights, "
+            "thresholds, raw inputs, and normalized components."
+        )
+    )
+    async def compounding_risk(
+        self,
+        info: Info,
+        org_id: str,
+        filter: CompoundingRiskFilterInput | None = None,  # noqa: A002
+    ) -> CompoundingRiskResult:
+        context = get_context(info)
+        return await resolve_compounding_risk(context, org_id, filter)
 
     @strawberry.field(
         description="Latest rule-based recommendations for a team within a lookback window."

@@ -17,6 +17,7 @@ each responsible for one table family:
   AIAttributionMixin        — AI attribution records (ai_attribution table)
   AIImpactMixin             — AI workflow impact daily rollups
   RecommendationsMixin      — recommendations_daily (CHAOS-1622)
+  CompoundingRiskMixin      — compounding_risk_daily (CHAOS-1641)
 
 Public API (stable — do not remove):
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -42,6 +43,9 @@ from dev_health_ops.metrics.sinks.clickhouse.ai_governance import AIGovernanceMi
 from dev_health_ops.metrics.sinks.clickhouse.ai_impact import AIImpactMixin
 from dev_health_ops.metrics.sinks.clickhouse.ai_workflow import AIWorkflowMixin
 from dev_health_ops.metrics.sinks.clickhouse.ci import CIMixin
+from dev_health_ops.metrics.sinks.clickhouse.compounding_risk import (
+    CompoundingRiskMixin,
+)
 from dev_health_ops.metrics.sinks.clickhouse.core import ClickHouseCore
 from dev_health_ops.metrics.sinks.clickhouse.dora import DoraMixin
 from dev_health_ops.metrics.sinks.clickhouse.investment import InvestmentMixin
@@ -59,6 +63,7 @@ class ClickHouseMetricsSink(
     AIImpactMixin,
     CIMixin,
     RecommendationsMixin,
+    CompoundingRiskMixin,
     DoraMixin,
     WellbeingMixin,
     InvestmentMixin,

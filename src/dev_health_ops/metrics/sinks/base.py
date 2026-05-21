@@ -467,3 +467,16 @@ class BaseMetricsSink(ABC):
         ``RecommendationsMixin``.
         """
         pass
+
+    # -------------------------------------------------------------------------
+    # Compounding Risk (CHAOS-1641)
+    # -------------------------------------------------------------------------
+
+    def write_compounding_risk_daily(self, rows: Sequence[Any]) -> None:
+        """Write Compounding Risk composite rows to ``compounding_risk_daily``.
+
+        Default implementation is a no-op so existing sink subclasses that
+        have not yet been updated continue to work.  Override in
+        ``CompoundingRiskMixin``.
+        """
+        pass

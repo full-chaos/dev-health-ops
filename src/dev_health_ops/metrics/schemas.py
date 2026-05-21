@@ -492,6 +492,48 @@ class FileHotspotDaily:
 
 
 @dataclass(frozen=True)
+class CompoundingRiskDailyRecord:
+    """One row per (org_id, day, scope, scope_id) of the composite risk score.
+
+    Persisted append-only into ``compounding_risk_daily`` (CHAOS-1641).
+    Read latest with ``argMax(<col>, computed_at)``.
+    """
+
+    day: date
+    scope: str  # 'repo' | 'team'
+    scope_id: str  # repo_id (uuid str) or team_id
+
+    # composite
+    compounding_risk: float | None  # 0..1, None when any required input missing
+    severity: str  # 'unknown' | 'low' | 'elevated' | 'high'
+
+    # normalized components (0..1, None when input missing)
+    churn_norm: float | None
+    complexity_norm: float | None
+    ownership_norm: float | None
+    review_norm: float | None
+
+    # raw inputs (for inspectability)
+    rework_churn: float | None
+    complexity_delta: float | None
+    bus_factor: float | None
+    ownership_gini: float | None
+    single_owner_ratio: float | None
+    review_latency_p90h: float | None
+
+    # weights and thresholds in force at compute time (audit trail)
+    w_churn: float
+    w_complexity: float
+    w_ownership: float
+    w_review: float
+    threshold_elevated: float
+    threshold_high: float
+
+    computed_at: datetime
+    org_id: str = ""
+
+
+@dataclass(frozen=True)
 class InvestmentClassificationRecord:
     repo_id: uuid.UUID | None
     day: date

@@ -294,6 +294,35 @@ class ClickHouseMetricsLoader:
 
         return complexity_delta, churn_overlap
 
+    def _load_compounding_risk_persisted(
+        self, team_id: str, ws: date, we: date
+    ) -> tuple[float | None, str | None]:
+        """Read the persisted Compounding Risk score for the team from
+        ``compounding_risk_daily`` (CHAOS-1641).
+
+        Returns ``(score, severity)`` from the latest team-scope row in the
+        window. Returns ``(None, None)`` when no row is available (e.g. the
+        backfill has not yet run), in which case the rule falls back to the
+        legacy hotspot proxy.
+        """
+        oc = self._oc()
+        params = self._p(team_id, ws, we)
+        query = f"""
+            SELECT
+                argMax(compounding_risk, computed_at) AS score,
+                argMax(severity,         computed_at) AS severity
+            FROM compounding_risk_daily
+            WHERE scope = 'team'
+              AND scope_id = %(team_id)s
+              AND day >= %(start)s AND day < %(end)s {oc}
+        """
+        rows = self._qd(query, params)
+        if not rows:
+            return None, None
+        score = _safe_float(rows[0].get("score"))
+        severity = rows[0].get("severity")
+        return score, (str(severity) if severity else None)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -323,6 +352,9 @@ class ClickHouseMetricsLoader:
             complexity_delta, churn_overlap = self._load_compounding_signals(
                 team_id, window_start, window_end
             )
+            compounding_score, compounding_severity = (
+                self._load_compounding_risk_persisted(team_id, window_start, window_end)
+            )
         finally:
             self._org_id = prev_org
 
@@ -340,6 +372,8 @@ class ClickHouseMetricsLoader:
             cycle_time_by_day=cycle_times,
             hotspot_complexity_delta=complexity_delta,
             hotspot_churn_overlap=churn_overlap,
+            compounding_risk_score=compounding_score,
+            compounding_risk_severity=compounding_severity,
         )
 
 

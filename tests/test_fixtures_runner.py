@@ -400,6 +400,78 @@ def test_validate_ai_fixture_tables_rejects_unlinked_runs():
     assert runner._validate_ai_fixture_tables(client, _all_ai_tables_exist) is False
 
 
+class _SecurityAlertsClient:
+    """Stub ClickHouse client for security_alerts validation tests."""
+
+    def __init__(self, *, count: int = 20, distinct_severities: int = 4):
+        self.count = count
+        self.distinct_severities = distinct_severities
+
+    def query(self, sql: str):
+        normalized = " ".join(sql.split())
+        if "countDistinct(severity)" in normalized:
+            return _QueryResult(self.distinct_severities)
+        if "FROM security_alerts" in normalized:
+            return _QueryResult(self.count)
+        raise AssertionError(f"Unexpected query: {normalized}")
+
+
+def _security_alerts_table_exists(name: str) -> bool:
+    return name == "security_alerts"
+
+
+def test_validate_security_alerts_fixture_accepts_populated_state():
+    client = _SecurityAlertsClient(count=20, distinct_severities=4)
+    assert (
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
+        is True
+    )
+
+
+def test_validate_security_alerts_fixture_rejects_missing_table():
+    client = _SecurityAlertsClient()
+    assert (
+        runner._validate_security_alerts_fixture(
+            client, table_exists=lambda name: False
+        )
+        is False
+    )
+
+
+def test_validate_security_alerts_fixture_rejects_empty_table():
+    client = _SecurityAlertsClient(count=0)
+    assert (
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
+        is False
+    )
+
+
+def test_validate_security_alerts_fixture_rejects_sparse_table():
+    """count > 0 but below MIN_SECURITY_ALERTS threshold."""
+    client = _SecurityAlertsClient(count=runner.MIN_SECURITY_ALERTS - 1)
+    assert (
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
+        is False
+    )
+
+
+def test_validate_security_alerts_fixture_rejects_single_severity():
+    """Table has rows but only one distinct severity — distribution is degenerate."""
+    client = _SecurityAlertsClient(count=20, distinct_severities=1)
+    assert (
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
+        is False
+    )
+
+
 class TestGenerateUsersRespectsOrgId:
     """Regression: ``generate_users(org_id=...)`` MUST stamp the supplied org_id
     onto the Organization row and every Membership/license, so that synthetic

@@ -1271,6 +1271,73 @@ def _validate_ai_fixture_tables(client: Any, table_exists) -> bool:
     return True
 
 
+MIN_SECURITY_ALERTS = 5
+
+
+def _validate_security_alerts_fixture(client: Any, *, table_exists) -> bool:
+    """Verify security_alerts is present, populated, and realistic.
+
+    Checks:
+    1. Table exists (migration applied).
+    2. Row count meets minimum (fixture generation wrote data).
+    3. At least two distinct severity levels present (realistic distribution).
+    """
+    if not table_exists("security_alerts"):
+        logging.error(
+            "FAIL: security_alerts table missing (run fixtures generate — "
+            "security alerts are emitted automatically)."
+        )
+        return False
+
+    try:
+        count = _query_int(client, "SELECT count() FROM security_alerts")
+    except Exception as exc:
+        logging.error("FAIL: Could not count security_alerts rows: %s", exc)
+        return False
+
+    if count == 0:
+        logging.error(
+            "FAIL: security_alerts is empty (regression in fixture generation — "
+            "check insert_security_alerts path in runner.py)."
+        )
+        return False
+
+    if count < MIN_SECURITY_ALERTS:
+        logging.error(
+            "FAIL: security_alerts too sparse (count=%d, required>=%d).",
+            count,
+            MIN_SECURITY_ALERTS,
+        )
+        return False
+
+    try:
+        distinct_severities = _query_int(
+            client,
+            "SELECT countDistinct(severity) FROM security_alerts WHERE severity IS NOT NULL",
+        )
+    except Exception as exc:
+        logging.error(
+            "FAIL: Could not validate security_alerts severity distribution: %s", exc
+        )
+        return False
+
+    if distinct_severities < 2:
+        logging.error(
+            "FAIL: security_alerts severity distribution too narrow "
+            "(distinct_severities=%d, required>=2). Fixture generation may "
+            "have produced single-severity data.",
+            distinct_severities,
+        )
+        return False
+
+    logging.info(
+        "security_alerts: count=%d, distinct_severities=%d — OK",
+        count,
+        distinct_severities,
+    )
+    return True
+
+
 def run_fixtures_validation(ns: argparse.Namespace) -> int:
     """Validate that fixture data is sufficient for work graph and investment."""
     import clickhouse_connect
@@ -1575,6 +1642,9 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         return 1
 
     if not _validate_ai_fixture_tables(client, _table_exists):
+        return 1
+
+    if not _validate_security_alerts_fixture(client, table_exists=_table_exists):
         return 1
 
     # 4. Evidence sanity (sample bundles)

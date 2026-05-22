@@ -32,19 +32,17 @@ This file is intentionally short. The canonical instructions live in the MkDocs 
 ## GitHub PR workflow override
 
 - Use the `github-gh` skill for GitHub operations.
-- Prefer `gh pr create --fill` or `gh pct --fill` for unpublished branches; `--fill` lets GitHub CLI derive the title/body from commits and push the branch as part of PR creation.
-- If you need a custom title/body, use `--fill` first and then edit the PR with `gh pr edit` rather than omitting `--fill` on an unpublished branch.
-- If PR creation still reports that the branch must be pushed first, push with an explicit refspec and retry with `--head`:
+- **Push the branch first, then create the PR with `--head <branch>`.** In non-interactive contexts (agents, CI) `gh pr create` will NOT push the branch for you. `--head` does NOT auto-push either — per the gh docs, it "explicitly skip[s] any forking or pushing behavior." The error message `you must first push the current branch to a remote, or use the --head flag` is misleading; `--head` only suppresses the interactive push prompt and still requires the branch to be on remote.
+- Canonical sequence:
 
   ```bash
-  gh pct --fill --base main
-
-  # Fallback only when --fill still cannot publish the branch:
   GIT_MASTER=1 git push origin <branch>:<branch>
-  gh pct "<title>" --base main --head <branch> --body "..."
+  gh pr create --head <branch> --title "<title>" --body "<body>" --base main
   ```
 
-- Never use a bare `git push` from a worktree; worktree upstreams can point at `main` and trigger branch-protection failures.
+  - `--fill` (derives title/body from commits) is independent of pushing — still push first: `git push origin <branch>:<branch> && gh pr create --head <branch> --fill --base main`.
+- Prefer `gh pr create ...` over the `gh pct` alias in agent contexts. `pct` resolves to `gh pr create -t`, which then collides on argument parsing when you also pass `--head` or `--title` after it.
+- Never use a bare `git push` from a worktree; worktree upstreams can point at `main` and trigger branch-protection failures. The explicit refspec form (`git push origin <branch>:<branch>`) bypasses this.
 
 ## Provider boundary
 - New provider integrations live under `src/dev_health_ops/providers/<provider>/`.

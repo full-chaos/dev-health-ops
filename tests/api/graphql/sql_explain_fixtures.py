@@ -370,8 +370,8 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
     start = SAMPLE_DAY - timedelta(days=30)
 
     # Source-table-routing matrix:
-#   investment dims (theme/subcategory/work_type) → work_unit_investments
-#   non-investment dims (team/repo/author)         → investment_metrics_daily
+    #   investment dims (theme/subcategory/work_type) → work_unit_investments
+    #   non-investment dims (team/repo/author)         → investment_metrics_daily
     # The two backing tables expose different column sets; the investment path
     # uses derived expressions over real columns in work_unit_investments:
     #   THROUGHPUT      → SUM(subcategory_kv.2)  (weighted work-unit count)

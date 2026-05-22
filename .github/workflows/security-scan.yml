@@ -73,11 +73,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Run Semgrep
-        uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          config: auto
-          args: --sarif --output semgrep.sarif
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: pip install "semgrep>=1.99.0"
+
+      - name: Run Semgrep
+        run: semgrep scan --config auto --sarif --output semgrep.sarif
 
       - name: Upload Semgrep results
         if: always()
@@ -88,7 +93,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Semgrep SARIF to code scanning
-        if: always()
+        if: always() && hashFiles('semgrep.sarif') != ''
         uses: github/codeql-action/upload-sarif@fe4161a26a8629af62121b670040955b330f9af2 # v4.31.6
         with:
           sarif_file: semgrep.sarif

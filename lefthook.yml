@@ -1,17 +1,39 @@
-pre-push:
+# Pre-commit + pre-push hooks for ruff format + lint.
+#
+# Design rationale:
+#   - pre-commit hook auto-fixes formatting + lint on staged files and
+#     re-stages the fixes (stage_fixed: true) so the resulting commit is clean.
+#     stage_fixed only works in pre-commit context, which is why fix-and-stage
+#     lives here and not in pre-push.
+#   - pre-push hook is a final gate; it runs `ruff format --check` and
+#     `ruff check` on pushed files but does NOT attempt to auto-fix. Pre-push
+#     cannot modify the commits being pushed (git's model), so auto-fix would
+#     leave uncommitted changes in the working tree and block the push without
+#     resolving anything. Final-gate-without-auto-fix is the correct shape here.
+#   - Either hook can be skipped with `--no-verify` for WIP or emergency pushes.
+#
+# Install: `make install` (wires `lefthook install` into the bootstrap).
+
+pre-commit:
   parallel: true
   commands:
     ruff-format:
       glob: "*.py"
-      run: ruff format {push_files}
+      run: ruff format {staged_files}
       stage_fixed: true
     ruff-fix:
       glob: "*.py"
-      run: ruff check --fix {push_files}
+      run: ruff check --fix {staged_files}
       stage_fixed: true
+
+pre-push:
+  parallel: true
+  commands:
     ruff-format-check:
       glob: "*.py"
       run: ruff format --check {push_files}
+      fail_text: "Run `ruff format .` locally, commit the result, push again. Or `git push --no-verify` to bypass."
     ruff-check:
       glob: "*.py"
       run: ruff check {push_files}
+      fail_text: "Run `ruff check --fix .` locally, commit the result, push again. Or `git push --no-verify` to bypass."

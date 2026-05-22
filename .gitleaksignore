@@ -1,1 +1,3 @@
 f3b6feebaea7953d563207a73c76217f8ec5ccea:tests/test_ingest_api.py:generic-api-key:71
+# CHAOS-1772: false-positive on slowapi rate-limit literal "20/15minutes"
+81d688d029526d14179b71df6db78921b9f09a46:tests/api/auth/test_login_rate_limit.py:generic-api-key:29

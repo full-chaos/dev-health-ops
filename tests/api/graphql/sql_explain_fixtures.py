@@ -372,16 +372,16 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
     # Source-table-routing matrix:
     #   investment dims (theme/subcategory/work_type) → work_unit_investments
     #   non-investment dims (team/repo/author)         → investment_metrics_daily
-    # The two backing tables expose different measure columns; restrict each
-    # dimension to the measure set the matching template can actually project.
-    # Known gaps for the investment path are tracked in CHAOS-1754: throughput,
-    # churn_loc, and cycle_time_hours mappings on work_unit_investments don't
-    # match any real column. Until that is fixed, only count is exercised
-    # against investment dimensions here.
+    # The two backing tables expose different column sets; the investment path
+    # uses derived expressions over real columns in work_unit_investments:
+    #   THROUGHPUT      → SUM(subcategory_kv.2)  (weighted work-unit count)
+    #   CHURN_LOC       → SUM(if(effort_metric='churn_loc', subcategory_kv.2*effort_value, 0))
+    #   CYCLE_TIME_HOURS→ AVG(dateDiff('hour', from_ts, to_ts))
+    # Fixed in CHAOS-1754; all four measures are now exercised.
     NON_INVESTMENT_DIMS = ["team", "repo"]
     NON_INVESTMENT_MEASURES = ["count", "throughput", "cycle_time_hours", "churn_loc"]
     INVESTMENT_DIMS = ["theme", "subcategory", "work_type"]
-    INVESTMENT_MEASURES = ["count"]
+    INVESTMENT_MEASURES = ["count", "throughput", "churn_loc", "cycle_time_hours"]
 
     matrix: list[tuple[list[str], list[str]]] = [
         (NON_INVESTMENT_DIMS, NON_INVESTMENT_MEASURES),

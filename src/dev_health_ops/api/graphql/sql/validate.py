@@ -78,9 +78,16 @@ class Measure(str, Enum):
         if use_investment:
             mapping: dict[Measure, str] = {
                 cls.COUNT: "SUM(subcategory_kv.2 * effort_value)",
-                cls.CHURN_LOC: "SUM(churn_loc)",
-                cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
-                cls.THROUGHPUT: "SUM(throughput)",
+                # THROUGHPUT: each work unit's subcategory probabilities sum to
+                # ~1.0, so summing them gives the weighted count of work units.
+                cls.THROUGHPUT: "SUM(subcategory_kv.2)",
+                # CHURN_LOC: effort_value stores the actual churn LOC for work
+                # units whose effort_metric = 'churn_loc'; weight by subcategory
+                # probability to apportion across the ARRAY JOIN fan-out.
+                cls.CHURN_LOC: "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))",
+                # CYCLE_TIME_HOURS: derived from the stored timestamps (from_ts,
+                # to_ts) as the per-work-unit cycle duration in hours.
+                cls.CYCLE_TIME_HOURS: "AVG(dateDiff('hour', from_ts, to_ts))",
             }
         else:
             mapping = {

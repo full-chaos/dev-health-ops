@@ -239,7 +239,7 @@ async def _fetch_hotspot_rows(
 
 async def resolve_complexity_timeseries(
     context: GraphQLContext,
-    input: ComplexityTimeseriesInput,  # noqa: A002
+    input: ComplexityTimeseriesInput,
 ) -> ComplexityTimeseriesResult:
     """Serve complexity timeseries from ClickHouse (read-only, append-only reads).
 
@@ -307,9 +307,7 @@ async def resolve_complexity_timeseries(
             repo_ids=input.repo_ids,
             limit=effective_limit,
         )
-        repo_ids_seen = list({str(r["repo_id"]) for r in rows})
-        labels = await _load_repo_labels(client, authorized_org_id, repo_ids_seen)
-
+        # FILE-scope scopeName is derived from file_path — no repo-label join needed.
         for row in rows:
             day_val = row["day"]
             if input.granularity == TimeGranularity.WEEK:
@@ -341,7 +339,7 @@ async def resolve_complexity_timeseries(
 
 async def resolve_hotspots(
     context: GraphQLContext,
-    input: HotspotsInput,  # noqa: A002
+    input: HotspotsInput,
 ) -> HotspotsResult:
     """Serve hotspot rows from ClickHouse (read-only, append-only reads).
 

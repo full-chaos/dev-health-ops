@@ -358,7 +358,7 @@ class Query:
     async def complexity_timeseries(
         self,
         info: Info,
-        input: ComplexityTimeseriesInput,  # noqa: A002
+        input: ComplexityTimeseriesInput,
     ) -> ComplexityTimeseriesResult:
         context = get_context(info)
         return await resolve_complexity_timeseries(context, input)
@@ -373,7 +373,7 @@ class Query:
     async def hotspots(
         self,
         info: Info,
-        input: HotspotsInput,  # noqa: A002
+        input: HotspotsInput,
     ) -> HotspotsResult:
         context = get_context(info)
         return await resolve_hotspots(context, input)

@@ -129,7 +129,7 @@ async def test_timeseries_empty_state_file_scope() -> None:
         ctx.client,
         [
             _qresult([], []),  # file_complexity_snapshots → no rows
-            _qresult([], []),  # repo labels lookup
+            # FILE-scope skips the repo-labels join — only 1 query fires.
         ],
     )
 
@@ -295,7 +295,7 @@ async def test_timeseries_file_scope_maps_columns_correctly() -> None:
         ctx.client,
         [
             _qresult(columns, [row]),
-            _qresult(["repo_id", "full_name"], [["repo-1", "acme/backend"]]),
+            # FILE-scope skips the repo-labels join — only 1 query fires.
         ],
     )
 
@@ -315,6 +315,40 @@ async def test_timeseries_file_scope_maps_columns_correctly() -> None:
     assert pt.high_complexity_functions == 3
     assert pt.very_high_complexity_functions == 0
 
+
+@pytest.mark.asyncio
+async def test_timeseries_file_scope_skips_repo_label_join() -> None:
+    """FILE-scope must NOT call _load_repo_labels.
+
+    Regression test for the dead-code path flagged by github-code-quality +
+    CodeQL on PR #769: previously FILE-scope built ``repo_ids_seen`` and queried
+    repo labels, but the result was never read (scopeName is derived from
+    file_path). The unused query added a wasted ClickHouse round-trip per call.
+    """
+    ctx = _ctx()
+    columns = [
+        "day", "repo_id", "file_path",
+        "cyclomatic_total", "cyclomatic_avg",
+        "high_complexity_functions", "very_high_complexity_functions",
+    ]
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(columns, [[DAY, "repo-1", "src/a.py", 10, 2.0, 0, 0]]),
+        ],
+    )
+
+    await resolve_complexity_timeseries(
+        ctx, _timeseries_input(scope=ComplexityScope.FILE)
+    )
+
+    # Exactly one ClickHouse call — the file_complexity_snapshots fetch.
+    # If a future change re-adds the repo-labels join, this assertion fails
+    # and forces the author to justify the extra round-trip.
+    assert ctx.client.query.call_count == 1, (
+        f"FILE-scope made {ctx.client.query.call_count} ClickHouse queries; "
+        "expected 1 (no repo-label join)."
+    )
 
 # ---------------------------------------------------------------------------
 # complexityTimeseries — WEEK granularity

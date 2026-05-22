@@ -132,6 +132,108 @@ def _run_clickhouse_status(ns: argparse.Namespace) -> int:
     return 0
 
 
+# --- ClickHouse repair (stale-tenant orphan rows in `repos`) ----------------
+
+# Background: ``repos`` is ``ReplacingMergeTree(last_synced)`` ordered by
+# ``(org_id, id)``. Prior to CHAOS-1775, ``ClickHouseStore.insert_repo``
+# short-circuited on existing rows, so re-running ``fixtures generate`` (or any
+# sync) under a different ``--org`` left the table with multiple rows for the
+# same ``id`` under different ``org_id`` values. Those orphan rows are harmless
+# (a non-existent tenant cannot read them) but clutter the table.
+#
+# This repair identifies, per ``id``, the row with the newest ``last_synced``
+# as the *active* tenant row; every other ``(id, org_id)`` row is an orphan.
+
+_REPAIR_DETECT_QUERY = """
+WITH latest AS (
+    SELECT
+        id,
+        argMax(org_id, last_synced) AS active_org_id,
+        max(last_synced) AS active_last_synced
+    FROM repos
+    GROUP BY id
+    HAVING uniqExact(org_id) > 1
+)
+SELECT
+    toString(r.id) AS id,
+    r.repo AS repo,
+    r.org_id AS stale_org_id,
+    l.active_org_id AS active_org_id,
+    r.last_synced AS stale_last_synced,
+    l.active_last_synced AS active_last_synced
+FROM repos r
+INNER JOIN latest l ON r.id = l.id
+WHERE r.org_id != l.active_org_id
+{org_filter}
+ORDER BY r.repo, r.org_id
+"""
+
+
+def _run_clickhouse_repair(ns: argparse.Namespace) -> int:
+    """Find (and optionally delete) stale-tenant orphan rows in ``repos``.
+
+    Dry-run by default. Pass ``--apply`` to issue ``ALTER TABLE repos DELETE``
+    for each orphan. Optional ``--org`` scopes the repair to orphans whose
+    active tenant is that org_id; orphans of other tenants are untouched.
+    """
+    import clickhouse_connect
+
+    uri = resolve_sink_uri(ns)
+    apply = bool(getattr(ns, "apply", False))
+    org_filter_value: str | None = getattr(ns, "org", None)
+
+    if org_filter_value:
+        org_filter_sql = "AND l.active_org_id = {active_org:String}"
+        params: dict[str, str] = {"active_org": org_filter_value}
+    else:
+        org_filter_sql = ""
+        params = {}
+
+    detect_query = _REPAIR_DETECT_QUERY.format(org_filter=org_filter_sql)
+
+    client = clickhouse_connect.get_client(dsn=uri)
+    try:
+        result = client.query(detect_query, parameters=params)
+        orphans = list(result.result_rows or [])
+
+        if not orphans:
+            print("No stale-tenant orphans found in repos.")
+            return 0
+
+        print(f"Found {len(orphans)} stale-tenant orphan row(s) in repos:")
+        print()
+        header = ("repo", "stale_org_id", "active_org_id", "stale_last_synced")
+        print(f"  {header[0]:<40s}  {header[1]:<40s}  {header[2]:<40s}  {header[3]}")
+        for row in orphans:
+            (_id, repo, stale_org, active_org, stale_ts, _active_ts) = row
+            print(
+                f"  {str(repo):<40s}  {str(stale_org):<40s}  "
+                f"{str(active_org):<40s}  {stale_ts}"
+            )
+        print()
+
+        if not apply:
+            print("Dry-run: pass --apply to delete these orphan rows.")
+            return 0
+
+        print("Applying ALTER TABLE repos DELETE per orphan...")
+        deleted = 0
+        for row in orphans:
+            (id_str, _repo, stale_org, _active_org, _stale_ts, _active_ts) = row
+            client.command(
+                "ALTER TABLE repos DELETE "
+                "WHERE id = {id:UUID} AND org_id = {org:String} "
+                "SETTINGS mutations_sync=2",
+                parameters={"id": str(id_str), "org": str(stale_org)},
+            )
+            deleted += 1
+
+        print(f"Deleted {deleted} stale-tenant row(s) from repos.")
+    finally:
+        client.close()
+    return 0
+
+
 # ── CLI registration ───────────────────────────────────────────────
 
 
@@ -171,6 +273,28 @@ def _register_clickhouse_subcommands(
 
     ch_status = sub.add_parser("status", help="Show applied and pending migrations.")
     ch_status.set_defaults(func=_run_clickhouse_status)
+
+    ch_repair = sub.add_parser(
+        "repair",
+        help=(
+            "Find (or with --apply, delete) stale-tenant orphan rows in repos "
+            "(see CHAOS-1775). Dry-run by default."
+        ),
+    )
+    ch_repair.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete orphan rows. Without this flag, repair is a dry-run.",
+    )
+    ch_repair.add_argument(
+        "--org",
+        default=None,
+        help=(
+            "Scope repair to orphans whose active tenant is this org_id. "
+            "Without this flag, every tenant's orphans are reported/repaired."
+        ),
+    )
+    ch_repair.set_defaults(func=_run_clickhouse_repair)
 
 
 def register_commands(subparsers: argparse._SubParsersAction) -> None:

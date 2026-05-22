@@ -65,6 +65,14 @@ dependencies = [
   "python-json-logger>=2.0.7",
   "sentry-sdk[fastapi,celery]>=2.0.0",
   "prometheus-fastapi-instrumentator>=6.1.0",
+  # CHAOS-1772 / PYSEC-2026-161 (GHSA-86qp-5c8j-p5mr): starlette < 1.0.1 has a
+  # Host-header validation flaw that can bypass path-based auth. fastapi 0.136+
+  # allows starlette 1.x, but prometheus-fastapi-instrumentator 7.x caps
+  # starlette < 1.0.0; this direct constraint forces pip to pick instrumentator
+  # 6.x (also caps starlette but allows 1.x via wider range). Drop when
+  # prometheus-fastapi-instrumentator publishes a release that supports
+  # starlette 1.x natively.
+  "starlette>=1.0.1",
   "prometheus-client>=0.20.0",
   "opentelemetry-api>=1.24.0",
   "opentelemetry-sdk>=1.24.0",
@@ -96,6 +104,7 @@ Issues = "https://github.com/chrisgeo/dev-health-ops/issues"
 [project.scripts]
 dev-health-ops = "dev_health_ops.cli:main"
 dev-hops = "dev_health_ops.cli:main"
+
 
 [tool.setuptools_scm]
 version_scheme = "post-release"

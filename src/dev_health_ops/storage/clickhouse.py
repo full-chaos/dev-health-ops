@@ -217,16 +217,30 @@ class ClickHouseStore:
         return bool(getattr(result, "result_rows", None))
 
     async def insert_repo(self, repo: Repo) -> None:
+        """Insert (or refresh) a repo row, idempotently.
+
+        ``repos`` is a ``ReplacingMergeTree(last_synced)`` ordered by
+        ``(org_id, id)``. We *always* write the row and let the engine
+        reconcile by ``last_synced`` for the same ``(org_id, id)`` key.
+
+        Why no existence-check short-circuit (CHAOS-1775):
+          The previous implementation returned early when a row with the
+          same ``id`` already existed, which meant mutable fields —
+          including the auto-injected ``org_id`` set by ``_insert_rows``
+          from ``self.org_id`` — were never refreshed. Re-running ``dev-hops
+          fixtures generate`` (or any sync) with a different ``--org`` then
+          silently stranded ``repos.org_id`` at its first value, which broke
+          every analytics view that scopes via ``r.org_id`` (e.g. the
+          ``/security`` dashboard).
+
+        Stale-tenant rows (same ``id``, prior ``org_id``) remain in the part
+          until merge but no longer mask the active-tenant row, since this
+          method always inserts a fresh row under ``self.org_id``. A
+          dedicated cleanup of stale-tenant orphans is intentionally out of
+          scope for this hot-path sink.
+        """
         assert self.client is not None
         repo_id = self._normalize_uuid(repo.id)
-        async with self._lock:
-            existing = await asyncio.to_thread(
-                self.client.query,
-                "SELECT 1 FROM repos WHERE id = {id:UUID} LIMIT 1",
-                parameters={"id": str(repo_id)},
-            )
-        if getattr(existing, "result_rows", None):
-            return
 
         synced_at = self._normalize_datetime(datetime.now(timezone.utc))
         created_at = (

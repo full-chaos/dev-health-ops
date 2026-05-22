@@ -874,6 +874,96 @@ async def test_clickhouse_store_insert_git_file_data_calls_insert():
     ]
 
 
+@pytest.mark.asyncio
+async def test_clickhouse_store_insert_repo_refreshes_org_id_on_existing_row():
+    """Regression for CHAOS-1775.
+
+    Re-inserting the same repo while ``self.org_id`` has changed must write
+    a fresh row tagged with the new ``org_id`` (so the analytics views, which
+    JOIN on ``repos.org_id``, see the active tenant). The previous
+    implementation short-circuited on existence and stranded ``org_id`` at
+    its first value.
+    """
+    test_repo_id = uuid.uuid4()
+    test_repo = Repo(id=test_repo_id, repo="owner/repo")
+
+    mock_client = MagicMock()
+    mock_client.command = MagicMock()
+    mock_client.insert = MagicMock()
+    # ``query`` is only invoked during migration init (SHOW TABLES, etc.).
+    # The post-fix ``insert_repo`` no longer performs an existence query.
+    mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    mock_client.close = MagicMock()
+
+    import sys
+    from types import SimpleNamespace
+
+    get_client = MagicMock(return_value=mock_client)
+    fake_clickhouse_connect = SimpleNamespace(get_client=get_client)
+
+    with patch.dict(sys.modules, {"clickhouse_connect": fake_clickhouse_connect}):
+        store = ClickHouseStore("clickhouse://localhost:8123/default")
+        async with store:
+            # First insert under org A.
+            store.org_id = "org-a"
+            await store.insert_repo(test_repo)
+            # Re-insert under org B. The fix must NOT short-circuit; it must
+            # write a new row tagged with org B.
+            store.org_id = "org-b"
+            await store.insert_repo(test_repo)
+
+    # Two inserts must have happened.
+    assert mock_client.insert.call_count == 2, (
+        "insert_repo short-circuited on existing row — CHAOS-1775 regressed"
+    )
+
+    for call_idx, expected_org in enumerate(("org-a", "org-b")):
+        args, kwargs = mock_client.insert.call_args_list[call_idx]
+        assert args[0] == "repos"
+        column_names = kwargs["column_names"]
+        assert "org_id" in column_names, (
+            f"call {call_idx}: org_id missing from column_names"
+        )
+        matrix = args[1]
+        org_id_idx = list(column_names).index("org_id")
+        assert matrix[0][org_id_idx] == expected_org, (
+            f"call {call_idx}: expected org_id={expected_org!r}, "
+            f"got {matrix[0][org_id_idx]!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_clickhouse_store_insert_repo_writes_under_self_org_id():
+    """Fresh insert path: org_id auto-injection from ``self.org_id`` works."""
+    test_repo = Repo(id=uuid.uuid4(), repo="owner/repo")
+
+    mock_client = MagicMock()
+    mock_client.command = MagicMock()
+    mock_client.insert = MagicMock()
+    mock_client.query = MagicMock(return_value=MagicMock(result_rows=[]))
+    mock_client.close = MagicMock()
+
+    import sys
+    from types import SimpleNamespace
+
+    get_client = MagicMock(return_value=mock_client)
+    fake_clickhouse_connect = SimpleNamespace(get_client=get_client)
+
+    with patch.dict(sys.modules, {"clickhouse_connect": fake_clickhouse_connect}):
+        store = ClickHouseStore("clickhouse://localhost:8123/default")
+        async with store:
+            store.org_id = "acme-corp"
+            await store.insert_repo(test_repo)
+
+    args, kwargs = mock_client.insert.call_args
+    assert args[0] == "repos"
+    column_names = kwargs["column_names"]
+    assert "org_id" in column_names
+    matrix = args[1]
+    org_id_idx = list(column_names).index("org_id")
+    assert matrix[0][org_id_idx] == "acme-corp"
+
+
 # SQLite-specific Tests
 
 

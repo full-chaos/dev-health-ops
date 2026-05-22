@@ -355,12 +355,21 @@ class TestMeasureDbExpression:
         assert Measure.db_expression(Measure.COUNT) == "SUM(work_items_completed)"
         assert Measure.db_expression(Measure.THROUGHPUT) == "SUM(work_items_completed)"
 
-        # Investment
+        # Investment path — expressions over real columns in work_unit_investments
+        # (CHAOS-1754: old non-existent column refs replaced with valid expressions)
         assert (
             Measure.db_expression(Measure.COUNT, use_investment=True)
             == "SUM(subcategory_kv.2 * effort_value)"
         )
         assert (
             Measure.db_expression(Measure.THROUGHPUT, use_investment=True)
-            == "SUM(throughput)"
+            == "SUM(subcategory_kv.2)"
+        )
+        assert (
+            Measure.db_expression(Measure.CHURN_LOC, use_investment=True)
+            == "SUM(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))"
+        )
+        assert (
+            Measure.db_expression(Measure.CYCLE_TIME_HOURS, use_investment=True)
+            == "AVG(dateDiff('hour', from_ts, to_ts))"
         )

@@ -11,8 +11,6 @@ from sqlalchemy import func, select
 
 from dev_health_ops.api.middleware.rate_limit import (
     AUTH_LOGIN_IP_LIMIT,
-    AUTH_LOGIN_LIMIT,
-    get_auth_key,
     limiter,
 )
 from dev_health_ops.api.services.login_attempts import (
@@ -65,7 +63,6 @@ class EmailVerificationRequiredResponse(BaseModel):
     response_model=LoginResponse | EmailVerificationRequiredResponse,
 )
 @limiter.limit(AUTH_LOGIN_IP_LIMIT)
-@limiter.limit(AUTH_LOGIN_LIMIT, key_func=get_auth_key)
 async def login(
     payload: LoginRequest,
     request: Request,

@@ -26,7 +26,9 @@ def test_auth_login_constant_removed() -> None:
     )
 
     # The per-IP limit must still exist as a coarse brute-force guard.
-    assert rate_limit.AUTH_LOGIN_IP_LIMIT == "20/15minutes"
+    # NOTE: gitleaks false-positive — "20/15minutes" matches its generic-api-key
+    # heuristic. This is a slowapi rate-limit literal, not a credential.
+    assert rate_limit.AUTH_LOGIN_IP_LIMIT == "20/15minutes"  # gitleaks:allow
 
 
 def test_get_auth_key_still_exported_for_other_routes() -> None:

@@ -53,6 +53,8 @@ dev-hops migrate postgres history          # show migration history
 dev-hops migrate clickhouse
 dev-hops migrate clickhouse upgrade        # same as above
 dev-hops migrate clickhouse status         # show applied/pending migrations
+dev-hops migrate clickhouse repair         # dry-run: find stale-tenant orphan rows in repos
+dev-hops migrate clickhouse repair --apply # actually delete the orphans (see CHAOS-1775/1776)
 ```
 
 > Run both migration commands after setting up a fresh environment, before any sync or metrics commands.

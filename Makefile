@@ -1,4 +1,4 @@
-.PHONY: test\:unit test\:integration test\:e2e test\:live-e2e test\:ci
+.PHONY: install test\:unit test\:integration test\:e2e test\:live-e2e test\:ci
 
 test\:unit:
 	@./ci/run_tests.sh unit
@@ -14,3 +14,7 @@ test\:live-e2e:
 
 test\:ci:
 	@./ci/run_tests.sh ci
+
+install:
+	pip install -r requirements.txt
+	lefthook install

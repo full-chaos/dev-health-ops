@@ -1275,7 +1275,7 @@ MIN_SECURITY_ALERTS = 5
 
 
 def _validate_security_alerts_fixture(client: Any, *, table_exists) -> bool:
-    """Verify security_alerts table is present, non-empty, and has realistic distribution.
+    """Verify security_alerts is present, populated, and realistic.
 
     Checks:
     1. Table exists (migration applied).
@@ -1284,7 +1284,8 @@ def _validate_security_alerts_fixture(client: Any, *, table_exists) -> bool:
     """
     if not table_exists("security_alerts"):
         logging.error(
-            "FAIL: security_alerts table missing (run fixtures generate — security alerts are emitted automatically)."
+            "FAIL: security_alerts table missing (run fixtures generate — "
+            "security alerts are emitted automatically)."
         )
         return False
 
@@ -1296,7 +1297,8 @@ def _validate_security_alerts_fixture(client: Any, *, table_exists) -> bool:
 
     if count == 0:
         logging.error(
-            "FAIL: security_alerts is empty (regression in fixture generation — check insert_security_alerts path in runner.py)."
+            "FAIL: security_alerts is empty (regression in fixture generation — "
+            "check insert_security_alerts path in runner.py)."
         )
         return False
 
@@ -1321,7 +1323,9 @@ def _validate_security_alerts_fixture(client: Any, *, table_exists) -> bool:
 
     if distinct_severities < 2:
         logging.error(
-            "FAIL: security_alerts severity distribution too narrow (distinct_severities=%d, required>=2). Fixture generation may have produced single-severity data.",
+            "FAIL: security_alerts severity distribution too narrow "
+            "(distinct_severities=%d, required>=2). Fixture generation may "
+            "have produced single-severity data.",
             distinct_severities,
         )
         return False

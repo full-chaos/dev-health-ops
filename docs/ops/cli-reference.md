@@ -359,6 +359,16 @@ dev-hops fixtures generate \
 
 Database type is auto-detected from the sink URI.
 
+Every fixture run also seeds synthetic security alert rows into
+`security_alerts` for each generated repo. These rows include Dependabot,
+code-scanning, advisory, GitLab vulnerability, and GitLab dependency-style
+sources so the security GraphQL resolvers and UI have demo data without a
+separate flag. Verify them with:
+
+```sql
+SELECT count(), countDistinct(severity) FROM security_alerts;
+```
+
 When `--with-metrics` is enabled against ClickHouse, AI workflow intelligence
 tables are also seeded: `ai_attribution`, `ai_workflow_runs`,
 `ai_workflow_artifact_edges`, and `ai_workflow_issue_edges`. The daily metrics
@@ -379,7 +389,8 @@ dev-hops fixtures validate --sink "clickhouse://localhost:8123/default"
 | `--sink` | Analytics sink URI (required, ClickHouse only) |
 
 Checks raw data counts, team mappings, cycle time metrics, work graph edges,
-connected components, AI fixture/rollup tables, and evidence bundle quality.
+connected components, security alert fixture coverage, AI fixture/rollup tables,
+and evidence bundle quality.
 
 ---
 

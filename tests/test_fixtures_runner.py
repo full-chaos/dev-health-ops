@@ -422,7 +422,12 @@ def _security_alerts_table_exists(name: str) -> bool:
 
 def test_validate_security_alerts_fixture_accepts_populated_state():
     client = _SecurityAlertsClient(count=20, distinct_severities=4)
-    assert runner._validate_security_alerts_fixture(client, table_exists=_security_alerts_table_exists) is True
+    assert (
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
+        is True
+    )
 
 
 def test_validate_security_alerts_fixture_rejects_missing_table():
@@ -436,7 +441,9 @@ def test_validate_security_alerts_fixture_rejects_missing_table():
 def test_validate_security_alerts_fixture_rejects_empty_table():
     client = _SecurityAlertsClient(count=0)
     assert (
-        runner._validate_security_alerts_fixture(client, table_exists=_security_alerts_table_exists)
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
         is False
     )
 
@@ -445,7 +452,9 @@ def test_validate_security_alerts_fixture_rejects_sparse_table():
     """count > 0 but below MIN_SECURITY_ALERTS threshold."""
     client = _SecurityAlertsClient(count=runner.MIN_SECURITY_ALERTS - 1)
     assert (
-        runner._validate_security_alerts_fixture(client, table_exists=_security_alerts_table_exists)
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
         is False
     )
 
@@ -454,7 +463,9 @@ def test_validate_security_alerts_fixture_rejects_single_severity():
     """Table has rows but only one distinct severity — distribution is degenerate."""
     client = _SecurityAlertsClient(count=20, distinct_severities=1)
     assert (
-        runner._validate_security_alerts_fixture(client, table_exists=_security_alerts_table_exists)
+        runner._validate_security_alerts_fixture(
+            client, table_exists=_security_alerts_table_exists
+        )
         is False
     )
 

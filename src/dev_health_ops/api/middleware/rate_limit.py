@@ -19,7 +19,9 @@ except Exception:
 
 from dev_health_ops.api.services.auth import extract_token_from_header, get_auth_service
 
-AUTH_LOGIN_LIMIT = "5/15minutes"
+# AUTH_LOGIN_LIMIT ("5/15minutes") was removed — it counted successful logins and
+# incorrectly triggered 429 for legitimate users. The DB-backed login_attempts
+# lockout (login_attempts.py) is the correct primitive for failed-attempt limits.
 AUTH_LOGIN_IP_LIMIT = "20/15minutes"
 AUTH_REGISTER_LIMIT = "3/hour"
 AUTH_REFRESH_LIMIT = "10/15minutes"

@@ -327,9 +327,13 @@ async def test_timeseries_file_scope_skips_repo_label_join() -> None:
     """
     ctx = _ctx()
     columns = [
-        "day", "repo_id", "file_path",
-        "cyclomatic_total", "cyclomatic_avg",
-        "high_complexity_functions", "very_high_complexity_functions",
+        "day",
+        "repo_id",
+        "file_path",
+        "cyclomatic_total",
+        "cyclomatic_avg",
+        "high_complexity_functions",
+        "very_high_complexity_functions",
     ]
     _setup_client(
         ctx.client,
@@ -349,6 +353,7 @@ async def test_timeseries_file_scope_skips_repo_label_join() -> None:
         f"FILE-scope made {ctx.client.query.call_count} ClickHouse queries; "
         "expected 1 (no repo-label join)."
     )
+
 
 # ---------------------------------------------------------------------------
 # complexityTimeseries — WEEK granularity

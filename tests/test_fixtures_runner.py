@@ -433,7 +433,9 @@ def test_validate_security_alerts_fixture_accepts_populated_state():
 def test_validate_security_alerts_fixture_rejects_missing_table():
     client = _SecurityAlertsClient()
     assert (
-        runner._validate_security_alerts_fixture(client, table_exists=lambda name: False)
+        runner._validate_security_alerts_fixture(
+            client, table_exists=lambda name: False
+        )
         is False
     )
 
@@ -468,6 +470,7 @@ def test_validate_security_alerts_fixture_rejects_single_severity():
         )
         is False
     )
+
 
 class TestGenerateUsersRespectsOrgId:
     """Regression: ``generate_users(org_id=...)`` MUST stamp the supplied org_id

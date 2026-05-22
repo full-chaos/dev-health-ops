@@ -1337,6 +1337,7 @@ def _validate_security_alerts_fixture(client: Any, *, table_exists) -> bool:
     )
     return True
 
+
 def run_fixtures_validation(ns: argparse.Namespace) -> int:
     """Validate that fixture data is sufficient for work graph and investment."""
     import clickhouse_connect

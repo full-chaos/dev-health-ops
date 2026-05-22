@@ -423,15 +423,16 @@ linear issues update CHAOS-123 --state "Done"
 
 ---
 
-## 11. Pre-push hook (lefthook + ruff)
+## 11. Pre-commit + pre-push hooks (lefthook + ruff)
 
-A lefthook-based pre-push hook auto-formats and auto-lints changed Python files
-in the working tree, then gates the push on the clean check commands.
-This mirrors exactly what CI runs (`ruff format --check .` and `ruff check .`).
+Lefthook drives two hooks that together match what CI enforces
+(`ruff format --check .` and `ruff check .`):
 
-> **Note:** `stage_fixed: true` is a lefthook pre-commit-only feature.
-> In pre-push context it is a no-op — fixes land in the working tree but are
-> not auto-staged. Commit the working-tree changes manually (see workflow below).
+- **pre-commit** auto-fixes formatting and lint on staged `.py` files and
+  re-stages the fixes (`stage_fixed: true`). The resulting commit is clean.
+- **pre-push** is a final gate: `ruff format --check` + `ruff check` on the
+  files being pushed. No auto-fix here — pre-push cannot modify the commits
+  it's gating, so blocking with an instruction is the only correct shape.
 
 ### One-time install
 
@@ -443,7 +444,8 @@ pip install -r requirements.txt
 lefthook install
 ```
 
-`lefthook install` writes the hook into `.git/hooks/pre-push`.
+`lefthook install` writes hooks into `.git/hooks/pre-commit` and
+`.git/hooks/pre-push`.
 
 ### Worktree note
 
@@ -460,32 +462,31 @@ If `lefthook install` (without `--force`) warns about `core.hooksPath`, add `--f
 
 ### Hook behaviour
 
-On every `git push`, for each `.py` file in the set of commits being pushed:
+**pre-commit** (on every `git commit`, for staged `.py` files):
 
-| Step | Command | What it does |
-|------|---------|--------------|
-| 1 | `ruff format {push_files}` | Auto-formats `.py` files in the working tree |
-| 2 | `ruff check --fix {push_files}` | Auto-fixes lint issues in the working tree |
-| 3 | `ruff format --check {push_files}` | **Gate**: fails if formatting issues remain |
-| 4 | `ruff check {push_files}` | **Gate**: fails if unfixable lint issues remain |
+| Step | Command | Behaviour |
+|------|---------|-----------|
+| 1 | `ruff format {staged_files}` | Auto-formats + re-stages |
+| 2 | `ruff check --fix {staged_files}` | Auto-fixes lint issues + re-stages |
 
-Steps 1–4 run in parallel (`parallel: true`). When files need fixing, the gate
-commands (3–4) will fail and block the push. The auto-fixes (1–2) modify the
-working tree; stage and re-push:
+**pre-push** (on every `git push`, for `.py` files in commits being pushed):
 
-```bash
-git add -p               # review ruff's auto-fixes
-git commit --amend --no-edit   # or: git commit -m 'fix: ruff auto-format'
-git push
-```
+| Step | Command | Behaviour |
+|------|---------|-----------|
+| 1 | `ruff format --check {push_files}` | **Gate**: blocks if formatting issues remain |
+| 2 | `ruff check {push_files}` | **Gate**: blocks if lint issues remain |
+
+If pre-push blocks you, the failure message tells you exactly what to run
+(`ruff format .` or `ruff check --fix .`), then commit and re-push.
 
 ### Escape hatch
 
 ```bash
-git push --no-verify   # skip the hook entirely (use sparingly)
+git commit --no-verify   # skip pre-commit (use sparingly, e.g. WIP)
+git push --no-verify     # skip pre-push (emergency pushes)
 ```
 
 ### No ruff config changes
 
-The hook uses the existing `[tool.ruff]` settings from `pyproject.toml`.
+The hooks use the existing `[tool.ruff]` settings from `pyproject.toml`.
 Do not add new rules or exclusions to satisfy the hook — fix the code instead.

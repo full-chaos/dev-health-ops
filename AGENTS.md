@@ -307,10 +307,11 @@ Explanation format:
   ```bash
   git checkout -b <type>/<descriptive-name>  # e.g., fix/password-hashing, feat/oauth-sso
   ```
-* **Use git worktrees for parallel work** — When starting a new feature or unrelated task, use a worktree:
+* **Use git worktrees for parallel work** — When starting a new feature or unrelated task, create the worktree under this repo's `.worktrees/` directory:
   ```bash
-  git worktree add ../dev-health-ops-feature-name feature/branch-name
+  git worktree add .worktrees/<branch-or-task-name> <branch-name>
   ```
+  Do not create ops worktrees as siblings of `ops/` or at the platform root.
   This keeps each task isolated, preventing cross-contamination of changes.
 * Prefer **minimal, surgical** changes.
 * Keep surrounding style; use targeted edits.

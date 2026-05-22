@@ -90,10 +90,13 @@ jobs:
     name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
     continue-on-error: true
-    # Gitleaks needs security-events write access to upload findings.
+    # Gitleaks needs:
+    #   - security-events: write — upload SARIF findings to code-scanning
+    #   - pull-requests: write — post the scan summary comment on the PR
     permissions:
       contents: read
       security-events: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

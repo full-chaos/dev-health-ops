@@ -42,6 +42,11 @@ CLICKHOUSE_URI="clickhouse://localhost:8123/default" dev-hops fixtures generate 
 
 ### Migrations
 
+Use `migrate clickhouse repair` when ClickHouse contains duplicate `repos`
+records for the same repository `id` across different `org_id`s (typically
+from running fixtures or syncs under a changed `--org`). The command previews
+by default and only deletes rows when `--apply` is passed.
+
 ```bash
 # PostgreSQL (Alembic) — users, orgs, settings
 dev-hops migrate postgres
@@ -53,8 +58,12 @@ dev-hops migrate postgres history          # show migration history
 dev-hops migrate clickhouse
 dev-hops migrate clickhouse upgrade        # same as above
 dev-hops migrate clickhouse status         # show applied/pending migrations
-dev-hops migrate clickhouse repair         # dry-run: find stale-tenant orphan rows in repos
-dev-hops migrate clickhouse repair --apply # actually delete the orphans (see CHAOS-1775/1776)
+
+# Repair stale duplicate rows in `repos` (different org_id, same id)
+dev-hops migrate clickhouse repair                   # dry-run; no writes
+dev-hops migrate clickhouse repair --org <uuid>      # dry-run scoped to one org
+dev-hops migrate clickhouse repair --apply           # delete the rows shown by dry-run
+dev-hops migrate clickhouse repair --apply --org <uuid>
 ```
 
 > Run both migration commands after setting up a fresh environment, before any sync or metrics commands.

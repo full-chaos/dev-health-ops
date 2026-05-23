@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dev_health_ops.cli import build_parser
+from dev_health_ops.cli import _should_resolve_org, build_parser
 from dev_health_ops.migrate import (
     _run_clickhouse_repair,
     _run_clickhouse_status,
@@ -75,6 +75,46 @@ class TestMigrateRouting:
     def test_clickhouse_bare_defaults_to_upgrade(self):
         ns = self.parser.parse_args(["migrate", "clickhouse"])
         assert ns.func.__name__ == "_run_clickhouse_upgrade"
+
+    def test_repair_preserves_root_org_flag(self):
+        ns = self.parser.parse_args(
+            [
+                "--org",
+                "root-org",
+                "migrate",
+                "clickhouse",
+                "repair",
+            ]
+        )
+
+        assert ns.org == "root-org"
+        assert not _should_resolve_org(ns)
+
+    def test_repair_leaf_org_flag_scopes_repair(self):
+        ns = self.parser.parse_args(
+            [
+                "migrate",
+                "clickhouse",
+                "repair",
+                "--org",
+                "leaf-org",
+            ]
+        )
+
+        assert ns.org == "leaf-org"
+        assert not _should_resolve_org(ns)
+
+    def test_repair_without_org_does_not_auto_resolve_first_org(self):
+        ns = self.parser.parse_args(["migrate", "clickhouse", "repair"])
+
+        assert getattr(ns, "org", None) is None
+        assert not _should_resolve_org(ns)
+
+    def test_non_repair_command_without_org_still_auto_resolves(self):
+        ns = self.parser.parse_args(["migrate", "clickhouse", "status"])
+
+        assert getattr(ns, "org", None) is None
+        assert _should_resolve_org(ns)
 
     def test_upgrade_flat_defaults_to_head(self):
         ns = self.parser.parse_args(["migrate", "upgrade"])
@@ -278,15 +318,15 @@ class TestClickhouseStatus:
 
 
 # ---------------------------------------------------------------------------
-# _run_clickhouse_repair  (CHAOS-1776)
+# _run_clickhouse_repair
 # ---------------------------------------------------------------------------
 
 
 class TestClickhouseRepair:
-    def _make_client(self, orphan_rows: list | None = None) -> MagicMock:
+    def _make_client(self, stale_rows: list | None = None) -> MagicMock:
         mock_client = MagicMock()
         result = MagicMock()
-        result.result_rows = orphan_rows or []
+        result.result_rows = stale_rows or []
         mock_client.query.return_value = result
         return mock_client
 
@@ -299,14 +339,14 @@ class TestClickhouseRepair:
         "dev_health_ops.migrate.resolve_sink_uri",
         return_value="clickhouse://fake:8123/test",
     )
-    def test_no_orphans_prints_clean_message(self, _uri, capsys):
-        mock_client = self._make_client(orphan_rows=[])
+    def test_no_stale_duplicates_prints_clean_message(self, _uri, capsys):
+        mock_client = self._make_client(stale_rows=[])
 
         with patch("clickhouse_connect.get_client", return_value=mock_client):
             result = _run_clickhouse_repair(self._ns_repair())
 
         assert result == 0
-        assert "No stale-tenant orphans found in repos." in capsys.readouterr().out
+        assert "No stale duplicate rows found in repos." in capsys.readouterr().out
         # Detection-only path — no ALTER TABLE DELETE.
         mock_client.command.assert_not_called()
         mock_client.close.assert_called_once()
@@ -315,9 +355,25 @@ class TestClickhouseRepair:
         "dev_health_ops.migrate.resolve_sink_uri",
         return_value="clickhouse://fake:8123/test",
     )
+    def test_org_scoped_empty_message_names_scope(self, _uri, capsys):
+        mock_client = self._make_client(stale_rows=[])
+
+        with patch("clickhouse_connect.get_client", return_value=mock_client):
+            result = _run_clickhouse_repair(self._ns_repair(org="my-org-uuid"))
+
+        assert result == 0
+        assert (
+            "No stale duplicate rows found where the newest row belongs to org "
+            "my-org-uuid."
+        ) in capsys.readouterr().out
+
+    @patch(
+        "dev_health_ops.migrate.resolve_sink_uri",
+        return_value="clickhouse://fake:8123/test",
+    )
     def test_dry_run_does_not_delete(self, _uri, capsys):
-        """Default invocation prints orphans but issues no ALTER TABLE DELETE."""
-        orphan_rows = [
+        """Default invocation prints stale duplicate rows but issues no ALTER TABLE DELETE."""
+        stale_rows = [
             (
                 "e50b01bd-47a3-50e7-a9b4-d29a95bfdb07",
                 "acme/demo-app-1",
@@ -327,18 +383,18 @@ class TestClickhouseRepair:
                 datetime(2026, 5, 22),
             ),
         ]
-        mock_client = self._make_client(orphan_rows=orphan_rows)
+        mock_client = self._make_client(stale_rows=stale_rows)
 
         with patch("clickhouse_connect.get_client", return_value=mock_client):
             result = _run_clickhouse_repair(self._ns_repair())
 
         assert result == 0
         out = capsys.readouterr().out
-        assert "Found 1 stale-tenant orphan row(s) in repos" in out
+        assert "Found 1 stale duplicate row(s) in repos" in out
         assert "acme/demo-app-1" in out
         assert "stale-org" in out
         assert "active-org" in out
-        assert "Dry-run: pass --apply to delete these orphan rows." in out
+        assert "Dry-run: pass --apply to delete these stale duplicate rows." in out
         # No DELETE issued in dry-run.
         mock_client.command.assert_not_called()
         mock_client.close.assert_called_once()
@@ -347,8 +403,8 @@ class TestClickhouseRepair:
         "dev_health_ops.migrate.resolve_sink_uri",
         return_value="clickhouse://fake:8123/test",
     )
-    def test_apply_issues_delete_per_orphan(self, _uri, capsys):
-        orphan_rows = [
+    def test_apply_issues_delete_per_stale_row(self, _uri, capsys):
+        stale_rows = [
             (
                 "e50b01bd-47a3-50e7-a9b4-d29a95bfdb07",
                 "acme/demo-app-1",
@@ -366,7 +422,7 @@ class TestClickhouseRepair:
                 datetime(2026, 5, 22),
             ),
         ]
-        mock_client = self._make_client(orphan_rows=orphan_rows)
+        mock_client = self._make_client(stale_rows=stale_rows)
 
         with patch("clickhouse_connect.get_client", return_value=mock_client):
             result = _run_clickhouse_repair(self._ns_repair(apply=True))
@@ -389,7 +445,7 @@ class TestClickhouseRepair:
             assert kwargs["parameters"] == {"id": expected[0], "org": expected[1]}
 
         out = capsys.readouterr().out
-        assert "Deleted 2 stale-tenant row(s) from repos." in out
+        assert "Deleted 2 stale duplicate row(s) from repos." in out
         mock_client.close.assert_called_once()
 
     @patch(
@@ -397,7 +453,7 @@ class TestClickhouseRepair:
         return_value="clickhouse://fake:8123/test",
     )
     def test_org_filter_passes_param_to_detect_query(self, _uri):
-        mock_client = self._make_client(orphan_rows=[])
+        mock_client = self._make_client(stale_rows=[])
 
         with patch("clickhouse_connect.get_client", return_value=mock_client):
             _run_clickhouse_repair(self._ns_repair(org="my-org-uuid"))
@@ -414,7 +470,7 @@ class TestClickhouseRepair:
         return_value="clickhouse://fake:8123/test",
     )
     def test_no_org_filter_omits_clause(self, _uri):
-        mock_client = self._make_client(orphan_rows=[])
+        mock_client = self._make_client(stale_rows=[])
 
         with patch("clickhouse_connect.get_client", return_value=mock_client):
             _run_clickhouse_repair(self._ns_repair())

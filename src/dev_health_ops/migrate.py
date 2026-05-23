@@ -15,9 +15,6 @@ import argparse
 import logging
 from pathlib import Path
 
-from alembic import command
-from alembic.config import Config
-
 from dev_health_ops.db import get_postgres_uri, resolve_sink_uri
 
 logger = logging.getLogger(__name__)
@@ -27,8 +24,10 @@ logger = logging.getLogger(__name__)
 _ALEMBIC_DIR = Path(__file__).resolve().parent / "alembic"
 
 
-def _make_alembic_config(db_url: str | None = None) -> Config:
+def _make_alembic_config(db_url: str | None = None):
     """Build an Alembic ``Config`` programmatically."""
+    from alembic.config import Config
+
     cfg = Config()
     cfg.set_main_option("script_location", str(_ALEMBIC_DIR))
 
@@ -43,30 +42,40 @@ def _make_alembic_config(db_url: str | None = None) -> Config:
 
 
 def _run_upgrade(ns: argparse.Namespace) -> int:
+    from alembic import command
+
     cfg = _make_alembic_config(getattr(ns, "db", None))
     command.upgrade(cfg, ns.revision)
     return 0
 
 
 def _run_downgrade(ns: argparse.Namespace) -> int:
+    from alembic import command
+
     cfg = _make_alembic_config(getattr(ns, "db", None))
     command.downgrade(cfg, ns.revision)
     return 0
 
 
 def _run_current(ns: argparse.Namespace) -> int:
+    from alembic import command
+
     cfg = _make_alembic_config(getattr(ns, "db", None))
     command.current(cfg, verbose=ns.verbose)
     return 0
 
 
 def _run_history(ns: argparse.Namespace) -> int:
+    from alembic import command
+
     cfg = _make_alembic_config(getattr(ns, "db", None))
     command.history(cfg, verbose=ns.verbose)
     return 0
 
 
 def _run_heads(ns: argparse.Namespace) -> int:
+    from alembic import command
+
     cfg = _make_alembic_config(getattr(ns, "db", None))
     command.heads(cfg, verbose=ns.verbose)
     return 0
@@ -132,17 +141,17 @@ def _run_clickhouse_status(ns: argparse.Namespace) -> int:
     return 0
 
 
-# --- ClickHouse repair (stale-tenant orphan rows in `repos`) ----------------
+# --- ClickHouse repair (stale duplicate rows in `repos`) ----------------
 
 # Background: ``repos`` is ``ReplacingMergeTree(last_synced)`` ordered by
-# ``(org_id, id)``. Prior to CHAOS-1775, ``ClickHouseStore.insert_repo``
+# ``(org_id, id)``. Earlier ``ClickHouseStore.insert_repo`` behavior
 # short-circuited on existing rows, so re-running ``fixtures generate`` (or any
 # sync) under a different ``--org`` left the table with multiple rows for the
-# same ``id`` under different ``org_id`` values. Those orphan rows are harmless
-# (a non-existent tenant cannot read them) but clutter the table.
+# same ``id`` under different ``org_id`` values. Older rows are stale duplicates
+# that clutter the table.
 #
 # This repair identifies, per ``id``, the row with the newest ``last_synced``
-# as the *active* tenant row; every other ``(id, org_id)`` row is an orphan.
+# as the newest repository row; every other ``(id, org_id)`` row is stale.
 
 _REPAIR_DETECT_QUERY = """
 WITH latest AS (
@@ -170,11 +179,11 @@ ORDER BY r.repo, r.org_id
 
 
 def _run_clickhouse_repair(ns: argparse.Namespace) -> int:
-    """Find (and optionally delete) stale-tenant orphan rows in ``repos``.
+    """Find (and optionally delete) stale duplicate rows in ``repos``.
 
     Dry-run by default. Pass ``--apply`` to issue ``ALTER TABLE repos DELETE``
-    for each orphan. Optional ``--org`` scopes the repair to orphans whose
-    active tenant is that org_id; orphans of other tenants are untouched.
+    for each stale duplicate row. Optional ``--org`` scopes the repair to
+    duplicate groups whose newest repository row belongs to that org_id.
     """
     import clickhouse_connect
 
@@ -194,17 +203,23 @@ def _run_clickhouse_repair(ns: argparse.Namespace) -> int:
     client = clickhouse_connect.get_client(dsn=uri)
     try:
         result = client.query(detect_query, parameters=params)
-        orphans = list(result.result_rows or [])
+        stale_rows = list(result.result_rows or [])
 
-        if not orphans:
-            print("No stale-tenant orphans found in repos.")
+        if not stale_rows:
+            if org_filter_value:
+                print(
+                    f"No stale duplicate rows found where the newest row "
+                    f"belongs to org {org_filter_value}."
+                )
+            else:
+                print("No stale duplicate rows found in repos.")
             return 0
 
-        print(f"Found {len(orphans)} stale-tenant orphan row(s) in repos:")
+        print(f"Found {len(stale_rows)} stale duplicate row(s) in repos:")
         print()
         header = ("repo", "stale_org_id", "active_org_id", "stale_last_synced")
         print(f"  {header[0]:<40s}  {header[1]:<40s}  {header[2]:<40s}  {header[3]}")
-        for row in orphans:
+        for row in stale_rows:
             (_id, repo, stale_org, active_org, stale_ts, _active_ts) = row
             print(
                 f"  {str(repo):<40s}  {str(stale_org):<40s}  "
@@ -213,12 +228,12 @@ def _run_clickhouse_repair(ns: argparse.Namespace) -> int:
         print()
 
         if not apply:
-            print("Dry-run: pass --apply to delete these orphan rows.")
+            print("Dry-run: pass --apply to delete these stale duplicate rows.")
             return 0
 
-        print("Applying ALTER TABLE repos DELETE per orphan...")
+        print("Applying ALTER TABLE repos DELETE for each stale duplicate row...")
         deleted = 0
-        for row in orphans:
+        for row in stale_rows:
             (id_str, _repo, stale_org, _active_org, _stale_ts, _active_ts) = row
             client.command(
                 "ALTER TABLE repos DELETE "
@@ -228,7 +243,7 @@ def _run_clickhouse_repair(ns: argparse.Namespace) -> int:
             )
             deleted += 1
 
-        print(f"Deleted {deleted} stale-tenant row(s) from repos.")
+        print(f"Deleted {deleted} stale duplicate row(s) from repos.")
     finally:
         client.close()
     return 0
@@ -277,21 +292,20 @@ def _register_clickhouse_subcommands(
     ch_repair = sub.add_parser(
         "repair",
         help=(
-            "Find (or with --apply, delete) stale-tenant orphan rows in repos "
-            "(see CHAOS-1775). Dry-run by default."
+            "Remediate stale duplicate rows in repos. Dry-run unless --apply is passed."
         ),
     )
     ch_repair.add_argument(
         "--apply",
         action="store_true",
-        help="Delete orphan rows. Without this flag, repair is a dry-run.",
+        help="Apply the repair by deleting the stale duplicate rows shown in the dry-run preview.",
     )
     ch_repair.add_argument(
         "--org",
-        default=None,
+        default=argparse.SUPPRESS,
         help=(
-            "Scope repair to orphans whose active tenant is this org_id. "
-            "Without this flag, every tenant's orphans are reported/repaired."
+            "Only include duplicate groups whose newest repository row belongs "
+            "to this org_id. Without this flag, all orgs are checked."
         ),
     )
     ch_repair.set_defaults(func=_run_clickhouse_repair)

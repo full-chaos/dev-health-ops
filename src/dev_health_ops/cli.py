@@ -74,10 +74,21 @@ def _resolve_first_org_id(db_url: str | None) -> str | None:
         return None
 
 
-async def _run_refresh_token_cleanup() -> int:
-    from dev_health_ops.api.services.refresh_tokens import cleanup_expired
-    from dev_health_ops.db import get_postgres_session
+def get_postgres_session():
+    from dev_health_ops.db import get_postgres_session as real_get_postgres_session
 
+    return real_get_postgres_session()
+
+
+async def cleanup_expired(db) -> int:
+    from dev_health_ops.api.services.refresh_tokens import (
+        cleanup_expired as real_cleanup_expired,
+    )
+
+    return await real_cleanup_expired(db)
+
+
+async def _run_refresh_token_cleanup() -> int:
     async with get_postgres_session() as db:
         deleted_count = await cleanup_expired(db)
         await db.commit()

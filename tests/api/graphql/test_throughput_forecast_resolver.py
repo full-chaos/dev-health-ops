@@ -1,9 +1,12 @@
 """Tests for the throughput-forecast GraphQL resolver (CHAOS-1783).
 
-Covers two behaviours added by the capacity-planning UX fix:
+Covers behaviours added by the capacity-planning UX fix:
 
-* When ``ThroughputForecastInput.team_id`` is ``None`` the resolver
-  aggregates org-wide instead of falling back to sample data.
+* When ``ThroughputForecastInput.team_ids`` is ``None`` or empty the
+  resolver aggregates org-wide instead of falling back to sample data.
+* When ``team_ids`` contains multiple ids the resolver aggregates across
+  the selected teams (single team scopes are a special case of the
+  multi-team path).
 * When ``ThroughputForecastInput.backlog_size`` is ``None`` the resolver
   derives the backlog from the latest ``work_item_metrics_daily`` rows
   matching the same scope.
@@ -65,6 +68,20 @@ def _result(team_id: str | None, backlog_size: int) -> ThroughputForecastResult:
     )
 
 
+def _history(team_id: str | None = None) -> ThroughputHistory:
+    return ThroughputHistory(
+        [
+            ThroughputSample(
+                day=date(2026, 5, i + 1),
+                items_completed=5,
+                team_id=team_id,
+                work_scope_id=None,
+            )
+            for i in range(14)
+        ]
+    )
+
+
 @pytest.fixture
 def ctx():
     c = MagicMock()
@@ -74,32 +91,18 @@ def ctx():
 
 
 @pytest.mark.asyncio
-async def test_resolver_aggregates_org_wide_when_team_id_is_none(ctx):
-    """``team_id=None`` must NOT short-circuit to None or sample data."""
+async def test_resolver_aggregates_org_wide_when_team_ids_is_none(ctx):
+    """``team_ids=None`` must NOT short-circuit to None or sample data."""
     from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
     from dev_health_ops.api.graphql.resolvers.forecast import (
         resolve_throughput_forecast,
     )
 
-    history = ThroughputHistory(
-        [
-            ThroughputSample(
-                day=date(2026, 5, i + 1),
-                items_completed=5,
-                team_id=None,
-                work_scope_id=None,
-            )
-            for i in range(14)
-        ]
-    )
-
-    fake_result = _result(team_id=None, backlog_size=42)
-
     with (
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
             new_callable=AsyncMock,
-            return_value=history,
+            return_value=_history(),
         ),
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
@@ -123,18 +126,122 @@ async def test_resolver_aggregates_org_wide_when_team_id_is_none(ctx):
         ) as load_backlog,
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
-            return_value=fake_result,
+            return_value=_result(team_id=None, backlog_size=42),
         ),
     ):
-        result = await resolve_throughput_forecast(
-            ctx,
-            ThroughputForecastInput(),  # no team_id, no backlog_size
-        )
+        result = await resolve_throughput_forecast(ctx, ThroughputForecastInput())
 
     assert result is not None
     assert result.team_id is None
     assert result.backlog_size == 42
-    load_backlog.assert_awaited_once_with(ctx, team_id=None, work_scope_id=None)
+    load_backlog.assert_awaited_once_with(ctx, team_ids=None, work_scope_id=None)
+
+
+@pytest.mark.asyncio
+async def test_resolver_aggregates_multi_team_selection(ctx):
+    """Multi-team ``team_ids`` must NOT collapse to one team's data."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=_history(),
+        ) as load_history,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
+            new_callable=AsyncMock,
+            return_value=(0.0, 0.0),
+        ) as load_wip,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_incident_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=84,
+        ) as load_backlog,
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
+            return_value=_result(team_id=None, backlog_size=84),
+        ),
+    ):
+        result = await resolve_throughput_forecast(
+            ctx,
+            ThroughputForecastInput(team_ids=["team-1", "team-2"]),
+        )
+
+    assert result is not None
+    # Multi-team scope: result's team_id stays None (aggregated across teams).
+    assert result.team_id is None
+    assert result.backlog_size == 84
+    # Every loader receives the FULL list, not just the first id.
+    load_history.assert_awaited_once_with(
+        ctx, team_ids=["team-1", "team-2"], work_scope_id=None, history_weeks=12
+    )
+    load_wip.assert_awaited_once_with(
+        ctx, team_ids=["team-1", "team-2"], work_scope_id=None, history_weeks=12
+    )
+    load_backlog.assert_awaited_once_with(
+        ctx, team_ids=["team-1", "team-2"], work_scope_id=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_single_team_sets_result_team_id(ctx):
+    """Single-team scope echoes the team id back on the result."""
+    from dev_health_ops.api.graphql.models.inputs import ThroughputForecastInput
+    from dev_health_ops.api.graphql.resolvers.forecast import (
+        resolve_throughput_forecast,
+    )
+
+    with (
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
+            new_callable=AsyncMock,
+            return_value=_history(team_id="team-a"),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
+            new_callable=AsyncMock,
+            return_value=(0.0, 0.0),
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_review_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_incident_overlay",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast._load_backlog",
+            new_callable=AsyncMock,
+            return_value=40,
+        ),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
+            return_value=_result(team_id="team-a", backlog_size=40),
+        ),
+    ):
+        result = await resolve_throughput_forecast(
+            ctx, ThroughputForecastInput(team_ids=["team-a"])
+        )
+
+    assert result is not None
+    assert result.team_id == "team-a"
 
 
 @pytest.mark.asyncio
@@ -145,25 +252,11 @@ async def test_resolver_skips_backlog_query_when_caller_provides_size(ctx):
         resolve_throughput_forecast,
     )
 
-    history = ThroughputHistory(
-        [
-            ThroughputSample(
-                day=date(2026, 5, i + 1),
-                items_completed=3,
-                team_id="team-a",
-                work_scope_id=None,
-            )
-            for i in range(14)
-        ]
-    )
-
-    fake_result = _result(team_id="team-a", backlog_size=99)
-
     with (
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_throughput_history",
             new_callable=AsyncMock,
-            return_value=history,
+            return_value=_history(team_id="team-a"),
         ),
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast._load_work_item_overlay",
@@ -186,11 +279,11 @@ async def test_resolver_skips_backlog_query_when_caller_provides_size(ctx):
         ) as load_backlog,
         patch(
             "dev_health_ops.api.graphql.resolvers.forecast.forecast_throughput_capacity",
-            return_value=fake_result,
+            return_value=_result(team_id="team-a", backlog_size=99),
         ),
     ):
         result = await resolve_throughput_forecast(
-            ctx, ThroughputForecastInput(team_id="team-a", backlog_size=99)
+            ctx, ThroughputForecastInput(team_ids=["team-a"], backlog_size=99)
         )
 
     assert result is not None
@@ -200,7 +293,7 @@ async def test_resolver_skips_backlog_query_when_caller_provides_size(ctx):
 
 
 @pytest.mark.asyncio
-async def test_load_backlog_sums_across_partitions_when_team_id_is_none(ctx):
+async def test_load_backlog_omits_team_clause_when_team_ids_empty(ctx):
     """``_load_backlog`` must aggregate the latest day across all teams."""
     from dev_health_ops.api.graphql.resolvers.forecast import _load_backlog
 
@@ -209,12 +302,58 @@ async def test_load_backlog_sums_across_partitions_when_team_id_is_none(ctx):
         new_callable=AsyncMock,
         return_value=[{"backlog": 137}],
     ) as query:
-        backlog = await _load_backlog(ctx, team_id=None, work_scope_id=None)
+        backlog = await _load_backlog(ctx, team_ids=None, work_scope_id=None)
 
     assert backlog == 137
-    # No team_id / work_scope_id should appear in params when both are None.
     call_args = query.await_args
     assert call_args is not None
     params = call_args.args[2]
     assert "team_id" not in params
+    assert "team_ids" not in params
     assert "work_scope_id" not in params
+
+
+@pytest.mark.asyncio
+async def test_load_backlog_uses_in_clause_for_multiple_teams(ctx):
+    """Multi-team scope must produce an ``IN`` clause with an Array param."""
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_backlog
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"backlog": 84}],
+    ) as query:
+        backlog = await _load_backlog(
+            ctx, team_ids=["team-1", "team-2"], work_scope_id=None
+        )
+
+    assert backlog == 84
+    call_args = query.await_args
+    assert call_args is not None
+    sql = call_args.args[1]
+    params = call_args.args[2]
+    assert "team_id IN {team_ids:Array(String)}" in sql
+    assert params["team_ids"] == ["team-1", "team-2"]
+    assert "team_id" not in params
+
+
+@pytest.mark.asyncio
+async def test_load_backlog_uses_equality_for_single_team(ctx):
+    """Single-team scope must still use ``team_id =``, not ``IN``."""
+    from dev_health_ops.api.graphql.resolvers.forecast import _load_backlog
+
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.forecast.query_dicts",
+        new_callable=AsyncMock,
+        return_value=[{"backlog": 40}],
+    ) as query:
+        backlog = await _load_backlog(ctx, team_ids=["team-a"], work_scope_id=None)
+
+    assert backlog == 40
+    call_args = query.await_args
+    assert call_args is not None
+    sql = call_args.args[1]
+    params = call_args.args[2]
+    assert "team_id = {team_id:String}" in sql
+    assert params["team_id"] == "team-a"
+    assert "team_ids" not in params

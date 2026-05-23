@@ -321,17 +321,18 @@ class CapacityForecastFilterInput:
 class ThroughputForecastInput:
     """Input for throughput-based capacity forecast computation.
 
-    ``team_id`` is optional: when omitted, the forecast aggregates org-wide
-    across all teams (CHAOS-1783). When provided, the forecast is scoped to
-    that single team.
+    ``team_ids`` is optional: when omitted or empty, the forecast aggregates
+    org-wide across all teams. When one or more team ids are supplied, the
+    forecast is scoped to that combined selection — backlog and throughput
+    are summed across the selected teams (CHAOS-1783 multi-team follow-up).
 
     ``backlog_size`` is optional: when omitted, the resolver derives the
     backlog from the latest ``work_item_metrics_daily`` rows that match the
-    same scope (CHAOS-1783). Callers may still pass an explicit value to
-    forecast hypothetical backlogs.
+    same scope. Callers may still pass an explicit value to forecast
+    hypothetical backlogs.
     """
 
-    team_id: str | None = None
+    team_ids: list[str] | None = None
     work_scope_id: str | None = None
     backlog_size: int | None = None
     history_weeks: int = 12

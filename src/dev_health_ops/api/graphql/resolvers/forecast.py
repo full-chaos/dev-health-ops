@@ -63,10 +63,30 @@ def _result_to_output(result: ThroughputForecastResult) -> ThroughputForecast:
     )
 
 
+def _team_filter(
+    team_ids: list[str] | None,
+    conditions: list[str],
+    params: dict[str, Any],
+) -> None:
+    """Append a team_id IN / = clause when ``team_ids`` is non-empty.
+
+    Mutates ``conditions`` and ``params`` in place to keep the call sites
+    terse. Empty/None means "no team filter" (org-wide).
+    """
+    if not team_ids:
+        return
+    if len(team_ids) == 1:
+        conditions.append("team_id = {team_id:String}")
+        params["team_id"] = team_ids[0]
+    else:
+        conditions.append("team_id IN {team_ids:Array(String)}")
+        params["team_ids"] = list(team_ids)
+
+
 async def _load_throughput_history(
     context: GraphQLContext,
     *,
-    team_id: str | None,
+    team_ids: list[str] | None,
     work_scope_id: str | None,
     history_weeks: int,
 ) -> ThroughputHistory:
@@ -76,9 +96,7 @@ async def _load_throughput_history(
         "start_date": start_date,
         "org_id": context.org_id,
     }
-    if team_id:
-        conditions.append("team_id = {team_id:String}")
-        params["team_id"] = team_id
+    _team_filter(team_ids, conditions, params)
     if work_scope_id:
         conditions.append("work_scope_id = {work_scope_id:String}")
         params["work_scope_id"] = work_scope_id
@@ -103,6 +121,9 @@ async def _load_throughput_history(
         """,
         params,
     )
+    # Result's per-sample team_id is informational only — for multi-team or
+    # all-teams scopes it stays None.
+    sample_team_id = team_ids[0] if team_ids and len(team_ids) == 1 else None
     return ThroughputHistory(
         [
             ThroughputSample(
@@ -110,7 +131,7 @@ async def _load_throughput_history(
                 if isinstance(row["day"], date)
                 else date.fromisoformat(str(row["day"])),
                 items_completed=int(row.get("items_completed") or 0),
-                team_id=team_id,
+                team_id=sample_team_id,
                 work_scope_id=work_scope_id,
             )
             for row in rows
@@ -121,7 +142,7 @@ async def _load_throughput_history(
 async def _load_work_item_overlay(
     context: GraphQLContext,
     *,
-    team_id: str | None,
+    team_ids: list[str] | None,
     work_scope_id: str | None,
     history_weeks: int,
 ) -> tuple[float, float]:
@@ -131,9 +152,7 @@ async def _load_work_item_overlay(
         "start_date": start_date,
         "org_id": context.org_id,
     }
-    if team_id:
-        conditions.append("team_id = {team_id:String}")
-        params["team_id"] = team_id
+    _team_filter(team_ids, conditions, params)
     if work_scope_id:
         conditions.append("work_scope_id = {work_scope_id:String}")
         params["work_scope_id"] = work_scope_id
@@ -197,22 +216,20 @@ async def _load_review_overlay(
 async def _load_backlog(
     context: GraphQLContext,
     *,
-    team_id: str | None,
+    team_ids: list[str] | None,
     work_scope_id: str | None,
 ) -> int:
     """Derive backlog size from latest ``work_item_metrics_daily`` rows.
 
     Sums ``wip_count_end_of_day`` across the latest day for every team and
-    scope partition that matches the filter. When ``team_id`` is None this
-    yields an org-wide rollup; when set, it yields the team's backlog.
-    Mirrors the contract of ``metrics.job_capacity.get_backlog_from_sink``
-    but corrects its all-teams aggregation (CHAOS-1783).
+    scope partition that matches the filter. With no team filter this
+    yields an org-wide rollup; with one team it yields that team's
+    backlog; with multiple teams it sums their backlogs (CHAOS-1783
+    multi-team follow-up).
     """
     conditions: list[str] = []
     params: dict[str, Any] = {"org_id": context.org_id}
-    if team_id:
-        conditions.append("team_id = {team_id:String}")
-        params["team_id"] = team_id
+    _team_filter(team_ids, conditions, params)
     if work_scope_id:
         conditions.append("work_scope_id = {work_scope_id:String}")
         params["work_scope_id"] = work_scope_id
@@ -275,9 +292,15 @@ async def resolve_throughput_forecast(
     if context.client is None:
         raise RuntimeError("Database client not available")
 
+    # Single-team scopes still set team_id on the result so the UI can
+    # display the scope; multi-team and all-teams scopes leave it None.
+    result_team_id = (
+        input.team_ids[0] if input.team_ids and len(input.team_ids) == 1 else None
+    )
+
     history = await _load_throughput_history(
         context,
-        team_id=input.team_id,
+        team_ids=input.team_ids,
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,
     )
@@ -286,7 +309,7 @@ async def resolve_throughput_forecast(
 
     current_wip, average_wip = await _load_work_item_overlay(
         context,
-        team_id=input.team_id,
+        team_ids=input.team_ids,
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,
     )
@@ -302,13 +325,13 @@ async def resolve_throughput_forecast(
     if backlog_size is None:
         backlog_size = await _load_backlog(
             context,
-            team_id=input.team_id,
+            team_ids=input.team_ids,
             work_scope_id=input.work_scope_id,
         )
     result = forecast_throughput_capacity(
         history=history,
         backlog_size=backlog_size,
-        team_id=input.team_id,
+        team_id=result_team_id,
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,
         current_wip=current_wip,

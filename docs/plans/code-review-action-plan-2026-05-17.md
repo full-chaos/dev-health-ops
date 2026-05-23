@@ -219,7 +219,7 @@ These were flagged in the review but couldn't be conclusively resolved without l
 
 - **First pass** (Sisyphus direct, grep + Read + LSP): 15 findings → CHAOS-1535 to CHAOS-1549.
 - **Deep dive** (Sisyphus direct, after 4 oracle agent attempts had output lost): 6 NEW findings → CHAOS-1550 to CHAOS-1555.
-- Tickets created via `linear i create` against the `CHAOS` team. All start in `Backlog` state, unassigned.
+- Tickets created via `linear-cli i create` against the `CHAOS` team. All start in `Backlog` state, unassigned.
 - No source files were modified during this review.
 
 ### Where this came from in the codebase

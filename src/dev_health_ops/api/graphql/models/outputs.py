@@ -475,11 +475,15 @@ class ThroughputRiskOverlay:
 
 @strawberry.type
 class ThroughputForecast:
-    """Throughput-based capacity forecast result."""
+    """Throughput-based capacity forecast result.
+
+    ``team_id`` is null when the forecast is computed org-wide (no team
+    scope; CHAOS-1783).
+    """
 
     forecast_id: str
     computed_at: str
-    team_id: str
+    team_id: str | None = None
     work_scope_id: str | None = None
     backlog_size: int
     history_weeks: int

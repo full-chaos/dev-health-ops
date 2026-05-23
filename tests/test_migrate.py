@@ -117,7 +117,7 @@ class TestRegisterCommands:
 class TestCommandDispatch:
     """Verify each _run_* function calls the correct alembic.command."""
 
-    @patch("dev_health_ops.migrate.command")
+    @patch("alembic.command")
     def test_run_upgrade(self, mock_cmd):
         ns = argparse.Namespace(db="sqlite:///x.db", revision="head")
         assert _run_upgrade(ns) == 0
@@ -125,7 +125,7 @@ class TestCommandDispatch:
         _cfg, rev = mock_cmd.upgrade.call_args[0]
         assert rev == "head"
 
-    @patch("dev_health_ops.migrate.command")
+    @patch("alembic.command")
     def test_run_downgrade(self, mock_cmd):
         ns = argparse.Namespace(db="sqlite:///x.db", revision="-1")
         assert _run_downgrade(ns) == 0
@@ -133,25 +133,25 @@ class TestCommandDispatch:
         _cfg, rev = mock_cmd.downgrade.call_args[0]
         assert rev == "-1"
 
-    @patch("dev_health_ops.migrate.command")
+    @patch("alembic.command")
     def test_run_current(self, mock_cmd):
         ns = argparse.Namespace(db="sqlite:///x.db", verbose=True)
         assert _run_current(ns) == 0
         mock_cmd.current.assert_called_once()
 
-    @patch("dev_health_ops.migrate.command")
+    @patch("alembic.command")
     def test_run_history(self, mock_cmd):
         ns = argparse.Namespace(db="sqlite:///x.db", verbose=False)
         assert _run_history(ns) == 0
         mock_cmd.history.assert_called_once()
 
-    @patch("dev_health_ops.migrate.command")
+    @patch("alembic.command")
     def test_run_heads(self, mock_cmd):
         ns = argparse.Namespace(db="sqlite:///x.db", verbose=False)
         assert _run_heads(ns) == 0
         mock_cmd.heads.assert_called_once()
 
-    @patch("dev_health_ops.migrate.command")
+    @patch("alembic.command")
     def test_upgrade_uses_db_from_namespace(self, mock_cmd):
         ns = argparse.Namespace(
             db="postgresql+asyncpg://custom@host/mydb", revision="abc123"
@@ -163,7 +163,7 @@ class TestCommandDispatch:
             == "postgresql+asyncpg://custom@host/mydb"
         )
 
-    @patch("dev_health_ops.migrate.command")
+    @patch("alembic.command")
     def test_upgrade_without_db_falls_back_to_env(self, mock_cmd, monkeypatch):
         monkeypatch.delenv("POSTGRES_URI", raising=False)
         monkeypatch.delenv("DATABASE_URL", raising=False)

@@ -385,11 +385,11 @@ If a `dev-health-ops` change affects `dev-health-web` rendering (e.g., API shape
 ### Quick Reference
 
 ```bash
-linear issues create "Task title" --team CHAOS --priority high
-linear issues list
-linear issues get CHAOS-123
-linear issues update CHAOS-123 --state "In Progress"
-linear issues update CHAOS-123 --state "Done"
+linear-cli issues create "Task title" --team CHAOS --priority high
+linear-cli issues list
+linear-cli issues get CHAOS-123
+linear-cli issues update CHAOS-123 --state "In Progress"
+linear-cli issues update CHAOS-123 --state "Done"
 ```
 
 ---

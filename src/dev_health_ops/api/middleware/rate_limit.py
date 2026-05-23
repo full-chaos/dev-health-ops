@@ -143,6 +143,19 @@ if Limiter is not None:
         key_func=get_forwarded_ip,
         storage_uri=_storage_uri,
     )
+else:
+    limiter = _NoOpLimiter()
+    LIMITER_BACKEND = "noop"
+
+
+def log_rate_limit_configuration() -> None:
+    """Emit deferred rate-limiter startup messages for real CLI/API runs."""
+    if Limiter is None:
+        _log.warning(
+            "slowapi not installed — rate limiting disabled (NoOp). "
+            "Acceptable for local development only."
+        )
+        return
     if _REDIS_URL:
         _log.info("Rate limiter using Redis storage: %s", _REDIS_URL[:20] + "...")
     else:
@@ -156,13 +169,6 @@ if Limiter is not None:
             "and rate limiting will key on TCP peer address only. "
             "Set TRUSTED_PROXIES (comma-separated IPs/CIDRs) when behind a load balancer."
         )
-else:
-    limiter = _NoOpLimiter()
-    LIMITER_BACKEND = "noop"
-    _log.warning(
-        "slowapi not installed — rate limiting disabled (NoOp). "
-        "Acceptable for local development only."
-    )
 
 
 def verify_rate_limit_config() -> None:

@@ -3,36 +3,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import inspect
+import io
 import logging
 import os
+import sys
 from pathlib import Path
-
-import dev_health_ops.api.billing.cli as billing_cli
-import dev_health_ops.backfill.cli as backfill_cli
-from dev_health_ops import migrate as migrate_mod
-from dev_health_ops.api import runner as api_runner
-from dev_health_ops.api.admin import cli as admin_cli
-from dev_health_ops.api.services.refresh_tokens import cleanup_expired
-from dev_health_ops.audit import completeness, coverage, perf, schema
-from dev_health_ops.db import get_postgres_session
-from dev_health_ops.fixtures import runner as fixtures_runner
-from dev_health_ops.metrics import (
-    job_capacity,
-    job_complexity_db,
-    job_compounding_risk,
-    job_daily,
-    job_dora,
-    job_ff_validation,
-    job_release_impact,
-    job_work_items,
-)
-
-# Runner and registration modules
-from dev_health_ops.processors import sync as sync_processor
-from dev_health_ops.providers import teams as teams_provider
-from dev_health_ops.work_graph import runner as work_graph_runner
-from dev_health_ops.workers import runner as workers_runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -98,6 +75,9 @@ def _resolve_first_org_id(db_url: str | None) -> str | None:
 
 
 async def _run_refresh_token_cleanup() -> int:
+    from dev_health_ops.api.services.refresh_tokens import cleanup_expired
+    from dev_health_ops.db import get_postgres_session
+
     async with get_postgres_session() as db:
         deleted_count = await cleanup_expired(db)
         await db.commit()
@@ -309,7 +289,58 @@ def _propagate_global_args_to_subparsers(parser: argparse.ArgumentParser) -> Non
     walk(parser)
 
 
+def _is_help_invocation(argv: list[str] | None) -> bool:
+    args = sys.argv[1:] if argv is None else argv
+    return any(arg in {"-h", "--help"} for arg in args)
+
+
+@contextlib.contextmanager
+def _suppress_parser_construction_noise():
+    previous_disable_level = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            yield
+    finally:
+        logging.disable(previous_disable_level)
+
+
+def _should_resolve_org(ns: argparse.Namespace) -> bool:
+    if getattr(ns, "org", None) is not None:
+        return False
+    return not (
+        getattr(ns, "command", None) == "migrate"
+        and getattr(ns, "migrate_command", None) == "clickhouse"
+        and getattr(ns, "ch_command", None) == "repair"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
+    import dev_health_ops.api.billing.cli as billing_cli
+    import dev_health_ops.backfill.cli as backfill_cli
+    from dev_health_ops import migrate as migrate_mod
+    from dev_health_ops.api import runner as api_runner
+    from dev_health_ops.api.admin import cli as admin_cli
+    from dev_health_ops.audit import completeness, coverage, perf, schema
+    from dev_health_ops.fixtures import runner as fixtures_runner
+    from dev_health_ops.metrics import (
+        job_capacity,
+        job_complexity_db,
+        job_compounding_risk,
+        job_daily,
+        job_dora,
+        job_ff_validation,
+        job_release_impact,
+        job_work_items,
+    )
+    from dev_health_ops.processors import sync as sync_processor
+    from dev_health_ops.providers import teams as teams_provider
+    from dev_health_ops.work_graph import runner as work_graph_runner
+    from dev_health_ops.workers import runner as workers_runner
+
     parser = argparse.ArgumentParser(
         prog="dev-health-ops",
         description="Sync git data and compute developer health metrics.",
@@ -441,10 +472,14 @@ def main(argv: list[str] | None = None) -> int:
     }:
         _load_dotenv(REPO_ROOT / ".env")
 
-    parser = build_parser()
+    if _is_help_invocation(argv):
+        with _suppress_parser_construction_noise():
+            parser = build_parser()
+    else:
+        parser = build_parser()
     ns = parser.parse_args(argv)
 
-    if getattr(ns, "org", None) is None:
+    if _should_resolve_org(ns):
         ns.org = _resolve_first_org_id(getattr(ns, "db", None))
 
     level_name = str(getattr(ns, "log_level", "") or "INFO").upper()
@@ -452,6 +487,10 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+
+    from dev_health_ops.api.middleware.rate_limit import log_rate_limit_configuration
+
+    log_rate_limit_configuration()
 
     func = getattr(ns, "func", None)
     if func is None:

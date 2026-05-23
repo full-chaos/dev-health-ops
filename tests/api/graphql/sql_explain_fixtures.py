@@ -119,26 +119,26 @@ async def _fixture_forecast(sink: CapturingSink) -> None:
     # Without work_scope_id.
     await _load_throughput_history(
         context,
-        team_id=SAMPLE_TEAM_ID,
+        team_ids=[SAMPLE_TEAM_ID],
         work_scope_id=None,
         history_weeks=history_weeks,
     )
     await _load_work_item_overlay(
         context,
-        team_id=SAMPLE_TEAM_ID,
+        team_ids=[SAMPLE_TEAM_ID],
         work_scope_id=None,
         history_weeks=history_weeks,
     )
     # With work_scope_id branch.
     await _load_throughput_history(
         context,
-        team_id=SAMPLE_TEAM_ID,
+        team_ids=[SAMPLE_TEAM_ID],
         work_scope_id="scope-1",
         history_weeks=history_weeks,
     )
     await _load_work_item_overlay(
         context,
-        team_id=SAMPLE_TEAM_ID,
+        team_ids=[SAMPLE_TEAM_ID],
         work_scope_id="scope-1",
         history_weeks=history_weeks,
     )

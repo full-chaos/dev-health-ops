@@ -36,8 +36,6 @@ def _risk_to_output(risk: RiskOverlay) -> ThroughputRiskOverlay:
 
 
 def _result_to_output(result: ThroughputForecastResult) -> ThroughputForecast:
-    if result.team_id is None:
-        raise ValueError("team_id is required for throughput forecasts")
     return ThroughputForecast(
         forecast_id=result.forecast_id,
         computed_at=result.computed_at.isoformat(),
@@ -68,17 +66,19 @@ def _result_to_output(result: ThroughputForecastResult) -> ThroughputForecast:
 async def _load_throughput_history(
     context: GraphQLContext,
     *,
-    team_id: str,
+    team_id: str | None,
     work_scope_id: str | None,
     history_weeks: int,
 ) -> ThroughputHistory:
     start_date = utc_today() - timedelta(weeks=history_weeks)
-    conditions = ["day >= {start_date:Date}", "team_id = {team_id:String}"]
+    conditions = ["day >= {start_date:Date}"]
     params: dict[str, Any] = {
         "start_date": start_date,
-        "team_id": team_id,
         "org_id": context.org_id,
     }
+    if team_id:
+        conditions.append("team_id = {team_id:String}")
+        params["team_id"] = team_id
     if work_scope_id:
         conditions.append("work_scope_id = {work_scope_id:String}")
         params["work_scope_id"] = work_scope_id
@@ -121,17 +121,19 @@ async def _load_throughput_history(
 async def _load_work_item_overlay(
     context: GraphQLContext,
     *,
-    team_id: str,
+    team_id: str | None,
     work_scope_id: str | None,
     history_weeks: int,
 ) -> tuple[float, float]:
     start_date = utc_today() - timedelta(weeks=history_weeks)
-    conditions = ["day >= {start_date:Date}", "team_id = {team_id:String}"]
+    conditions = ["day >= {start_date:Date}"]
     params: dict[str, Any] = {
         "start_date": start_date,
-        "team_id": team_id,
         "org_id": context.org_id,
     }
+    if team_id:
+        conditions.append("team_id = {team_id:String}")
+        params["team_id"] = team_id
     if work_scope_id:
         conditions.append("work_scope_id = {work_scope_id:String}")
         params["work_scope_id"] = work_scope_id
@@ -192,6 +194,53 @@ async def _load_review_overlay(
     return float((rows[0] if rows else {}).get("review_latency_hours") or 0.0)
 
 
+async def _load_backlog(
+    context: GraphQLContext,
+    *,
+    team_id: str | None,
+    work_scope_id: str | None,
+) -> int:
+    """Derive backlog size from latest ``work_item_metrics_daily`` rows.
+
+    Sums ``wip_count_end_of_day`` across the latest day for every team and
+    scope partition that matches the filter. When ``team_id`` is None this
+    yields an org-wide rollup; when set, it yields the team's backlog.
+    Mirrors the contract of ``metrics.job_capacity.get_backlog_from_sink``
+    but corrects its all-teams aggregation (CHAOS-1783).
+    """
+    conditions: list[str] = []
+    params: dict[str, Any] = {"org_id": context.org_id}
+    if team_id:
+        conditions.append("team_id = {team_id:String}")
+        params["team_id"] = team_id
+    if work_scope_id:
+        conditions.append("work_scope_id = {work_scope_id:String}")
+        params["work_scope_id"] = work_scope_id
+    where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = await query_dicts(
+        context.client,
+        f"""
+        SELECT sum(wip_count_end_of_day) AS backlog
+        FROM (
+            SELECT
+                team_id,
+                work_scope_id,
+                provider,
+                argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
+            FROM work_item_metrics_daily
+            WHERE day = (
+                SELECT max(day) FROM work_item_metrics_daily{where_sql}
+            )
+            {("AND " + " AND ".join(conditions)) if conditions else ""}
+            GROUP BY team_id, work_scope_id, provider
+        )
+        """,
+        params,
+    )
+    return int((rows[0] if rows else {}).get("backlog") or 0)
+
+
 async def _load_incident_overlay(
     context: GraphQLContext,
     *,
@@ -249,9 +298,16 @@ async def resolve_throughput_forecast(
         context,
         history_weeks=input.history_weeks,
     )
+    backlog_size = input.backlog_size
+    if backlog_size is None:
+        backlog_size = await _load_backlog(
+            context,
+            team_id=input.team_id,
+            work_scope_id=input.work_scope_id,
+        )
     result = forecast_throughput_capacity(
         history=history,
-        backlog_size=input.backlog_size,
+        backlog_size=backlog_size,
         team_id=input.team_id,
         work_scope_id=input.work_scope_id,
         history_weeks=input.history_weeks,

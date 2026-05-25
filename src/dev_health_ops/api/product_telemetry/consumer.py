@@ -22,8 +22,14 @@ BLOCK_MS = 5000
 def _ensure_group(redis_client, stream_key: str) -> None:
     try:
         redis_client.xgroup_create(stream_key, CONSUMER_GROUP, id="0", mkstream=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        if "BUSYGROUP" in str(exc):
+            return
+        logger.exception(
+            "failed to ensure consumer group",
+            extra={"stream_key": stream_key, "consumer_group": CONSUMER_GROUP},
+        )
+        raise
 
 
 def _move_to_dlq(redis_client, stream_key: str, entry_id: str, reason: str) -> None:

@@ -88,6 +88,7 @@ nav:
       - Work Graph: user-guide/work-graph.md
       - Reports: user-guide/reports.md
       - Product Telemetry: user-guide/product-telemetry.md
+      - Product Telemetry Dashboard Assessment: product-telemetry-dashboard-assessment.md
   - API:
       - GraphQL Overview: api/graphql-overview.md
       - AI Workflow Analytics: api/graphql-ai.md

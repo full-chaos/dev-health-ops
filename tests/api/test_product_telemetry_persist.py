@@ -138,6 +138,30 @@ def test_product_telemetry_consumer_persists_sanitized_payload_json(
     assert isinstance(row["occurred_at"], datetime)
 
 
+def test_product_telemetry_consumer_coerces_missing_org_hash_to_empty_string(
+    monkeypatch,
+) -> None:
+    event = _event()
+    event.pop("orgIdHash")
+    redis = FakeRedis([_entry("1-0", event)])
+    clickhouse = FakeClickHouseClient()
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.product_telemetry.streams.get_redis_client", lambda: redis
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.product_telemetry.persist.create_sink",
+        lambda: FakeSink(clickhouse),
+    )
+
+    processed = consume_product_telemetry_streams(max_iterations=1)
+
+    assert processed == 1
+    _table, rows, columns = clickhouse.inserts[0]
+    row = dict(zip(columns, rows[0]))
+    assert row["org_id_hash"] == ""
+
+
 def test_product_telemetry_consumer_rejects_blocked_payload_keys_to_dlq(
     monkeypatch,
 ) -> None:

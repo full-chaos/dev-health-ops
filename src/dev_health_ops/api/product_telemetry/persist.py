@@ -68,7 +68,7 @@ async def persist_product_telemetry_events(
     for event in events:
         rows.append(
             [
-                event.org_id_hash,
+                event.org_id_hash or "",
                 event.event_id,
                 event.name,
                 event.schema_version,

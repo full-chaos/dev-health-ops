@@ -36,6 +36,7 @@ from dev_health_ops.workers.system_tasks import (
     phone_home_heartbeat,
     process_webhook_event,
     run_ingest_consumer,
+    run_product_telemetry_consumer,
     send_billing_notification,
 )
 from dev_health_ops.workers.task_utils import (
@@ -78,6 +79,7 @@ __all__ = [
     "run_dora_metrics",
     "run_ingest_consumer",
     "run_investment_materialize",
+    "run_product_telemetry_consumer",
     "run_sync_config",
     "run_work_graph_build",
     "run_work_items_sync",

@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS product_telemetry_events (
-    org_id_hash Nullable(String),
+    org_id_hash String DEFAULT '',
     event_id String,
     name LowCardinality(String),
     schema_version String,

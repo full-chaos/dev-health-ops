@@ -44,6 +44,7 @@ from .models.outputs import (
     HomeResult,
     OperatingReview,
     ProductTelemetryDashboardType,
+    ProductTelemetryPlatformDashboardType,
     SecurityAlertConnection,
     SecurityOverview,
     ThroughputForecast,
@@ -69,7 +70,10 @@ from .resolvers.catalog import resolve_catalog
 from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
-from .resolvers.product_telemetry import resolve_product_telemetry_dashboard
+from .resolvers.product_telemetry import (
+    resolve_product_telemetry_dashboard,
+    resolve_product_telemetry_platform_dashboard,
+)
 from .resolvers.reports import (
     CloneSavedReportInput,
     CreateSavedReportInput,
@@ -166,6 +170,21 @@ class Query:
     ) -> ProductTelemetryDashboardType:
         context = get_context(info)
         return await resolve_product_telemetry_dashboard(context, input)
+
+    @strawberry.field(
+        description=(
+            "Cross-org product telemetry dashboard for platform/super admins. "
+            "Requires is_superuser. Returns global aggregates plus a top-orgs "
+            "rollup with org names resolved from Postgres."
+        )
+    )
+    async def product_telemetry_platform_dashboard(
+        self,
+        info: Info,
+        input: ProductTelemetryDashboardInput,
+    ) -> ProductTelemetryPlatformDashboardType:
+        context = get_context(info)
+        return await resolve_product_telemetry_platform_dashboard(context, input)
 
     @strawberry.field(description="Get home dashboard metrics")
     async def home(

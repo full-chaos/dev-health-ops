@@ -155,6 +155,27 @@ def require_org_id(context: GraphQLContext) -> str:
     return context.org_id
 
 
+def require_platform_admin(context: GraphQLContext) -> None:
+    """
+    Validate that the authenticated user is a platform-level superuser.
+
+    Platform-admin queries are cross-org by design (e.g., the Super-admin
+    product telemetry dashboard). They must not be reachable by org-scoped
+    users even when ``org_id`` is present in the context.
+
+    Args:
+        context: GraphQL request context.
+
+    Raises:
+        AuthorizationError: If the user is missing or not a superuser.
+    """
+    user = context.user
+    if user is None:
+        raise AuthorizationError("Authentication required")
+    if not getattr(user, "is_superuser", False):
+        raise AuthorizationError("Platform admin access required")
+
+
 def enforce_org_scope(org_id: str, params: dict[str, Any]) -> dict[str, Any]:
     """
     Inject org_id into SQL parameters to enforce org scoping.

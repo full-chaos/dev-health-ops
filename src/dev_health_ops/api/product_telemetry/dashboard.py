@@ -92,6 +92,58 @@ class ProductTelemetryDashboard:
     )
 
 
+@dataclass(frozen=True)
+class ProductTelemetryPlatformTotals:
+    """Cross-org aggregate counts for the platform-admin dashboard."""
+
+    active_orgs: int = 0
+    anonymous_users: int = 0
+    sessions: int = 0
+    events: int = 0
+
+
+@dataclass(frozen=True)
+class ProductTelemetryTopOrg:
+    """Per-org rollup row returned by the top-orgs query.
+
+    ``org_id`` / ``org_name`` / ``org_slug`` are filled in by the GraphQL
+    resolver after computing ``sha256(org.id)`` for each known Postgres
+    organization. Unknown hashes (e.g., events ingested from orgs that no
+    longer exist in Postgres) keep the resolved fields ``None``.
+    """
+
+    org_id_hash: str
+    events: int
+    sessions: int
+    anonymous_users: int
+    org_id: str | None = None
+    org_name: str | None = None
+    org_slug: str | None = None
+
+
+@dataclass(frozen=True)
+class ProductTelemetryPlatformDashboard:
+    """Platform-admin dashboard shape: cross-org rollups plus top-org list."""
+
+    totals: ProductTelemetryPlatformTotals = field(
+        default_factory=ProductTelemetryPlatformTotals
+    )
+    daily_active_users: list[ProductTelemetryDailyActiveUsers] = field(
+        default_factory=list
+    )
+    top_routes: list[ProductTelemetryRouteUsage] = field(default_factory=list)
+    feature_views: list[ProductTelemetryFeatureView] = field(default_factory=list)
+    filter_changes: list[ProductTelemetryFilterChange] = field(default_factory=list)
+    chart_interactions: list[ProductTelemetryChartInteraction] = field(
+        default_factory=list
+    )
+    client_errors: list[ProductTelemetryClientError] = field(default_factory=list)
+    session_summary: ProductTelemetrySessionSummary = field(
+        default_factory=ProductTelemetrySessionSummary
+    )
+    top_orgs: list[ProductTelemetryTopOrg] = field(default_factory=list)
+
+
 DAILY_ACTIVE_USERS_SQL = """
 SELECT
     toDate(occurred_at) AS day,
@@ -320,4 +372,259 @@ def _session_summary(rows: list[dict[str, Any]]) -> ProductTelemetrySessionSumma
         p95_duration_ms=_optional_int(row.get("p95_duration_ms")),
         avg_pages_viewed=_optional_float(row.get("avg_pages_viewed")),
         avg_interactions=_optional_float(row.get("avg_interactions")),
+    )
+
+
+# =============================================================================
+# Platform-admin dashboard (cross-org). Used by the /superadmin/product-telemetry
+# overview page. Reuses the per-section dataclasses where shape matches.
+# =============================================================================
+
+
+PLATFORM_TOTALS_SQL = """
+SELECT
+    uniqExact(org_id_hash) AS active_orgs,
+    uniqExact(anonymous_user_id) AS anonymous_users,
+    uniqExact(session_id) AS sessions,
+    count() AS events
+FROM product_telemetry_events
+WHERE occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+"""
+
+PLATFORM_DAILY_ACTIVE_USERS_SQL = """
+SELECT
+    toDate(occurred_at) AS day,
+    uniqExact(anonymous_user_id) AS active_anonymous_users
+FROM product_telemetry_events
+WHERE occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+GROUP BY day
+ORDER BY day
+"""
+
+PLATFORM_TOP_ROUTES_SQL = """
+SELECT
+    route_pattern,
+    count() AS events,
+    uniqExact(session_id) AS sessions,
+    uniqExact(anonymous_user_id) AS anonymous_users
+FROM product_telemetry_events
+WHERE name = 'page_viewed'
+  AND occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+GROUP BY route_pattern
+ORDER BY events DESC
+LIMIT 25
+"""
+
+PLATFORM_FEATURE_VIEWS_SQL = """
+SELECT
+    JSONExtractString(payload_json, 'feature') AS feature,
+    JSONExtractString(payload_json, 'surface') AS surface,
+    count() AS views,
+    uniqExact(anonymous_user_id) AS anonymous_users
+FROM product_telemetry_events
+WHERE name = 'feature_viewed'
+  AND occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+GROUP BY feature, surface
+ORDER BY views DESC
+"""
+
+PLATFORM_FILTER_CHANGES_SQL = """
+SELECT
+    JSONExtractString(payload_json, 'view') AS view,
+    JSONExtractString(payload_json, 'filterKey') AS filter_key,
+    count() AS changes,
+    avg(JSONExtractInt(payload_json, 'valueCount')) AS avg_value_count
+FROM product_telemetry_events
+WHERE name = 'filter_changed'
+  AND occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+GROUP BY view, filter_key
+ORDER BY changes DESC
+"""
+
+PLATFORM_CHART_INTERACTIONS_SQL = """
+SELECT
+    JSONExtractString(payload_json, 'chart') AS chart,
+    JSONExtractString(payload_json, 'action') AS action,
+    JSONExtractString(payload_json, 'surface') AS surface,
+    count() AS interactions,
+    uniqExact(session_id) AS sessions
+FROM product_telemetry_events
+WHERE name = 'chart_interacted'
+  AND occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+GROUP BY chart, action, surface
+ORDER BY interactions DESC
+"""
+
+PLATFORM_CLIENT_ERRORS_SQL = """
+SELECT
+    route_pattern,
+    JSONExtractString(payload_json, 'boundary') AS boundary,
+    JSONExtractString(payload_json, 'errorClass') AS error_class,
+    count() AS errors,
+    uniqExact(anonymous_user_id) AS affected_anonymous_users
+FROM product_telemetry_events
+WHERE name = 'client_error'
+  AND occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+GROUP BY route_pattern, boundary, error_class
+ORDER BY errors DESC
+"""
+
+PLATFORM_SESSION_SUMMARY_SQL = """
+SELECT
+    quantile(0.5)(JSONExtractInt(payload_json, 'durationMs')) AS p50_duration_ms,
+    quantile(0.75)(JSONExtractInt(payload_json, 'durationMs')) AS p75_duration_ms,
+    quantile(0.9)(JSONExtractInt(payload_json, 'durationMs')) AS p90_duration_ms,
+    quantile(0.95)(JSONExtractInt(payload_json, 'durationMs')) AS p95_duration_ms,
+    avg(JSONExtractInt(payload_json, 'pagesViewed')) AS avg_pages_viewed,
+    avg(JSONExtractInt(payload_json, 'interactions')) AS avg_interactions
+FROM product_telemetry_events
+WHERE name = 'session_ended'
+  AND occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+"""
+
+PLATFORM_TOP_ORGS_SQL = """
+SELECT
+    org_id_hash,
+    count() AS events,
+    uniqExact(session_id) AS sessions,
+    uniqExact(anonymous_user_id) AS anonymous_users
+FROM product_telemetry_events
+WHERE occurred_at >= %(start)s
+  AND occurred_at < %(end)s
+GROUP BY org_id_hash
+ORDER BY events DESC
+LIMIT 50
+"""
+
+
+def _platform_params(date_range: ProductTelemetryDashboardRange) -> dict[str, Any]:
+    return {
+        "start": date_range.start_date,
+        "end": date_range.end_date,
+    }
+
+
+def _platform_totals(rows: list[dict[str, Any]]) -> ProductTelemetryPlatformTotals:
+    if not rows:
+        return ProductTelemetryPlatformTotals()
+    row = rows[0]
+    return ProductTelemetryPlatformTotals(
+        active_orgs=int(row.get("active_orgs") or 0),
+        anonymous_users=int(row.get("anonymous_users") or 0),
+        sessions=int(row.get("sessions") or 0),
+        events=int(row.get("events") or 0),
+    )
+
+
+async def load_product_telemetry_platform_dashboard(
+    client: Any,
+    date_range: ProductTelemetryDashboardRange,
+) -> ProductTelemetryPlatformDashboard:
+    """Load cross-org product telemetry rollups for the platform-admin view.
+
+    All queries are run in parallel against the analytics backend. Unlike
+    :func:`load_product_telemetry_dashboard`, none of the queries filter on
+    ``org_id_hash`` — they aggregate across every tenant — and an additional
+    top-orgs query rolls up event volume per ``org_id_hash`` so the resolver
+    can attach Postgres-side org names.
+    """
+    require_clickhouse_backend(client)
+    params = _platform_params(date_range)
+
+    (
+        totals_rows,
+        daily_rows,
+        route_rows,
+        feature_rows,
+        filter_rows,
+        chart_rows,
+        error_rows,
+        session_rows,
+        top_orgs_rows,
+    ) = await asyncio.gather(
+        query_dicts(client, PLATFORM_TOTALS_SQL, params),
+        query_dicts(client, PLATFORM_DAILY_ACTIVE_USERS_SQL, params),
+        query_dicts(client, PLATFORM_TOP_ROUTES_SQL, params),
+        query_dicts(client, PLATFORM_FEATURE_VIEWS_SQL, params),
+        query_dicts(client, PLATFORM_FILTER_CHANGES_SQL, params),
+        query_dicts(client, PLATFORM_CHART_INTERACTIONS_SQL, params),
+        query_dicts(client, PLATFORM_CLIENT_ERRORS_SQL, params),
+        query_dicts(client, PLATFORM_SESSION_SUMMARY_SQL, params),
+        query_dicts(client, PLATFORM_TOP_ORGS_SQL, params),
+    )
+
+    return ProductTelemetryPlatformDashboard(
+        totals=_platform_totals(totals_rows),
+        daily_active_users=[
+            ProductTelemetryDailyActiveUsers(
+                day=row["day"],
+                active_anonymous_users=int(row.get("active_anonymous_users") or 0),
+            )
+            for row in daily_rows
+        ],
+        top_routes=[
+            ProductTelemetryRouteUsage(
+                route_pattern=str(row.get("route_pattern") or ""),
+                events=int(row.get("events") or 0),
+                sessions=int(row.get("sessions") or 0),
+                anonymous_users=int(row.get("anonymous_users") or 0),
+            )
+            for row in route_rows
+        ],
+        feature_views=[
+            ProductTelemetryFeatureView(
+                feature=str(row.get("feature") or ""),
+                surface=str(row.get("surface") or ""),
+                views=int(row.get("views") or 0),
+                anonymous_users=int(row.get("anonymous_users") or 0),
+            )
+            for row in feature_rows
+        ],
+        filter_changes=[
+            ProductTelemetryFilterChange(
+                view=str(row.get("view") or ""),
+                filter_key=str(row.get("filter_key") or ""),
+                changes=int(row.get("changes") or 0),
+                avg_value_count=_optional_float(row.get("avg_value_count")),
+            )
+            for row in filter_rows
+        ],
+        chart_interactions=[
+            ProductTelemetryChartInteraction(
+                chart=str(row.get("chart") or ""),
+                action=str(row.get("action") or ""),
+                surface=str(row.get("surface") or ""),
+                interactions=int(row.get("interactions") or 0),
+                sessions=int(row.get("sessions") or 0),
+            )
+            for row in chart_rows
+        ],
+        client_errors=[
+            ProductTelemetryClientError(
+                route_pattern=str(row.get("route_pattern") or ""),
+                boundary=str(row.get("boundary") or ""),
+                error_class=str(row.get("error_class") or ""),
+                errors=int(row.get("errors") or 0),
+                affected_anonymous_users=int(row.get("affected_anonymous_users") or 0),
+            )
+            for row in error_rows
+        ],
+        session_summary=_session_summary(session_rows),
+        top_orgs=[
+            ProductTelemetryTopOrg(
+                org_id_hash=str(row.get("org_id_hash") or ""),
+                events=int(row.get("events") or 0),
+                sessions=int(row.get("sessions") or 0),
+                anonymous_users=int(row.get("anonymous_users") or 0),
+            )
+            for row in top_orgs_rows
+        ],
     )

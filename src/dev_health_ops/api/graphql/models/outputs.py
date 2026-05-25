@@ -172,6 +172,51 @@ class ProductTelemetryDashboardType:
 
 
 @strawberry.type
+class ProductTelemetryPlatformTotalsType:
+    """Cross-org totals shown at the top of the Super-admin dashboard."""
+
+    active_orgs: int
+    anonymous_users: int
+    sessions: int
+    events: int
+
+
+@strawberry.type
+class ProductTelemetryTopOrgType:
+    """Per-org rollup row for the Super-admin drilldown table.
+
+    ``org_id`` / ``org_name`` / ``org_slug`` are resolved server-side from
+    Postgres by hashing each known organization's id and matching against
+    ``org_id_hash``. Unknown hashes (e.g., events ingested from orgs that no
+    longer exist) keep those fields ``None`` and the UI falls back to the
+    hash prefix.
+    """
+
+    org_id_hash: str
+    events: int
+    sessions: int
+    anonymous_users: int
+    org_id: str | None = None
+    org_name: str | None = None
+    org_slug: str | None = None
+
+
+@strawberry.type
+class ProductTelemetryPlatformDashboardType:
+    """Platform-admin product telemetry dashboard payload."""
+
+    totals: ProductTelemetryPlatformTotalsType
+    daily_active_users: list[ProductTelemetryDailyActiveUsersType]
+    top_routes: list[ProductTelemetryRouteUsageType]
+    feature_views: list[ProductTelemetryFeatureViewType]
+    filter_changes: list[ProductTelemetryFilterChangeType]
+    chart_interactions: list[ProductTelemetryChartInteractionType]
+    client_errors: list[ProductTelemetryClientErrorType]
+    session_summary: ProductTelemetrySessionSummaryType
+    top_orgs: list[ProductTelemetryTopOrgType]
+
+
+@strawberry.type
 class CatalogDimension:
     """A dimension available in the catalog."""
 

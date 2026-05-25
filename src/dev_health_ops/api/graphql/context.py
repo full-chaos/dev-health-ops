@@ -54,7 +54,11 @@ class GraphQLContext(BaseContext):
     user: AuthenticatedUser | None = None
 
     def __post_init__(self) -> None:
-        if not self.org_id:
+        # Platform/super admins can reach cross-org admin queries without
+        # belonging to a tenant (e.g., the /superadmin/product-telemetry
+        # overview). Per-org resolvers still call ``require_org_id`` so an
+        # org-less context can't be used to query tenant-scoped data.
+        if not self.org_id and not getattr(self.user, "is_superuser", False):
             from .errors import AuthorizationError
 
             raise AuthorizationError("org_id is required")

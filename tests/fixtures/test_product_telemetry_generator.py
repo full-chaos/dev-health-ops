@@ -14,16 +14,21 @@ from dev_health_ops.fixtures.generators.product_telemetry import (
 FIXED_END = datetime(2026, 5, 25, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _spec(**overrides) -> ProductTelemetrySeedSpec:
-    base = {
-        "org_id": "00000000-0000-0000-0000-000000000001",
-        "days": 3,
-        "sessions_per_day": 4,
-        "seed": 42,
-        "end_time": FIXED_END,
-    }
-    base.update(overrides)
-    return ProductTelemetrySeedSpec(**base)
+def _spec(
+    *,
+    org_id: str = "00000000-0000-0000-0000-000000000001",
+    days: int = 3,
+    sessions_per_day: int = 4,
+    seed: int | None = 42,
+    end_time: datetime | None = FIXED_END,
+) -> ProductTelemetrySeedSpec:
+    return ProductTelemetrySeedSpec(
+        org_id=org_id,
+        days=days,
+        sessions_per_day=sessions_per_day,
+        seed=seed,
+        end_time=end_time,
+    )
 
 
 def test_generator_is_deterministic_for_same_seed_and_org() -> None:

@@ -81,6 +81,33 @@ query Analytics($orgId: String!, $batch: AnalyticsRequestInput!) {
 }
 ```
 
+### Query.productTelemetryDashboard
+
+Fetch first-party product usage dashboard aggregates from the persisted ClickHouse `product_telemetry_events` table. This query is read-only, org-scoped, and uses the same half-open date range contract as the product telemetry dashboard UI: `startDate` is inclusive and `endDate` is exclusive.
+
+```graphql
+query ProductTelemetryDashboard($orgId: String!, $input: ProductTelemetryDashboardInput!) {
+  productTelemetryDashboard(orgId: $orgId, input: $input) {
+    dailyActiveUsers { day activeAnonymousUsers }
+    topRoutes { routePattern events sessions anonymousUsers }
+    featureViews { feature surface views anonymousUsers }
+    filterChanges { view filterKey changes avgValueCount }
+    chartInteractions { chart action surface interactions sessions }
+    clientErrors { routePattern boundary errorClass errors affectedAnonymousUsers }
+    sessionSummary {
+      p50DurationMs
+      p75DurationMs
+      p90DurationMs
+      p95DurationMs
+      avgPagesViewed
+      avgInteractions
+    }
+  }
+}
+```
+
+The resolver derives the product telemetry `org_id_hash` from the authenticated organization before querying ClickHouse. Callers still provide the raw `orgId` variable used by the GraphQL authorization layer; raw organization IDs are not read from `product_telemetry_events`.
+
 ---
 
 ## Example Queries

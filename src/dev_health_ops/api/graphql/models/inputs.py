@@ -137,6 +137,14 @@ class DateRangeInput:
 
 
 @strawberry.input
+class ProductTelemetryDashboardInput:
+    """Half-open date range for product telemetry dashboard queries."""
+
+    start_date: date
+    end_date: date
+
+
+@strawberry.input
 class TimeseriesRequestInput:
     """Request for a timeseries query."""
 

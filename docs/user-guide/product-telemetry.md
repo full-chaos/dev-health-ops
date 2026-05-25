@@ -52,6 +52,24 @@ The table is optimized for analytical queries and includes the following fields:
 - **TTL:** ClickHouse automatically deletes rows older than 180 days based on the `occurred_at` column.
 - **Rollups:** Future phases may introduce aggregate rollups for long-term trend analysis beyond the 180-day raw event window.
 
+## Product Telemetry Dashboard
+
+The first-party dashboard is available in the admin UI at `/admin/product-telemetry`. It reads the persisted ClickHouse `product_telemetry_events` table through the GraphQL API and does not call external analytics providers.
+
+The default dashboard window is the last 30 days, represented as a half-open date range: `start_date` is inclusive and `end_date` is exclusive. Dashboard sections are intentionally limited to the early product-usage questions supported by the sanitized event contract:
+
+- Daily active anonymous users.
+- Top route patterns by page-view events, sessions, and anonymous users.
+- Stable feature IDs viewed by surface.
+- Filter changes by view and filter key, including average selected value count.
+- Chart interactions by chart type, action, and surface.
+- Client errors by route pattern, boundary, and error class.
+- Session duration percentiles plus average pages viewed and interactions.
+
+Organization scoping uses the same one-way organization hash emitted by `dev-health-web` product telemetry. The dashboard resolver hashes the authenticated organization ID before querying `org_id_hash`, so raw organization IDs are not stored in or queried from the product telemetry table.
+
+The dashboard is a read-only analytics surface. It renders persisted aggregates only; it does not recompute telemetry classifications in the UI and does not write dashboard outputs back to storage.
+
 ## Separation of Concerns
 
 Product telemetry is strictly separated from other telemetry types in the platform:

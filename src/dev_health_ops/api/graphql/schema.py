@@ -30,6 +30,7 @@ from .models.inputs import (
     DimensionInput,
     FilterInput,
     OperatingReviewInput,
+    ProductTelemetryDashboardInput,
     SecurityAlertFilterInput,
     SecurityPaginationInput,
     ThroughputForecastInput,
@@ -42,6 +43,7 @@ from .models.outputs import (
     CatalogResult,
     HomeResult,
     OperatingReview,
+    ProductTelemetryDashboardType,
     SecurityAlertConnection,
     SecurityOverview,
     ThroughputForecast,
@@ -67,6 +69,7 @@ from .resolvers.catalog import resolve_catalog
 from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
+from .resolvers.product_telemetry import resolve_product_telemetry_dashboard
 from .resolvers.reports import (
     CloneSavedReportInput,
     CreateSavedReportInput,
@@ -153,6 +156,16 @@ class Query:
         """
         context = get_context(info)
         return await resolve_analytics(context, batch)
+
+    @strawberry.field(description="Get first-party product telemetry dashboard metrics")
+    async def product_telemetry_dashboard(
+        self,
+        info: Info,
+        org_id: str,
+        input: ProductTelemetryDashboardInput,
+    ) -> ProductTelemetryDashboardType:
+        context = get_context(info)
+        return await resolve_product_telemetry_dashboard(context, input)
 
     @strawberry.field(description="Get home dashboard metrics")
     async def home(

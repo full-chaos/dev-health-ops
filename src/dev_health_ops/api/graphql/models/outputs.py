@@ -103,6 +103,75 @@ class AnalyticsResult:
 
 
 @strawberry.type
+class ProductTelemetryDailyActiveUsersType:
+    day: date
+    active_anonymous_users: int
+
+
+@strawberry.type
+class ProductTelemetryRouteUsageType:
+    route_pattern: str
+    events: int
+    sessions: int
+    anonymous_users: int
+
+
+@strawberry.type
+class ProductTelemetryFeatureViewType:
+    feature: str
+    surface: str
+    views: int
+    anonymous_users: int
+
+
+@strawberry.type
+class ProductTelemetryFilterChangeType:
+    view: str
+    filter_key: str
+    changes: int
+    avg_value_count: float | None = None
+
+
+@strawberry.type
+class ProductTelemetryChartInteractionType:
+    chart: str
+    action: str
+    surface: str
+    interactions: int
+    sessions: int
+
+
+@strawberry.type
+class ProductTelemetryClientErrorType:
+    route_pattern: str
+    boundary: str
+    error_class: str
+    errors: int
+    affected_anonymous_users: int
+
+
+@strawberry.type
+class ProductTelemetrySessionSummaryType:
+    p50_duration_ms: int | None = None
+    p75_duration_ms: int | None = None
+    p90_duration_ms: int | None = None
+    p95_duration_ms: int | None = None
+    avg_pages_viewed: float | None = None
+    avg_interactions: float | None = None
+
+
+@strawberry.type
+class ProductTelemetryDashboardType:
+    daily_active_users: list[ProductTelemetryDailyActiveUsersType]
+    top_routes: list[ProductTelemetryRouteUsageType]
+    feature_views: list[ProductTelemetryFeatureViewType]
+    filter_changes: list[ProductTelemetryFilterChangeType]
+    chart_interactions: list[ProductTelemetryChartInteractionType]
+    client_errors: list[ProductTelemetryClientErrorType]
+    session_summary: ProductTelemetrySessionSummaryType
+
+
+@strawberry.type
 class CatalogDimension:
     """A dimension available in the catalog."""
 

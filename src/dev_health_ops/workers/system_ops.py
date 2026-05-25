@@ -23,6 +23,21 @@ def run_ingest_consumer(self, max_iterations: int = 100):
     return {"processed": processed}
 
 
+@celery_app.task(
+    bind=True,
+    queue="ingest",
+    name="dev_health_ops.workers.tasks.run_product_telemetry_consumer",
+)
+def run_product_telemetry_consumer(self, max_iterations: int = 100):
+    """Process buffered product telemetry stream entries."""
+    from dev_health_ops.api.product_telemetry.consumer import (
+        consume_product_telemetry_streams,
+    )
+
+    processed = consume_product_telemetry_streams(max_iterations=max_iterations)
+    return {"processed": processed}
+
+
 @celery_app.task(bind=True, name="dev_health_ops.workers.tasks.health_check")
 def health_check(self) -> dict:
     """Simple health check task to verify worker is running."""

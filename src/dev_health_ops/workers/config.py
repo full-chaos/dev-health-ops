@@ -78,6 +78,12 @@ beat_schedule = {
         "kwargs": {"max_iterations": 50},
         "options": {"queue": "ingest"},
     },
+    "process-product-telemetry-streams": {
+        "task": "dev_health_ops.workers.tasks.run_product_telemetry_consumer",
+        "schedule": 30.0,
+        "kwargs": {"max_iterations": 50},
+        "options": {"queue": "ingest"},
+    },
     "phone-home-heartbeat": {
         "task": "dev_health_ops.workers.tasks.phone_home_heartbeat",
         "schedule": crontab(hour=0, minute=0),

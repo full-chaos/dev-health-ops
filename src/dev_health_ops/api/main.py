@@ -23,6 +23,7 @@ init_sentry()
 init_tracing()
 
 from dev_health_ops.api.middleware.rate_limit import limiter
+from dev_health_ops.api.product_telemetry import router as product_telemetry_router
 from dev_health_ops.api.telemetry.router import router as telemetry_router
 
 from ._errors import (
@@ -194,6 +195,7 @@ app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(licensing_router)
 app.include_router(telemetry_router)
+app.include_router(product_telemetry_router)
 app.include_router(ingest_router)
 app.include_router(orgs_router)
 

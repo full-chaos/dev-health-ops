@@ -1753,6 +1753,90 @@ def run_fixtures_validation(ns: argparse.Namespace) -> int:
         return 1
 
 
+async def run_product_telemetry_fixtures(ns: argparse.Namespace) -> int:
+    """Seed product_telemetry_events across one or more orgs.
+
+    Resolves orgs from ``--org`` (repeatable) or, when omitted, the first N
+    Postgres ``organizations`` rows. Writes through the canonical sink helper
+    so seeded rows look identical to production ingestion and become visible
+    in both the per-org and the platform-admin dashboards.
+    """
+    from dev_health_ops.api.product_telemetry.persist import (
+        persist_product_telemetry_events,
+    )
+    from dev_health_ops.fixtures.generators.product_telemetry import (
+        SOURCE,
+        ProductTelemetryGenerator,
+        ProductTelemetrySeedSpec,
+    )
+
+    org_ids: list[str] = list(getattr(ns, "org", None) or [])
+
+    if not org_ids:
+        from sqlalchemy import select
+
+        from dev_health_ops.db import get_postgres_session
+        from dev_health_ops.models.users import Organization
+
+        try:
+            async with get_postgres_session() as session:
+                result = await session.execute(
+                    select(Organization.id).limit(int(ns.orgs))
+                )
+                org_ids = [str(row[0]) for row in result.all()]
+        except Exception as exc:
+            logging.warning(
+                "Could not load orgs from Postgres (%s); falling back to "
+                "synthetic ids. Set DATABASE_URI to seed against real orgs.",
+                exc,
+            )
+            # Fall back to synthetic UUIDs so the seeder still produces
+            # platform-admin top-orgs ranks; they just won't resolve to names.
+            org_ids = [
+                str(uuid.uuid5(uuid.NAMESPACE_URL, f"seed-org-{idx}"))
+                for idx in range(int(ns.orgs))
+            ]
+
+    if not org_ids:
+        logging.error(
+            "No orgs to seed. Pass --org <uuid> (repeatable) or seed Postgres "
+            "with `dev-hops fixtures generate` first."
+        )
+        return 1
+
+    total_rows = 0
+    end_time = datetime.now(timezone.utc)
+    for idx, org_id in enumerate(org_ids):
+        # Slightly vary volume per org so the top-orgs roll-up has visible
+        # ranking spread instead of a flat distribution.
+        sessions = max(1, int(ns.sessions_per_day) - (idx % 3))
+        spec = ProductTelemetrySeedSpec(
+            org_id=org_id,
+            days=int(ns.days),
+            sessions_per_day=sessions,
+            seed=ns.seed,
+            end_time=end_time,
+        )
+        generator = ProductTelemetryGenerator(spec)
+        events = generator.generate_events()
+        persisted = await persist_product_telemetry_events(events, source=SOURCE)
+        total_rows += persisted
+        logging.info(
+            "Seeded %d product telemetry events for org %s (hash=%s, "
+            "%d days x %d sessions/day).",
+            persisted,
+            org_id,
+            generator.org_id_hash,
+            spec.days,
+            spec.sessions_per_day,
+        )
+
+    logging.info(
+        "Total: %d product telemetry rows across %d orgs.", total_rows, len(org_ids)
+    )
+    return 0
+
+
 def register_commands(subparsers: argparse._SubParsersAction) -> None:
     fix = subparsers.add_parser("fixtures", help="Data simulation and fixtures.")
     fix_sub = fix.add_subparsers(dest="fixtures_command", required=True)
@@ -1810,3 +1894,45 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         help="Analytics sink URI (ClickHouse). Env: CLICKHOUSE_URI",
     )
     fix_val.set_defaults(func=run_fixtures_validation)
+
+    fix_pt = fix_sub.add_parser(
+        "product-telemetry",
+        help=(
+            "Seed product_telemetry_events across multiple orgs so the "
+            "platform-admin dashboard and per-org views light up locally."
+        ),
+    )
+    fix_pt.add_argument(
+        "--orgs",
+        type=int,
+        default=5,
+        help=(
+            "Number of orgs to seed when --org is not provided. Pulls the "
+            "first N rows from Postgres `organizations`; falls back to "
+            "synthetic UUIDs if Postgres is unavailable."
+        ),
+    )
+    fix_pt.add_argument(
+        "--org",
+        action="append",
+        help=(
+            "Explicit org id to seed. Repeatable. When provided, overrides "
+            "the --orgs Postgres lookup."
+        ),
+    )
+    fix_pt.add_argument(
+        "--days", type=int, default=30, help="Number of days of data per org."
+    )
+    fix_pt.add_argument(
+        "--sessions-per-day",
+        type=int,
+        default=50,
+        help="Average synthetic sessions per day per org.",
+    )
+    fix_pt.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Deterministic seed (mixed with org_id) for repeatable runs.",
+    )
+    fix_pt.set_defaults(func=run_product_telemetry_fixtures)

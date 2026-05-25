@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from dev_health_ops.api.product_telemetry.consumer import (
+    _ensure_group,
     consume_product_telemetry_streams,
 )
 
@@ -29,8 +30,13 @@ class FakeSink:
 
 
 class FakeRedis:
-    def __init__(self, entries: list[tuple[str, dict[str, str]]]) -> None:
+    def __init__(
+        self,
+        entries: list[tuple[str, dict[str, str]]],
+        xgroup_error: Exception | None = None,
+    ) -> None:
         self.entries = entries
+        self.xgroup_error = xgroup_error
         self.acked: list[tuple[str, str, tuple[str, ...]]] = []
         self.dlq: list[tuple[str, dict[str, str]]] = []
 
@@ -40,6 +46,8 @@ class FakeRedis:
     def xgroup_create(
         self, stream_key: str, group: str, id: str = "0", mkstream: bool = True
     ) -> None:
+        if self.xgroup_error is not None:
+            raise self.xgroup_error
         return None
 
     def xreadgroup(
@@ -192,3 +200,22 @@ def test_product_telemetry_consumer_rejects_blocked_payload_keys_to_dlq(
     assert dlq_stream == "product-telemetry:dlq"
     assert dlq_data["original_stream"] == "product-telemetry:org_hash_123:events"
     assert dlq_data["entry_id"] == "1-0"
+
+
+def test_product_telemetry_consumer_ignores_existing_consumer_group() -> None:
+    redis = FakeRedis(
+        [], xgroup_error=Exception("BUSYGROUP Consumer Group name already exists")
+    )
+
+    _ensure_group(redis, "product-telemetry:org_hash_123:events")
+
+
+def test_product_telemetry_consumer_raises_unexpected_consumer_group_error() -> None:
+    redis = FakeRedis([], xgroup_error=Exception("connection refused"))
+
+    try:
+        _ensure_group(redis, "product-telemetry:org_hash_123:events")
+    except Exception as exc:
+        assert str(exc) == "connection refused"
+    else:
+        raise AssertionError("expected _ensure_group to re-raise unexpected errors")

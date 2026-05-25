@@ -423,9 +423,15 @@ linear-cli issues update CHAOS-123 --state "Done"
 
 ## 11. Pre-commit + pre-push hooks (lefthook + ruff)
 
-Lefthook drives two hooks that together match what CI enforces
-(`ruff format --check .` and `ruff check .`):
+Lefthook drives three hooks:
 
+- **commit-msg** strips agent-attribution trailers from every commit message
+  before the commit lands. Backs the repo-root AGENTS.md rule
+  "Never add contribution attribution for agents in commits." Removes
+  `Ultraworked with [...]`, `Co-authored-by: Sisyphus`,
+  `Co-authored-by: Claude`, and `🤖 Generated with [Claude Code]` lines.
+  Implementation: `scripts/strip_agent_attribution.py`. Tests:
+  `tests/scripts/test_strip_agent_attribution.py`.
 - **pre-commit** auto-fixes formatting and lint on staged `.py` files and
   re-stages the fixes (`stage_fixed: true`). The resulting commit is clean.
 - **pre-push** is a final gate: `ruff format --check` + `ruff check` on the
@@ -459,6 +465,12 @@ lefthook install --force
 If `lefthook install` (without `--force`) warns about `core.hooksPath`, add `--force`.
 
 ### Hook behaviour
+
+**commit-msg** (on every `git commit`, edits the commit message file in place):
+
+| Step | Command | Behaviour |
+|------|---------|-----------|
+| 1 | `python3 scripts/strip_agent_attribution.py {1}` | Removes agent-attribution trailers (`Ultraworked with`, `Co-authored-by: Sisyphus`, `Co-authored-by: Claude`, `🤖 Generated with`). Idempotent. Preserves real human `Co-authored-by`, `Signed-off-by`, `Refs`, `Closes`. |
 
 **pre-commit** (on every `git commit`, for staged `.py` files):
 

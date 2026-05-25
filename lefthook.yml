@@ -14,6 +14,15 @@
 #
 # Install: `make install` (wires `lefthook install` into the bootstrap).
 
+commit-msg:
+  commands:
+    strip-agent-attribution:
+      # AGENTS.md rule: "Never add contribution attribution for agents in commits."
+      # Sisyphus / oh-my-openagent / Claude Code and similar agents inject
+      # "Ultraworked with ..." and "Co-authored-by: <agent>" trailers despite
+      # the repo rule; this hook strips them before the commit lands.
+      run: python3 scripts/strip_agent_attribution.py {1}
+
 pre-commit:
   parallel: true
   commands:

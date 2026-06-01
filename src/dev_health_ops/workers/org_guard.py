@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from dev_health_ops.models.users import Organization
 
 
@@ -13,10 +15,19 @@ def organization_exists_sync(session: Any, org_id: str | None) -> bool:
         org_uuid = uuid.UUID(str(org_id))
     except ValueError:
         return True
-    return (
-        session.query(Organization.id).filter(Organization.id == org_uuid).one_or_none()
-        is not None
-    )
+    try:
+        return (
+            session.query(Organization.id)
+            .filter(Organization.id == org_uuid)
+            .one_or_none()
+            is not None
+        )
+    except SQLAlchemyError:
+        # Fail open: this guard only skips work for already-deleted orgs. If
+        # existence cannot be verified (DB error, or a narrow test/migration
+        # context without the organizations table), do not block scheduled
+        # work — OrganizationDeletionService remains authoritative for removal.
+        return True
 
 
 __all__ = ["organization_exists_sync"]

@@ -1,45 +1,177 @@
 # dev-health-ops
 
-Development team and developers' operational help should be available for all.
+Open source analytics for developer health and team operating modes.
 
-This project's goal is to provide tools and quick-win implementations by integrating with a majority of popular tooling.
+Dev Health Ops ingests engineering activity from Git providers, work trackers,
+deployments, incidents, and local repositories; normalizes it into persisted
+evidence; computes inspectable metrics; and serves those metrics to the
+GraphQL/API layer used by `dev-health-web`.
 
 ## Why this exists
 
-Developer health tooling drifted into expensive, opaque “scoring” systems that are easy to misuse. This project is intentionally different.
+Developer health tooling often drifts into expensive, opaque scorecards that are
+easy to misuse. This project is intentionally different:
 
-### Principles
+- **Accessibility over extraction**: derive insight from data teams already own.
+- **Learning, not judgment**: show operating signals, not individual rankings.
+- **Trends over absolutes**: emphasize change over time and distributions.
+- **Inspectable by default**: metrics trace back to schemas, queries, and evidence.
 
-- **Accessibility over extraction**: derived from data teams already own; should be cheap to run and never gated behind per-seat pricing.
-- **Learning, not judgment**: metrics are **signals** about system behavior (WIP, churn, cycle time, blocked work), not performance rankings.
-- **Trends > absolutes**: compare change over time and distributions, not “who’s best”.
-- **Inspectable by default**: open schemas, explicit definitions, and reproducible computation.
+Non-goals:
 
-### Non-goals
+- Individual leaderboards or performance scores
+- HR/performance-management workflows
+- Dashboards that hide definitions, provenance, or missing data
 
-- Individual leaderboards and “scores”
-- HR/performance-management tooling
-- Executive theater dashboards that hide context
+## Current architecture
 
-## Installation
+Dev Health Ops follows a strict pipeline boundary:
 
-If you are not developing on this project and just want to use the tools, you can install the package directly:
+```text
+Providers → Processors → Sinks → Metrics → API / Visualization
+```
+
+- **Providers** fetch raw provider data from GitHub, GitLab, Jira, Linear,
+  local Git, CI/CD, deployments, incidents, and synthetic/demo sources.
+- **Processors** normalize provider records into internal models.
+- **Sinks** persist computed outputs. Analytics persistence is ClickHouse-only.
+- **Metrics jobs** compute daily rollups, DORA, complexity, risk, investment,
+  AI workflow, and work graph outputs from persisted data.
+- **API/GraphQL** serves persisted analytics to `dev-health-web` and other
+  consumers.
+
+The primary visualization surface is now `dev-health-web`. Grafana is optional,
+and this repository no longer ships the old sample dashboard gallery in this
+README.
+
+## Install
+
+Use the package directly:
 
 ```bash
 pip install dev-health-ops
-```
-
-This provides the `dev-hops` command in your terminal.
-
-```bash
 dev-hops --help
 ```
 
-_Note: In the documentation below, you can replace `dev-hops` with `dev-hops` if you have installed the package._
+For local development from this repository:
 
-## Test tiers (Phase 2 contract)
+```bash
+pip install -r requirements.txt
+```
 
-Use the canonical tier commands locally:
+The installed command is `dev-hops`.
+
+## Database model
+
+Dev Health Ops uses two databases with different responsibilities:
+
+| Layer | Backend | Environment variable | Purpose |
+| --- | --- | --- | --- |
+| Semantic | PostgreSQL | `POSTGRES_URI` | Users, organizations, settings, credentials |
+| Analytics | ClickHouse | `CLICKHOUSE_URI` | Commits, PRs/MRs, work items, metrics, graph data |
+
+ClickHouse is required for analytics features. MongoDB, SQLite, and PostgreSQL
+analytics sinks have been removed or deprecated; SQLite remains only for narrow
+test/local fixture paths.
+
+Start local services and run migrations:
+
+```bash
+docker compose up -d postgres clickhouse valkey
+
+export POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres"
+export CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default"
+
+dev-hops migrate postgres
+dev-hops migrate clickhouse
+```
+
+See [`docs/architecture/database-architecture.md`](docs/architecture/database-architecture.md)
+and [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md) for details.
+
+## Common workflows
+
+### Sync source data
+
+```bash
+# Local git repository
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops sync git --provider local --repo-path /path/to/repo
+
+# GitHub repository
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops sync git --provider github \
+  --auth "$GITHUB_TOKEN" \
+  --owner <owner> \
+  --repo <repo>
+
+# Pull requests
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops sync prs --provider github \
+  --auth "$GITHUB_TOKEN" \
+  --owner <owner> \
+  --repo <repo>
+
+# Work items from Jira, GitHub, GitLab, Linear, synthetic data, or all providers
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops sync work-items --provider all --backfill 30
+
+# Teams into the semantic database
+POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
+  dev-hops sync teams --provider config --path src/dev_health_ops/config/team_mapping.yaml
+```
+
+Provider authentication can come from CLI flags or environment variables such as
+`GITHUB_TOKEN`, `GITLAB_TOKEN`, `JIRA_*`, `ATLASSIAN_*`, and `LINEAR_API_KEY`.
+
+### Compute metrics
+
+```bash
+# Daily analytics rollups
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops metrics daily --backfill 30
+
+# Complexity and hotspot snapshots for a repository
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops metrics complexity --repo-path /path/to/repo --backfill 30
+```
+
+### Generate demo data
+
+```bash
+dev-hops fixtures generate \
+  --sink "clickhouse://ch:ch@localhost:8123/default" \
+  --days 30 \
+  --with-metrics \
+  --with-work-graph
+```
+
+### Run the API
+
+```bash
+POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+  dev-hops api --reload
+```
+
+OpenAPI docs are available at <http://localhost:8000/docs> when the API is
+running. GraphQL is served by the API for the web app.
+
+### Run workers
+
+Background jobs use Celery with Valkey/Redis:
+
+```bash
+POSTGRES_URI="postgresql+asyncpg://postgres:postgres@localhost:5555/postgres" \
+CLICKHOUSE_URI="clickhouse://ch:ch@localhost:8123/default" \
+CELERY_BROKER_URL="redis://localhost:6379/0" \
+CELERY_RESULT_BACKEND="redis://localhost:6379/0" \
+  dev-hops workers start-worker --queues default metrics sync reports
+```
+
+## Test tiers
+
+Canonical local test commands:
 
 ```bash
 make test:unit
@@ -49,7 +181,7 @@ make test:live-e2e
 make test:ci
 ```
 
-All commands route to one entrypoint:
+All tiers route through one entrypoint:
 
 ```bash
 ./ci/run_tests.sh <unit|integration|e2e|live-e2e|ci>
@@ -57,584 +189,70 @@ All commands route to one entrypoint:
 
 Notes:
 
-- `integration` is token-aware. It uses `GITHUB_TOKEN`/`GITLAB_TOKEN` (or `GH_TOKEN`/`GL_TOKEN`) when available, and skips cleanly when not provided.
-- `live-e2e` runs a live backend harness (`ci/run_live_backend_e2e.sh`): deterministic fixture generation into ClickHouse (`--with-metrics --with-work-graph`), API boot + readiness, then concrete assertions for `/health`, `/api/v1/meta`, and `/api/v1/home` via `curl` + Python checks.
-- `live-e2e` expects local services reachable via `CLICKHOUSE_URI` and `POSTGRES_URI` (defaults target localhost service containers).
-- `ci` always blocks on `flake8` + coverage-gated unit tests (`COVERAGE_THRESHOLD`, default `50`), then optional integration/e2e tiers.
-- `black`, `isort`, and `mypy` run as advisory checks by default. Set `STRICT_QUALITY_GATES=1` to make them blocking.
-- pytest tiers emit diagnostics by default (`-ra` summary + `--durations`, configurable via `PYTEST_DURATIONS`).
-- JUnit XML paths are stable: `test-results/junit/unit.xml`, `test-results/junit/integration.xml`, and `test-results/junit/e2e.xml` (overridable via `TEST_RESULTS_DIR`/`JUNIT_XML_*` env vars).
-- Set `PYTEST_SINGLE_RETRY=1` to enable a single retry for failing pytest tiers.
-
-## Private Repository Support ✅
-
-**Both GitHub and GitLab connectors fully support private repositories!** When provided with tokens that have appropriate permissions, you can access and sync data from private repositories just as easily as public ones.
-
-- **GitHub**: Requires `repo` scope on your personal access token
-- **GitLab**: Requires `read_api` and `read_repository` scopes on your private token
-
-See [`docs/connectors/private-repo-testing.md`](docs/connectors/private-repo-testing.md) for detailed instructions on setting up and testing private repository access.
-
-## Batch Repository Processing ✅
-
-The GitHub connector supports batch processing of repositories with:
-
-- **Pattern matching** - Filter repositories using fnmatch-style patterns (e.g., `chrisgeo/*`, `*/api-*`)
-- **Configurable batch size** - Process repositories in batches to manage memory and API usage
-- **Rate limiting** - Delay between batches plus shared backoff across workers (avoids stampedes; honors server reset/`Retry-After` when available)
-- **Async processing** - Process multiple repositories concurrently for better performance
-- **Callbacks** - Get notified as each repository is processed
-
-### Example Usage
-
-```python
-from connectors import GitHubConnector
-
-connector = GitHubConnector(token="your_token")
-
-# List repos with pattern matching (integrated into list_repositories)
-repos = connector.list_repositories(
-    org_name="myorg",
-    pattern="myorg/api-*",      # Filter repos matching this pattern
-    max_repos=50,
-)
-
-# Get all repos matching a pattern with stats
-results = connector.get_repos_with_stats(
-    org_name="myorg",
-    pattern="myorg/api-*",      # Filter repos matching this pattern
-    batch_size=10,              # Process 10 repos at a time
-    max_concurrent=4,           # Use 4 concurrent workers
-    rate_limit_delay=1.0,       # Wait 1 second between batches
-    max_commits_per_repo=100,   # Limit commits analyzed per repo
-    max_repos=50,               # Maximum repos to process
-)
-
-for result in results:
-    if result.success:
-        print(f"{result.repository.full_name}: {result.stats.total_commits} commits")
-```
-
-### Async Processing
-
-For even better performance, use the async version:
-
-```python
-import asyncio
-from connectors import GitHubConnector
-
-async def main():
-    connector = GitHubConnector(token="your_token")
-
-    results = await connector.get_repos_with_stats_async(
-        org_name="myorg",
-        pattern="myorg/*",
-        batch_size=10,
-        max_concurrent=4,
-    )
-
-    for result in results:
-        if result.success:
-            print(f"{result.repository.full_name}: {result.stats.total_commits} commits")
-
-asyncio.run(main())
-```
-
-### Pattern Matching Examples
-
-| Pattern       | Matches                                      |
-| ------------- | -------------------------------------------- |
-| `chrisgeo/m*` | `chrisgeo/dev-health-ops`, `chrisgeo/my-app` |
-| `*/api-*`     | `anyorg/api-service`, `myuser/api-gateway`   |
-| `org/repo`    | Exactly `org/repo`                           |
-| `chrisgeo/*`  | All repositories owned by `chrisgeo`         |
-| `*sync*`      | Any repository with `sync` in the name       |
-
-## Developer Health Metrics (Work + Git) ✅
-
-This repo computes daily “developer health” metrics on top of:
-
-- **Git + PR/MR facts** (from GitHub/GitLab/local syncs)
-- **Work tracking items** (Jira issues, GitHub issues/Projects, GitLab issues)
-
-Jira is **not** a replacement for pull request data — it’s used to track associated project work (throughput, WIP, work-item cycle/lead times). PR metrics still come from the Git provider data (e.g., GitHub PRs / GitLab MRs) synced by the CLI (`dev-hops sync <target> --provider ...`).
-
-**Docs**
-
-- Metrics definitions + tables: `docs/metrics.md`
-- Implementation plans, metrics inventory, requirements/roadmap: `docs/project.md`, `docs/metrics-inventory.md`, `docs/roadmap.md`
-- Task tracker configuration (Jira/GitHub/GitLab, status mapping, teams): `docs/task_trackers.md`
-
-### Quickstart (ClickHouse)
-
-1. Start ClickHouse:
-
-```bash
-docker compose -f compose.yml up -d clickhouse
-```
-
-1. Sync Git data into ClickHouse (choose one):
-
-```bash
-# Local repo (commits + stats)
-dev-hops sync git --provider local --db “clickhouse://localhost:8123/default” --repo-path .
-
-# GitHub repo (commits + stats)
-dev-hops sync git --provider github --db “clickhouse://localhost:8123/default” --owner <owner> --repo <repo>
-
-# GitLab project (commits + stats)
-dev-hops sync git --provider gitlab --db “clickhouse://localhost:8123/default” --project-id <id>
-```
-
-1. Compute derived metrics (Git + Work Items):
-
-```bash
-# (Optional) Sync work items from provider APIs (recommended)
-dev-hops sync work-items --provider all --date 2025-02-01 --backfill 30 --db “clickhouse://localhost:8123/default”
-
-# One day (derived Git metrics; enriches IC metrics from already-synced work items when available)
-dev-hops metrics daily --date 2025-02-01 --db “clickhouse://localhost:8123/default”
-
-# Backfill last 30 days ending at date
-dev-hops metrics daily --date 2025-02-01 --backfill 30 --db “clickhouse://localhost:8123/default”
-```
-
-### API (FastAPI)
-
-Run the Developer Health Ops API for the web app:
-
-```bash
-dev-hops api --db "clickhouse://localhost:8123/default" --reload
-```
-
-OpenAPI docs are available at <http://localhost:8000/docs>.
+- `integration` is token-aware and skips provider tests cleanly when credentials
+  are unavailable.
+- `live-e2e` starts a live backend harness, generates deterministic ClickHouse
+  fixtures, waits for API readiness, and asserts `/health`, `/api/v1/meta`, and
+  `/api/v1/home`.
+- `ci` blocks on `flake8` and coverage-gated unit tests. `black`, `isort`, and
+  `mypy` are advisory by default; set `STRICT_QUALITY_GATES=1` to make them
+  blocking.
+- JUnit XML paths are stable under `test-results/junit/` and can be overridden
+  with `TEST_RESULTS_DIR` / `JUNIT_XML_*` variables.
 
 ## Container images
 
-This repo ships two reusable images built from `docker/Dockerfile`, which provides a multi-stage build (`base`, `api`, `runner`). The images cover demo runners and REST APIs:
+The repository builds two reusable images from `docker/Dockerfile`:
 
-1. `dev-hops-api` runs `dev-hops api` and exposes `port 8000`.
-2. `dev-hops-runner` uses `dev-hops` as the entrypoint so you can invoke `sync`, `fixtures`, `metrics`, etc., through a container.
+| Image | Purpose |
+| --- | --- |
+| `dev-hops-api` | Runs `dev-hops api` on port 8000 |
+| `dev-hops-runner` | Uses `dev-hops` as the entrypoint for sync, fixtures, metrics, and maintenance jobs |
 
-### Building the images
-
-Use `scripts/build-images.sh` to build both images (it sets `SETUPTOOLS_SCM_PRETEND_VERSION` so `setuptools_scm` doesn't require `.git`). The base stage installs the package and then drops the source tree so the runtime image contains only the installed wheel. Override the defaults with:
-
-- Note: the API runtime loads packaged SQL files from `dev_health_ops/api/sql`. If you extend the build, make sure those SQL files are included in the wheel (the Docker build will fail fast if they're missing).
-
-- `IMAGE_REGISTRY` (defaults to `ghcr.io/chrisgeo/dev-health-ops`)
-- `VERSION` (tags the images; default `latest`)
-- `SETUPTOOLS_SCM_PRETEND_VERSION` (needed when building from a released archive without Git metadata)
+Build both images:
 
 ```bash
-cd /path/to/dev-health-ops
 IMAGE_REGISTRY=ghcr.io/myorg/dev-health-ops \
 VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo latest) \
-./scripts/build-images.sh
+  ./scripts/build-images.sh
 ```
 
-Any extra arguments (`--no-cache`, `--pull`, etc.) are forwarded to both `docker build` invocations.
-
-### Running the API container
-
-Expose port `8000` and point the container at your ClickHouse backend:
+Run the API image:
 
 ```bash
 docker run --rm -p 8000:8000 \
-  -e DATABASE_URI=clickhouse://ch:ch@clickhouse:8123/stats \
+  -e POSTGRES_URI="postgresql+asyncpg://postgres:postgres@postgres:5432/postgres" \
+  -e CLICKHOUSE_URI="clickhouse://ch:ch@clickhouse:8123/default" \
   dev-hops-api:latest
 ```
 
-Add flags after the image name (e.g., `--reload`) to modify the default `api` invocation (`--host 0.0.0.0 --port 8000` is already applied).
-
-### Using the runner container
-
-Mount repositories or fixtures directories and run any `dev-hops` command you need. Share a Docker network with ClickHouse (Compose uses `dev-health-ops_default` by default):
+Run a CLI job through the runner image:
 
 ```bash
 docker run --rm -it \
-  --network dev-health-ops_default \
+  --network dev-health_default \
   -v "$(pwd)":/app \
   -w /app \
-  -e DATABASE_URI=clickhouse://ch:ch@clickhouse:8123/stats \
+  -e CLICKHOUSE_URI="clickhouse://ch:ch@clickhouse:8123/default" \
   dev-hops-runner:latest \
-  fixtures generate --db clickhouse://ch:ch@clickhouse:8123/stats --days 14
+  metrics daily --backfill 14
 ```
 
-Replace the final arguments with any `dev-hops` subcommand you need (`sync`, `metrics daily`, etc.). The entrypoint handles argument parsing so you can run the same image in CI, demos, or release flows.
-
-### Automated builds
-
-`docker-images.yml` runs on GitHub when a `v*` tag is pushed or a release is published. It logs into `ghcr.io`, builds both `runner`/`api` targets from `docker/Dockerfile`, and pushes `:latest` plus the tag pulled from the workflow context (`${{ github.ref_name }}` or the release tag). Make sure `GITHUB_TOKEN` has `packages: write` (default) so the workflow can publish into `ghcr.io/chrisgeo/dev-health-ops`.
-
-### “Download” work tracking data (Jira/GitHub/GitLab)
-
-Work items are fetched from provider APIs via a dedicated sync command. This is separate from PR ingestion:
-
-- Configure credentials + mapping (see `docs/task_trackers.md`)
-- Sync work items: `dev-hops sync work-items --provider jira|github|gitlab|all ...` (use `-s` to filter repos; `--auth` for GitHub/GitLab token override)
-- `metrics daily` does not need `--provider` unless you want backward-compatible "sync-then-compute" behavior in one step.
-
-`src/dev_health_ops/cli.py` automatically loads a local `.env` file from the repo root (without overriding already-set environment variables). Disable with `DISABLE_DOTENV=1`.
-
-### Sync Teams
-
-You can sync team definitions into the database from multiple sources. This allows dashboards to group data by teams.
-
-```bash
-# Sync from a local YAML config (default)
-dev-hops sync teams --db "sqlite+aiosqlite:///stats.db" --path config/teams.yaml
-
-# Sync from Jira Projects (uses JIRA_* env vars)
-dev-hops sync teams --db "sqlite+aiosqlite:///stats.db" --provider jira
-
-# Generate synthetic teams for testing
-dev-hops sync teams --db "sqlite+aiosqlite:///stats.db" --provider synthetic
-```
-
-## Database Configuration
-
-This project supports PostgreSQL, MongoDB, SQLite, and ClickHouse as storage backends.
-
-### Environment Variables
-
-| Variable | Status | Used for |
-|----------|--------|----------|
-| `POSTGRES_URI` | Required (semantic DB) | Users/orgs/settings, admin flows, Alembic-backed services |
-| `CLICKHOUSE_URI` | Required (analytics DB) | Sync pipelines, metrics jobs, analytics APIs |
-| `DATABASE_URI` | Deprecated fallback | Legacy DB resolver paths (prefer `POSTGRES_URI` + `CLICKHOUSE_URI`) |
-| `DATABASE_URL` | Deprecated alias | Alias fallback alongside `DATABASE_URI` |
-| `SECONDARY_DATABASE_URI` | Optional | Dual-write mode (`--sink both`) |
-| `GITHUB_TOKEN` / `GITLAB_TOKEN` | Optional | Provider auth defaults when `--auth` is omitted |
-| `GITLAB_URL` | Optional | GitLab host override (default `https://gitlab.com`) |
-| `JIRA_*` / `ATLASSIAN_*` | Optional | Jira/Atlassian work-item ingestion and AGG integration |
-| `LINEAR_API_KEY` | Optional | Linear work-item ingestion (`sync work-items --provider linear`) |
-| `APP_BASE_URL` | Optional | API callback origins (billing + SSO routes) |
-| `JWT_SECRET_KEY` / `SETTINGS_ENCRYPTION_KEY` | Required in production | Auth token signing and settings encryption |
-| `DB_ECHO`, `LOG_LEVEL`, `DISABLE_DOTENV` | Optional | Diagnostics/runtime behavior toggles |
-| `REPO_UUID`, `MAX_WORKERS` | Optional | Repository identity and processing parallelism |
-
-Deprecated variables are still honored for compatibility, but new setup should use `POSTGRES_URI` and `CLICKHOUSE_URI`.
-
-### Command-Line Arguments
-
-You can also configure the database using command-line arguments, which will override environment variables:
-
-#### Core Arguments
-
-- **`--db`**: Database connection string (required for `sync`; optional for `metrics daily` if `DATABASE_URI` is set)
-- **`--db-type`**: Database backend override (`postgres`, `mongo`, `sqlite`, or `clickhouse`) - optional if URL scheme is clear
-- **`--provider`**: Source provider for sync targets (`local`, `github`, `gitlab`, `synthetic`)
-- **`--auth`**: Authentication token (GitHub/GitLab)
-- **`--repo-path`**: Path to the git repository (for `--provider local`)
-- **`--since`**: Lower-bound date/time filter for sync targets. Uses ISO formats (e.g., `2024-01-01` or `2024-01-01T00:00:00`).
-
-#### Connector-Specific Arguments
-
-- **`--owner`**: GitHub repository owner/organization
-- **`--repo`**: GitHub repository name
-- **`--gitlab-url`**: GitLab instance URL (default: <https://gitlab.com>)
-- **`--project-id`**: GitLab project ID (numeric)
-
-#### Batch Processing Options
-
-These unified options work with both GitHub and GitLab connectors:
-
-- **`-s, --search`**: fnmatch-style pattern to filter repositories/projects (e.g., `owner/repo*`, `group/p*`)
-- **`--batch-size`**: Number of repositories/projects to process in each batch (default: 10)
-- **`--group`**: Organization/group name to fetch repositories/projects from
-- **`--max-concurrent`**: Maximum concurrent workers for batch processing (default: 4)
-- **`--rate-limit-delay`**: Delay in seconds between batches for rate limiting (default: 1.0)
-- **`--max-commits-per-repo`**: Maximum commits to analyze per repository/project
-- **`--max-repos`**: Maximum number of repositories/projects to process
-- **`--use-async`**: Use async processing for better performance
-
-Example usage:
-
-```bash
-# Using PostgreSQL (auto-detected from URL)
-dev-hops sync git --provider local --db "postgresql+asyncpg://user:pass@localhost:5432/stats"
-
-# Using MongoDB (auto-detected from URL)
-dev-hops sync git --provider local --db "mongodb://localhost:27017"
-
-# Local repo filtered to recent activity
-dev-hops sync git --provider local \
-  --db "sqlite+aiosqlite:///stats.db" \
-  --repo-path /path/to/repo \
-  --since 2024-01-01
-# Commits and stats are limited to changes on/after this date.
-
-# Using SQLite (file-based, auto-detected)
-dev-hops sync git --provider local --db "sqlite+aiosqlite:///stats.db"
-
-# Using SQLite (in-memory)
-dev-hops sync git --provider local --db "sqlite+aiosqlite:///:memory:"
-
-# GitHub repository with unified auth
-dev-hops sync git --provider github \
-  --db "postgresql+asyncpg://user:pass@localhost:5432/stats" \
-  --auth "$GITHUB_TOKEN" \
-  --owner torvalds \
-  --repo linux
-
-# GitLab project with unified auth
-dev-hops sync git --provider gitlab \
-  --db "mongodb://localhost:27017" \
-  --auth "$GITLAB_TOKEN" \
-  --project-id 278964
-
-# Batch process repositories matching a pattern (GitHub)
-dev-hops sync git --provider github \
-  --db "sqlite+aiosqlite:///stats.db" \
-  --auth "$GITHUB_TOKEN" \
-  -s "chrisgeo/dev-health-*" \
-  --group "chrisgeo" \
-  --batch-size 5 \
-  --max-concurrent 2 \
-  --max-repos 10 \
-  --use-async
-
-# Batch process projects matching a pattern (GitLab)
-dev-hops sync git --provider gitlab \
-  --db "sqlite+aiosqlite:///stats.db" \
-  --auth "$GITLAB_TOKEN" \
-  --gitlab-url "https://gitlab.com" \
-  --group "mygroup" \
-  -s "mygroup/api-*" \
-  --batch-size 5 \
-  --max-concurrent 2 \
-  --max-repos 10 \
-  --use-async
-```
-
-### MongoDB Connection String Format
-
-MongoDB connection strings follow the standard MongoDB URI format:
-
-- **Basic**: `mongodb://host:port`
-- **With authentication**: `mongodb://username:password@host:port`
-- **With database**: `mongodb://username:password@host:port/database_name`
-- **With options**: `mongodb://host:port/?authSource=admin&retryWrites=true`
-
-Note: Include the database name in the URI (e.g., `mongodb://host:port/stats`).
-
-### SQLite Connection String Format
-
-SQLite connection strings use the following format:
-
-- **File-based**: `sqlite+aiosqlite:///path/to/database.db` (relative path) or `sqlite+aiosqlite:////absolute/path/to/database.db` (absolute path - note the four slashes)
-- **In-memory**: `sqlite+aiosqlite:///:memory:` (data is lost when the process exits)
-
-SQLite is ideal for:
-
-- Local development and testing
-- Single-user scenarios
-- Small to medium-sized repositories
-- Environments where running a database server is not practical
-
-Note: SQLite does not use connection pooling since it is a file-based database.
-
-### Performance Tuning
-
-The script includes several configuration options to optimize performance:
-
-- **`MAX_WORKERS`**: Controls parallel processing of git blame data. Set this based on your CPU cores (e.g., 2-8). Higher values speed up processing but use more CPU and memory.
-
-- **Connection Pooling**: PostgreSQL automatically uses connection pooling with these defaults:
-  - Pool size: 20 connections
-  - Max overflow: 30 additional connections
-  - Connections are recycled every hour
-
-**Example for large repositories:**
-
-```bash
-export MAX_WORKERS=8
-dev-hops sync git --provider local --db "sqlite+aiosqlite:///stats.db" --repo-path .
-```
-
-**Example for resource-constrained environments:**
-
-```bash
-export MAX_WORKERS=2
-dev-hops sync git --provider local --db "sqlite+aiosqlite:///stats.db" --repo-path .
-```
-
-## Performance Optimizations
-
-This project includes several key performance optimizations to speed up git data processing:
-
-### 1. **Increased Batch Size** (10x improvement)
-
-- **Batching**: Uses batched inserts to reduce database round-trips
-- **Impact**: Significantly reduces database round-trips, improving insertion speed
-
-### 2. **Parallel Git Blame Processing** (4-8x improvement)
-
-- **Implementation**: Uses asyncio with configurable worker pool
-- **Default**: 4 parallel workers processing files concurrently
-- **Impact**: Multi-core CPU utilization, dramatically faster blame processing
-- **Configuration**: Set `MAX_WORKERS=8` for more powerful machines
-
-### 3. **Database Connection Pooling** (PostgreSQL)
-
-- **Pool size**: 20 connections (up from default 5)
-- **Max overflow**: 30 additional connections (up from default 10)
-- **Impact**: Better handling of concurrent operations, reduced connection overhead
-- **Auto-configured**: No manual setup required
-
-### 4. **Optimized Bulk Operations**
-
-- All database insertions use bulk operations
-- MongoDB operations use `ordered=False` for better performance
-- SQLAlchemy uses `add_all()` for efficient batch inserts
-
-### 5. **Smart File Filtering**
-
-- Skips binary files (images, videos, archives, etc.)
-- Skips files larger than 1MB for content reading
-- Reduces unnecessary I/O and processing time
-
-### Expected Performance Improvements
-
-For a typical repository with 1000 files and 10,000 commits:
-
-| Operation    | Before      | After         | Improvement      |
-| ------------ | ----------- | ------------- | ---------------- |
-| Git Blame    | 50 min      | 6-12 min      | **4-8x faster**  |
-| Commits      | -           | 1-2 min       | **New feature**  |
-| Commit Stats | -           | 2-4 min       | **New feature**  |
-| Files        | -           | 30-60 sec     | **New feature**  |
-| **Total**    | **50+ min** | **10-20 min** | **~3-5x faster** |
-
-_Actual performance depends on hardware, repository size, and configuration._
-
-### PostgreSQL vs MongoDB vs SQLite: Setup and Migration Considerations
-
-#### Using PostgreSQL
-
-- Requires running database migrations with Alembic before first use
-- Provides strong relational data structure
-- Best for complex queries and joins
-- Example setup:
-
-  ```bash
-  # Start PostgreSQL with Docker Compose
-  docker compose up postgres -d
-
-  # Run migrations (Alembic reads DATABASE_URI)
-  export DATABASE_URI="postgresql+asyncpg://postgres:postgres@localhost:5333/postgres"
-  alembic upgrade head
-
-  # Sync a local repo
-  dev-hops sync git --provider local --db "$DATABASE_URI" --repo-path .
-  ```
-
-#### Using MongoDB
-
-- No migrations required - collections are created automatically
-- Schema-less design allows for flexible data structures
-- Best for quick setup and document-based storage
-- Example setup:
-
-  ```bash
-  # Start MongoDB with Docker Compose
-  docker compose up mongo -d
-
-  dev-hops sync git --provider local --db "mongodb://localhost:27017/stats" --repo-path .
-  ```
-
-#### Using SQLite
-
-- No migrations required - tables are created automatically using SQLAlchemy
-- Simple file-based or in-memory database
-- No external database server required
-- Best for local development, testing, and single-user scenarios
-- Example setup:
-
-  ```bash
-  dev-hops sync git --provider local --db "sqlite+aiosqlite:///stats.db" --repo-path .
-  ```
-
-  Or for an in-memory database (data lost when process exits):
-
-  ```bash
-  dev-hops sync git --provider local --db "sqlite+aiosqlite:///:memory:" --repo-path .
-  ```
-
-#### Using ClickHouse
-
-- No migrations required - tables are created automatically using `ReplacingMergeTree`
-- Best for analytics and large datasets
-- Example setup:
-
-  ```bash
-  dev-hops sync git --provider local --db "clickhouse://default:@localhost:8123/default" --repo-path .
-  ```
-
-#### Switching Between Databases
-
-- The different backends use different storage mechanisms and are not directly compatible
-- Data is not automatically migrated when switching between PostgreSQL, MongoDB, SQLite, and ClickHouse
-- If you need to switch backends, you'll need to re-run the analysis to populate the new database
-- PostgreSQL and MongoDB can run simultaneously on the same machine using different ports (see `compose.yml`)
-
-### Local Repository Pull Request Handling Warning
-
-**Important:** When processing local repositories, pull request records are inferred from merge commit messages and local refs. These inferences are estimation-based and highly volatile:
-
-- Dates (created_at, merged_at) may be inaccurate due to limited information in local repositories
-- PR states (open/closed/merged) are estimated from commit history
-- Some PRs may be missed entirely if they don't match expected patterns
-- The accuracy depends heavily on repository history and commit message conventions
-
-This behavior is different from GitHub/GitLab connectors, which provide accurate PR data directly from the provider API.
-
-## Example Running Order
-
-1.  Sync teams
-
-dev-hops sync teams --provider config --path config/teams.yaml --db "<DB_CONN>"
-
-# or: dev-hops sync teams --provider jira --db "<DB_CONN>"
-
-2. Sync git facts (example: GitHub)
-
-dev-hops sync git --provider github --owner "<ORG>" --repo "<REPO>" --db "<DB_CONN>"
-dev-hops sync prs --provider github --owner "<ORG>" --repo "<REPO>" --db "<DB_CONN>"
-dev-hops sync blame --provider github --owner "<ORG>" --repo "<REPO>" --db "<DB_CONN>"
-dev-hops sync cicd --provider github --owner "<ORG>" --repo "<REPO>" --db "<DB_CONN>"
-dev-hops sync deployments --provider github --owner "<ORG>" --repo "<REPO>" --db "<DB_CONN>"
-dev-hops sync incidents --provider github --owner "<ORG>" --repo "<REPO>" --db "<DB_CONN>"
-
-3. Sync work items (and derived work‑item tables)
-
-dev-hops sync work-items --provider github --db "<DB_CONN>" --date YYYY-MM-DD --backfill 30
-
-# use --provider jira|gitlab|all as needed
-
-4. Compute daily metrics (uses stored facts)
-
-dev-hops metrics daily --db "<DB_CONN>" --date YYYY-MM-DD --backfill 30
-
-5. Compute complexity snapshots
-
-dev-hops metrics complexity --repo-path /path/to/repo --db "<DB_CONN>" --date YYYY-MM-DD --backfill 30
-
-## Sample Dashboards
-
-<img width="1807" height="1080" alt="Advanced Work Tracking Phase 2" src="https://github.com/user-attachments/assets/f635d1ec-2c0f-41c6-b57c-e3687f090007" />
-<img width="1807" height="1080" alt="CI CD Pipelines Dashboard" src="https://github.com/user-attachments/assets/ba8a03bc-fa4c-4241-9a3b-ab312c9e9f23" />
-<img width="1807" height="1080" alt="Code Hotspots Dashboard" src="https://github.com/user-attachments/assets/3ba27599-ec82-424d-a616-330b946ac37b" />
-<img width="1080" height="1441" alt="Collaboration Developer Health Dashboard" src="https://github.com/user-attachments/assets/61e09239-07de-4a54-ad47-6ab50641c137" />
-<img width="1807" height="1080" alt="Complexity Hotspots Dashboard" src="https://github.com/user-attachments/assets/6958338e-cae7-4f19-8dae-e543f461f811" />
-<img width="1807" height="1080" alt="Deployments Dashboard" src="https://github.com/user-attachments/assets/a6cc37c8-ab92-42f4-8d33-2ad85c7a12d6" />
-<img width="1807" height="1080" alt="Developer Landscape Dashboard" src="https://github.com/user-attachments/assets/811ee083-80b4-4543-9267-e8afb1efc5e6" />
-<img width="1080" height="1137" alt="IC Drilldown Developer Health" src="https://github.com/user-attachments/assets/4223f663-2e10-4119-aa4b-2f187928bebc" />
-<img width="1807" height="1080" alt="Incidents Dashboard" src="https://github.com/user-attachments/assets/341ff259-1c97-4c2f-a144-2a26714b7c1c" />
-<img width="1807" height="1080" alt="Investment Areas Dashboard" src="https://github.com/user-attachments/assets/87292edd-26f8-4c09-9047-f8a6317a2b90" />
-<img width="1807" height="1080" alt="Issue Types - Developer Health" src="https://github.com/user-attachments/assets/c80c4e43-fc02-4ca1-9191-e6fefc268c02" />
-<img width="1080" height="1593" alt="Quality   Risk Dashboard" src="https://github.com/user-attachments/assets/5b398dd3-8c42-4f95-b77b-145f4ff71e27" />
-<img width="1080" height="1289" alt="Repo Health Dashboard" src="https://github.com/user-attachments/assets/e7e31df3-a073-476c-a76a-9830147bbdbd" />
-<img width="1807" height="1080" alt="Well-being Team Level Dashboard" src="https://github.com/user-attachments/assets/830f84e3-b356-4499-be89-7967a1537576" />
-<img width="1080" height="1669" alt="Work Tracking Developer Health Dashboard" src="https://github.com/user-attachments/assets/7bb42ae9-bcd3-437b-b60d-6064b9f9ee81" />
+## Key docs
+
+- [`docs/getting-started.md`](docs/getting-started.md): setup and demo data
+- [`docs/ops/cli-reference.md`](docs/ops/cli-reference.md): full CLI reference
+- [`docs/architecture/database-architecture.md`](docs/architecture/database-architecture.md): PostgreSQL/ClickHouse split
+- [`docs/architecture/data-pipeline.md`](docs/architecture/data-pipeline.md): provider → processor → sink boundaries
+- [`docs/product/prd.md`](docs/product/prd.md): product intent and guardrails
+- [`docs/user-guide/investment-view.md`](docs/user-guide/investment-view.md): canonical Investment View
+- [`docs/user-guide/reports.md`](docs/user-guide/reports.md): Report Center and scheduled reports
+
+## Guardrails
+
+- WorkUnits are evidence containers, not categories.
+- Investment categorization runs at compute time and persists distributions.
+- Theme rollups are deterministic from canonical subcategories.
+- UX-time LLM usage is explanation-only and must not recompute categories.
+- Analytics persistence goes through ClickHouse sinks, not file exports or debug
+  dumps.

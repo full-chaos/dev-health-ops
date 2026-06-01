@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.org_guard import organization_exists_sync
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ def dispatch_scheduled_reports(self) -> dict:
             )
 
             for job in jobs:
+                if not organization_exists_sync(session, job.org_id):
+                    skipped += 1
+                    continue
+
                 report = (
                     session.query(SavedReport)
                     .filter(

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.sync_batch import _is_batch_eligible, dispatch_batch_sync
 from dev_health_ops.workers.sync_runtime import run_sync_config
 from dev_health_ops.workers.task_utils import _as_datetime, _as_str
@@ -37,6 +38,10 @@ def dispatch_scheduled_syncs(self) -> dict:
             )
 
             for config in configs:
+                if not organization_exists_sync(session, config.org_id):
+                    skipped += 1
+                    continue
+
                 job = (
                     session.query(ScheduledJob)
                     .filter(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 from typing import TypedDict
 
@@ -102,6 +103,45 @@ async def _create_org_async(ns: argparse.Namespace) -> int:
 
 def create_org(ns: argparse.Namespace) -> int:
     return asyncio.run(_create_org_async(ns))
+
+
+async def _delete_org_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.services.org_deletion import OrganizationDeletionService
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+    session = await _get_session(ns)
+    clickhouse_sink = None
+    try:
+        analytics_db = getattr(ns, "analytics_db", None)
+        if analytics_db:
+            clickhouse_sink = ClickHouseMetricsSink(dsn=analytics_db)
+        service = OrganizationDeletionService(
+            session,
+            clickhouse_client=clickhouse_sink,
+        )
+        result = await service.delete(ns.org_id, dry_run=ns.dry_run)
+        if ns.dry_run:
+            await session.rollback()
+        else:
+            await session.commit()
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        return 0
+    except ValueError as e:
+        await session.rollback()
+        print(f"Error: {e}")
+        return 1
+    except Exception as e:
+        await session.rollback()
+        print(f"Error: {e}")
+        return 1
+    finally:
+        if clickhouse_sink is not None:
+            clickhouse_sink.close()
+        await session.close()
+
+
+def delete_org(ns: argparse.Namespace) -> int:
+    return asyncio.run(_delete_org_async(ns))
 
 
 async def _list_users_async(ns: argparse.Namespace) -> int:
@@ -613,6 +653,20 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--owner-email", dest="owner_email", help="Email of the initial owner."
     )
     orgs_create.set_defaults(func=create_org)
+
+    orgs_delete = orgs_sub.add_parser(
+        "delete", help="Delete an organization and all scoped data."
+    )
+    orgs_delete.add_argument(
+        "--org-id", dest="org_id", required=True, help="Organization ID."
+    )
+    orgs_delete.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Return the deletion plan without deleting data.",
+    )
+    orgs_delete.set_defaults(func=delete_org)
 
     orgs_list = orgs_sub.add_parser("list", help="List all organizations.")
     orgs_list.add_argument("--limit", type=int, default=100, help="Max orgs to list.")

@@ -55,6 +55,7 @@ nav:
       - Enterprise Test Plan: ops/enterprise-test-plan.md
       - Workers: ops/workers.md
       - SLOs: slos.md
+      - Customer Offboarding: ops/customer-offboarding.md
   - CLI:
       - Overview: cli.md
       - Reference: ops/cli-reference.md

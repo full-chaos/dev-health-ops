@@ -8,6 +8,7 @@ from typing import Any
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.task_utils import (
     _as_datetime,
     _as_dict,
@@ -48,6 +49,10 @@ def dispatch_scheduled_metrics(self) -> dict:
             )
 
             for job in jobs:
+                if not organization_exists_sync(session, job.org_id):
+                    skipped += 1
+                    continue
+
                 if job.is_running:
                     skipped += 1
                     continue
@@ -138,6 +143,20 @@ def run_daily_metrics(
     )
 
     try:
+        if org_id:
+            from dev_health_ops.db import get_postgres_session_sync
+
+            with get_postgres_session_sync() as session:
+                if not organization_exists_sync(session, org_id):
+                    logger.info(
+                        "Skipping daily metrics task for deleted org_id=%s", org_id
+                    )
+                    return {
+                        "status": "skipped",
+                        "reason": "organization_not_found",
+                        "day": target_day.isoformat(),
+                    }
+
         # Run the async job in a new event loop
         run_async(
             run_daily_metrics_job(

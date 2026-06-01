@@ -8,6 +8,7 @@ from typing import Any
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.task_utils import (
     _GIT_TARGETS,
     _WORK_ITEM_TARGETS,
@@ -373,6 +374,10 @@ def run_sync_config(
 
     try:
         with get_postgres_session_sync() as session:
+            if not organization_exists_sync(session, org_id):
+                logger.info("Skipping sync config task for deleted org_id=%s", org_id)
+                return {"status": "skipped", "reason": "organization_not_found"}
+
             config = (
                 session.query(SyncConfiguration)
                 .filter(

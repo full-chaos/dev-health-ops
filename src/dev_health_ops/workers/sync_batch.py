@@ -11,6 +11,7 @@ from celery import chord, group
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.sync_runtime import (
     _dispatch_post_sync_tasks,
     run_sync_config,
@@ -132,6 +133,12 @@ def dispatch_batch_sync(
 
     try:
         with get_postgres_session_sync() as session:
+            if not organization_exists_sync(session, org_id):
+                logger.info(
+                    "Skipping batch sync dispatch for deleted org_id=%s", org_id
+                )
+                return {"status": "skipped", "reason": "organization_not_found"}
+
             config = (
                 session.query(SyncConfiguration)
                 .filter(

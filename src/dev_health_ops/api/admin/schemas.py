@@ -443,6 +443,22 @@ class OrganizationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DeletionScopeResponse(BaseModel):
+    total: int
+    tables: dict[str, int]
+
+
+class DeletionResultResponse(BaseModel):
+    organization_id: str
+    dry_run: bool
+    timestamp: str
+    postgres: DeletionScopeResponse
+    clickhouse: DeletionScopeResponse
+    disabled_jobs: int
+    credentials_deleted: int
+    warnings: list[str]
+
+
 class OrganizationCreate(BaseModel):
     name: str = Field(..., min_length=1)
     slug: str | None = None

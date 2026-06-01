@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import require_admin, require_superuser
 from dev_health_ops.api.admin.schemas import (
+    DeletionResultResponse,
     MembershipCreate,
     MembershipResponse,
     MembershipUpdateRole,
@@ -22,6 +23,7 @@ from dev_health_ops.api.admin.schemas import (
 )
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.invites import create_invite, send_invite_email
+from dev_health_ops.api.services.org_deletion import OrganizationDeletionService
 from dev_health_ops.api.services.users import MembershipService, OrganizationService
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
@@ -160,17 +162,20 @@ async def update_organization(
     return _organization_response(org)
 
 
-@router.delete("/orgs/{org_id}")
+@router.delete("/orgs/{org_id}", response_model=DeletionResultResponse)
 async def delete_organization(
     org_id: str,
+    dry_run: bool = False,
     session: AsyncSession = Depends(get_session),
     current_user: AuthenticatedUser = Depends(require_superuser),
-) -> dict:
-    svc = OrganizationService(session)
-    deleted = await svc.delete(org_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    return {"deleted": True}
+) -> dict[str, Any]:
+    try:
+        result = await OrganizationDeletionService(session).delete(
+            org_id, dry_run=dry_run
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result.to_dict()
 
 
 @router.get("/orgs/{org_id}/members", response_model=list[MembershipResponse])

@@ -352,6 +352,11 @@ async def test_org_deletion_deletes_only_target_org_and_sanitizes_logs(
     assert "encrypted-secret-value" not in log_output
     assert "encrypted-token-body" not in log_output
     assert "encrypted-cert" not in log_output
+    # CodeQL py/log-injection (#945): the dry_run query param is logged via a
+    # constant literal selected by the boolean, not the tainted value itself.
+    # Confirm the finished entry renders the expected boolean text on one line.
+    assert "Organization deletion finished" in log_output
+    assert "dry_run=False" in log_output
 
 
 @pytest.mark.asyncio

@@ -35,3 +35,5 @@ dist/
 
 # Mypy report artifact
 index.txt
+.omo/**
+.worktrees/**

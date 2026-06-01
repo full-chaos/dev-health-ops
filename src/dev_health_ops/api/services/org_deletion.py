@@ -342,7 +342,7 @@ class OrganizationDeletionService:
         logger.info(
             "Organization deletion finished org_id=%s dry_run=%s postgres_rows=%s clickhouse_rows=%s",
             org_id_str,
-            dry_run,
+            "True" if dry_run else "False",
             result.postgres.total,
             result.clickhouse.total,
         )

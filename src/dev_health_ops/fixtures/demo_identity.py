@@ -60,3 +60,36 @@ def demo_repo_name(base_name: str, index: int, repo_count: int) -> str:
     if base_name == DEFAULT_DEMO_REPO_NAME and index < len(DEMO_REPO_NAMES):
         return DEMO_REPO_NAMES[index]
     return f"{base_name}-{index + 1}"
+
+
+# Curated, believable team identities (``(team_id, team_name)``). Replaces the
+# generic ``Team 1``/``Alpha Team`` synthetic team names so team pickers, chord
+# diagrams, and repo->team flows render coherent names. Aligned with the
+# dev-health-web sample team names (Core, Platform, Growth, Data, Infra ...).
+DEMO_TEAMS: tuple[tuple[str, str], ...] = (
+    ("core", "Core"),
+    ("platform", "Platform"),
+    ("growth", "Growth"),
+    ("data", "Data"),
+    ("infra", "Infra"),
+    ("mobile", "Mobile"),
+    ("reliability", "Reliability"),
+    ("research", "Research"),
+    ("security", "Security"),
+    ("docs", "Docs"),
+)
+
+# Default team identity used as a single-team fallback when no teams are
+# assigned to a generator (replaces the legacy ``("alpha", "Alpha Team")``).
+DEFAULT_DEMO_TEAM: tuple[str, str] = DEMO_TEAMS[0]
+
+
+def demo_team_identity(index: int) -> tuple[str, str] | None:
+    """Return the curated ``(team_id, team_name)`` for the team at ``index``.
+
+    Returns ``None`` once the curated list is exhausted so callers can fall back
+    to the legacy ``team-{n}`` / ``Team {n}`` scheme for very large team counts.
+    """
+    if 0 <= index < len(DEMO_TEAMS):
+        return DEMO_TEAMS[index]
+    return None

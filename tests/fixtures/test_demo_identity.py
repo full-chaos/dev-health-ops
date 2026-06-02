@@ -17,9 +17,12 @@ import uuid
 
 from dev_health_ops.fixtures.demo_identity import (
     DEFAULT_DEMO_REPO_NAME,
+    DEFAULT_DEMO_TEAM,
     DEMO_ORG_NAME,
     DEMO_REPO_NAMES,
+    DEMO_TEAMS,
     demo_repo_name,
+    demo_team_identity,
 )
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
@@ -78,3 +81,31 @@ def test_generated_org_name_is_curated_without_org_id():
     data = SyntheticDataGenerator(seed=1).generate_users(org_id=None)
     for org in data["organizations"]:
         assert org.name == DEMO_ORG_NAME
+
+
+def test_demo_team_identity_is_curated_and_distinct():
+    names = [demo_team_identity(i) for i in range(len(DEMO_TEAMS))]
+    assert names == list(DEMO_TEAMS)
+    ids = [t[0] for t in DEMO_TEAMS]
+    labels = [t[1] for t in DEMO_TEAMS]
+    assert len(set(ids)) == len(ids)
+    assert len(set(labels)) == len(labels)
+    # Never the legacy generic scaffolding.
+    for tid, label in DEMO_TEAMS:
+        assert label not in ("Alpha Team", "Beta Team")
+        assert not label.startswith("Team ")
+        assert tid not in ("alpha", "beta")
+    assert DEFAULT_DEMO_TEAM == DEMO_TEAMS[0]
+
+
+def test_demo_team_identity_falls_back_past_curated_list():
+    assert demo_team_identity(len(DEMO_TEAMS)) is None
+
+
+def test_generated_team_names_are_curated_not_generic():
+    teams = SyntheticDataGenerator(seed=3).generate_teams(count=4)
+    rendered = [(t.id, t.name) for t in teams]
+    assert rendered == list(DEMO_TEAMS[:4])
+    for _, name in rendered:
+        assert name not in ("Alpha Team", "Beta Team")
+        assert not name.startswith("Team ")

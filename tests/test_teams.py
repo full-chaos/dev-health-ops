@@ -123,12 +123,18 @@ async def test_clickhouse_store_teams():
 
 
 def test_synthetic_teams_generation():
-    """Test synthetic team generation."""
+    """Test synthetic team generation uses curated, believable identities."""
+    from dev_health_ops.fixtures.demo_identity import DEMO_TEAMS
+
     generator = SyntheticDataGenerator()
     teams = generator.generate_teams(count=3)
     assert len(teams) == 3
+    rendered = [(str(getattr(t, "id")), str(getattr(t, "name"))) for t in teams]
+    assert rendered == list(DEMO_TEAMS[:3])
     for team in teams:
-        assert str(getattr(team, "id")).startswith("team-")
+        # Never the legacy generic 'team-N'/'Team N' scaffolding.
+        assert not str(getattr(team, "id")).startswith("team-")
+        assert not str(getattr(team, "name")).startswith("Team ")
         assert len(list(getattr(team, "members") or [])) > 0
 
 

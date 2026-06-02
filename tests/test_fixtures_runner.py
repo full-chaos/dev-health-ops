@@ -530,7 +530,7 @@ class TestGenerateUsersRespectsOrgId:
 
         assert data["organizations"][0].id == expected
         assert data["organizations"][0].slug == "default-org"
-        assert data["organizations"][0].name == "Default Organization"
+        assert data["organizations"][0].name == "Meridian"
         for m in data["memberships"]:
             assert m.org_id == expected
 

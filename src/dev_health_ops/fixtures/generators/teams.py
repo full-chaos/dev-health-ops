@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from dev_health_ops.fixtures.demo_identity import DEMO_ORG_NAME
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
 from dev_health_ops.metrics.schemas import RepoMetricsDailyRecord
 from dev_health_ops.models.git import Repo
@@ -119,11 +120,11 @@ class TeamsGeneratorMixin(BaseGeneratorMixin):
                 _safe = re.sub(r"[^a-z0-9-]+", "-", org_id.lower()).strip("-")
                 _slug_seed = (_safe or f"fixture-{target_org_uuid.hex[:8]}")[:60]
             target_slug = _slug_seed
-            target_name = f"Fixture Org ({org_id})"
+            target_name = DEMO_ORG_NAME
         else:
             target_org_uuid = uuid.uuid5(_DEFAULT_NS, "default-org")
             target_slug = "default-org"
-            target_name = "Default Organization"
+            target_name = DEMO_ORG_NAME
 
         if include_admin:
             admin_user = User(

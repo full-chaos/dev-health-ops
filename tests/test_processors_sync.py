@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from dev_health_ops.fixtures.demo_identity import DEFAULT_DEMO_REPO_NAME
 from dev_health_ops.processors import sync as sync_mod
 
 
@@ -75,7 +76,7 @@ def test_resolve_synthetic_repo_name_defaults_and_variants():
         sync_mod._resolve_synthetic_repo_name(
             _ns(repo_name=None, owner=None, repo=None, search=None)
         )
-        == "acme/demo-app"
+        == DEFAULT_DEMO_REPO_NAME
     )
 
 

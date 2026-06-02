@@ -7,6 +7,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.fixtures.demo_identity import (
+    DEFAULT_DEMO_REPO_NAME,
+    demo_repo_name,
+)
 from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 from dev_health_ops.licensing.gating import LicenseManager
 from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
@@ -438,7 +442,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             sink.ensure_tables()
 
         for i in range(repo_count):
-            r_name = base_name if repo_count == 1 else f"{base_name}-{i + 1}"
+            r_name = demo_repo_name(base_name, i, repo_count)
             logging.info(
                 f"Generating fixture data for repo {i + 1}/{repo_count}: {r_name}"
             )
@@ -814,9 +818,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     )
                 )
                 for i in range(_repo_count):
-                    r_name = (
-                        ns.repo_name if _repo_count == 1 else f"{ns.repo_name}-{i + 1}"
-                    )
+                    r_name = demo_repo_name(ns.repo_name, i, _repo_count)
                     seed_value = (int(ns.seed) + i) if ns.seed is not None else None
                     repo_context = cast(
                         dict[str, Any], fixture_data["feature_flag_contexts"][i]
@@ -1850,7 +1852,9 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     fix_gen.add_argument(
         "--db-type", help="Explicit DB type (postgres, clickhouse, etc)."
     )
-    fix_gen.add_argument("--repo-name", default="acme/demo-app", help="Repo name.")
+    fix_gen.add_argument(
+        "--repo-name", default=DEFAULT_DEMO_REPO_NAME, help="Repo name."
+    )
     fix_gen.add_argument(
         "--repo-count", type=int, default=1, help="Number of repos to generate."
     )

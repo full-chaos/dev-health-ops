@@ -9,6 +9,7 @@ from dev_health_ops.credentials import (
     resolve_credentials_sync,
 )
 from dev_health_ops.db import resolve_sink_uri
+from dev_health_ops.fixtures.demo_identity import DEFAULT_DEMO_REPO_NAME
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.processors.github import (
     process_github_repo,
@@ -53,7 +54,7 @@ def _resolve_synthetic_repo_name(ns: argparse.Namespace) -> str:
                 "Synthetic provider does not support pattern search; use --repo-name."
             )
         return ns.search
-    return "acme/demo-app"
+    return DEFAULT_DEMO_REPO_NAME
 
 
 def _read_github_app_private_key(path: str) -> str:
@@ -434,7 +435,8 @@ def _add_sync_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--use-async", action="store_true")
     parser.add_argument("--max-commits-per-repo", type=int)
     parser.add_argument(
-        "--repo-name", help="Synthetic repo name (default: acme/demo-app)."
+        "--repo-name",
+        help=f"Synthetic repo name (default: {DEFAULT_DEMO_REPO_NAME}).",
     )
     add_date_range_args(parser)
 

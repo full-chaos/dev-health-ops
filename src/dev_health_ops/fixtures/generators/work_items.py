@@ -6,6 +6,7 @@ import random
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.fixtures.demo_identity import DEFAULT_DEMO_TEAM
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
 from dev_health_ops.metrics.schemas import (
     UserMetricsDailyRecord,
@@ -38,7 +39,7 @@ class WorkItemsGeneratorMixin(BaseGeneratorMixin):
 
         teams_to_use = []
         if self.assigned_teams is None:
-            teams_to_use = [("alpha", "Alpha Team")]
+            teams_to_use = [DEFAULT_DEMO_TEAM]
         elif self.assigned_teams:
             teams_to_use = [(t.id, t.name) for t in self.assigned_teams]
         else:
@@ -95,7 +96,7 @@ class WorkItemsGeneratorMixin(BaseGeneratorMixin):
 
         teams_to_use: list[tuple[str, str]] = []
         if self.assigned_teams is None:
-            teams_to_use = [("alpha", "Alpha Team")]
+            teams_to_use = [DEFAULT_DEMO_TEAM]
         elif self.assigned_teams:
             teams_to_use = [(t.id, t.name) for t in self.assigned_teams]
         else:

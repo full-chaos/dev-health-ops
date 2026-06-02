@@ -13,6 +13,7 @@ import uuid
 from datetime import date, datetime, timezone
 from typing import Any
 
+from dev_health_ops.fixtures.demo_identity import demo_team_identity
 from dev_health_ops.models.teams import Team
 
 
@@ -96,9 +97,11 @@ class BaseGeneratorMixin:
             team_members = self.authors[start:end]
 
             # Stable IDs
-            if count == 2:
-                team_id = "alpha" if i == 0 else "beta"
-                team_name = "Alpha Team" if i == 0 else "Beta Team"
+            # Curated, believable team identities; falls back to the legacy
+            # team-{n}/Team {n} scheme once the curated list is exhausted.
+            curated_team = demo_team_identity(i)
+            if curated_team is not None:
+                team_id, team_name = curated_team
             else:
                 team_id = f"team-{i + 1}"
                 team_name = f"Team {i + 1}"

@@ -331,7 +331,7 @@ dev-hops fixtures generate --days 30
 # Full generation with metrics and work graph
 dev-hops fixtures generate \
   --sink "$CLICKHOUSE_URI" \
-  --repo-name "acme/demo-app" \
+  --repo-name "meridian/web-app" \
   --repo-count 3 \
   --days 60 \
   --commits-per-day 10 \
@@ -346,7 +346,7 @@ dev-hops fixtures generate \
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--sink` | `$CLICKHOUSE_URI` | Analytics sink URI (ClickHouse) |
-| `--repo-name` | `acme/demo-app` | Base repository name |
+| `--repo-name` | `meridian/web-app` | Base repository name |
 | `--repo-count` | `1` | Number of repos to generate |
 | `--days` | `30` | Number of days of historical data |
 | `--commits-per-day` | `5` | Average commits per day |

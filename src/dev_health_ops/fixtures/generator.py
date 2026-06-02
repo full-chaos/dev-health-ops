@@ -11,6 +11,7 @@ from __future__ import annotations
 import random
 import uuid
 
+from dev_health_ops.fixtures.demo_identity import DEFAULT_DEMO_REPO_NAME
 from dev_health_ops.fixtures.generators import (
     AiWorkflowGeneratorMixin,
     BaseGeneratorMixin,
@@ -42,7 +43,7 @@ class SyntheticDataGenerator(
 ):
     def __init__(
         self,
-        repo_name: str = "acme/demo-app",
+        repo_name: str = DEFAULT_DEMO_REPO_NAME,
         repo_id: uuid.UUID | None = None,
         provider: str = "synthetic",
         seed: int | None = None,

@@ -28,6 +28,34 @@ services:
       retries: 3
       start_period: 30s
 
+  pgbouncer:
+    # CHAOS-2065: transaction-mode connection pooler in front of postgres.
+    # Multiplexes many client connections onto a small server-connection set so
+    # the worker fleet cannot exhaust postgres max_connections. The app runs with
+    # PGBOUNCER_TRANSACTION_MODE=true (disables asyncpg prepared statements).
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: postgres
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "25"
+      MIN_POOL_SIZE: "5"
+      RESERVE_POOL_SIZE: "5"
+      ADMIN_USERS: postgres
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: clickhouse
@@ -80,7 +108,11 @@ services:
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
       # GraphQL analytics endpoint available at /graphql
       GRAPHQL_QUERY_TIMEOUT: "30"
-      DATABASE_URI: "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
+      # CHAOS-2065: runtime DB traffic flows through PgBouncer (transaction mode).
+      # Run schema migrations against postgres:5432 directly -- see
+      # docs/ops/database-connection-pooling.md.
+      DATABASE_URI: "postgresql+asyncpg://postgres:postgres@pgbouncer:6432/postgres"
+      PGBOUNCER_TRANSACTION_MODE: "true"
       CLICKHOUSE_URI: "clickhouse://ch:ch@clickhouse:8123/default"
       REDIS_URL: "redis://valkey:6379/1"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
@@ -108,6 +140,8 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
     ports:
       - "8000:8000"
     volumes:
@@ -143,10 +177,12 @@ services:
       - /app/src/dev_health_ops/api
     environment:
       <<: *env
-      POSTGRES_URI: "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"
+      POSTGRES_URI: "postgresql+asyncpg://postgres:postgres@pgbouncer:6432/postgres"
     depends_on:
       postgres:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
     ports:
       - "8010:8000"
     volumes:
@@ -181,6 +217,8 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
     volumes:
       - ./:/app
     working_dir: /app

@@ -15,6 +15,8 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
+from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -25,9 +27,64 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 _postgres_engine: AsyncEngine | None = None
 _clickhouse_engine: AsyncEngine | None = None
+
+
+def _is_truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pgbouncer_transaction_mode() -> bool:
+    """True when the semantic DB is reached through PgBouncer in transaction mode.
+
+    Transaction pooling multiplexes a small set of server connections across many
+    clients, which breaks server-side prepared statements. When enabled we let
+    PgBouncer own the pool (NullPool) and stop asyncpg from caching/naming
+    prepared statements. See docs/ops/database-connection-pooling.md.
+    """
+    return _is_truthy(os.getenv("PGBOUNCER_TRANSACTION_MODE"))
+
+
+def _pg_pool_size() -> tuple[int, int]:
+    """(pool_size, max_overflow) for the direct-connection path, env-overridable."""
+
+    def _int_env(name: str, default: int) -> int:
+        raw = os.getenv(name)
+        if not raw:
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            return default
+
+    return _int_env("POSTGRES_POOL_SIZE", 20), _int_env("POSTGRES_MAX_OVERFLOW", 10)
+
+
+def _async_postgres_engine_kwargs(uri: str) -> dict[str, Any]:
+    """Build create_async_engine kwargs for the semantic Postgres engine.
+
+    Behind PgBouncer transaction mode: NullPool + disabled asyncpg statement
+    cache + unique prepared-statement names (requires SQLAlchemy >= 2.0.18).
+    Otherwise: a SQLAlchemy QueuePool with pre-ping and env-tunable sizing.
+    """
+    is_postgres = uri.startswith("postgresql+")
+    if is_postgres and _pgbouncer_transaction_mode():
+        return {
+            "poolclass": NullPool,
+            "connect_args": {
+                "statement_cache_size": 0,
+                "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+            },
+        }
+    kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    if is_postgres:
+        pool_size, max_overflow = _pg_pool_size()
+        kwargs["pool_size"] = pool_size
+        kwargs["max_overflow"] = max_overflow
+    return kwargs
 
 
 def get_postgres_uri() -> str | None:
@@ -66,11 +123,9 @@ def get_postgres_engine() -> AsyncEngine:
             raise RuntimeError(
                 "PostgreSQL URI not configured. Set POSTGRES_URI environment variable."
             )
-        engine_kwargs: dict[str, bool | int] = {"pool_pre_ping": True}
-        if uri.startswith("postgresql+"):
-            engine_kwargs["pool_size"] = 20
-            engine_kwargs["max_overflow"] = 10
-        _postgres_engine = create_async_engine(uri, **engine_kwargs)
+        _postgres_engine = create_async_engine(
+            uri, **_async_postgres_engine_kwargs(uri)
+        )
     return _postgres_engine
 
 
@@ -217,12 +272,18 @@ def get_postgres_sync_engine() -> Engine:
             raise RuntimeError(
                 "PostgreSQL URI not configured. Set POSTGRES_URI environment variable."
             )
-        _postgres_sync_engine = create_engine(
-            uri,
-            pool_pre_ping=True,
-            pool_size=20,
-            max_overflow=10,
-        )
+        if _pgbouncer_transaction_mode():
+            # PgBouncer owns the pool; psycopg keeps no server-side prepared
+            # statements by default, so only the pool class needs to change.
+            _postgres_sync_engine = create_engine(uri, poolclass=NullPool)
+        else:
+            pool_size, max_overflow = _pg_pool_size()
+            _postgres_sync_engine = create_engine(
+                uri,
+                pool_pre_ping=True,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+            )
     return _postgres_sync_engine
 
 

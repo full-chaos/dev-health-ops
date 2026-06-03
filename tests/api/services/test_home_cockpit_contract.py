@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from dev_health_ops.api.models.filters import MetricFilter, ScopeFilter
 from dev_health_ops.api.models.schemas import MetricDelta, SparkPoint
 from dev_health_ops.api.services.home import (
+    _risk_signal,
     build_data_confidence,
     build_health_state,
     build_limiting_factor,
@@ -156,3 +157,95 @@ def test_cockpit_additive_fields_are_present_on_limiting_factor() -> None:
     }
     assert signals[0].category == "dynamics"
     assert signals[0].affected_scope == "team-a"
+
+
+# ---------------------------------------------------------------------------
+# Risk signal: display name resolution + A8/B7 guards
+# ---------------------------------------------------------------------------
+
+
+def _risk_confidence() -> object:
+    return build_data_confidence(
+        coverage={
+            "repos_covered_pct": 80.0,
+            "prs_linked_to_issues_pct": 80.0,
+            "issues_with_cycle_states_pct": 80.0,
+        },
+        sources={"github": "ok"},
+    )
+
+
+def test_risk_signal_uses_resolved_display_name() -> None:
+    """Title must contain the resolved entity name, never a raw UUID."""
+    confidence = _risk_confidence()
+    filters = MetricFilter()
+    row = {
+        "scope_id": "698c1234-0000-0000-0000-000000000000",
+        "scope": "repo",
+        "score": 0.75,
+        "severity": "elevated",
+    }
+    signal = _risk_signal(row, filters, confidence, scope_display_name="acme/backend")
+
+    assert signal is not None
+    assert "acme/backend" in signal.title
+    assert "698c" not in signal.title
+    assert "698c" not in signal.affected_scope
+
+
+def test_risk_signal_subject_and_scope_are_distinct() -> None:
+    """Signal title subject and affected_scope must be distinct (no duplication)."""
+    confidence = _risk_confidence()
+    filters = MetricFilter()
+    row = {
+        "scope_id": "repo-abc",
+        "scope": "repo",
+        "score": 0.6,
+        "severity": "elevated",
+    }
+    signal = _risk_signal(row, filters, confidence, scope_display_name="org/service-x")
+
+    assert signal is not None
+    # affected_scope describes the scope context; must not equal the entity name in title
+    assert signal.affected_scope != signal.title
+    assert "org/service-x" not in signal.affected_scope
+
+
+def test_risk_signal_uuid_scope_display_name_returns_controlled_state() -> None:
+    """B7: when display name is a bare UUID, signal is suppressed (controlled flat state)."""
+    confidence = _risk_confidence()
+    filters = MetricFilter()
+    uuid_val = "698c1234-abcd-4321-8765-000000000000"
+    row = {"scope_id": uuid_val, "scope": "repo", "score": 0.8, "severity": "high"}
+    # Passing a UUID as display_name must suppress the signal
+    signal = _risk_signal(row, filters, confidence, scope_display_name=uuid_val)
+    assert signal is None
+
+
+def test_risk_signal_no_display_name_returns_controlled_state() -> None:
+    """B7: unresolved display name (None) yields None — no silent UUID surfacing."""
+    confidence = _risk_confidence()
+    filters = MetricFilter()
+    row = {"scope_id": "repo-xyz", "scope": "repo", "score": 0.5, "severity": "low"}
+    signal = _risk_signal(row, filters, confidence)  # no scope_display_name
+    assert signal is None
+
+
+def test_risk_signal_empty_scope_id_returns_controlled_state() -> None:
+    """B7: empty scope_id yields None (missing backing row → controlled empty)."""
+    confidence = _risk_confidence()
+    filters = MetricFilter()
+    row = {"scope_id": "", "scope": "repo", "score": 0.5, "severity": "low"}
+    signal = _risk_signal(row, filters, confidence, scope_display_name="some-name")
+    assert signal is None
+
+
+def test_risk_signal_affected_scope_uses_scope_type_plural() -> None:
+    """affected_scope must be the scope type label (e.g. 'repos'), never the entity name."""
+    confidence = _risk_confidence()
+    filters = MetricFilter()
+    row = {"scope_id": "repo-1", "scope": "repo", "score": 0.5, "severity": "elevated"}
+    signal = _risk_signal(row, filters, confidence, scope_display_name="acme/backend")
+
+    assert signal is not None
+    assert signal.affected_scope == "repos"

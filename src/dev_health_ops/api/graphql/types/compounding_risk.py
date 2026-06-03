@@ -61,6 +61,18 @@ class CompoundingRiskWeights:
 
 
 @strawberry.type
+class CompoundingRiskScopeEntity:
+    """Resolved entity reference (Framework A7).
+
+    ``id`` is stable for routing/linking; ``displayName`` is the human-readable
+    label the frontend must render via EntityLabel — never a bare UUID.
+    """
+
+    id: str
+    display_name: str = strawberry.field(name="displayName")
+
+
+@strawberry.type
 class CompoundingRiskThresholds:
     """Severity bucket thresholds used at compute time (audit trail)."""
 
@@ -85,6 +97,8 @@ class CompoundingRiskPoint:
     thresholds: CompoundingRiskThresholds
 
     computed_at: datetime = strawberry.field(name="computedAt")
+
+    scope_entity: CompoundingRiskScopeEntity = strawberry.field(name="scopeEntity")
 
 
 @strawberry.type

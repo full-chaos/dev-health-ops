@@ -23,6 +23,7 @@ from ..types.compounding_risk import (
     CompoundingRiskPoint,
     CompoundingRiskResult,
     CompoundingRiskScope,
+    CompoundingRiskScopeEntity,
     CompoundingRiskSeverity,
     CompoundingRiskThresholds,
     CompoundingRiskTrendPoint,
@@ -222,6 +223,10 @@ def _point_from_repo_row(
         weights=_weights_from_row(row),
         thresholds=_thresholds_from_row(row),
         computed_at=row.get("latest_computed_at") or datetime.now(timezone.utc),
+        scope_entity=CompoundingRiskScopeEntity(
+            id=scope_id,
+            display_name=label_resolver.get(scope_id, scope_id),
+        ),
     )
 
 
@@ -241,6 +246,10 @@ def _point_from_team_row(
         weights=_weights_from_row(row),
         thresholds=_thresholds_from_row(row),
         computed_at=row.get("latest_computed_at") or datetime.now(timezone.utc),
+        scope_entity=CompoundingRiskScopeEntity(
+            id=scope_id,
+            display_name=team_labels.get(scope_id, scope_id),
+        ),
     )
 
 
@@ -323,6 +332,10 @@ def _aggregate_repo_rows_to_team(
                 thresholds=thresholds,
                 computed_at=first.get("latest_computed_at")
                 or datetime.now(timezone.utc),
+                scope_entity=CompoundingRiskScopeEntity(
+                    id=team_id,
+                    display_name=team_labels.get(team_id, team_id),
+                ),
             )
         )
     # Sort by score desc, nulls last.

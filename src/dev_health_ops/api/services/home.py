@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
@@ -550,9 +551,86 @@ def _recommendation_signal(
         category="dynamics",
     )
 
+_BARE_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_uuid(value: str) -> bool:
+    """Return True when *value* is a bare UUID that must not appear as a label (A8)."""
+    return bool(_BARE_UUID_RE.match(value.strip()))
+
+
+async def _resolve_scope_labels(
+    sink: BaseMetricsSink,
+    *,
+    org_id: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Return {scope_id: display_name} for the given risk rows.
+
+    Queries the repos / teams tables to resolve human-readable labels.
+    Best-effort: on any failure returns an empty dict so callers apply a
+    controlled fallback rather than surfacing raw IDs (A8 / B7).
+    """
+    repo_ids = [
+        str(r["scope_id"])
+        for r in rows
+        if str(r.get("scope") or "") == "repo" and r.get("scope_id")
+    ]
+    team_ids = [
+        str(r["scope_id"])
+        for r in rows
+        if str(r.get("scope") or "") == "team" and r.get("scope_id")
+    ]
+
+    label_map: dict[str, str] = {}
+
+    if repo_ids:
+        try:
+            repo_rows = await query_dicts(
+                sink,
+                """
+                SELECT toString(id) AS scope_id, repo AS display_name
+                FROM repos
+                WHERE org_id = {org_id:String}
+                  AND toString(id) IN {scope_ids:Array(String)}
+                """,
+                {"org_id": org_id, "scope_ids": repo_ids},
+            )
+            label_map.update(
+                {r["scope_id"]: r.get("display_name") or r["scope_id"] for r in repo_rows}
+            )
+        except Exception:
+            logger.warning("Could not resolve repo labels for risk signals")
+
+    if team_ids:
+        try:
+            team_rows = await query_dicts(
+                sink,
+                """
+                SELECT toString(id) AS scope_id, name AS display_name
+                FROM teams
+                WHERE org_id = {org_id:String}
+                """,
+                {"org_id": org_id},
+            )
+            label_map.update(
+                {r["scope_id"]: r.get("display_name") or r["scope_id"] for r in team_rows}
+            )
+        except Exception:
+            logger.warning("Could not resolve team labels for risk signals")
+
+    return label_map
+
 
 def _risk_signal(
-    row: dict[str, Any], filters: MetricFilter, data_confidence: HomeDataConfidence
+    row: dict[str, Any],
+    filters: MetricFilter,
+    data_confidence: HomeDataConfidence,
+    *,
+    scope_display_name: str | None = None,
 ) -> HomeSignal | None:
     score = row.get("score")
     if score is None:
@@ -566,10 +644,25 @@ def _risk_signal(
         "unknown": "low",
     }
     severity: SignalSeverity = severity_map.get(raw_severity, "low")
-    scope = str(row.get("scope_id") or _primary_scope_label(filters))
+    scope_id = str(row.get("scope_id") or "").strip()
+    scope_type = str(row.get("scope") or filters.scope.level or "repo").strip()
+
+    # B7: controlled empty/flat state — absent scope_id → suppress signal
+    if not scope_id:
+        return None
+
+    # A8: no bare UUID in any label or headline field
+    entity_name = scope_display_name
+    if not entity_name or _looks_like_uuid(entity_name):
+        # Display name unresolved — controlled flat state; do not surface raw id
+        return None
+
+    # affected_scope is DISTINCT from the entity named in the title
+    affected_scope = f"{scope_type}s"
+
     return HomeSignal(
-        id=f"risk:{row.get('scope') or 'scope'}:{scope}",
-        title=f"Compounding risk appears {raw_severity} for {scope}",
+        id=f"risk:{scope_type}:{scope_id}",
+        title=f"Compounding risk appears {raw_severity} for {entity_name}",
         metric="compounding_risk",
         current_value=_format_value(current_value, "%"),
         prior_value=None,
@@ -577,11 +670,11 @@ def _risk_signal(
         direction="flat",
         severity=severity,
         confidence=_confidence_from_evidence(1, data_confidence.coverage_pct),
-        affected_scope=scope,
+        affected_scope=affected_scope,
         evidence_count=1,
         why_it_matters=_why_for_metric("compounding_risk", "Compounding Risk", "flat"),
         recommended_action=_action_for_metric("compounding_risk"),
-        evidence_ref=f"/api/graphql?query=compoundingRisk&scope_id={scope}",
+        evidence_ref=None,
         category="durability",
     )
 
@@ -649,10 +742,24 @@ async def _fetch_risk_signals(
     except Exception:
         logger.exception("Failed to fetch home compounding risk signals")
         return []
+    if not rows:
+        return []
+
+    # Resolve scope_id → human display name so labels never contain bare IDs (A8)
+    label_map = await _resolve_scope_labels(sink, org_id=org_id, rows=rows)
+
     return [
         signal
         for row in rows
-        if (signal := _risk_signal(row, filters, data_confidence)) is not None
+        if (
+            signal := _risk_signal(
+                row,
+                filters,
+                data_confidence,
+                scope_display_name=label_map.get(str(row.get("scope_id") or "")),
+            )
+        )
+        is not None
     ]
 
 

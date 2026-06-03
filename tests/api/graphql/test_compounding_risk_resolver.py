@@ -26,6 +26,7 @@ from dev_health_ops.api.graphql.resolvers.compounding_risk import (
 from dev_health_ops.api.graphql.types.compounding_risk import (
     CompoundingRiskFilterInput,
     CompoundingRiskScope,
+    CompoundingRiskScopeEntity,
     CompoundingRiskSeverity,
 )
 
@@ -522,3 +523,89 @@ def test_scope_input_has_no_developer_option() -> None:
     """
     values = {s.value for s in CompoundingRiskScope}
     assert values == {"repo", "team"}
+
+
+# ---------------------------------------------------------------------------
+# scope_entity resolved display name (Framework A7 / A8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scope_entity_carries_resolved_display_name() -> None:
+    """scope_entity must expose the human label, not the raw scope_id (A7)."""
+    ctx = _ctx()
+    columns = [
+        "scope_id",
+        "score",
+        "severity",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "latest_computed_at",
+    ]
+    base = [0.30, 0.30, 0.20, 0.20, 0.4, 0.65]
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(["day"], [[DAY]]),
+            _qresult(columns, [["repo-1", 0.5, "elevated", *base, NOW]]),
+            _qresult(["repo_id", "full_name"], [["repo-1", "acme/backend"]]),
+            _qresult(["day", "avg_score"], [[DAY, 0.5]]),
+        ],
+    )
+    result = await resolve_compounding_risk(ctx, ORG_ID)
+    assert len(result.rows) == 1
+    row = result.rows[0]
+
+    assert isinstance(row.scope_entity, CompoundingRiskScopeEntity)
+    assert row.scope_entity.id == "repo-1"
+    assert row.scope_entity.display_name == "acme/backend"
+    # scope_entity.displayName must equal scope_label for consistency
+    assert row.scope_entity.display_name == row.scope_label
+
+
+@pytest.mark.asyncio
+async def test_scope_entity_display_name_is_not_bare_uuid_when_label_resolved() -> None:
+    """A8: when a label lookup succeeds, displayName must not be a bare UUID."""
+    import re
+
+    uuid_scope_id = "698c1234-abcd-0000-0000-000000000000"
+    ctx = _ctx()
+    columns = [
+        "scope_id",
+        "score",
+        "severity",
+        "w_churn",
+        "w_complexity",
+        "w_ownership",
+        "w_review",
+        "threshold_elevated",
+        "threshold_high",
+        "latest_computed_at",
+    ]
+    base = [0.30, 0.30, 0.20, 0.20, 0.4, 0.65]
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(["day"], [[DAY]]),
+            _qresult(columns, [[uuid_scope_id, 0.7, "high", *base, NOW]]),
+            _qresult(
+                ["repo_id", "full_name"],
+                [[uuid_scope_id, "my-org/api-service"]],
+            ),
+            _qresult(["day", "avg_score"], [[DAY, 0.7]]),
+        ],
+    )
+    result = await resolve_compounding_risk(ctx, ORG_ID)
+    assert len(result.rows) == 1
+    row = result.rows[0]
+
+    uuid_re = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+    )
+    assert row.scope_entity.id == uuid_scope_id
+    assert row.scope_entity.display_name == "my-org/api-service"
+    assert not uuid_re.match(row.scope_entity.display_name)

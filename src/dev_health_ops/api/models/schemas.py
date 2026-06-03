@@ -57,6 +57,49 @@ class EventItem(BaseModel):
     link: str
 
 
+class HomeHealthState(BaseModel):
+    status: Literal["healthy", "watch", "at_risk", "critical"] = "healthy"
+    headline: str = "Operating posture appears healthy"
+    summary: str = "Available signals suggest no acute limiting factor."
+    as_of: datetime | None = None
+
+
+class HomeSignal(BaseModel):
+    id: str
+    title: str
+    metric: str
+    current_value: str
+    prior_value: str | None = None
+    delta: str | None = None
+    direction: Literal["up", "down", "flat"]
+    severity: Literal["critical", "high", "medium", "low"]
+    confidence: Literal["high", "medium", "low"]
+    affected_scope: str
+    evidence_count: int
+    why_it_matters: str
+    recommended_action: str
+    evidence_ref: str | None = None
+    category: Literal["delivery", "durability", "wellbeing", "dynamics", "ai"]
+
+
+class HomeLimitingFactor(BaseModel):
+    claim: str = "No single limiting factor appears dominant."
+    why_it_matters: str = (
+        "The cockpit should keep watching directional changes as more evidence arrives."
+    )
+    recommended_action: str = "Review the ranked signals and confirm data coverage before changing operating priorities."
+    confidence: Literal["high", "medium", "low"] = "low"
+    evidence_ref: str | None = None
+
+
+class HomeDataConfidence(BaseModel):
+    level: Literal["high", "medium", "low"] = "low"
+    coverage_pct: float | None = None
+    connected_sources: list[str] = Field(default_factory=list)
+    missing_sources: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+
+
 class HomeResponse(BaseModel):
     freshness: Freshness
     deltas: list[MetricDelta]
@@ -64,6 +107,10 @@ class HomeResponse(BaseModel):
     tiles: dict[str, Any]
     constraint: ConstraintCard
     events: list[EventItem]
+    health_state: HomeHealthState = Field(default_factory=HomeHealthState)
+    signals: list[HomeSignal] = Field(default_factory=list)
+    limiting_factor: HomeLimitingFactor = Field(default_factory=HomeLimitingFactor)
+    data_confidence: HomeDataConfidence = Field(default_factory=HomeDataConfidence)
 
 
 class Contributor(BaseModel):

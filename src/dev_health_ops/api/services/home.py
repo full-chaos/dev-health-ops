@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
@@ -13,12 +15,16 @@ from ..models.schemas import (
     Coverage,
     EventItem,
     Freshness,
+    HomeDataConfidence,
+    HomeHealthState,
+    HomeLimitingFactor,
     HomeResponse,
+    HomeSignal,
     MetricDelta,
     SparkPoint,
     SummarySentence,
 )
-from ..queries.client import clickhouse_client
+from ..queries.client import clickhouse_client, query_dicts
 from ..queries.explain import fetch_metric_driver_delta
 from ..queries.freshness import fetch_coverage, fetch_last_ingested_at
 from ..queries.metrics import (
@@ -29,6 +35,13 @@ from ..queries.metrics import (
 from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import filter_cache_key, scope_filter_for_metric, time_window
+
+logger = logging.getLogger(__name__)
+
+SignalDirection = Literal["up", "down", "flat"]
+SignalSeverity = Literal["critical", "high", "medium", "low"]
+SignalConfidence = Literal["high", "medium", "low"]
+SignalCategory = Literal["delivery", "durability", "wellbeing", "dynamics", "ai"]
 
 _METRICS = [
     {
@@ -133,6 +146,67 @@ _METRICS = [
     },
 ]
 
+_METRIC_CATEGORIES: dict[str, SignalCategory] = {
+    "cycle_time": "delivery",
+    "review_latency": "dynamics",
+    "throughput": "delivery",
+    "deploy_freq": "delivery",
+    "churn": "durability",
+    "wip_saturation": "dynamics",
+    "blocked_work": "delivery",
+    "change_failure_rate": "durability",
+    "rework_ratio": "durability",
+    "ci_success": "durability",
+    "compounding_risk": "durability",
+}
+
+_LOWER_IS_BETTER = {
+    "cycle_time",
+    "review_latency",
+    "churn",
+    "wip_saturation",
+    "blocked_work",
+    "change_failure_rate",
+    "rework_ratio",
+    "compounding_risk",
+}
+
+_RECOMMENDATIONS_SQL = """
+    SELECT
+        team_id,
+        org_id,
+        rule_id,
+        argMax(fired,               computed_at) AS latest_fired,
+        argMax(severity,            computed_at) AS latest_severity,
+        argMax(title,               computed_at) AS latest_title,
+        argMax(rationale,           computed_at) AS latest_rationale,
+        argMax(success_criterion,   computed_at) AS latest_success_criterion,
+        argMax(evidence_json,       computed_at) AS latest_evidence_json,
+        argMax(window_start,        computed_at) AS latest_window_start,
+        argMax(window_end,          computed_at) AS latest_window_end,
+        max(computed_at)                         AS latest_computed_at
+    FROM recommendations_daily
+    WHERE org_id = {org_id:String}
+      AND window_end >= {window_start:Date}
+      AND window_end <= {window_end:Date}
+"""
+
+_COMPOUNDING_RISK_SQL = """
+    SELECT
+        scope,
+        scope_id,
+        argMax(compounding_risk, computed_at) AS score,
+        argMax(severity,         computed_at) AS severity,
+        max(computed_at)                      AS latest_computed_at
+    FROM compounding_risk_daily
+    WHERE org_id = {org_id:String}
+      AND day = (
+          SELECT max(day)
+          FROM compounding_risk_daily
+          WHERE org_id = {org_id:String}
+      )
+"""
+
 
 def _spark_points(rows: list[dict[str, Any]], transform) -> list[SparkPoint]:
     points = []
@@ -152,6 +226,434 @@ def _direction(pct_change: float) -> str:
 
 def _format_delta(delta_pct: float) -> str:
     return f"{abs(delta_pct):.0f}%"
+
+
+def _primary_scope_label(filters: MetricFilter) -> str:
+    if filters.scope.ids:
+        return ",".join(filters.scope.ids)
+    return filters.scope.level
+
+
+def _signal_direction(delta: float) -> SignalDirection:
+    if delta > 1:
+        return "up"
+    if delta < -1:
+        return "down"
+    return "flat"
+
+
+def _prior_value(current: float, delta: float) -> float | None:
+    if abs(delta + 100.0) < 0.0001:
+        return None
+    return current / (1.0 + (delta / 100.0))
+
+
+def _metric_impact(metric: str, delta: float) -> float:
+    direction = _signal_direction(delta)
+    if direction == "flat":
+        return 0.0
+    magnitude = abs(delta)
+    worsened = (metric in _LOWER_IS_BETTER and delta > 0) or (
+        metric not in _LOWER_IS_BETTER and delta < 0
+    )
+    return magnitude if worsened else magnitude * 0.35
+
+
+def _severity_for_impact(impact: float) -> SignalSeverity:
+    if impact >= 60:
+        return "critical"
+    if impact >= 35:
+        return "high"
+    if impact >= 15:
+        return "medium"
+    return "low"
+
+
+def _severity_rank(severity: str) -> int:
+    return {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(severity, 0)
+
+
+def _confidence_from_evidence(
+    evidence_count: int, coverage_pct: float | None
+) -> SignalConfidence:
+    coverage = coverage_pct or 0.0
+    if evidence_count >= 7 and coverage >= 75:
+        return "high"
+    if evidence_count >= 2 and coverage >= 40:
+        return "medium"
+    return "low"
+
+
+def _format_value(value: float, unit: str | None = None) -> str:
+    suffix = f" {unit}" if unit else ""
+    if abs(value) >= 100 or float(value).is_integer():
+        return f"{value:.0f}{suffix}"
+    return f"{value:.1f}{suffix}"
+
+
+def _format_delta_value(delta: float | None) -> str | None:
+    if delta is None:
+        return None
+    return f"{delta:+.0f}%"
+
+
+def _evidence_link(metric: str, filters: MetricFilter) -> str:
+    return (
+        f"/api/v1/explain?metric={metric}"
+        f"&scope_type={filters.scope.level}"
+        f"&scope_id={_primary_scope_id(filters)}"
+        f"&range_days={filters.time.range_days}"
+        f"&compare_days={filters.time.compare_days}"
+    )
+
+
+def _action_for_metric(metric: str) -> str:
+    actions = {
+        "cycle_time": "Inspect the slowest stage and rebalance active work before adding scope.",
+        "review_latency": "Rebalance reviewer rotation and clear stale review queues.",
+        "throughput": "Review WIP and dependency queues before changing delivery commitments.",
+        "deploy_freq": "Check release blockers and restore the smallest safe deployment path.",
+        "churn": "Inspect hotspots and stabilize rework loops before expanding the change set.",
+        "wip_saturation": "Set a short-term WIP limit and finish active items before starting more.",
+        "blocked_work": "Triage blocked items by owner and unblock the oldest high-impact queue first.",
+        "change_failure_rate": "Inspect recent failed changes and tighten pre-release checks around the common failure mode.",
+        "rework_ratio": "Review reopened or rewritten work and pick one root-cause experiment.",
+        "ci_success": "Inspect failing pipelines and restore the most common broken check first.",
+        "compounding_risk": "Inspect the highest-risk scope and reduce the strongest component before adding scope.",
+    }
+    return actions.get(
+        metric,
+        "Inspect supporting evidence and choose one reversible operating experiment.",
+    )
+
+
+def _why_for_metric(metric: str, label: str, direction: str) -> str:
+    movement = {
+        "up": "rising",
+        "down": "falling",
+        "flat": "flat",
+    }[direction]
+    reasons = {
+        "cycle_time": "longer cycle time suggests delivery work may spend more time waiting than moving.",
+        "review_latency": "review queues shape how quickly teams can learn from completed work.",
+        "throughput": "throughput movement changes the team's ability to keep commitments credible.",
+        "deploy_freq": "deployment cadence suggests whether finished work can reach users smoothly.",
+        "churn": "higher churn suggests effort may be cycling through rework rather than durable progress.",
+        "wip_saturation": "saturation suggests active work may exceed the team's coordination capacity.",
+        "blocked_work": "blocked time suggests dependencies may be consuming delivery capacity.",
+        "change_failure_rate": "failed changes suggest reliability work may be competing with delivery.",
+        "rework_ratio": "rework suggests unclear requirements or fragile implementation paths may be taxing focus.",
+        "ci_success": "CI health suggests whether the delivery path is dependable.",
+        "compounding_risk": "compounding risk combines churn, complexity, ownership, and review pressure into one persisted signal.",
+    }
+    reason = reasons.get(
+        metric, f"{label} movement suggests an operating signal to inspect."
+    )
+    return f"{label} appears {movement}; {reason}"
+
+
+def _coverage_pct_from_coverage(coverage: dict[str, Any]) -> float | None:
+    values = [safe_float(value) for value in coverage.values() if value is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def build_data_confidence(
+    *, coverage: dict[str, Any], sources: dict[str, str]
+) -> HomeDataConfidence:
+    coverage_pct = _coverage_pct_from_coverage(coverage)
+    connected = sorted(source for source, status in sources.items() if status == "ok")
+    missing = sorted(source for source, status in sources.items() if status != "ok")
+    if coverage_pct is not None and coverage_pct >= 75 and not missing:
+        level = "high"
+    elif coverage_pct is not None and coverage_pct >= 40 and connected:
+        level = "medium"
+    else:
+        level = "low"
+
+    caveats: list[str] = []
+    if missing:
+        caveats.append("Some source freshness checks are missing or stale.")
+    if coverage_pct is None:
+        caveats.append("Coverage could not be computed from available lineage fields.")
+    elif coverage_pct < 60:
+        caveats.append(
+            "Coverage appears partial; treat cockpit signals as directional."
+        )
+
+    return HomeDataConfidence(
+        level=level,
+        coverage_pct=coverage_pct,
+        connected_sources=connected,
+        missing_sources=missing,
+        caveats=caveats,
+    )
+
+
+def build_metric_signals(
+    deltas: list[MetricDelta],
+    filters: MetricFilter,
+    data_confidence: HomeDataConfidence,
+) -> list[HomeSignal]:
+    signals: list[HomeSignal] = []
+    for delta in deltas:
+        direction = _signal_direction(delta.delta_pct)
+        evidence_count = len(delta.spark)
+        impact = _metric_impact(delta.metric, delta.delta_pct)
+        signals.append(
+            HomeSignal(
+                id=f"metric:{delta.metric}",
+                title=f"{delta.label} appears {direction}",
+                metric=delta.metric,
+                current_value=_format_value(delta.value, delta.unit),
+                prior_value=(
+                    _format_value(prior, delta.unit)
+                    if (prior := _prior_value(delta.value, delta.delta_pct)) is not None
+                    else None
+                ),
+                delta=_format_delta_value(delta.delta_pct),
+                direction=direction,
+                severity=_severity_for_impact(impact),
+                confidence=_confidence_from_evidence(
+                    evidence_count, data_confidence.coverage_pct
+                ),
+                affected_scope=_primary_scope_label(filters),
+                evidence_count=evidence_count,
+                why_it_matters=_why_for_metric(delta.metric, delta.label, direction),
+                recommended_action=_action_for_metric(delta.metric),
+                evidence_ref=_evidence_link(delta.metric, filters),
+                category=_METRIC_CATEGORIES.get(delta.metric, "delivery"),
+            )
+        )
+    return _rank_signals(signals)
+
+
+def _rank_signals(signals: list[HomeSignal]) -> list[HomeSignal]:
+    def _delta_magnitude(signal: HomeSignal) -> float:
+        if not signal.delta:
+            return 0.0
+        try:
+            return abs(float(signal.delta.rstrip("%")))
+        except ValueError:
+            return 0.0
+
+    return sorted(
+        signals,
+        key=lambda signal: (
+            _severity_rank(signal.severity),
+            _delta_magnitude(signal),
+            signal.evidence_count,
+        ),
+        reverse=True,
+    )
+
+
+def build_health_state(
+    signals: list[HomeSignal],
+    data_confidence: HomeDataConfidence,
+    as_of: datetime | None,
+) -> HomeHealthState:
+    top = signals[0] if signals else None
+    if top is None:
+        status = "watch" if data_confidence.level == "low" else "healthy"
+        return HomeHealthState(
+            status=status,
+            headline="Cockpit signals appear sparse",
+            summary="Available data suggests watching coverage before making operating changes.",
+            as_of=as_of,
+        )
+
+    if top.severity == "critical":
+        status = "critical"
+    elif top.severity == "high":
+        status = "at_risk"
+    elif top.severity == "medium" or data_confidence.level == "low":
+        status = "watch"
+    else:
+        status = "healthy"
+
+    return HomeHealthState(
+        status=status,
+        headline=f"{top.title} across {top.affected_scope}",
+        summary=f"The strongest signal suggests {top.why_it_matters}",
+        as_of=as_of,
+    )
+
+
+def build_limiting_factor(signals: list[HomeSignal]) -> HomeLimitingFactor:
+    if not signals:
+        return HomeLimitingFactor()
+    top = signals[0]
+    return HomeLimitingFactor(
+        claim=f"{top.title} appears to be the current limiting factor.",
+        why_it_matters=top.why_it_matters,
+        recommended_action=top.recommended_action,
+        confidence=top.confidence,
+        evidence_ref=top.evidence_ref,
+    )
+
+
+def _parse_recommendation_evidence(raw: str | list[Any] | None) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return []
+    else:
+        parsed = raw
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _recommendation_signal(
+    row: dict[str, Any], filters: MetricFilter, data_confidence: HomeDataConfidence
+) -> HomeSignal | None:
+    title = str(row.get("latest_title") or row.get("title") or "").strip()
+    if not title:
+        return None
+    raw_severity = str(row.get("latest_severity") or row.get("severity") or "warning")
+    severity: SignalSeverity = "critical" if raw_severity == "critical" else "medium"
+    evidence = _parse_recommendation_evidence(
+        row.get("latest_evidence_json") or row.get("evidence_json")
+    )
+    rule_id = str(row.get("rule_id") or "recommendation")
+    team_id = str(row.get("team_id") or _primary_scope_label(filters))
+    return HomeSignal(
+        id=f"recommendation:{rule_id}:{team_id}",
+        title=title,
+        metric=rule_id,
+        current_value=_format_value(float(len(evidence)), "refs"),
+        prior_value=None,
+        delta=None,
+        direction="flat",
+        severity=severity,
+        confidence=_confidence_from_evidence(
+            len(evidence), data_confidence.coverage_pct
+        ),
+        affected_scope=team_id,
+        evidence_count=len(evidence),
+        why_it_matters=str(
+            row.get("latest_rationale")
+            or row.get("rationale")
+            or "A persisted recommendation suggests this operating pattern needs attention."
+        ),
+        recommended_action=str(
+            row.get("latest_success_criterion")
+            or row.get("success_criterion")
+            or "Choose one reversible experiment and inspect the evidence trail."
+        ),
+        evidence_ref=(
+            f"/api/graphql?query=recommendations&team={team_id}" if team_id else None
+        ),
+        category="dynamics",
+    )
+
+
+def _risk_signal(
+    row: dict[str, Any], filters: MetricFilter, data_confidence: HomeDataConfidence
+) -> HomeSignal | None:
+    score = row.get("score")
+    if score is None:
+        return None
+    current_value = safe_float(score) * 100.0
+    raw_severity = str(row.get("severity") or "low").lower()
+    severity_map: dict[str, SignalSeverity] = {
+        "high": "high",
+        "elevated": "medium",
+        "low": "low",
+        "unknown": "low",
+    }
+    severity: SignalSeverity = severity_map.get(raw_severity, "low")
+    scope = str(row.get("scope_id") or _primary_scope_label(filters))
+    return HomeSignal(
+        id=f"risk:{row.get('scope') or 'scope'}:{scope}",
+        title=f"Compounding risk appears {raw_severity} for {scope}",
+        metric="compounding_risk",
+        current_value=_format_value(current_value, "%"),
+        prior_value=None,
+        delta=None,
+        direction="flat",
+        severity=severity,
+        confidence=_confidence_from_evidence(1, data_confidence.coverage_pct),
+        affected_scope=scope,
+        evidence_count=1,
+        why_it_matters=_why_for_metric("compounding_risk", "Compounding Risk", "flat"),
+        recommended_action=_action_for_metric("compounding_risk"),
+        evidence_ref=f"/api/graphql?query=compoundingRisk&scope_id={scope}",
+        category="durability",
+    )
+
+
+async def _fetch_recommendation_signals(
+    sink: BaseMetricsSink,
+    *,
+    filters: MetricFilter,
+    start_day: date,
+    end_day: date,
+    org_id: str,
+    data_confidence: HomeDataConfidence,
+) -> list[HomeSignal]:
+    if filters.scope.level != "team" or not filters.scope.ids:
+        return []
+    query = _RECOMMENDATIONS_SQL
+    params: dict[str, Any] = {
+        "org_id": org_id,
+        "window_start": start_day,
+        "window_end": end_day,
+        "team_ids": filters.scope.ids,
+    }
+    query += """
+      AND team_id IN {team_ids:Array(String)}
+    GROUP BY org_id, team_id, rule_id, window_end
+    HAVING latest_fired = true
+    ORDER BY window_end DESC, latest_severity DESC, rule_id
+    LIMIT 10
+    """
+    try:
+        rows = await query_dicts(sink, query, params)
+    except Exception:
+        logger.exception("Failed to fetch home recommendation signals")
+        return []
+    return [
+        signal
+        for row in rows
+        if (signal := _recommendation_signal(row, filters, data_confidence)) is not None
+    ]
+
+
+async def _fetch_risk_signals(
+    sink: BaseMetricsSink,
+    *,
+    filters: MetricFilter,
+    org_id: str,
+    data_confidence: HomeDataConfidence,
+) -> list[HomeSignal]:
+    query = _COMPOUNDING_RISK_SQL
+    params: dict[str, Any] = {"org_id": org_id}
+    if filters.scope.level in {"team", "repo"} and filters.scope.ids:
+        query += """
+      AND scope = {scope:String}
+      AND scope_id IN {scope_ids:Array(String)}
+        """
+        params["scope"] = filters.scope.level
+        params["scope_ids"] = filters.scope.ids
+    query += """
+    GROUP BY scope, scope_id
+    ORDER BY score DESC NULLS LAST
+    LIMIT 5
+    """
+    try:
+        rows = await query_dicts(sink, query, params)
+    except Exception:
+        logger.exception("Failed to fetch home compounding risk signals")
+        return []
+    return [
+        signal
+        for row in rows
+        if (signal := _risk_signal(row, filters, data_confidence)) is not None
+    ]
 
 
 async def _metric_deltas(
@@ -297,6 +799,27 @@ async def build_home_response(
             "jira": "ok" if last_ingested else "down",
             "ci": "ok" if last_ingested else "down",
         }
+        data_confidence = build_data_confidence(coverage=coverage, sources=sources)
+        metric_signals = build_metric_signals(deltas, filters, data_confidence)
+        recommendation_signals, risk_signals = await asyncio.gather(
+            _fetch_recommendation_signals(
+                sink,
+                filters=filters,
+                start_day=start_day,
+                end_day=end_day,
+                org_id=org_id,
+                data_confidence=data_confidence,
+            ),
+            _fetch_risk_signals(
+                sink,
+                filters=filters,
+                org_id=org_id,
+                data_confidence=data_confidence,
+            ),
+        )
+        signals = _rank_signals(metric_signals + recommendation_signals + risk_signals)
+        health_state = build_health_state(signals, data_confidence, last_ingested)
+        limiting_factor = build_limiting_factor(signals)
 
         summary_sentences: list[SummarySentence] = []
         top_delta = max(deltas, key=lambda d: abs(d.delta_pct), default=None)
@@ -418,6 +941,10 @@ async def build_home_response(
             tiles=tiles,
             constraint=constraint,
             events=events,
+            health_state=health_state,
+            signals=signals,
+            limiting_factor=limiting_factor,
+            data_confidence=data_confidence,
         )
 
     cache.set(cache_key, response.model_dump(mode="json"))

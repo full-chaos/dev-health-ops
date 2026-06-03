@@ -160,9 +160,9 @@ the matching GraphQL contract.
 ## Part F — Enforcement (so it is adhered to)
 
 - **Definition of Done** (add to the issue template):
-  > Conforms to the Design & Style Framework; uses shared primitives; backing queries return
-  > resolved names (no unresolved ids surfaced); `design-lint` passes; after-screenshot or
-  > visual-regression assertion attached.
+  > Conforms to the Design & Style Framework; uses the shared primitives; 
+  > backing queries return resolved names (no unresolved ids surfaced); `npm run design-lint` passes; 
+  >an after-screenshot or visual-regression assertion is attached.
 - **`design-lint`** (ESLint / custom): ban raw UUID/hash regex in JSX text and label props;
   ban hardcoded hex/px in components; ban non-registry CTA strings; ban `/api/`,
   `api/graphql`, `CHAOS-\d+`, edge-name and detector/telemetry tokens in user-facing strings;

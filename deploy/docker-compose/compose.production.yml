@@ -109,6 +109,9 @@ services:
       - "8000"
     environment:
       POSTGRES_URI: ${POSTGRES_URI:-}
+      # CHAOS-2065: set true when POSTGRES_URI points at a transaction-mode
+      # pooler (PgBouncer/RDS Proxy/etc). See docs/ops/database-connection-pooling.md.
+      PGBOUNCER_TRANSACTION_MODE: ${PGBOUNCER_TRANSACTION_MODE:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
@@ -173,6 +176,39 @@ services:
         reservations:
           memory: 256M
           cpus: "0.1"
+
+  pgbouncer:
+    # CHAOS-2065: optional transaction-mode pooler in front of a managed
+    # Postgres. Disabled unless explicitly enabled:
+    #   docker compose --profile pooler up -d
+    # Then point Postgres consumers at it and flip the app flag:
+    #   POSTGRES_URI=postgresql+asyncpg://USER:PASS@pgbouncer:6432/DB
+    #   PGBOUNCER_TRANSACTION_MODE=true
+    # See docs/ops/database-connection-pooling.md
+    profiles: ["pooler"]
+    image: edoburu/pgbouncer:latest
+    container_name: dev-health-pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT:-5432}
+      DB_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:?set POSTGRES_DB}
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-25}
+    ports:
+      - "${PGBOUNCER_PORT:-6432}:6432"
+    networks:
+      - dev-health
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
 
 volumes:
   clickhouse_data:

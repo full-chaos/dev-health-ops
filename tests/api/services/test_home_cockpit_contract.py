@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from dev_health_ops.api.models.filters import MetricFilter, ScopeFilter
 from dev_health_ops.api.models.schemas import MetricDelta, SparkPoint
 from dev_health_ops.api.services.home import (
+    HomeDataConfidence,
     _risk_signal,
     build_data_confidence,
     build_health_state,
@@ -164,7 +165,7 @@ def test_cockpit_additive_fields_are_present_on_limiting_factor() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _risk_confidence() -> object:
+def _risk_confidence() -> HomeDataConfidence:
     return build_data_confidence(
         coverage={
             "repos_covered_pct": 80.0,

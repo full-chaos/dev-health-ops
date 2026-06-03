@@ -139,6 +139,8 @@ services:
       - --port
       - "8000"
       - --reload
+      - --reload-dir
+      - /app/src/dev_health_ops/api
     environment:
       <<: *env
       POSTGRES_URI: "postgresql+asyncpg://postgres:postgres@postgres:5432/postgres"

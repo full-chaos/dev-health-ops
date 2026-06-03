@@ -2,6 +2,10 @@
 
 Reads buffered payloads from Redis Streams using consumer groups,
 deserializes them, and persists to the configured storage backend.
+
+The resilient consume loop (blocking-safe client, bounded backoff, group
+creation, ACK) lives in :mod:`dev_health_ops.api._stream_consumer`. This module
+supplies the ingest-specific stream patterns and batch persistence.
 """
 
 from __future__ import annotations
@@ -9,8 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
-import uuid
+import time  # noqa: F401  (retained for backward-compatible monkeypatching)
+
+from .._stream_consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +68,77 @@ def _move_to_dlq(rc, stream_key: str, entry_id: str, entity_type: str) -> None:
         logger.exception("Failed to move entry %s to DLQ", entry_id)
 
 
+def _entity_type_from_key(stream_key: str) -> str:
+    parts = (
+        stream_key.split(":")
+        if isinstance(stream_key, str)
+        else stream_key.decode().split(":")
+    )
+    return parts[-1] if len(parts) >= 3 else "unknown"
+
+
+class IngestStreamConsumer(StreamConsumer):
+    """Drains ``ingest:<org>:<entity>`` streams and persists items in batches.
+
+    Overrides :meth:`handle_entries` because ingest deserializes every entry in
+    a stream into a single flat item list and performs one persist call per
+    stream, rather than one per entry.
+    """
+
+    consumer_group = CONSUMER_GROUP
+    consumer_name_prefix = "consumer"
+
+    def __init__(self, stream_patterns: list[str] | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._stream_patterns = stream_patterns
+
+    def stream_patterns(self) -> list[str]:
+        if self._stream_patterns is not None:
+            return self._stream_patterns
+        from .streams import ENTITY_TYPES
+
+        return [f"ingest:*:{et}" for et in ENTITY_TYPES]
+
+    def ensure_group(self, rc, stream_key: str) -> None:
+        # Preserve ingest's swallow-all semantics (best-effort group creation).
+        _ensure_group(rc, stream_key)
+
+    def handle_entries(self, rc, stream_key, entries) -> int:
+        if not entries:
+            return 0
+
+        entity_type = _entity_type_from_key(stream_key)
+        items = _process_entries(entries, entity_type)
+
+        processed = 0
+        if items:
+            logger.info(
+                "Processed %d items from %s (%d entries)",
+                len(items),
+                stream_key,
+                len(entries),
+            )
+            try:
+                from .persist import persist_items
+
+                asyncio.run(persist_items(entity_type, items))
+            except Exception:
+                logger.exception(
+                    "Failed to persist %d items for %s",
+                    len(items),
+                    entity_type,
+                )
+            processed = len(entries)
+
+        entry_ids = [eid for eid, _ in entries]
+        try:
+            rc.xack(stream_key, self.consumer_group, *entry_ids)
+        except Exception:
+            logger.exception("Failed to ACK entries on %s", stream_key)
+
+        return processed
+
+
 def consume_streams(
     stream_patterns: list[str] | None = None,
     max_iterations: int | None = None,
@@ -72,98 +148,10 @@ def consume_streams(
 
     Returns total number of entries processed.
     """
-    from .streams import ENTITY_TYPES, get_redis_client
-
-    rc = get_redis_client()
-    if not rc:
-        logger.warning("Redis unavailable, consumer cannot start")
-        return 0
-
-    if consumer_name is None:
-        consumer_name = f"consumer-{uuid.uuid4().hex[:8]}"
-
-    if stream_patterns is None:
-        stream_patterns = [f"ingest:*:{et}" for et in ENTITY_TYPES]
-
-    all_streams: dict[str, str] = {}
-    for pattern in stream_patterns:
-        if "*" in pattern:
-            try:
-                for key in rc.scan_iter(match=pattern, _type="stream"):
-                    all_streams[key] = ">"
-            except Exception:
-                pass
-        else:
-            all_streams[pattern] = ">"
-
-    if not all_streams:
-        logger.info("No streams found matching patterns")
-        return 0
-
-    for stream_key in all_streams:
-        _ensure_group(rc, stream_key)
-
-    total_processed = 0
-    iterations = 0
-    backoff_s = 1.0
-    BACKOFF_MAX_S = 30.0
-
-    while max_iterations is None or iterations < max_iterations:
-        iterations += 1
-        try:
-            results = rc.xreadgroup(
-                CONSUMER_GROUP,
-                consumer_name,
-                streams=all_streams,
-                count=BATCH_SIZE,
-                block=BLOCK_MS,
-            )
-            backoff_s = 1.0
-        except Exception:
-            logger.exception("XREADGROUP failed (backoff=%ss)", backoff_s)
-            time.sleep(backoff_s)
-            backoff_s = min(backoff_s * 2, BACKOFF_MAX_S)
-            continue
-
-        if not results:
-            continue
-
-        for stream_key, entries in results:
-            if not entries:
-                continue
-
-            parts = (
-                stream_key.split(":")
-                if isinstance(stream_key, str)
-                else stream_key.decode().split(":")
-            )
-            entity_type = parts[-1] if len(parts) >= 3 else "unknown"
-
-            items = _process_entries(entries, entity_type)
-
-            if items:
-                logger.info(
-                    "Processed %d items from %s (%d entries)",
-                    len(items),
-                    stream_key,
-                    len(entries),
-                )
-                try:
-                    from .persist import persist_items
-
-                    asyncio.run(persist_items(entity_type, items))
-                except Exception:
-                    logger.exception(
-                        "Failed to persist %d items for %s",
-                        len(items),
-                        entity_type,
-                    )
-                total_processed += len(entries)
-
-            entry_ids = [eid for eid, _ in entries]
-            try:
-                rc.xack(stream_key, CONSUMER_GROUP, *entry_ids)
-            except Exception:
-                logger.exception("Failed to ACK entries on %s", stream_key)
-
-    return total_processed
+    consumer = IngestStreamConsumer(
+        stream_patterns=stream_patterns,
+        consumer_name=consumer_name,
+        block_ms=BLOCK_MS,
+        batch_size=BATCH_SIZE,
+    )
+    return consumer.consume(max_iterations=max_iterations)

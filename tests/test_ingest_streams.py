@@ -145,7 +145,7 @@ class TestConsumeStreams:
         fake_redis.xadd(skey, {"ingestion_id": "i1", "payload": payload})
 
         monkeypatch.setattr(
-            "dev_health_ops.api.ingest.streams.get_redis_client",
+            "dev_health_ops.api._stream_consumer.get_consumer_redis_client",
             lambda: fake_redis,
         )
 
@@ -161,7 +161,7 @@ class TestConsumeStreams:
 
     def test_max_iterations_limits_loop(self, monkeypatch, fake_redis):
         monkeypatch.setattr(
-            "dev_health_ops.api.ingest.streams.get_redis_client",
+            "dev_health_ops.api._stream_consumer.get_consumer_redis_client",
             lambda: fake_redis,
         )
 
@@ -192,7 +192,7 @@ class TestConsumeStreams:
             fake_redis.xadd(skey, {"ingestion_id": f"i-{entity}", "payload": payload})
 
         monkeypatch.setattr(
-            "dev_health_ops.api.ingest.streams.get_redis_client",
+            "dev_health_ops.api._stream_consumer.get_consumer_redis_client",
             lambda: fake_redis,
         )
         monkeypatch.setattr("dev_health_ops.api.ingest.consumer.BLOCK_MS", 100)

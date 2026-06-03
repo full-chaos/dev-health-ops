@@ -110,7 +110,7 @@ def test_product_telemetry_consumer_persists_sanitized_payload_json(
     clickhouse = FakeClickHouseClient()
 
     monkeypatch.setattr(
-        "dev_health_ops.api.product_telemetry.streams.get_redis_client", lambda: redis
+        "dev_health_ops.api._stream_consumer.get_consumer_redis_client", lambda: redis
     )
     monkeypatch.setattr(
         "dev_health_ops.api.product_telemetry.persist.create_sink",
@@ -155,7 +155,7 @@ def test_product_telemetry_consumer_coerces_missing_org_hash_to_empty_string(
     clickhouse = FakeClickHouseClient()
 
     monkeypatch.setattr(
-        "dev_health_ops.api.product_telemetry.streams.get_redis_client", lambda: redis
+        "dev_health_ops.api._stream_consumer.get_consumer_redis_client", lambda: redis
     )
     monkeypatch.setattr(
         "dev_health_ops.api.product_telemetry.persist.create_sink",
@@ -177,7 +177,7 @@ def test_product_telemetry_consumer_rejects_blocked_payload_keys_to_dlq(
     clickhouse = FakeClickHouseClient()
 
     monkeypatch.setattr(
-        "dev_health_ops.api.product_telemetry.streams.get_redis_client", lambda: redis
+        "dev_health_ops.api._stream_consumer.get_consumer_redis_client", lambda: redis
     )
     monkeypatch.setattr(
         "dev_health_ops.api.product_telemetry.persist.create_sink",

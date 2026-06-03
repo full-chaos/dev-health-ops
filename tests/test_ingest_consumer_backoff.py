@@ -4,6 +4,7 @@ from __future__ import annotations
 
 
 def test_exponential_backoff_on_repeated_failures(monkeypatch):
+    from dev_health_ops.api import _stream_consumer as base
     from dev_health_ops.api.ingest import consumer as mod
 
     class BrokenRedis:
@@ -21,13 +22,13 @@ def test_exponential_backoff_on_repeated_failures(monkeypatch):
             pass
 
     broken = BrokenRedis()
+    broken = BrokenRedis()
     sleeps: list[float] = []
-    monkeypatch.setattr(mod.time, "sleep", lambda s: sleeps.append(s))
+    # Backoff sleep now happens in the shared base consume loop.
+    monkeypatch.setattr(base.time, "sleep", lambda s: sleeps.append(s))
 
-    # get_redis_client is imported lazily inside consume_streams
-    from dev_health_ops.api.ingest import streams as streams_mod
-
-    monkeypatch.setattr(streams_mod, "get_redis_client", lambda: broken)
+    # The consumer acquires its blocking-safe client from the base factory.
+    monkeypatch.setattr(base, "get_consumer_redis_client", lambda: broken)
 
     mod.consume_streams(stream_patterns=["ingest:*:commits"], max_iterations=5)
 

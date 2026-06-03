@@ -551,6 +551,7 @@ def _recommendation_signal(
         category="dynamics",
     )
 
+
 _BARE_UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -600,7 +601,10 @@ async def _resolve_scope_labels(
                 {"org_id": org_id, "scope_ids": repo_ids},
             )
             label_map.update(
-                {r["scope_id"]: r.get("display_name") or r["scope_id"] for r in repo_rows}
+                {
+                    r["scope_id"]: r.get("display_name") or r["scope_id"]
+                    for r in repo_rows
+                }
             )
         except Exception:
             logger.warning("Could not resolve repo labels for risk signals")
@@ -617,7 +621,10 @@ async def _resolve_scope_labels(
                 {"org_id": org_id},
             )
             label_map.update(
-                {r["scope_id"]: r.get("display_name") or r["scope_id"] for r in team_rows}
+                {
+                    r["scope_id"]: r.get("display_name") or r["scope_id"]
+                    for r in team_rows
+                }
             )
         except Exception:
             logger.warning("Could not resolve team labels for risk signals")

@@ -57,6 +57,17 @@ class EventItem(BaseModel):
     link: str
 
 
+class ScopeEntityRef(BaseModel):
+    """Resolved entity reference for REST payloads (Framework A7).
+
+    ``id`` is stable for routing; ``display_name`` is the human-readable
+    label to render — guaranteed to be non-UUID when provided.
+    """
+
+    id: str
+    display_name: str
+
+
 class HomeHealthState(BaseModel):
     status: Literal["healthy", "watch", "at_risk", "critical"] = "healthy"
     headline: str = "Operating posture appears healthy"
@@ -80,6 +91,9 @@ class HomeSignal(BaseModel):
     recommended_action: str
     evidence_ref: str | None = None
     category: Literal["delivery", "durability", "wellbeing", "dynamics", "ai"]
+    # Structured entity ref for risk signals (Framework A7 / A8).
+    # ``display_name`` is the resolved human label; never a bare UUID.
+    scope_entity: ScopeEntityRef | None = None
 
 
 class HomeLimitingFactor(BaseModel):

@@ -22,6 +22,7 @@ from ..models.schemas import (
     HomeResponse,
     HomeSignal,
     MetricDelta,
+    ScopeEntityRef,
     SparkPoint,
     SummarySentence,
 )
@@ -683,6 +684,7 @@ def _risk_signal(
         recommended_action=_action_for_metric("compounding_risk"),
         evidence_ref=None,
         category="durability",
+        scope_entity=ScopeEntityRef(id=scope_id, display_name=entity_name),
     )
 
 

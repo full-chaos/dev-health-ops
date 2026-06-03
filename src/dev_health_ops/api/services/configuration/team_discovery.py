@@ -23,7 +23,11 @@ if TYPE_CHECKING:
 class TeamDiscoveryService:
     """Service for discovering teams from external providers."""
 
-    def __init__(self, session: AsyncSession, org_id: str):
+    def __init__(self, session: AsyncSession | None, org_id: str):
+        # ``session`` is optional: the discover_* methods perform external
+        # network I/O only and never touch the DB, so callers that only need
+        # discovery (e.g. the worker fan-out) can pass ``None`` and avoid
+        # holding a connection idle-in-transaction. import_teams requires one.
         self.session = session
         self.org_id = org_id
 
@@ -171,6 +175,8 @@ class TeamDiscoveryService:
         on_conflict: str = "skip",
     ) -> dict[str, Any]:
         """Import discovered teams into TeamMapping."""
+        if self.session is None:
+            raise RuntimeError("import_teams requires a database session")
         team_mapping_svc = TeamMappingService(self.session, self.org_id)
         imported = 0
         skipped = 0

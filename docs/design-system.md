@@ -3,46 +3,52 @@
 > **Status: binding.** Every UI change in `dev-health-web` must conform to this framework.
 > "Done" requires conformance **plus** visual verification (see Part F).
 >
-> This file is the canonical source of truth. It is mirrored in Linear and referenced by
-> the *Market-ready Frontend UX* milestone (CHAOS-2055 interaction/design normalization,
-> CHAOS-2031 style rollout, and the Phase-1 trust issues). When this file and Linear
-> diverge, **this file governs**. Reference it from the repo agent config (`CLAUDE.md` /
-> `AGENTS.md`) so coding agents auto-load it.
+> This file is the canonical source of truth, mirrored in Linear and referenced by the
+> *Market-ready Frontend UX* milestone (CHAOS-2075 navigation, CHAOS-2055 interaction/design
+> normalization, CHAOS-2031 style rollout, and the Phase-1 trust issues). Reference it from
+> the repo agent config (`CLAUDE.md` / `AGENTS.md`) so coding agents auto-load it.
 
 ## Why this exists
 
 The UI inconsistencies were **not** caused by agents ignoring issues — the issues shipped
 with real PRs. They were caused by *explicit, per-defect* issues producing isolated
-point-fixes with no shared framework to conform to. One chart says "Unattributed", another
-dumps raw JSON; one page resolves names, another shows `#cf3d56b4`; CTAs drift to
-"Re-orient in Cockpit". The fix is systemic: canonical rules + tokens + shared primitives,
-**enforced**, so every change uses them instead of inventing one-offs.
+point-fixes with no shared framework to conform to. The fix is systemic: canonical rules +
+tokens + shared primitives, enforced, so every change uses them instead of inventing
+one-offs.
 
 ---
 
 ## Part A — Interaction & content rules (design)
 
-- **A1 Sidebar** — major product areas only. No one-off metric pages without product approval.
-- **A2 Tabs** — sibling views within one area only (Work: Investment / Flow / Landscape /
-  Heatmap / Capacity / Evidence; AI Workflows: Impact / Attribution / Review Load /
-  Test Gaps / Governance Risk / Evidence). Never style a navigation exit as a tab.
+- **A1 Sidebar — two-level.** The sidebar shows the primary areas (Cockpit / Diagnose /
+  Improve / Govern / Reports / Admin) at rest; the **active area expands to its child
+  destinations**. Children are real destinations only — never stub/preview routes (gate
+  behind `navVisible`). Do not reintroduce the flat metric catalog; keep an expanded area to
+  ~7±2 children (cluster leaves into tabs where needed). See CHAOS-2075.
+- **A2 Tabs** — sibling views **within a single destination** (Work: Investment / Flow /
+  Landscape / Heatmap / Capacity / Evidence; AI Workflows: Impact / Attribution / Review
+  Load / Test Gaps / Governance Risk / Evidence). Area children in the sidebar are
+  destinations, not tabs; never style a navigation exit as a tab.
+- **A2a Area Overview (triage).** Each area's **Overview** bubbles severity-sorted sub-area
+  signal (metric + state), so the sidebar handles *findability* and the Overview handles
+  *triage*. Bottom "area cards" are "Related workflows" or removed — never a second copy of
+  the sidebar tree. See CHAOS-2074.
 - **A3 Pills** — filters, scope, status, and segmented view controls only. Never for
   navigation, back, or primary CTAs.
-- **A4 Buttons** — actions only, drawn from the CTA registry (Part D). Do not invent verbs.
+- **A4 Buttons** — actions only, from the CTA registry (Part D). Do not invent verbs.
 - **A5 Back links** — one pattern: `Back to Cockpit` or `Back to {parent area}`. Never
   styled as pills/filters. One return path per screen — remove redundant ones (e.g.
   `Back to Metrics View` **and** `Back to Cockpit` together).
-- **A6 Page-name agreement** — sidebar label = page title = breadcrumb = route metadata.
-  Normalize: Delivery Risk vs Risk & Quality Drag; AI Workflows vs AI Workflow Intelligence;
-  Coverage vs Coverage Delta.
+- **A6 Page-name agreement** — sidebar label = page title = breadcrumb = route metadata, all
+  derived from one shared route config. Normalize: Delivery Risk vs Risk & Quality Drag; AI
+  Workflows vs AI Workflow Intelligence; Coverage vs Coverage Delta.
 - **A7 Identity labels — full-stack contract (not a render-only rule).** Never show a raw
-  ID/hash as a primary user-facing label. The data layer must do the resolving:
-  **GraphQL queries/resolvers must return a resolved display name alongside any id**
-  (e.g. `compoundingRisk` must return `scope { id, displayName }`, not a bare `scope_id`),
-  and the frontend renders it via `EntityLabel`. Fallback order, *only when the server
-  genuinely cannot resolve*: (1) display name → (2) repo/name slug → (3) provider key with
-  prefix → (4) shortened ID with an explicit `Unresolved` badge. A bare `#cf3d56b4` is
-  non-compliant.
+  ID/hash as a primary user-facing label. The data layer must do the resolving: **GraphQL
+  queries/resolvers must return a resolved display name alongside any id** (e.g.
+  `compoundingRisk` must return `scope { id, displayName }`, not a bare `scope_id`), and the
+  frontend renders it via `EntityLabel`. Fallback order *only when the server genuinely
+  cannot resolve*: (1) display name → (2) repo/name slug → (3) provider key with prefix →
+  (4) shortened ID with an explicit `Unresolved` badge. A bare `#cf3d56b4` is non-compliant.
   - **Root-cause example (cockpit conclusion):** "Compounding risk appears elevated for
     {scope} across {scope}" is driven by `api/graphql?query=compoundingRisk&scope_id=<uuid>`.
     That query does **not** return a resolved scope display name, and it binds the **same
@@ -55,13 +61,15 @@ dumps raw JSON; one page resolves names, another shows `#cf3d56b4`; CTAs drift t
   paths (`/api/v1/...`, `api/graphql?query=...&scope_id=...`), graph edge names (`DEPLOYS`,
   `LINKED_INCIDENT`), detector/telemetry jargon, version tags (`V1 SPARKLINE`), or Linear
   IDs (`CHAOS-1757`). Dev-only details go behind debug mode. Remove `Debug Filters` from
-  customer/explore views.
+  customer/explore views. Eyebrow/kicker labels must be meaningful context — never
+  page-scaffolding nouns (`section`, `fixed agenda section`, `rule engine`) and never a
+  repeat of the adjacent title.
 - **A9 Never render raw data structures** — no JSON/object dumps in user-facing tables. The
   Evidence Table currently renders `{"repo_id":"…","number":1,…}`; map to typed, labeled
   fields.
 - **A10 Active navigation** — exactly one selected destination at a time; hover/focus must
-  be visually distinct from selected. No two outlined/selected items at once (observed:
-  Coverage + Delivery Risk both selected; Bottlenecks highlighted on the Coverage page).
+  be visually distinct from selected. No two outlined/selected items at once. Active state is
+  computed from route metadata, not per-page string matching.
 - **A11 Empty / unavailable / error states** — use the `DataState` component with
   customer-safe copy ("No prior period", "Ownership data not connected yet"), never bare
   `--`, blank panels, or raw red error blocks (CHAOS-2054). Evidence drawers use the
@@ -104,11 +112,14 @@ token, don't inline.
 - **C2 Color roles** — semantic tokens, not raw hex: `bg`, `surface`, `surface-raised`,
   `border`, `text-primary`, `text-secondary`, `text-muted`, `accent` (orange), and status
   `positive` / `caution` / `negative` / `info`. Map status badges consistently
-  (WATCH / ELEVATED → caution / negative; NORMAL → positive).
+  (WATCH / ELEVATED → caution / negative; NORMAL → positive). Default borders use the
+  `border` token (low-contrast hairline) — bright/accent borders are reserved for
+  active/selected/interactive states (CHAOS-2067).
 - **C3 Spacing** — 4px base scale (4 / 8 / 12 / 16 / 24 / 32 / 48). Standardize card padding
   and section gaps.
 - **C4 Radius & elevation** — one radius scale (`sm` 6 / `md` 10 / `lg` 16 / `pill` 999) and
-  one elevation set for cards/drawers.
+  one elevation set for cards/drawers; separate cards with surface/elevation contrast rather
+  than stacked bright outlines.
 - **C5 Charts** — one palette + conventions: sequential scale for heatmaps that **must map
   data variance** (the Churn heatmap renders uniform cyan today), categorical palette for
   series, consistent axis / gridline / tooltip styling, **styled tooltips** (Pipelines shows
@@ -149,6 +160,7 @@ The only sanctioned implementations:
 | `ModeTabs` | A2 |
 | `FilterPills` | A3 |
 | `ChartFrame` + chart theme | C5 |
+| shared route config (sidebar / breadcrumb / title / active state) | A1 / A6 / A10 |
 | CTA constants | D |
 
 New surfaces **compose** these — do not re-implement. The `render-safe entity-label helper`
@@ -159,14 +171,15 @@ the matching GraphQL contract.
 
 ## Part F — Enforcement (so it is adhered to)
 
-- **Definition of Done** (add to the issue template):
-  > Conforms to the Design & Style Framework; uses the shared primitives; 
-  > backing queries return resolved names (no unresolved ids surfaced); `npm run design-lint` passes; 
-  >an after-screenshot or visual-regression assertion is attached.
+- **Definition of Done** (identical in `AGENTS.md` and the Linear issue template):
+  > Conforms to the Design & Style Framework; uses the shared primitives; backing queries
+  > return resolved names (no unresolved ids surfaced); `npm run design-lint` passes; an
+  > after-screenshot or visual-regression assertion is attached.
 - **`design-lint`** (ESLint / custom): ban raw UUID/hash regex in JSX text and label props;
-  ban hardcoded hex/px in components; ban non-registry CTA strings; ban `/api/`,
-  `api/graphql`, `CHAOS-\d+`, edge-name and detector/telemetry tokens in user-facing strings;
-  require `formatNumber` on chart value labels.
+  ban hardcoded hex/px in components; ban non-registry CTA strings; ban scaffolding kicker
+  strings (`SECTION` / `FIXED AGENDA SECTION` / `RULE ENGINE`); ban `/api/`, `api/graphql`,
+  `CHAOS-\d+`, edge-name and detector/telemetry tokens in user-facing strings; require
+  `formatNumber` on chart value labels.
 - **Dev guard** — throw in dev if an unresolved hash reaches a primary label slot.
 - **Visual gate** — tie "Done" to the *Visual User Journey Evidence & UX Acceptance
   Coverage* milestone: an after-screenshot or visual-regression assertion per fix, so "Done"

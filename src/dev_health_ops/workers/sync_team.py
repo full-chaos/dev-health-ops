@@ -32,12 +32,18 @@ def _string_or_none(value: object | None) -> str | None:
 
 
 async def _discover_and_sync_all(org_id: str | None) -> dict:
-    """Discover teams from every configured provider concurrently and run drift sync.
+    """Discover teams from every configured provider and run drift sync.
 
-    Each provider (github, gitlab, jira) gets its own coroutine that performs the
-    credential lookup, discovery call, and drift-sync call. ``asyncio.gather``
-    fans them out so the wall-time equals max(per-provider-time) rather than the
-    sum.
+    Connections are scoped tightly to the DB work so a Postgres connection is
+    never held idle-in-transaction across the slow external discovery calls:
+
+    * Phase 1 (one short session): read + decrypt credentials for all providers.
+    * Phase 2 (no session held): discover teams from each provider concurrently
+      via ``asyncio.gather`` -- pure external network I/O, zero DB connections.
+    * Phase 3 (one short session): persist drift sequentially.
+
+    Peak demand is one connection per job, held only for the millisecond-scale
+    reads/writes, while the slow per-provider network calls still overlap.
     """
     from dev_health_ops.api.services.configuration import (
         IntegrationCredentialsService,
@@ -47,72 +53,106 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
     from dev_health_ops.db import get_postgres_session
 
     effective_org_id = org_id or ""
+    providers = ("github", "gitlab", "jira")
 
+    # Phase 1: read + decrypt credentials in one short-lived session. These are
+    # fast local reads; the connection is released before any network I/O.
+    prepared: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    skipped: dict[str, dict[str, Any]] = {}
     async with get_postgres_session() as session:
         creds_svc = IntegrationCredentialsService(session, effective_org_id)
-        discovery_svc = TeamDiscoveryService(session, effective_org_id)
-        drift_svc = TeamDriftSyncService(session, effective_org_id)
-
-        async def _run_one(provider: str) -> dict:
+        for provider in providers:
             credential = await creds_svc.get(provider, "default")
             if credential is None:
-                return {"provider": provider, "skipped": "no_credential"}
+                skipped[provider] = {"provider": provider, "skipped": "no_credential"}
+                continue
             decrypted = await creds_svc.get_decrypted_credentials(provider, "default")
             if decrypted is None:
-                return {"provider": provider, "skipped": "no_decrypted"}
+                skipped[provider] = {"provider": provider, "skipped": "no_decrypted"}
+                continue
             config: dict[str, Any] = (
                 credential.config if isinstance(credential.config, dict) else {}
             )
+            prepared[provider] = (decrypted, config)
+
+    # Phase 2: discover teams concurrently WITHOUT holding a DB connection.
+    # discover_* perform external network I/O only, so a sessionless service is
+    # safe and keeps the connection pool free during the slow calls.
+    discovery_svc = TeamDiscoveryService(None, effective_org_id)
+
+    async def _discover(provider: str) -> dict:
+        decrypted, config = prepared[provider]
+        try:
+            if provider == "github":
+                token = decrypted.get("token")
+                org_name = config.get("org")
+                if not isinstance(token, str) or not token:
+                    return {"provider": provider, "skipped": "missing_config"}
+                if not isinstance(org_name, str) or not org_name:
+                    return {"provider": provider, "skipped": "missing_config"}
+                teams = await discovery_svc.discover_github(
+                    token=token, org_name=org_name
+                )
+            elif provider == "gitlab":
+                token = decrypted.get("token")
+                group_path = config.get("group")
+                url = config.get("url", "https://gitlab.com")
+                if not isinstance(token, str) or not token:
+                    return {"provider": provider, "skipped": "missing_config"}
+                if not isinstance(group_path, str) or not group_path:
+                    return {"provider": provider, "skipped": "missing_config"}
+                if not isinstance(url, str) or not url:
+                    return {"provider": provider, "skipped": "missing_config"}
+                teams = await discovery_svc.discover_gitlab(
+                    token=token, group_path=group_path, url=url
+                )
+            else:
+                email = decrypted.get("email")
+                api_token = decrypted.get("api_token") or decrypted.get("token")
+                jira_url = config.get("url") or decrypted.get("url")
+                if not isinstance(email, str) or not email:
+                    return {"provider": provider, "skipped": "missing_config"}
+                if not isinstance(api_token, str) or not api_token:
+                    return {"provider": provider, "skipped": "missing_config"}
+                if not isinstance(jira_url, str) or not jira_url:
+                    return {"provider": provider, "skipped": "missing_config"}
+                teams = await discovery_svc.discover_jira(
+                    email=email, api_token=api_token, url=jira_url
+                )
+            return {"provider": provider, "teams": teams}
+        except Exception as exc:
+            logger.warning("Team discovery failed for provider %s: %s", provider, exc)
+            return {"provider": provider, "error": str(exc)}
+
+    discovered = await asyncio.gather(*(_discover(p) for p in prepared))
+    discovered_by_provider = {item["provider"]: item for item in discovered}
+
+    # Phase 3: persist drift in one short-lived session, sequentially. Each
+    # run_drift_sync is a fast local read + write + flush.
+    results: list[dict[str, Any]] = []
+    async with get_postgres_session() as session:
+        drift_svc = TeamDriftSyncService(session, effective_org_id)
+        for provider in providers:
+            if provider in skipped:
+                results.append(skipped[provider])
+                continue
+            outcome = discovered_by_provider.get(provider)
+            if outcome is None:
+                continue
+            if "teams" not in outcome:
+                # discovery skipped or errored -- surface as-is, no DB work
+                results.append(outcome)
+                continue
             try:
-                if provider == "github":
-                    token = decrypted.get("token")
-                    org_name = config.get("org")
-                    if not isinstance(token, str) or not token:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    if not isinstance(org_name, str) or not org_name:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    teams = await discovery_svc.discover_github(
-                        token=token, org_name=org_name
-                    )
-                elif provider == "gitlab":
-                    token = decrypted.get("token")
-                    group_path = config.get("group")
-                    url = config.get("url", "https://gitlab.com")
-                    if not isinstance(token, str) or not token:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    if not isinstance(group_path, str) or not group_path:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    if not isinstance(url, str) or not url:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    teams = await discovery_svc.discover_gitlab(
-                        token=token, group_path=group_path, url=url
-                    )
-                else:
-                    email = decrypted.get("email")
-                    api_token = decrypted.get("api_token") or decrypted.get("token")
-                    jira_url = config.get("url") or decrypted.get("url")
-                    if not isinstance(email, str) or not email:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    if not isinstance(api_token, str) or not api_token:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    if not isinstance(jira_url, str) or not jira_url:
-                        return {"provider": provider, "skipped": "missing_config"}
-                    teams = await discovery_svc.discover_jira(
-                        email=email, api_token=api_token, url=jira_url
-                    )
-                return await drift_svc.run_drift_sync(provider, teams)
+                results.append(
+                    await drift_svc.run_drift_sync(provider, outcome["teams"])
+                )
             except Exception as exc:
                 logger.warning(
                     "Team drift sync failed for provider %s: %s", provider, exc
                 )
-                return {"provider": provider, "error": str(exc)}
+                results.append({"provider": provider, "error": str(exc)})
 
-        results = await asyncio.gather(
-            _run_one("github"),
-            _run_one("gitlab"),
-            _run_one("jira"),
-        )
-        await session.commit()
     return {"status": "success", "results": list(results)}
 
 

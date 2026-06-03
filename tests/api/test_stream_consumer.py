@@ -86,7 +86,6 @@ class FakeRedis:
 
 def test_consumer_client_uses_unbounded_socket_timeout(monkeypatch):
     monkeypatch.setenv("REDIS_URL", "redis://valkey:6379/1")
-    fake_valkey = MagicMock()
     with patch("valkey.from_url", return_value=MagicMock()) as from_url:
         get_consumer_redis_client()
 
@@ -97,7 +96,6 @@ def test_consumer_client_uses_unbounded_socket_timeout(monkeypatch):
     assert kwargs["socket_timeout"] is None
     assert kwargs["socket_connect_timeout"] == base.DEFAULT_CONNECT_TIMEOUT_S
     assert kwargs["decode_responses"] is True
-    del fake_valkey
 
 
 def test_consumer_client_none_when_redis_url_unset(monkeypatch):

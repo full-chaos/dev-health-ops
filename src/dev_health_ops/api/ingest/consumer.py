@@ -14,7 +14,6 @@ import asyncio
 import json
 import logging
 import time  # noqa: F401  (retained for backward-compatible monkeypatching)
-import uuid  # noqa: F401  (retained for backward compatibility)
 
 from .._stream_consumer import StreamConsumer
 

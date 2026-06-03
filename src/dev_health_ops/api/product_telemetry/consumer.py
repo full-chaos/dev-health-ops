@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid  # noqa: F401  (retained for backward compatibility)
 from typing import Any
 
 from pydantic import ValidationError

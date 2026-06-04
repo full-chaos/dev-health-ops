@@ -158,6 +158,52 @@ async def _execute_timeseries_query(
     ]
 
 
+async def _resolve_breakdown_labels(
+    client: Any,
+    *,
+    dimension: str,
+    org_id: str,
+    keys: list[str],
+) -> dict[str, str]:
+    """Resolve repo/team breakdown keys to display names (Framework A7/A8).
+
+    Only the ``repo`` and ``team`` dimensions carry stable ids that can leak as
+    raw UUIDs; other dimensions (theme, work_type, ...) are already human text.
+    Best-effort: returns an empty map on failure so callers fall back.
+    """
+    from dev_health_ops.api.services.identity import resolve_scope_display_names
+
+    if dimension not in {"repo", "team"}:
+        return {}
+    return await resolve_scope_display_names(
+        client,
+        org_id=org_id,
+        scope="team" if dimension == "team" else "repo",
+        ids=keys,
+    )
+
+
+def _build_breakdown_item(
+    key: str,
+    value: float,
+    label_map: dict[str, str],
+) -> BreakdownItem:
+    from dev_health_ops.api.services.identity import looks_like_uuid
+
+    resolved = label_map.get(key)
+    if resolved and not looks_like_uuid(resolved):
+        label: str | None = resolved
+    elif key and not looks_like_uuid(key):
+        # Already-human key (e.g. investment-path repo slug, theme name).
+        label = key
+    else:
+        # A8: never surface a bare UUID; emit a controlled short token and let
+        # the client render its Unresolved badge.
+        token = key.replace("-", "")[:8]
+        label = f"#{token}" if token else None
+    return BreakdownItem(key=key, value=value, label=label)
+
+
 async def _execute_breakdown_query(
     client: Any,
     bd_req: BreakdownRequestInput,
@@ -184,10 +230,18 @@ async def _execute_breakdown_query(
     sql, params = compile_breakdown(request, org_id, timeout, filters=filters)
 
     rows = await query_dicts(client, sql, params)
+
+    # Resolve repo/team dimension keys to human display names server-side so the
+    # client never renders a raw id as the primary label (Framework A7/A8).
+    keys = [str(row.get("dimension_value", "")) for row in rows]
+    label_map = await _resolve_breakdown_labels(
+        client, dimension=bd_req.dimension.value, org_id=org_id, keys=keys
+    )
     items = [
-        BreakdownItem(
-            key=str(row.get("dimension_value", "")),
-            value=float(row.get("value", 0)),
+        _build_breakdown_item(
+            str(row.get("dimension_value", "")),
+            float(row.get("value", 0)),
+            label_map,
         )
         for row in rows
     ]

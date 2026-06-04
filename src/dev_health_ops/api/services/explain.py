@@ -11,6 +11,11 @@ from ..queries.metrics import fetch_metric_value
 from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
 from .filtering import filter_cache_key, scope_filter_for_metric, time_window
+from .identity import (
+    looks_like_uuid,
+    resolve_scope_display_names,
+    scope_kind_for_group_by,
+)
 
 
 class _MetricConfig(TypedDict):
@@ -167,6 +172,7 @@ async def build_explain_response(
             compare_end=compare_end,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
         )
         contributors = await fetch_metric_contributors(
             sink,
@@ -177,42 +183,47 @@ async def build_explain_response(
             end_day=end_day,
             scope_filter=scope_filter,
             scope_params=scope_params,
+            org_id=org_id,
         )
-
-    driver_models: list[Contributor] = []
-    for row in drivers:
-        raw_value = safe_float(row.get("value"))
-        raw_delta = safe_float(row.get("delta_pct"))
-        driver_models.append(
-            Contributor(
-                id=str(row.get("id") or ""),
-                label=str(row.get("id") or "Unknown"),
-                value=safe_transform(config["transform"], raw_value),
-                delta_pct=raw_delta,
-                evidence_link=(
-                    f"/api/v1/drilldown/prs?metric={metric}"
-                    f"&scope_type={filters.scope.level}"
-                    f"&scope_id={_primary_scope_id(filters)}"
-                ),
+        # Resolve scope ids -> display names server-side so labels never carry
+        # a bare UUID (Framework A7/A8). group_by is repo_id or team_id.
+        scope_kind = scope_kind_for_group_by(config["group_by"])
+        all_ids = list(
+            {str(r.get("id") or "") for r in (*drivers, *contributors)} - {""}
+        )
+        if scope_kind is not None and all_ids:
+            display_names = await resolve_scope_display_names(
+                sink,
+                org_id=org_id,
+                scope=scope_kind,
+                ids=all_ids,
             )
-        )
+        else:
+            display_names = {}
 
-    contributor_models: list[Contributor] = []
-    for row in contributors:
-        raw_value = safe_float(row.get("value"))
-        contributor_models.append(
-            Contributor(
-                id=str(row.get("id") or ""),
-                label=str(row.get("id") or "Unknown"),
-                value=safe_transform(config["transform"], raw_value),
-                delta_pct=0.0,
-                evidence_link=(
-                    f"/api/v1/drilldown/prs?metric={metric}"
-                    f"&scope_type={filters.scope.level}"
-                    f"&scope_id={_primary_scope_id(filters)}"
-                ),
-            )
+    driver_models: list[Contributor] = [
+        _build_contributor(
+            row,
+            metric=metric,
+            filters=filters,
+            transform=config["transform"],
+            display_names=display_names,
+            delta_value=safe_float(row.get("delta_pct")),
         )
+        for row in drivers
+    ]
+
+    contributor_models: list[Contributor] = [
+        _build_contributor(
+            row,
+            metric=metric,
+            filters=filters,
+            transform=config["transform"],
+            display_names=display_names,
+            delta_value=0.0,
+        )
+        for row in contributors
+    ]
 
     response = ExplainResponse(
         metric=metric,
@@ -236,3 +247,48 @@ def _primary_scope_id(filters: MetricFilter) -> str:
     if filters.scope.ids:
         return filters.scope.ids[0]
     return ""
+
+
+def _short_token(scope_id: str) -> str:
+    """Controlled fallback for an unresolved id (never a bare UUID).
+
+    Mirrors the cockpit contract: when the server cannot resolve a human name,
+    surface a short, stable, non-UUID token (e.g. ``#698c0211``) plus the
+    structured ``display_name=None`` so the client renders its Unresolved badge
+    rather than leaking a raw UUID as the primary label (A8).
+    """
+    token = scope_id.replace("-", "")[:8]
+    return f"#{token}" if token else "Unknown"
+
+
+def _build_contributor(
+    row: dict[str, object],
+    *,
+    metric: str,
+    filters: MetricFilter,
+    transform: Callable[[float], float],
+    display_names: dict[str, str],
+    delta_value: float,
+) -> Contributor:
+    scope_id = str(row.get("id") or "")
+    resolved = display_names.get(scope_id)
+    # A8: a bare UUID is never a valid label; fall back to a controlled token.
+    if resolved and not looks_like_uuid(resolved):
+        label = resolved
+        display_name: str | None = resolved
+    else:
+        label = _short_token(scope_id)
+        display_name = None
+    raw_value = safe_float(row.get("value"))
+    return Contributor(
+        id=scope_id,
+        label=label,
+        display_name=display_name,
+        value=safe_transform(transform, raw_value),
+        delta_pct=delta_value,
+        evidence_link=(
+            f"/api/v1/drilldown/prs?metric={metric}"
+            f"&scope_type={filters.scope.level}"
+            f"&scope_id={_primary_scope_id(filters)}"
+        ),
+    )

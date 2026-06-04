@@ -128,11 +128,20 @@ class HomeResponse(BaseModel):
 
 
 class Contributor(BaseModel):
+    """A metric driver/contributor row (Framework A7).
+
+    ``id`` is stable for routing/drill-down. ``label`` is the human-readable
+    text the UI renders. ``display_name`` carries the resolved name when the
+    server could resolve it (non-UUID, A8); when ``None`` the entity is
+    genuinely unresolved and the client applies its controlled fallback.
+    """
+
     id: str
     label: str
     value: float
     delta_pct: float
     evidence_link: str
+    display_name: str | None = None
 
 
 class ExplainResponse(BaseModel):

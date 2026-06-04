@@ -28,10 +28,17 @@ class TimeseriesResult:
 
 @strawberry.type
 class BreakdownItem:
-    """A single item in a breakdown result."""
+    """A single item in a breakdown result.
+
+    ``key`` is the stable dimension value (id or slug). ``label`` is the
+    server-resolved human-readable name (Framework A7); it falls back to a
+    controlled non-UUID token when the entity cannot be resolved (A8) so the
+    client never renders a raw id as the primary label.
+    """
 
     key: str
     value: float
+    label: str | None = None
 
 
 @strawberry.type

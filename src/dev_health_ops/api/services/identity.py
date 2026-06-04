@@ -99,6 +99,13 @@ async def resolve_scope_display_names(
     return resolved
 
 
-def scope_kind_for_group_by(group_by: str) -> ScopeKind:
-    """Map an explain/driver ``group_by`` column to a resolver scope kind."""
-    return "team" if group_by == "team_id" else "repo"
+def scope_kind_for_group_by(group_by: str) -> ScopeKind | None:
+    """Map an explain/driver ``group_by`` column to a resolver scope kind.
+
+    Returns None for unrecognised values; callers must skip resolution.
+    """
+    if group_by == "team_id":
+        return "team"
+    if group_by == "repo_id":
+        return "repo"
+    return None

@@ -188,13 +188,18 @@ async def build_explain_response(
         # Resolve scope ids -> display names server-side so labels never carry
         # a bare UUID (Framework A7/A8). group_by is repo_id or team_id.
         scope_kind = scope_kind_for_group_by(config["group_by"])
-        all_ids = [str(r.get("id") or "") for r in (*drivers, *contributors)]
-        display_names = await resolve_scope_display_names(
-            sink,
-            org_id=org_id,
-            scope=scope_kind,
-            ids=all_ids,
+        all_ids = list(
+            {str(r.get("id") or "") for r in (*drivers, *contributors)} - {""}
         )
+        if scope_kind is not None and all_ids:
+            display_names = await resolve_scope_display_names(
+                sink,
+                org_id=org_id,
+                scope=scope_kind,
+                ids=all_ids,
+            )
+        else:
+            display_names = {}
 
     driver_models: list[Contributor] = [
         _build_contributor(

@@ -36,6 +36,7 @@ def test_looks_like_uuid_matches_bare_uuid() -> None:
 def test_scope_kind_maps_group_by() -> None:
     assert scope_kind_for_group_by("team_id") == "team"
     assert scope_kind_for_group_by("repo_id") == "repo"
+    assert scope_kind_for_group_by("unknown_col") is None
 
 
 def test_short_token_never_returns_bare_uuid() -> None:
@@ -105,34 +106,37 @@ def test_build_explain_response_forwards_org_id_to_fetches() -> None:
     is threaded through so contributor identity can actually be resolved.
     """
     import asyncio
+    from collections.abc import AsyncIterator
     from contextlib import asynccontextmanager
+    from typing import cast
 
     from dev_health_ops.api.services import explain as ex
     from dev_health_ops.api.services.cache import TTLCache
+    from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
     seen: dict[str, str | None] = {}
 
-    async def _fake_contributors(*_a, **kwargs):  # type: ignore[no-untyped-def]
+    async def _fake_contributors(*_a, **kwargs):
         seen["contributors_org"] = kwargs.get("org_id")
         return [{"id": _REPO_UUID, "value": 1.0}]
 
-    async def _fake_drivers(*_a, **kwargs):  # type: ignore[no-untyped-def]
+    async def _fake_drivers(*_a, **kwargs):
         seen["drivers_org"] = kwargs.get("org_id")
         return [{"id": _REPO_UUID, "value": 1.0, "delta_pct": 0.0}]
 
-    async def _fake_value(*_a, **_k):  # type: ignore[no-untyped-def]
+    async def _fake_value(*_a, **_k):
         return 1.0
 
-    async def _fake_scope_filter(*_a, **_k):  # type: ignore[no-untyped-def]
+    async def _fake_scope_filter(*_a, **_k):
         return "", {}
 
-    async def _fake_resolve(*_a, **kwargs):  # type: ignore[no-untyped-def]
+    async def _fake_resolve(*_a, **kwargs):
         seen["resolve_org"] = kwargs.get("org_id")
         return {_REPO_UUID: "meridian/billing-service"}
 
     @asynccontextmanager
-    async def _fake_client(_url):  # type: ignore[no-untyped-def]
-        yield object()
+    async def _fake_client(_url: str) -> AsyncIterator[BaseMetricsSink]:
+        yield cast(BaseMetricsSink, object())
 
     orig = {
         "fetch_metric_contributors": ex.fetch_metric_contributors,
@@ -147,7 +151,7 @@ def test_build_explain_response_forwards_org_id_to_fetches() -> None:
     ex.fetch_metric_value = _fake_value
     ex.scope_filter_for_metric = _fake_scope_filter
     ex.resolve_scope_display_names = _fake_resolve
-    ex.clickhouse_client = _fake_client
+    setattr(ex, "clickhouse_client", _fake_client)
     try:
         response = asyncio.run(
             ex.build_explain_response(

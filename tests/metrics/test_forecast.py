@@ -4,7 +4,11 @@ import pytest
 
 from dev_health_ops.metrics.compute_capacity import ThroughputHistory, ThroughputSample
 from dev_health_ops.metrics.forecast import (
+    INCIDENT_LOAD_THRESHOLD,
+    REVIEW_BOTTLENECK_THRESHOLD_HOURS,
+    WIP_CONGESTION_THRESHOLD,
     RiskKind,
+    _assert_monotonic_weeks,
     compute_risk_overlays,
     forecast_throughput_capacity,
     rolling_weekly_throughput,
@@ -65,6 +69,22 @@ def test_insufficient_history_uses_observed_weekly_rate() -> None:
     assert result.p90_weeks == 2
 
 
+def test_forecast_percentiles_use_distribution_when_selected_window_collapses() -> None:
+    history = _history([6] * 28 + [2] * 28 + [1] * 28)
+
+    result = forecast_throughput_capacity(
+        history=history,
+        backlog_size=100,
+        history_weeks=12,
+    )
+
+    assert result.p50_weeks is not None
+    assert result.p75_weeks is not None
+    assert result.p90_weeks is not None
+    assert result.p50_weeks <= result.p75_weeks <= result.p90_weeks
+    assert (result.p50_weeks, result.p75_weeks, result.p90_weeks) == (6, 7, 9)
+
+
 def test_zero_throughput_returns_unknown_completion_weeks() -> None:
     result = forecast_throughput_capacity(history=_history([0] * 84), backlog_size=10)
 
@@ -86,7 +106,7 @@ def test_primary_risk_prefers_highest_active_normalized_score() -> None:
         current_wip=30,
         average_wip=20,
         review_latency_hours=120,
-        incident_count=1,
+        incident_count=12,
     )
 
     assert wip.active
@@ -109,3 +129,35 @@ def test_primary_risk_reports_no_elevated_risk_when_below_thresholds() -> None:
     assert not incident.active
     assert primary.kind is RiskKind.NONE
     assert primary.label == "No elevated risk"
+
+
+def test_risk_threshold_defaults_are_in_planning_units() -> None:
+    assert WIP_CONGESTION_THRESHOLD == pytest.approx(1.25)
+    assert REVIEW_BOTTLENECK_THRESHOLD_HOURS == pytest.approx(48.0)
+    assert INCIDENT_LOAD_THRESHOLD == pytest.approx(10.0)
+
+    _, _, _, incident = compute_risk_overlays(incident_count=9.9)
+    assert incident.threshold == pytest.approx(10.0)
+    assert not incident.active
+
+    _, _, _, incident = compute_risk_overlays(incident_count=10.0)
+    assert incident.active
+
+
+def test_assert_monotonic_weeks_raises_on_non_monotonic() -> None:
+    with pytest.raises(ValueError, match="monotonic"):
+        _assert_monotonic_weeks(9, 7, 6)
+
+
+def test_assert_monotonic_weeks_allows_monotonic() -> None:
+    _assert_monotonic_weeks(6, 7, 9)
+
+
+@pytest.mark.parametrize(
+    ("p50", "p75", "p90"),
+    [(None, 7, 9), (6, None, 9), (6, 7, None), (None, None, None)],
+)
+def test_assert_monotonic_weeks_is_null_safe(
+    p50: int | None, p75: int | None, p90: int | None
+) -> None:
+    _assert_monotonic_weeks(p50, p75, p90)

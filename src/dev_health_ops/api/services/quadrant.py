@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastapi import HTTPException
 
@@ -19,7 +20,7 @@ from ..models.schemas import (
     QuadrantPointTrajectory,
     QuadrantResponse,
 )
-from ..queries.client import clickhouse_client
+from ..queries.client import clickhouse_client, query_dicts
 from ..queries.people import fetch_person_team_id, resolve_person_identity
 from ..queries.quadrant import fetch_quadrant_metric
 from ..utils import build_reverse_alias_map, normalize_alias
@@ -62,6 +63,7 @@ class QuadrantDefinition:
 
 
 TEAM_LABEL = "ifNull(nullIf(m.team_name, ''), m.team_id)"
+logger = logging.getLogger(__name__)
 
 TEAM_METRICS: dict[str, MetricSpec] = {
     "churn": MetricSpec(
@@ -388,6 +390,35 @@ def _row_entity(
     return person_id, label
 
 
+async def _resolve_team_labels(
+    sink: BaseMetricsSink,
+    *,
+    team_ids: set[str],
+    org_id: str,
+) -> dict[str, str]:
+    if not team_ids:
+        return {}
+    try:
+        rows = await query_dicts(
+            sink,
+            """
+            SELECT toString(id) AS team_id, name AS team_name
+            FROM teams FINAL
+            WHERE org_id = %(org_id)s
+              AND toString(id) IN %(team_ids)s
+            """,
+            {"org_id": org_id, "team_ids": sorted(team_ids)},
+        )
+    except Exception as exc:
+        logger.warning("Could not resolve quadrant team labels: %s", exc)
+        return {}
+    return {
+        str(row.get("team_id") or ""): str(row.get("team_name") or "").strip()
+        for row in rows
+        if row.get("team_id") and str(row.get("team_name") or "").strip()
+    }
+
+
 def _build_axes(definition: QuadrantDefinition) -> QuadrantAxes:
     return QuadrantAxes(
         x=QuadrantAxis(
@@ -445,7 +476,10 @@ async def build_quadrant_response(
 
     normalized_scope = _normalize_scope(scope_type)
     group_scope = _group_scope(normalized_scope)
-    filter_scope = "developer" if normalized_scope == "person" else normalized_scope
+    filter_scope = cast(
+        Literal["org", "team", "repo", "service", "developer"],
+        "developer" if normalized_scope == "person" else normalized_scope,
+    )
     if group_scope == "person" and not scope_id:
         raise HTTPException(
             status_code=400, detail="Individual quadrants require a person id"
@@ -521,6 +555,20 @@ async def build_quadrant_response(
             ),
         )
 
+        team_labels = (
+            await _resolve_team_labels(
+                sink,
+                team_ids={
+                    str(row.get("entity_id") or "").strip()
+                    for row in [*x_rows, *y_rows]
+                    if str(row.get("entity_id") or "").strip()
+                },
+                org_id=org_id,
+            )
+            if group_scope == "team"
+            else {}
+        )
+
     x_map: dict[tuple[str, date], dict[str, Any]] = {}
     for row in x_rows:
         bucket_start = _bucket_start(row.get("bucket"))
@@ -529,6 +577,7 @@ async def build_quadrant_response(
         entity_id, label = _row_entity(row, group_scope=group_scope)
         if not entity_id:
             continue
+        label = team_labels.get(entity_id, label)
         value = x_spec.transform(float(row.get("value") or 0.0))
         x_map[(entity_id, bucket_start)] = {
             "entity_id": entity_id,
@@ -544,6 +593,7 @@ async def build_quadrant_response(
         entity_id, label = _row_entity(row, group_scope=group_scope)
         if not entity_id:
             continue
+        label = team_labels.get(entity_id, label)
         key = (entity_id, bucket_start)
         x_entry = x_map.get(key)
         if not x_entry:

@@ -8,6 +8,7 @@ from dev_health_ops.metrics.forecast import (
     REVIEW_BOTTLENECK_THRESHOLD_HOURS,
     WIP_CONGESTION_THRESHOLD,
     RiskKind,
+    _assert_monotonic_weeks,
     compute_risk_overlays,
     forecast_throughput_capacity,
     rolling_weekly_throughput,
@@ -141,3 +142,22 @@ def test_risk_threshold_defaults_are_in_planning_units() -> None:
 
     _, _, _, incident = compute_risk_overlays(incident_count=10.0)
     assert incident.active
+
+
+def test_assert_monotonic_weeks_raises_on_non_monotonic() -> None:
+    with pytest.raises(ValueError, match="monotonic"):
+        _assert_monotonic_weeks(9, 7, 6)
+
+
+def test_assert_monotonic_weeks_allows_monotonic() -> None:
+    _assert_monotonic_weeks(6, 7, 9)
+
+
+@pytest.mark.parametrize(
+    ("p50", "p75", "p90"),
+    [(None, 7, 9), (6, None, 9), (6, 7, None), (None, None, None)],
+)
+def test_assert_monotonic_weeks_is_null_safe(
+    p50: int | None, p75: int | None, p90: int | None
+) -> None:
+    _assert_monotonic_weeks(p50, p75, p90)

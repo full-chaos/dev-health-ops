@@ -181,10 +181,11 @@ def _assert_monotonic_weeks(
 ) -> None:
     if p50_weeks is None or p75_weeks is None or p90_weeks is None:
         return
-    assert p50_weeks <= p75_weeks <= p90_weeks, (
-        "forecast weeks must be monotonic: "
-        f"P50={p50_weeks}, P75={p75_weeks}, P90={p90_weeks}"
-    )
+    if not p50_weeks <= p75_weeks <= p90_weeks:
+        raise ValueError(
+            "forecast weeks must be monotonic: "
+            f"P50={p50_weeks}, P75={p75_weeks}, P90={p90_weeks}"
+        )
 
 
 def _risk_overlay(

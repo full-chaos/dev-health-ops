@@ -30,7 +30,7 @@ MIN_DAYS_PER_WEEK = 7
 ROLLING_WINDOWS_WEEKS = (4, 8, 12)
 WIP_CONGESTION_THRESHOLD = 1.25
 REVIEW_BOTTLENECK_THRESHOLD_HOURS = 48.0
-INCIDENT_LOAD_THRESHOLD = 1.0
+INCIDENT_LOAD_THRESHOLD = 10.0
 
 
 class RiskKind(str, Enum):
@@ -140,12 +140,51 @@ def compute_rolling_windows(
     return tuple(rolling_weekly_throughput(history, weeks) for weeks in windows_weeks)
 
 
+def _select_percentile_distribution(
+    windows: tuple[RollingWindowThroughput, ...], history_weeks: int
+) -> tuple[float, ...]:
+    if not windows:
+        return ()
+
+    selected = next(
+        (window for window in windows if window.window_weeks == history_weeks),
+        windows[-1],
+    )
+    if len(selected.samples) > 1:
+        return selected.samples
+
+    shorter_windows = sorted(
+        (
+            window
+            for window in windows
+            if window.window_weeks < selected.window_weeks and len(window.samples) > 1
+        ),
+        key=lambda window: window.window_weeks,
+        reverse=True,
+    )
+    if shorter_windows:
+        return shorter_windows[0].samples
+
+    return selected.samples
+
+
 def _weeks_to_complete(backlog_size: int, weekly_throughput: float) -> int | None:
     if backlog_size <= 0:
         return 0
     if weekly_throughput <= 0:
         return None
     return max(1, math.ceil(backlog_size / weekly_throughput))
+
+
+def _assert_monotonic_weeks(
+    p50_weeks: int | None, p75_weeks: int | None, p90_weeks: int | None
+) -> None:
+    if p50_weeks is None or p75_weeks is None or p90_weeks is None:
+        return
+    assert p50_weeks <= p75_weeks <= p90_weeks, (
+        "forecast weeks must be monotonic: "
+        f"P50={p50_weeks}, P75={p75_weeks}, P90={p90_weeks}"
+    )
 
 
 def _risk_overlay(
@@ -233,14 +272,14 @@ def forecast_throughput_capacity(
         raise ValueError("history_weeks must be positive")
 
     windows = compute_rolling_windows(history)
-    selected = next(
-        (window for window in windows if window.window_weeks == history_weeks),
-        windows[-1],
-    )
-    distribution = list(selected.samples)
+    distribution = list(_select_percentile_distribution(windows, history_weeks))
     p50_throughput = _percentile(distribution, 0.50)
     p75_throughput = _percentile(distribution, 0.25)
     p90_throughput = _percentile(distribution, 0.10)
+    p50_weeks = _weeks_to_complete(backlog_size, p50_throughput)
+    p75_weeks = _weeks_to_complete(backlog_size, p75_throughput)
+    p90_weeks = _weeks_to_complete(backlog_size, p90_throughput)
+    _assert_monotonic_weeks(p50_weeks, p75_weeks, p90_weeks)
     primary, wip, review, incident = compute_risk_overlays(
         current_wip=current_wip,
         average_wip=average_wip,
@@ -254,9 +293,9 @@ def forecast_throughput_capacity(
         work_scope_id=work_scope_id,
         backlog_size=backlog_size,
         history_weeks=history_weeks,
-        p50_weeks=_weeks_to_complete(backlog_size, p50_throughput),
-        p75_weeks=_weeks_to_complete(backlog_size, p75_throughput),
-        p90_weeks=_weeks_to_complete(backlog_size, p90_throughput),
+        p50_weeks=p50_weeks,
+        p75_weeks=p75_weeks,
+        p90_weeks=p90_weeks,
         rolling_windows=windows,
         primary_risk=primary,
         wip_congestion=wip,

@@ -335,6 +335,21 @@ class TestWorkGraphEdgeDisplayNames:
         assert result.edges[0].target_display_name is None
 
     @pytest.mark.asyncio
+    async def test_hash_like_ids_yield_none_display_name(self, mock_context):
+        hash_id = "4e00fff2df6650288ebde4535332300b"
+        rows = [
+            make_edge_row(source_id=hash_id, target_id="INC-001"),
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].source_display_name is None
+
+    @pytest.mark.asyncio
     async def test_display_names_present_on_every_edge(self, mock_context):
         """Every edge result carries source/target display name fields (may be None)."""
         rows = [

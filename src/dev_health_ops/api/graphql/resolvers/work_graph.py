@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from dev_health_ops.api.services.identity import looks_like_uuid
@@ -20,6 +21,8 @@ from ..models.outputs import (
 )
 
 logger = logging.getLogger(__name__)
+
+_OPAQUE_HEX_ID_RE = re.compile(r"^[0-9a-f]{24,}$", re.IGNORECASE)
 
 
 def _map_node_type(value: str) -> WorkGraphNodeType:
@@ -54,7 +57,7 @@ def _display_name_for(entity_id: str) -> str | None:
     raw = str(entity_id).strip()
     if not raw:
         return None
-    return None if looks_like_uuid(raw) else raw
+    return None if looks_like_uuid(raw) or _OPAQUE_HEX_ID_RE.match(raw) else raw
 
 
 def _row_to_edge(row: dict[str, Any]) -> WorkGraphEdgeResult:

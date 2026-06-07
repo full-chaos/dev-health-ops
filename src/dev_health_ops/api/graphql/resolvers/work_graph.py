@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
+
+from dev_health_ops.api.services.identity import looks_like_uuid
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -18,6 +21,8 @@ from ..models.outputs import (
 )
 
 logger = logging.getLogger(__name__)
+
+_OPAQUE_HEX_ID_RE = re.compile(r"^[0-9a-f]{24,}$", re.IGNORECASE)
 
 
 def _map_node_type(value: str) -> WorkGraphNodeType:
@@ -41,13 +46,31 @@ def _map_provenance(value: str) -> WorkGraphProvenance:
         return WorkGraphProvenance.HEURISTIC
 
 
+def _display_name_for(entity_id: str) -> str | None:
+    """A7/A8: pass through human-readable ids; return None for bare UUIDs.
+
+    Non-UUID identifiers (e.g. PROJ-123, INC-001, deploy-xyz) are already
+    human-readable and are surfaced verbatim. UUID-style identifiers that
+    cannot be resolved server-side return None so the client renders a
+    controlled Unresolved badge rather than leaking a raw UUID.
+    """
+    raw = str(entity_id).strip()
+    if not raw:
+        return None
+    return None if looks_like_uuid(raw) or _OPAQUE_HEX_ID_RE.match(raw) else raw
+
+
 def _row_to_edge(row: dict[str, Any]) -> WorkGraphEdgeResult:
+    source_id = str(row.get("source_id", ""))
+    target_id = str(row.get("target_id", ""))
     return WorkGraphEdgeResult(
         edge_id=str(row.get("edge_id", "")),
         source_type=_map_node_type(str(row.get("source_type", "issue"))),
-        source_id=str(row.get("source_id", "")),
+        source_id=source_id,
+        source_display_name=_display_name_for(source_id),
         target_type=_map_node_type(str(row.get("target_type", "issue"))),
-        target_id=str(row.get("target_id", "")),
+        target_id=target_id,
+        target_display_name=_display_name_for(target_id),
         edge_type=_map_edge_type(str(row.get("edge_type", "relates"))),
         provenance=_map_provenance(str(row.get("provenance", "heuristic"))),
         confidence=float(row.get("confidence", 0.0)),

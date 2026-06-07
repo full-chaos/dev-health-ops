@@ -262,3 +262,114 @@ class TestResolveWorkGraphEdges:
 
         with pytest.raises(RuntimeError, match="Database client not available"):
             await resolve_work_graph_edges(context)
+
+
+class TestWorkGraphEdgeDisplayNames:
+    """CHAOS-2089: WorkGraphEdgeResult carries server-resolved display names.
+
+    A7/A8 contract: human-readable source/target IDs pass through as
+    display names; UUID-style IDs that cannot be looked up return None so
+    the client renders a controlled Unresolved badge rather than a bare UUID.
+    """
+
+    @pytest.mark.asyncio
+    async def test_human_readable_source_id_becomes_display_name(self, mock_context):
+        """Non-UUID source_id (e.g. PROJ-123) passes through as source_display_name."""
+        rows = [
+            make_edge_row(source_id="PROJ-123", target_id="dep-abc"),
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].source_display_name == "PROJ-123"
+
+    @pytest.mark.asyncio
+    async def test_human_readable_target_id_becomes_display_name(self, mock_context):
+        """Non-UUID target_id (e.g. INC-001) passes through as target_display_name."""
+        rows = [
+            make_edge_row(source_id="deploy-xyz", target_id="INC-001"),
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].target_display_name == "INC-001"
+
+    @pytest.mark.asyncio
+    async def test_uuid_source_id_yields_none_display_name(self, mock_context):
+        """UUID source_id without a resolvable name -> source_display_name is None (A8)."""
+        uuid_id = "4e00fff2-df66-5028-8ebd-e4535332300b"
+        rows = [
+            make_edge_row(source_id=uuid_id, target_id="INC-001"),
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].source_display_name is None
+
+    @pytest.mark.asyncio
+    async def test_uuid_target_id_yields_none_display_name(self, mock_context):
+        """UUID target_id without a resolvable name -> target_display_name is None (A8)."""
+        uuid_id = "698c0211-e29b-41d4-a716-446655440000"
+        rows = [
+            make_edge_row(source_id="dep-xyz", target_id=uuid_id),
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].target_display_name is None
+
+    @pytest.mark.asyncio
+    async def test_hash_like_ids_yield_none_display_name(self, mock_context):
+        hash_id = "4e00fff2df6650288ebde4535332300b"
+        rows = [
+            make_edge_row(source_id=hash_id, target_id="INC-001"),
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].source_display_name is None
+
+    @pytest.mark.asyncio
+    async def test_display_names_present_on_every_edge(self, mock_context):
+        """Every edge result carries source/target display name fields (may be None)."""
+        rows = [
+            make_edge_row(edge_id="e1", source_id="PROJ-1", target_id="INC-2"),
+            make_edge_row(
+                edge_id="e2",
+                source_id="4e00fff2-df66-5028-8ebd-e4535332300b",
+                target_id="INC-5",
+            ),
+        ]
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert hasattr(result.edges[0], "source_display_name")
+        assert hasattr(result.edges[0], "target_display_name")
+        assert result.edges[0].source_display_name == "PROJ-1"
+        assert result.edges[0].target_display_name == "INC-2"
+        assert result.edges[1].source_display_name is None
+        assert result.edges[1].target_display_name == "INC-5"

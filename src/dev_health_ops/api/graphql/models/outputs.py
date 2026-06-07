@@ -499,13 +499,21 @@ class WorkGraphProvenance(Enum):
 
 @strawberry.type
 class WorkGraphEdgeResult:
-    """A single edge in the work graph."""
+    """A single edge in the work graph.
+
+    source_display_name / target_display_name are A7/A8 resolved labels:
+    a non-UUID id passes through verbatim; a UUID that cannot be looked up
+    is None so the client renders a controlled Unresolved badge (never a
+    bare UUID).
+    """
 
     edge_id: str
     source_type: WorkGraphNodeType
     source_id: str
+    source_display_name: str | None = None
     target_type: WorkGraphNodeType
     target_id: str
+    target_display_name: str | None = None
     edge_type: WorkGraphEdgeType
     provenance: WorkGraphProvenance
     confidence: float

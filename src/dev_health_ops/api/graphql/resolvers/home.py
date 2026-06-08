@@ -34,6 +34,11 @@ async def resolve_home(
         raise RuntimeError("Database client not available")
 
     from dev_health_ops.api.queries.client import query_dicts
+    from dev_health_ops.api.queries.metrics import (
+        _INVESTMENT_THEME_LABELS,
+        canonical_investment_theme_sql,
+    )
+    from dev_health_ops.investment_taxonomy import THEMES
 
     # Get freshness data
     freshness_sql = """
@@ -65,7 +70,7 @@ async def resolve_home(
         SELECT
             'pr_rework_ratio' as metric,
             'PR Rework Ratio' as label,
-            avg(pr_rework_ratio) * 100.0 as value,
+            SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0) * 100.0 as value,
             '%' as unit
         FROM repo_metrics_daily
         WHERE day >= today() - 30
@@ -74,9 +79,10 @@ async def resolve_home(
     """
     delta_rows = await query_dicts(client, deltas_sql, {"org_id": context.org_id})
 
-    rework_theme_sql = """
+    canonical_theme_expr = canonical_investment_theme_sql("investment_area")
+    rework_theme_sql = f"""
         SELECT
-            investment_area AS theme,
+            canonical_theme AS theme,
             sum(work_items_completed) AS allocation,
             sum(prs_merged) AS prs_merged,
             sum(churn_loc) AS churn_loc
@@ -85,7 +91,7 @@ async def resolve_home(
                 day,
                 repo_id,
                 team_id,
-                investment_area,
+                {canonical_theme_expr} AS canonical_theme,
                 project_stream,
                 argMax(work_items_completed, computed_at) AS work_items_completed,
                 argMax(prs_merged, computed_at) AS prs_merged,
@@ -94,9 +100,10 @@ async def resolve_home(
             WHERE day >= today() - 30
               AND day < today()
               AND org_id = %(org_id)s
-            GROUP BY day, repo_id, team_id, investment_area, project_stream
+            GROUP BY day, repo_id, team_id, canonical_theme, project_stream
         )
-        GROUP BY investment_area
+        WHERE canonical_theme != ''
+        GROUP BY canonical_theme
         ORDER BY allocation DESC
     """
     rework_theme_rows = await query_dicts(
@@ -116,24 +123,20 @@ async def resolve_home(
             }
         )
 
-    theme_labels = {
-        "feature_delivery": "Feature Delivery",
-        "operational": "Operational / Support",
-        "maintenance": "Maintenance / Tech Debt",
-        "quality": "Quality / Reliability",
-        "risk": "Risk / Security",
-    }
+    canonical_rework_theme_rows = [
+        row for row in rework_theme_rows if str(row.get("theme") or "") in THEMES
+    ]
     total_allocation = sum(
-        float(row.get("allocation") or 0.0) for row in rework_theme_rows
+        float(row.get("allocation") or 0.0) for row in canonical_rework_theme_rows
     )
     rework_theme_allocation = []
-    for row in rework_theme_rows:
+    for row in canonical_rework_theme_rows:
         theme = str(row.get("theme") or "")
         allocation = float(row.get("allocation") or 0.0)
         rework_theme_allocation.append(
             {
                 "theme": theme,
-                "label": theme_labels.get(theme, theme),
+                "label": _INVESTMENT_THEME_LABELS[theme],
                 "allocation": allocation,
                 "allocation_pct": (allocation / total_allocation * 100.0)
                 if total_allocation

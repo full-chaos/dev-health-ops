@@ -94,7 +94,7 @@ class Measure(str, Enum):
             mapping = {
                 cls.COUNT: "SUM(work_items_completed)",
                 cls.CHURN_LOC: "SUM(churn_loc)",
-                cls.PR_REWORK_RATIO: "AVG(pr_rework_ratio)",
+                cls.PR_REWORK_RATIO: "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)",
                 cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
                 cls.THROUGHPUT: "SUM(work_items_completed)",
             }

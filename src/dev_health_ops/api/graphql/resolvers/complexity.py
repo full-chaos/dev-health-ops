@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 #: Hard cap on timeseries rows; protects against pathological scopes.
 MAX_ROWS: int = 1000
+MAX_TIMESERIES_POINTS: int = 1000
 #: Default row limit for timeseries queries.
 DEFAULT_TIMESERIES_LIMIT: int = 500
 #: Default row limit for hotspot queries.
@@ -69,14 +70,16 @@ def _nfloat(row: dict[str, Any], key: str) -> float | None:
     return float(v) if v is not None else None
 
 
-def _truncate_to_week(day_val: Any) -> Any:
-    """Truncate a ``date`` to the start of its ISO week (Monday).
-
-    Returns the input unchanged when it is not a ``datetime.date``.
-    """
-    if isinstance(day_val, PyDate):
-        return day_val - timedelta(days=day_val.weekday())
-    return day_val
+def _bucket_count(
+    since_day: PyDate, until_day: PyDate, granularity: TimeGranularity
+) -> int:
+    if until_day < since_day:
+        return 1
+    if granularity == TimeGranularity.WEEK:
+        since_bucket = since_day - timedelta(days=since_day.weekday())
+        until_bucket = until_day - timedelta(days=until_day.weekday())
+        return ((until_bucket - since_bucket).days // 7) + 1
+    return (until_day - since_day).days + 1
 
 
 async def _load_repo_labels(
@@ -115,25 +118,30 @@ async def _fetch_repo_timeseries(
     until_day: str,
     repo_ids: list[str] | None,
     limit: int,
+    granularity: TimeGranularity,
 ) -> list[dict[str, Any]]:
     """Latest-compute read from ``repo_complexity_daily`` for the date window.
 
     ``argMax`` over ``computed_at`` returns the most-recent ingestion for each
     ``(repo_id, day)`` pair, consistent with the append-only sink contract.
     """
-    query = """
+    day_expr = "toStartOfWeek(day, 1)" if granularity == TimeGranularity.WEEK else "day"
+    computed_expr = (
+        "(day, computed_at)" if granularity == TimeGranularity.WEEK else "computed_at"
+    )
+    query = f"""
         SELECT
-            day,
+            {day_expr} AS day,
             toString(repo_id) AS repo_id,
-            argMax(loc_total,                      computed_at) AS loc_total,
-            argMax(cyclomatic_total,               computed_at) AS cyclomatic_total,
-            argMax(cyclomatic_per_kloc,            computed_at) AS cyclomatic_per_kloc,
-            argMax(high_complexity_functions,      computed_at) AS high_complexity_functions,
-            argMax(very_high_complexity_functions, computed_at) AS very_high_complexity_functions
+            argMax(loc_total,                      {computed_expr}) AS loc_total,
+            argMax(cyclomatic_total,               {computed_expr}) AS cyclomatic_total,
+            argMax(cyclomatic_per_kloc,            {computed_expr}) AS cyclomatic_per_kloc,
+            argMax(high_complexity_functions,      {computed_expr}) AS high_complexity_functions,
+            argMax(very_high_complexity_functions, {computed_expr}) AS very_high_complexity_functions
         FROM repo_complexity_daily
-        WHERE org_id = {org_id:String}
-          AND day >= {since_day:Date}
-          AND day <= {until_day:Date}
+        WHERE org_id = {{org_id:String}}
+          AND day >= {{since_day:Date}}
+          AND day <= {{until_day:Date}}
     """
     params: dict[str, Any] = {
         "org_id": org_id,
@@ -141,7 +149,7 @@ async def _fetch_repo_timeseries(
         "until_day": until_day,
     }
     if repo_ids:
-        bounded = list(repo_ids)[:MAX_ROWS]
+        bounded = list(repo_ids)[:limit]
         query += "\n  AND toString(repo_id) IN {repo_ids:Array(String)}"
         params["repo_ids"] = bounded
     else:
@@ -175,24 +183,35 @@ async def _fetch_file_timeseries(
     until_day: str,
     repo_ids: list[str] | None,
     limit: int,
+    granularity: TimeGranularity,
 ) -> list[dict[str, Any]]:
     """Latest-compute read from ``file_complexity_snapshots`` for the date window.
 
     The table uses ``as_of_day`` (not ``day``) as the snapshot column.
     """
-    query = """
+    day_expr = (
+        "toStartOfWeek(as_of_day, 1)"
+        if granularity == TimeGranularity.WEEK
+        else "as_of_day"
+    )
+    computed_expr = (
+        "(as_of_day, computed_at)"
+        if granularity == TimeGranularity.WEEK
+        else "computed_at"
+    )
+    query = f"""
         SELECT
-            as_of_day AS day,
+            {day_expr} AS day,
             toString(repo_id) AS repo_id,
             file_path,
-            argMax(cyclomatic_total,               computed_at) AS cyclomatic_total,
-            argMax(cyclomatic_avg,                 computed_at) AS cyclomatic_avg,
-            argMax(high_complexity_functions,      computed_at) AS high_complexity_functions,
-            argMax(very_high_complexity_functions, computed_at) AS very_high_complexity_functions
+            argMax(cyclomatic_total,               {computed_expr}) AS cyclomatic_total,
+            argMax(cyclomatic_avg,                 {computed_expr}) AS cyclomatic_avg,
+            argMax(high_complexity_functions,      {computed_expr}) AS high_complexity_functions,
+            argMax(very_high_complexity_functions, {computed_expr}) AS very_high_complexity_functions
         FROM file_complexity_snapshots
-        WHERE org_id = {org_id:String}
-          AND as_of_day >= {since_day:Date}
-          AND as_of_day <= {until_day:Date}
+        WHERE org_id = {{org_id:String}}
+          AND as_of_day >= {{since_day:Date}}
+          AND as_of_day <= {{until_day:Date}}
     """
     params: dict[str, Any] = {
         "org_id": org_id,
@@ -200,13 +219,10 @@ async def _fetch_file_timeseries(
         "until_day": until_day,
     }
     if repo_ids:
-        bounded = list(repo_ids)[:MAX_ROWS]
+        bounded = list(repo_ids)[:limit]
         query += "\n  AND toString(repo_id) IN {repo_ids:Array(String)}"
         params["repo_ids"] = bounded
-    query += (
-        f"\nGROUP BY as_of_day, repo_id, file_path"
-        f"\nORDER BY as_of_day, repo_id\nLIMIT {limit}"
-    )
+    query += f"\nGROUP BY day, repo_id, file_path\nORDER BY day, repo_id\nLIMIT {limit}"
     return await query_dicts(client, query, params)
 
 
@@ -278,8 +294,14 @@ async def resolve_complexity_timeseries(
     raw_limit = input.limit if input.limit is not None else DEFAULT_TIMESERIES_LIMIT
     effective_limit = max(1, min(raw_limit, MAX_ROWS))
 
-    since_day = input.since_utc.astimezone(timezone.utc).date().isoformat()
-    until_day = input.until_utc.astimezone(timezone.utc).date().isoformat()
+    since_date = input.since_utc.astimezone(timezone.utc).date()
+    until_date = input.until_utc.astimezone(timezone.utc).date()
+    bucket_count = _bucket_count(since_date, until_date, input.granularity)
+    effective_limit = min(
+        effective_limit, max(1, MAX_TIMESERIES_POINTS // bucket_count)
+    )
+    since_day = since_date.isoformat()
+    until_day = until_date.isoformat()
 
     points: list[ComplexityPoint] = []
 
@@ -291,19 +313,16 @@ async def resolve_complexity_timeseries(
             until_day=until_day,
             repo_ids=input.repo_ids,
             limit=effective_limit,
+            granularity=input.granularity,
         )
         repo_ids_seen = list({str(r["repo_id"]) for r in rows})
         labels = await _load_repo_labels(client, authorized_org_id, repo_ids_seen)
 
         for row in rows:
-            day_val = row["day"]
-            if input.granularity == TimeGranularity.WEEK:
-                day_val = _truncate_to_week(day_val)
-
             repo_id = str(row["repo_id"])
             points.append(
                 ComplexityPoint(
-                    point_date=day_val,
+                    point_date=row["day"],
                     scope_id=repo_id,
                     scope_name=labels.get(repo_id, repo_id),
                     loc_total=_nint(row, "loc_total"),
@@ -325,20 +344,17 @@ async def resolve_complexity_timeseries(
             until_day=until_day,
             repo_ids=input.repo_ids,
             limit=effective_limit,
+            granularity=input.granularity,
         )
         # FILE-scope scopeName is derived from file_path — no repo-label join needed.
         for row in rows:
-            day_val = row["day"]
-            if input.granularity == TimeGranularity.WEEK:
-                day_val = _truncate_to_week(day_val)
-
             repo_id = str(row["repo_id"])
             file_path = str(row.get("file_path") or "")
             # Composite scopeId encodes both repo and file path for uniqueness.
             scope_id = f"{repo_id}/{file_path}"
             points.append(
                 ComplexityPoint(
-                    point_date=day_val,
+                    point_date=row["day"],
                     scope_id=scope_id,
                     scope_name=file_path or scope_id,
                     loc_total=None,  # not stored per-file in v1 schema

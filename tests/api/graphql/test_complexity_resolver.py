@@ -27,6 +27,7 @@ from dev_health_ops.api.graphql.context import GraphQLContext
 from dev_health_ops.api.graphql.resolvers.complexity import (
     MAX_HOTSPOTS_ROWS,
     MAX_ROWS,
+    MAX_TIMESERIES_POINTS,
     resolve_complexity_timeseries,
     resolve_hotspots,
 )
@@ -372,11 +373,13 @@ async def test_timeseries_week_granularity_truncates_to_monday() -> None:
         "high_complexity_functions",
         "very_high_complexity_functions",
     ]
-    # 2026-05-20 is a Wednesday; expect truncation to Monday 2026-05-18.
     _setup_client(
         ctx.client,
         [
-            _qresult(columns, [[DAY, "repo-1", 1000, 80, 80.0, 5, 0]]),
+            _qresult(
+                columns,
+                [[date(2026, 5, 18), "repo-1", 1000, 80, 80.0, 5, 0]],
+            ),
             _qresult([], []),
         ],
     )
@@ -388,17 +391,62 @@ async def test_timeseries_week_granularity_truncates_to_monday() -> None:
     assert result.points[0].point_date == date(2026, 5, 18)
 
 
+@pytest.mark.asyncio
+async def test_timeseries_week_granularity_buckets_in_clickhouse() -> None:
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+
+    await resolve_complexity_timeseries(
+        ctx, _timeseries_input(granularity=TimeGranularity.WEEK)
+    )
+
+    first_call_query: str = ctx.client.query.call_args_list[0].args[0]
+    assert "toStartOfWeek(day, 1) AS day" in first_call_query
+    assert (
+        "argMax(cyclomatic_total,               (day, computed_at))" in first_call_query
+    )
+    assert "GROUP BY day, repo_id" in first_call_query
+
+
+@pytest.mark.asyncio
+async def test_timeseries_week_granularity_returns_one_point_per_repo_week() -> None:
+    ctx = _ctx()
+    columns = [
+        "day",
+        "repo_id",
+        "loc_total",
+        "cyclomatic_total",
+        "cyclomatic_per_kloc",
+        "high_complexity_functions",
+        "very_high_complexity_functions",
+    ]
+    _setup_client(
+        ctx.client,
+        [
+            _qresult(columns, [[date(2026, 5, 18), "repo-1", 1000, 80, 80.0, 5, 0]]),
+            _qresult([], []),
+        ],
+    )
+
+    result = await resolve_complexity_timeseries(
+        ctx, _timeseries_input(granularity=TimeGranularity.WEEK)
+    )
+
+    assert [(p.scope_id, p.point_date) for p in result.points] == [
+        ("repo-1", date(2026, 5, 18))
+    ]
+
+
 # ---------------------------------------------------------------------------
 # complexityTimeseries — row limit clamping
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_timeseries_limit_is_clamped_to_max_rows() -> None:
+async def test_timeseries_limit_is_clamped_by_scope_bucket_point_cap() -> None:
     ctx = _ctx()
     _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
 
-    # A limit far above MAX_ROWS should be clamped silently.
     result = await resolve_complexity_timeseries(
         ctx, _timeseries_input(limit=MAX_ROWS + 99999)
     )
@@ -407,9 +455,23 @@ async def test_timeseries_limit_is_clamped_to_max_rows() -> None:
     first_call_params: dict[str, Any] = ctx.client.query.call_args_list[0].kwargs[
         "parameters"
     ]
+    expected_scope_limit = MAX_TIMESERIES_POINTS // 20
     assert "LIMIT {limit:UInt32}" in first_call_query
-    assert first_call_params["limit"] == MAX_ROWS
+    assert first_call_params["limit"] == expected_scope_limit
     assert result.points == []
+
+
+@pytest.mark.asyncio
+async def test_timeseries_point_bound_limits_multi_day_multi_repo_window() -> None:
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+
+    await resolve_complexity_timeseries(ctx, _timeseries_input(limit=MAX_ROWS))
+
+    first_call_params: dict[str, Any] = ctx.client.query.call_args_list[0].kwargs[
+        "parameters"
+    ]
+    assert first_call_params["limit"] * 20 <= MAX_TIMESERIES_POINTS
 
 
 @pytest.mark.asyncio

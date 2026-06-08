@@ -54,6 +54,9 @@ async def test_home_response_sanitizes_non_finite_values(monkeypatch):
     async def _fake_fetch_metric_driver_delta(*_args, **_kwargs):
         return []
 
+    async def _fake_fetch_rework_theme_allocation(*_args, **_kwargs):
+        return []
+
     monkeypatch.setattr(home_service, "clickhouse_client", _fake_clickhouse_client)
     monkeypatch.setattr(
         home_service, "scope_filter_for_metric", _fake_scope_filter_for_metric
@@ -67,6 +70,11 @@ async def test_home_response_sanitizes_non_finite_values(monkeypatch):
     monkeypatch.setattr(home_service, "fetch_coverage", _fake_fetch_coverage)
     monkeypatch.setattr(
         home_service, "fetch_metric_driver_delta", _fake_fetch_metric_driver_delta
+    )
+    monkeypatch.setattr(
+        home_service,
+        "fetch_rework_theme_allocation",
+        _fake_fetch_rework_theme_allocation,
     )
 
     response = await home_service.build_home_response(

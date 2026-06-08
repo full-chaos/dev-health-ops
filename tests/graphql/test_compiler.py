@@ -137,6 +137,22 @@ class TestCompileTimeseries:
         assert params["end_date"] == date(2025, 1, 7)
         assert "timeout" in params
 
+    def test_pr_rework_ratio_timeseries_uses_repo_metrics(self):
+        request = TimeseriesRequest(
+            dimension="repo",
+            measure="pr_rework_ratio",
+            interval="day",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 1, 7),
+        )
+
+        sql, params = compile_timeseries(request, org_id="org1")
+
+        assert "FROM repo_metrics_daily" in sql
+        assert "AVG(pr_rework_ratio)" in sql
+        assert "repo_id AS dimension_value" in sql
+        assert params["org_id"] == "org1"
+
     def test_invalid_dimension(self):
         """Test that invalid dimension raises ValidationError."""
         request = TimeseriesRequest(
@@ -354,6 +370,7 @@ class TestMeasureDbExpression:
         # Non-investment (default)
         assert Measure.db_expression(Measure.COUNT) == "SUM(work_items_completed)"
         assert Measure.db_expression(Measure.THROUGHPUT) == "SUM(work_items_completed)"
+        assert Measure.db_expression(Measure.PR_REWORK_RATIO) == "AVG(pr_rework_ratio)"
 
         # Investment path — expressions over real columns in work_unit_investments
         # (CHAOS-1754: old non-existent column refs replaced with valid expressions)

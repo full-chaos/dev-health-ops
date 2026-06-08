@@ -203,7 +203,7 @@ class Query:
         Returns:
             HomeResult with freshness and metric deltas.
         """
-        from .models.outputs import Freshness, MetricDelta
+        from .models.outputs import Freshness, MetricDelta, ReworkThemeAllocation
         from .models.outputs import HomeResult as HR
         from .resolvers.home import resolve_home
 
@@ -226,6 +226,17 @@ class Query:
                     spark=[],
                 )
                 for d in data["deltas"]
+            ],
+            rework_theme_allocation=[
+                ReworkThemeAllocation(
+                    theme=row["theme"],
+                    label=row["label"],
+                    allocation=row["allocation"],
+                    allocation_pct=row["allocation_pct"],
+                    prs_merged=row["prs_merged"],
+                    churn_loc=row["churn_loc"],
+                )
+                for row in data.get("rework_theme_allocation", [])
             ],
         )
 

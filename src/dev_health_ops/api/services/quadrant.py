@@ -475,6 +475,16 @@ async def build_quadrant_response(
         raise HTTPException(status_code=404, detail="Unknown quadrant type")
 
     normalized_scope = _normalize_scope(scope_type)
+    # Churn is repo-attributed at ingest; user_metrics_daily.team_id is sparse, so
+    # team/org-grain churn collapses to ~0 and the scatter degenerates onto the y-axis
+    # (CHAOS-2079). For churn_throughput, always enumerate repos regardless of the
+    # caller's filter scope so the quadrant plots real per-repo churn. Person grain
+    # (the individual view) is left intact, and cycle/wip/review quadrants are
+    # unaffected because the branch is gated on the quadrant type. The scope id does
+    # not filter entities at team/repo grain (scope_filter is only set for person
+    # scope below), so an inbound team id here is harmless.
+    if type == "churn_throughput" and normalized_scope in {"org", "team"}:
+        normalized_scope = "repo"
     group_scope = _group_scope(normalized_scope)
     filter_scope = cast(
         Literal["org", "team", "repo", "service", "developer"],

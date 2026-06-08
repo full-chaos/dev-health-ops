@@ -118,6 +118,65 @@ async def test_quadrant_resolves_team_uuid_label_from_team_catalog(monkeypatch):
         raising=False,
     )
 
+    # churn_throughput now forces repo grain (CHAOS-2079), so exercise team-label
+    # resolution through a quadrant that keeps team grain (cycle_throughput).
+    response = await build_quadrant_response(
+        db_url="clickhouse://test",
+        org_id="test-org",
+        type="cycle_throughput",
+        scope_type="team",
+        scope_id="",
+        range_days=30,
+        bucket="week",
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 8),
+    )
+
+    assert response.points[0].entity_id == team_uuid
+    assert response.points[0].entity_label == "Platform Team"
+
+
+@pytest.mark.asyncio
+async def test_churn_quadrant_forces_repo_grain(monkeypatch):
+    """churn_throughput must enumerate repos even when the caller asks for team/org
+    scope. Churn is repo-attributed at ingest, so team-grain churn collapses to ~0 and
+    the scatter degenerates onto the y-axis (CHAOS-2079). Assert both axes source from
+    repo_metrics_daily and that team-label resolution is skipped."""
+
+    @asynccontextmanager
+    async def _fake_client(_db_url):
+        yield object()
+
+    captured_tables: list[str] = []
+    captured_value_exprs: list[str] = []
+
+    async def _fake_metric(_sink, *, table, value_expr, entity_expr, **_):
+        captured_tables.append(table)
+        captured_value_exprs.append(value_expr)
+        return [
+            {
+                "bucket": date(2024, 1, 1),
+                "entity_id": "checkout-service",
+                "entity_label": "checkout-service",
+                "value": 120.0,
+            }
+        ]
+
+    async def _unexpected_query_dicts(*_args, **_kwargs):
+        raise AssertionError("team-label resolution must not run for repo-grain churn")
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.clickhouse_client", _fake_client
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.fetch_quadrant_metric", _fake_metric
+    )
+    monkeypatch.setattr(
+        "dev_health_ops.api.services.quadrant.query_dicts",
+        _unexpected_query_dicts,
+        raising=False,
+    )
+
     response = await build_quadrant_response(
         db_url="clickhouse://test",
         org_id="test-org",
@@ -130,5 +189,11 @@ async def test_quadrant_resolves_team_uuid_label_from_team_catalog(monkeypatch):
         end_date=date(2024, 1, 8),
     )
 
-    assert response.points[0].entity_id == team_uuid
-    assert response.points[0].entity_label == "Platform Team"
+    # Both axes must source from the repo grain (repo_metrics_daily), not the
+    # team/user tables that produce the degenerate churn≈0 collapse.
+    assert captured_tables, "fetch_quadrant_metric was never called"
+    assert all(table == "repo_metrics_daily AS m" for table in captured_tables)
+    assert any("total_loc_touched" in expr for expr in captured_value_exprs)
+    assert any("prs_merged" in expr for expr in captured_value_exprs)
+    # Repo labels pass through untouched (no team-catalog resolution).
+    assert response.points[0].entity_label == "checkout-service"

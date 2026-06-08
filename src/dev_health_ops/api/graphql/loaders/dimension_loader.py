@@ -84,6 +84,7 @@ def get_measure_descriptions() -> dict[str, str]:
     return {
         Measure.COUNT.value: "Count of work units",
         Measure.CHURN_LOC.value: "Lines of code changed",
+        Measure.PR_REWORK_RATIO.value: "Share of PRs that required multiple review rounds",
         Measure.CYCLE_TIME_HOURS.value: "Average cycle time in hours",
         Measure.THROUGHPUT.value: "Distinct work units completed",
         Measure.PIPELINE_SUCCESS_RATE.value: "CI/CD pipeline success rate",

@@ -22,6 +22,7 @@ from ..models.schemas import (
     HomeResponse,
     HomeSignal,
     MetricDelta,
+    ReworkThemeAllocation,
     ScopeEntityRef,
     SparkPoint,
     SummarySentence,
@@ -33,10 +34,16 @@ from ..queries.metrics import (
     fetch_blocked_hours,
     fetch_metric_series,
     fetch_metric_value,
+    fetch_rework_theme_allocation,
 )
 from ..utils import delta_pct, safe_float, safe_transform
 from .cache import TTLCache
-from .filtering import filter_cache_key, scope_filter_for_metric, time_window
+from .filtering import (
+    filter_cache_key,
+    scope_filter_for_metric,
+    time_window,
+    work_category_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +144,16 @@ _METRICS = [
         "scope": "repo",
     },
     {
+        "metric": "pr_rework_ratio",
+        "label": "PR Rework Ratio",
+        "unit": "%",
+        "table": "repo_metrics_daily",
+        "column": "pr_rework_ratio",
+        "aggregator": "avg",
+        "transform": lambda v: v * 100.0,
+        "scope": "repo",
+    },
+    {
         "metric": "ci_success",
         "label": "CI Success Rate",
         "unit": "%",
@@ -158,6 +175,7 @@ _METRIC_CATEGORIES: dict[str, SignalCategory] = {
     "blocked_work": "delivery",
     "change_failure_rate": "durability",
     "rework_ratio": "durability",
+    "pr_rework_ratio": "durability",
     "ci_success": "durability",
     "compounding_risk": "durability",
 }
@@ -170,6 +188,7 @@ _LOWER_IS_BETTER = {
     "blocked_work",
     "change_failure_rate",
     "rework_ratio",
+    "pr_rework_ratio",
     "compounding_risk",
 }
 
@@ -890,7 +909,26 @@ async def build_home_response(
     start_day, end_day, compare_start, compare_end = time_window(filters)
 
     async with clickhouse_client(db_url) as sink:
-        last_ingested, coverage, deltas = await asyncio.gather(
+        allocation_scope = "repo" if filters.scope.level == "repo" else "team"
+        (
+            allocation_scope_filter,
+            allocation_scope_params,
+        ) = await scope_filter_for_metric(
+            sink,
+            metric_scope=allocation_scope,
+            filters=filters,
+            org_id=org_id,
+        )
+        allocation_category_filter, allocation_category_params = work_category_filter(
+            filters
+        )
+
+        (
+            last_ingested,
+            coverage,
+            deltas,
+            rework_theme_allocation_rows,
+        ) = await asyncio.gather(
             fetch_last_ingested_at(sink, org_id=org_id),
             fetch_coverage(
                 sink,
@@ -907,7 +945,20 @@ async def build_home_response(
                 compare_end,
                 org_id=org_id,
             ),
+            fetch_rework_theme_allocation(
+                sink,
+                start_day=start_day,
+                end_day=end_day,
+                scope_filter=allocation_scope_filter,
+                scope_params=allocation_scope_params,
+                work_category_filter=allocation_category_filter,
+                work_category_params=allocation_category_params,
+                org_id=org_id,
+            ),
         )
+        rework_theme_allocation = [
+            ReworkThemeAllocation(**row) for row in rework_theme_allocation_rows
+        ]
 
         sources = {
             "github": "ok" if last_ingested else "down",
@@ -1053,6 +1104,7 @@ async def build_home_response(
                 coverage=Coverage(**coverage),
             ),
             deltas=deltas,
+            rework_theme_allocation=rework_theme_allocation,
             summary=summary_sentences,
             tiles=tiles,
             constraint=constraint,

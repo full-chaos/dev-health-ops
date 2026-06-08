@@ -350,6 +350,16 @@ class MetricDelta:
 
 
 @strawberry.type
+class ReworkThemeAllocation:
+    theme: str
+    label: str
+    allocation: float
+    allocation_pct: float
+    prs_merged: int
+    churn_loc: int
+
+
+@strawberry.type
 class Coverage:
     """Data coverage metrics."""
 
@@ -372,6 +382,7 @@ class HomeResult:
 
     freshness: Freshness
     deltas: list[MetricDelta]
+    rework_theme_allocation: list[ReworkThemeAllocation]
 
 
 # =============================================================================

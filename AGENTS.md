@@ -321,7 +321,20 @@ Explanation format:
 If a `dev-health-ops` change affects `dev-health-web` rendering (e.g., API shape changes, new/modified GraphQL fields, metric schema changes), screenshot evidence from the web frontend **must** be included in the PR.
 
 * Use the **Playwright MCP** (`playwright` skill) in the `dev-health-web` repo to capture affected pages after the dev server is running.
-* Attach screenshots to the GitHub PR body and the linked Linear issue/task.
+* Attach screenshots to the GitHub PR body using a GitHub-hosted release asset URL, then attach the same URL to Linear:
+
+  ```bash
+  # 1) Host local PNG(s) in the web repo with a stable GitHub URL.
+  gh release create gh-attach-assets --repo full-chaos/dev-health-web --title "PR screenshot assets" --notes "Long-lived release for agent-uploaded PR and Linear screenshot evidence." 2>/dev/null || true
+  gh release upload gh-attach-assets "/path/to/screenshot.png" --repo full-chaos/dev-health-web --clobber
+
+  # 2) Embed the hosted image URL in the PR body/comment.
+  IMAGE_URL="https://github.com/full-chaos/dev-health-web/releases/download/gh-attach-assets/screenshot.png"
+  gh pr edit <PR> --repo full-chaos/dev-health-web --body-file <updated-body.md>
+
+  # 3) Attach the same hosted URL to Linear (linear-cli does not upload local files).
+  linear-cli attachments create --title "Screenshot: <description>" --url "$IMAGE_URL" <ISSUE>
+  ```
 * **When to skip:** Changes that have no impact on rendered frontend output (add `SCREENSHOT-WAIVER: <reason>` to PR body).
 ### 7.2 Correct boundaries
 

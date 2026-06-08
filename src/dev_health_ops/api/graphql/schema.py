@@ -67,6 +67,7 @@ from .resolvers.ai import (
 from .resolvers.analytics import resolve_analytics
 from .resolvers.bus_factor import resolve_bus_factor
 from .resolvers.catalog import resolve_catalog
+from .resolvers.cognitive_load import resolve_cognitive_load
 from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
@@ -91,8 +92,13 @@ from .resolvers.reports import (
     resolve_trigger_report,
     resolve_update_saved_report,
 )
+from .resolvers.review_edges import resolve_review_edges
 from .subscriptions import Subscription
 from .types.bus_factor import BusFactor, BusFactorScopeInput
+from .types.cognitive_load import (
+    CognitiveLoadInput,
+    CognitiveLoadResult,
+)
 from .types.complexity import (
     ComplexityTimeseriesInput,
     ComplexityTimeseriesResult,
@@ -102,6 +108,10 @@ from .types.complexity import (
 from .types.compounding_risk import (
     CompoundingRiskFilterInput,
     CompoundingRiskResult,
+)
+from .types.review_edges import (
+    ReviewEdgesInput,
+    ReviewEdgesResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -409,6 +419,37 @@ class Query:
     ) -> HotspotsResult:
         context = get_context(info)
         return await resolve_hotspots(context, input)
+
+    @strawberry.field(
+        description=(
+            "Daily cognitive-load signals (PR interruption, context spread, "
+            "review request load, after-hours and weekend commit ratios). "
+            "Reads from ``user_metrics_daily`` and ``team_metrics_daily`` — "
+            "no recomputation, pure surface of persisted metrics."
+        )
+    )
+    async def cognitive_load(
+        self,
+        info: Info,
+        input: CognitiveLoadInput,
+    ) -> CognitiveLoadResult:
+        context = get_context(info)
+        return await resolve_cognitive_load(context, input)
+
+    @strawberry.field(
+        description=(
+            "Reviewer-to-author collaboration edges from ``review_edges_daily``. "
+            "Ordered by review count descending.  Use ``repoIds`` to narrow to "
+            "specific repositories.  Org-scoped; no recomputation."
+        )
+    )
+    async def review_edges(
+        self,
+        info: Info,
+        input: ReviewEdgesInput,
+    ) -> ReviewEdgesResult:
+        context = get_context(info)
+        return await resolve_review_edges(context, input)
 
     @strawberry.field(
         description="Latest rule-based recommendations for a team within a lookback window."

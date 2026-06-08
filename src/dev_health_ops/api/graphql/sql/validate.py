@@ -50,6 +50,7 @@ class Measure(str, Enum):
 
     COUNT = "count"
     CHURN_LOC = "churn_loc"
+    PR_REWORK_RATIO = "pr_rework_ratio"
     CYCLE_TIME_HOURS = "cycle_time_hours"
     THROUGHPUT = "throughput"
     PIPELINE_SUCCESS_RATE = "pipeline_success_rate"
@@ -93,6 +94,7 @@ class Measure(str, Enum):
             mapping = {
                 cls.COUNT: "SUM(work_items_completed)",
                 cls.CHURN_LOC: "SUM(churn_loc)",
+                cls.PR_REWORK_RATIO: "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)",
                 cls.CYCLE_TIME_HOURS: "AVG(cycle_p50_hours)",
                 cls.THROUGHPUT: "SUM(work_items_completed)",
             }
@@ -149,6 +151,7 @@ class Measure(str, Enum):
             cls.FLAG_ACTIVATION_RATE: "release_impact_daily",
         }
         testops_tables.update(ff_tables)
+        testops_tables[cls.PR_REWORK_RATIO] = "repo_metrics_daily"
         return testops_tables.get(measure)
 
 

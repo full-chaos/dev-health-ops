@@ -32,6 +32,15 @@ class MetricDelta(BaseModel):
     spark: list[SparkPoint]
 
 
+class ReworkThemeAllocation(BaseModel):
+    theme: str
+    label: str
+    allocation: float
+    allocation_pct: float
+    prs_merged: int = 0
+    churn_loc: int = 0
+
+
 class SummarySentence(BaseModel):
     id: str
     text: str
@@ -117,6 +126,7 @@ class HomeDataConfidence(BaseModel):
 class HomeResponse(BaseModel):
     freshness: Freshness
     deltas: list[MetricDelta]
+    rework_theme_allocation: list[ReworkThemeAllocation] = Field(default_factory=list)
     summary: list[SummarySentence]
     tiles: dict[str, Any]
     constraint: ConstraintCard

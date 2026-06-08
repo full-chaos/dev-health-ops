@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date as PyDate
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -144,7 +144,26 @@ async def _fetch_repo_timeseries(
         bounded = list(repo_ids)[:MAX_ROWS]
         query += "\n  AND toString(repo_id) IN {repo_ids:Array(String)}"
         params["repo_ids"] = bounded
-    query += f"\nGROUP BY day, repo_id\nORDER BY day, repo_id\nLIMIT {limit}"
+    else:
+        query += """
+          AND toString(repo_id) IN (
+              SELECT repo_id
+              FROM (
+                  SELECT
+                      toString(repo_id) AS repo_id,
+                      argMax(cyclomatic_per_kloc, (day, computed_at)) AS latest_complexity
+                  FROM repo_complexity_daily
+                  WHERE org_id = {org_id:String}
+                    AND day >= {since_day:Date}
+                    AND day <= {until_day:Date}
+                  GROUP BY repo_id
+                  ORDER BY latest_complexity DESC NULLS LAST, repo_id
+                  LIMIT {limit:UInt32}
+              )
+          )
+        """
+        params["limit"] = limit
+    query += "\nGROUP BY day, repo_id\nORDER BY day, repo_id"
     return await query_dicts(client, query, params)
 
 
@@ -259,8 +278,8 @@ async def resolve_complexity_timeseries(
     raw_limit = input.limit if input.limit is not None else DEFAULT_TIMESERIES_LIMIT
     effective_limit = max(1, min(raw_limit, MAX_ROWS))
 
-    since_day = input.since_utc.date().isoformat()
-    until_day = input.until_utc.date().isoformat()
+    since_day = input.since_utc.astimezone(timezone.utc).date().isoformat()
+    until_day = input.until_utc.astimezone(timezone.utc).date().isoformat()
 
     points: list[ComplexityPoint] = []
 

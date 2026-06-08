@@ -403,10 +403,31 @@ async def test_timeseries_limit_is_clamped_to_max_rows() -> None:
         ctx, _timeseries_input(limit=MAX_ROWS + 99999)
     )
 
-    # The LIMIT clause in the query must be at most MAX_ROWS.
     first_call_query: str = ctx.client.query.call_args_list[0].args[0]
-    assert f"LIMIT {MAX_ROWS}" in first_call_query
+    first_call_params: dict[str, Any] = ctx.client.query.call_args_list[0].kwargs[
+        "parameters"
+    ]
+    assert "LIMIT {limit:UInt32}" in first_call_query
+    assert first_call_params["limit"] == MAX_ROWS
     assert result.points == []
+
+
+@pytest.mark.asyncio
+async def test_timeseries_limit_selects_scopes_not_earliest_rows() -> None:
+    ctx = _ctx()
+    _setup_client(ctx.client, [_qresult([], []), _qresult([], [])])
+
+    await resolve_complexity_timeseries(ctx, _timeseries_input(limit=10))
+
+    first_call_query: str = ctx.client.query.call_args_list[0].args[0]
+    first_call_params: dict[str, Any] = ctx.client.query.call_args_list[0].kwargs[
+        "parameters"
+    ]
+    assert "GROUP BY day, repo_id" in first_call_query
+    assert "SELECT repo_id" in first_call_query
+    assert "latest_complexity" in first_call_query
+    assert "ORDER BY day, repo_id\nLIMIT" not in first_call_query
+    assert first_call_params["limit"] == 10
 
 
 # ---------------------------------------------------------------------------

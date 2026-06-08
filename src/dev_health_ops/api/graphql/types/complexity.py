@@ -47,7 +47,7 @@ class ComplexityTimeseriesInput:
     scope: ComplexityScope
     repo_ids: list[str] | None = strawberry.field(default=None, name="repoIds")
     team_ids: list[str] | None = strawberry.field(default=None, name="teamIds")
-    #: Row cap; default 500, hard max 1000.
+    #: Repo scope cap; default 500, hard max 1000. Returned points remain bounded by scope × bucket safety limits.
     limit: int | None = None
 
 

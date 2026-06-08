@@ -149,7 +149,7 @@ class TestCompileTimeseries:
         sql, params = compile_timeseries(request, org_id="org1")
 
         assert "FROM repo_metrics_daily" in sql
-        assert "AVG(pr_rework_ratio)" in sql
+        assert "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)" in sql
         assert "repo_id AS dimension_value" in sql
         assert params["org_id"] == "org1"
 
@@ -370,7 +370,10 @@ class TestMeasureDbExpression:
         # Non-investment (default)
         assert Measure.db_expression(Measure.COUNT) == "SUM(work_items_completed)"
         assert Measure.db_expression(Measure.THROUGHPUT) == "SUM(work_items_completed)"
-        assert Measure.db_expression(Measure.PR_REWORK_RATIO) == "AVG(pr_rework_ratio)"
+        assert (
+            Measure.db_expression(Measure.PR_REWORK_RATIO)
+            == "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)"
+        )
 
         # Investment path — expressions over real columns in work_unit_investments
         # (CHAOS-1754: old non-existent column refs replaced with valid expressions)

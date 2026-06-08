@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from dev_health_ops.investment_taxonomy import SUBCATEGORIES, THEMES, theme_of
+
 from .client import query_dicts
 
 
@@ -22,10 +24,13 @@ async def fetch_metric_series(
     aggregator: str,
     org_id: str = "",
 ) -> list[dict[str, Any]]:
+    value_expression = _metric_value_expression(
+        table=table, column=column, aggregator=aggregator
+    )
     query = f"""
         SELECT
             day,
-            {aggregator}({column}) AS value
+            {value_expression} AS value
         FROM {table}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {scope_filter}
@@ -51,9 +56,12 @@ async def fetch_metric_value(
     aggregator: str,
     org_id: str = "",
 ) -> float:
+    value_expression = _metric_value_expression(
+        table=table, column=column, aggregator=aggregator
+    )
     query = f"""
         SELECT
-            {aggregator}({column}) AS value
+            {value_expression} AS value
         FROM {table}
         WHERE day >= %(start_day)s AND day < %(end_day)s
         {scope_filter}
@@ -67,6 +75,12 @@ async def fetch_metric_value(
         return 0.0
     value = rows[0].get("value")
     return float(value or 0.0)
+
+
+def _metric_value_expression(*, table: str, column: str, aggregator: str) -> str:
+    if table == "repo_metrics_daily" and column == "pr_rework_ratio":
+        return "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)"
+    return f"{aggregator}({column})"
 
 
 async def fetch_blocked_hours(
@@ -107,6 +121,22 @@ _INVESTMENT_THEME_LABELS = {
 }
 
 
+def canonical_investment_theme_sql(column: str = "investment_area") -> str:
+    mappings: dict[str, str] = {theme: theme for theme in THEMES}
+    mappings.update(
+        {subcategory: theme_of(subcategory) for subcategory in SUBCATEGORIES}
+    )
+    for subcategory in SUBCATEGORIES:
+        leaf = subcategory.rsplit(".", 1)[-1]
+        mappings.setdefault(leaf, theme_of(subcategory))
+
+    clauses = []
+    for raw_key, theme in sorted(mappings.items()):
+        clauses.append(f"lowerUTF8({column}) = '{raw_key}'")
+        clauses.append(f"'{theme}'")
+    return f"multiIf({', '.join(clauses)}, '')"
+
+
 async def fetch_rework_theme_allocation(
     client: Any,
     *,
@@ -118,9 +148,10 @@ async def fetch_rework_theme_allocation(
     work_category_params: dict[str, Any] | None = None,
     org_id: str = "",
 ) -> list[dict[str, Any]]:
+    canonical_theme_expr = canonical_investment_theme_sql("investment_area")
     query = f"""
         SELECT
-            investment_area AS theme,
+            canonical_theme AS theme,
             sum(work_items_completed) AS allocation,
             sum(prs_merged) AS prs_merged,
             sum(churn_loc) AS churn_loc
@@ -129,7 +160,7 @@ async def fetch_rework_theme_allocation(
                 day,
                 repo_id,
                 team_id,
-                investment_area,
+                {canonical_theme_expr} AS canonical_theme,
                 project_stream,
                 argMax(work_items_completed, computed_at) AS work_items_completed,
                 argMax(prs_merged, computed_at) AS prs_merged,
@@ -139,9 +170,10 @@ async def fetch_rework_theme_allocation(
             {scope_filter}
             {work_category_filter}
               AND org_id = %(org_id)s
-            GROUP BY day, repo_id, team_id, investment_area, project_stream
+            GROUP BY day, repo_id, team_id, canonical_theme, project_stream
         )
-        GROUP BY investment_area
+        WHERE canonical_theme != ''
+        GROUP BY canonical_theme
         ORDER BY allocation DESC
     """
     params = _date_params(start_day, end_day)
@@ -149,6 +181,7 @@ async def fetch_rework_theme_allocation(
     params.update(work_category_params or {})
     params["org_id"] = org_id
     rows = await query_dicts(client, query, params)
+    rows = [row for row in rows if str(row.get("theme") or "") in THEMES]
     total = sum(float(row.get("allocation") or 0.0) for row in rows)
     allocations: list[dict[str, Any]] = []
     for row in rows:
@@ -157,7 +190,7 @@ async def fetch_rework_theme_allocation(
         allocations.append(
             {
                 "theme": theme,
-                "label": _INVESTMENT_THEME_LABELS.get(theme, theme),
+                "label": _INVESTMENT_THEME_LABELS[theme],
                 "allocation": allocation,
                 "allocation_pct": (allocation / total * 100.0) if total else 0.0,
                 "prs_merged": int(row.get("prs_merged") or 0),

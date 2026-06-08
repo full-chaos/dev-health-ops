@@ -61,8 +61,47 @@ async def resolve_home(
         WHERE from_ts >= today() - 30
         AND from_ts < today()
         AND org_id = %(org_id)s
+        UNION ALL
+        SELECT
+            'pr_rework_ratio' as metric,
+            'PR Rework Ratio' as label,
+            avg(pr_rework_ratio) * 100.0 as value,
+            '%' as unit
+        FROM repo_metrics_daily
+        WHERE day >= today() - 30
+        AND day < today()
+        AND org_id = %(org_id)s
     """
     delta_rows = await query_dicts(client, deltas_sql, {"org_id": context.org_id})
+
+    rework_theme_sql = """
+        SELECT
+            investment_area AS theme,
+            sum(work_items_completed) AS allocation,
+            sum(prs_merged) AS prs_merged,
+            sum(churn_loc) AS churn_loc
+        FROM (
+            SELECT
+                day,
+                repo_id,
+                team_id,
+                investment_area,
+                project_stream,
+                argMax(work_items_completed, computed_at) AS work_items_completed,
+                argMax(prs_merged, computed_at) AS prs_merged,
+                argMax(churn_loc, computed_at) AS churn_loc
+            FROM investment_metrics_daily
+            WHERE day >= today() - 30
+              AND day < today()
+              AND org_id = %(org_id)s
+            GROUP BY day, repo_id, team_id, investment_area, project_stream
+        )
+        GROUP BY investment_area
+        ORDER BY allocation DESC
+    """
+    rework_theme_rows = await query_dicts(
+        client, rework_theme_sql, {"org_id": context.org_id}
+    )
 
     deltas = []
     for row in delta_rows:
@@ -77,6 +116,33 @@ async def resolve_home(
             }
         )
 
+    theme_labels = {
+        "feature_delivery": "Feature Delivery",
+        "operational": "Operational / Support",
+        "maintenance": "Maintenance / Tech Debt",
+        "quality": "Quality / Reliability",
+        "risk": "Risk / Security",
+    }
+    total_allocation = sum(
+        float(row.get("allocation") or 0.0) for row in rework_theme_rows
+    )
+    rework_theme_allocation = []
+    for row in rework_theme_rows:
+        theme = str(row.get("theme") or "")
+        allocation = float(row.get("allocation") or 0.0)
+        rework_theme_allocation.append(
+            {
+                "theme": theme,
+                "label": theme_labels.get(theme, theme),
+                "allocation": allocation,
+                "allocation_pct": (allocation / total_allocation * 100.0)
+                if total_allocation
+                else 0.0,
+                "prs_merged": int(row.get("prs_merged") or 0),
+                "churn_loc": int(row.get("churn_loc") or 0),
+            }
+        )
+
     return {
         "freshness": {
             "last_ingested_at": last_ingested,
@@ -88,6 +154,7 @@ async def resolve_home(
             },
         },
         "deltas": deltas,
+        "rework_theme_allocation": rework_theme_allocation,
         "summary": [],
         "tiles": {},
         "constraint": {

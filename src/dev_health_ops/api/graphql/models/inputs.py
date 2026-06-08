@@ -26,6 +26,7 @@ class MeasureInput(Enum):
 
     COUNT = "count"
     CHURN_LOC = "churn_loc"
+    PR_REWORK_RATIO = "pr_rework_ratio"
     CYCLE_TIME_HOURS = "cycle_time_hours"
     THROUGHPUT = "throughput"
     PIPELINE_SUCCESS_RATE = "pipeline_success_rate"

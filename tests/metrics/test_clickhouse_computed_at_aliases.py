@@ -63,15 +63,22 @@ async def test_ai_opportunity_query_qualifies_computed_at(
     assert "max(metrics.computed_at) AS computed_at" in captured["query"]
 
 
-def test_ai_governance_coverage_query_qualifies_computed_at():
+@pytest.mark.asyncio
+async def test_ai_governance_coverage_query_qualifies_computed_at(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured = {"query": ""}
 
-    class FakeClient:
-        def query_dicts(self, query, _params):
+    async def fake_query_dicts(_client, query, _params):
+        if "ai_governance_coverage_daily" in query:
             captured["query"] = query
-            return []
+        return []
 
-    AIGovernanceLoader(FakeClient()).load_coverage(
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+
+    await AIGovernanceLoader(MagicMock()).load_coverage(
         org_id="org-a",
         start_day=date(2026, 5, 1),
         end_day=date(2026, 5, 2),

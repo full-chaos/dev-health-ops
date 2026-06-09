@@ -46,7 +46,7 @@ class AIGovernanceLoader:
         )
         return [_artifact_from_row(row) for row in rows]
 
-    def load_coverage(
+    async def load_coverage(
         self,
         *,
         org_id: str,
@@ -55,7 +55,10 @@ class AIGovernanceLoader:
         team_id: str | None = None,
         repo_id: UUID | None = None,
     ) -> list[AIGovernanceCoverageDaily]:
-        rows = self.client.query_dicts(
+        from dev_health_ops.api.queries.client import query_dicts
+
+        rows = await query_dicts(
+            self.client,
             _COVERAGE_SQL,
             {
                 "org_id": org_id,
@@ -67,7 +70,7 @@ class AIGovernanceLoader:
         )
         return [_coverage_from_row(row) for row in rows]
 
-    def load_violations(
+    async def load_violations(
         self,
         *,
         org_id: str,
@@ -77,7 +80,10 @@ class AIGovernanceLoader:
         repo_id: UUID | None = None,
         limit: int = 500,
     ) -> list[AIGovernanceViolationQueryRow]:
-        rows = self.client.query_dicts(
+        from dev_health_ops.api.queries.client import query_dicts
+
+        rows = await query_dicts(
+            self.client,
             _VIOLATIONS_SQL,
             {
                 "org_id": org_id,

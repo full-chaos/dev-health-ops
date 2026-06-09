@@ -217,6 +217,38 @@ def test_traversal_from_pr_root_reaches_review_deployment_incident() -> None:
     )
 
 
+def test_ai_workflow_queries_use_clickhouse_param_syntax() -> None:
+    """Regression: queries must use {name:Type} syntax for clickhouse-connect, not %(name)s.
+
+    clickhouse-connect's query(..., parameters=...) requires the {name:Type} placeholder
+    format.  The old %(name)s style is never substituted — it reaches the DB as a literal
+    string, causing empty result sets or syntax errors (CHAOS-2205).
+    """
+    from dev_health_ops.work_graph.ai_workflow import (
+        _AI_EDGE_UNION_QUERY,
+        _AI_RUN_QUERY,
+    )
+
+    for name, query in [
+        ("_AI_RUN_QUERY", _AI_RUN_QUERY),
+        ("_AI_EDGE_UNION_QUERY", _AI_EDGE_UNION_QUERY),
+    ]:
+        assert "%(org_id)s" not in query, f"{name} still uses %(org_id)s"
+        assert "{org_id:String}" in query, f"{name} missing {{org_id:String}}"
+
+    assert "%(run_ids)s" not in _AI_RUN_QUERY
+    assert "{run_ids:Array(String)}" in _AI_RUN_QUERY
+
+    assert "%(node_types)s" not in _AI_EDGE_UNION_QUERY
+    assert "{node_types:Array(String)}" in _AI_EDGE_UNION_QUERY
+
+    assert "%(node_ids)s" not in _AI_EDGE_UNION_QUERY
+    assert "{node_ids:Array(String)}" in _AI_EDGE_UNION_QUERY
+
+    assert "%(limit)s" not in _AI_EDGE_UNION_QUERY
+    assert "{limit:UInt32}" in _AI_EDGE_UNION_QUERY
+
+
 def test_non_ai_work_graph_edge_record_shape_regression() -> None:
     edge = WorkGraphEdge(
         edge_id="edge-1",

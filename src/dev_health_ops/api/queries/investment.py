@@ -560,6 +560,7 @@ async def fetch_investment_quality_stats(
     org_id: str = "",
     themes: list[str] | None = None,
     subcategories: list[str] | None = None,
+    team_scope_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch aggregated evidence quality stats: mean, stddev, band counts."""
     filters: list[str] = []
@@ -577,22 +578,68 @@ async def fetch_investment_quality_stats(
         )
         params["subcategories"] = subcategories
     category_filter = f" AND ({' OR '.join(filters)})" if filters else ""
+    team_join = ""
+    team_filter = ""
+    if team_scope_ids:
+        params["team_scope_ids"] = team_scope_ids
+        team_join = """
+        LEFT JOIN (
+            SELECT
+                work_unit_id,
+                argMax(team_id, cnt) AS team_id,
+                argMax(team_label, cnt) AS team_label
+            FROM (
+                SELECT
+                    work_unit_investments.work_unit_id AS work_unit_id,
+                    t.team_id AS team_id,
+                    ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team_label,
+                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
+                FROM work_unit_investments
+                ARRAY JOIN arrayDistinct(arrayConcat(
+                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
+                    [work_unit_investments.work_unit_id]
+                )) AS issue_id
+                LEFT JOIN (
+                    SELECT
+                        work_item_id,
+                        argMax(team_id, computed_at) AS team_id,
+                        argMax(team_name, computed_at) AS team_name
+                    FROM work_item_cycle_times
+                    WHERE org_id = %(org_id)s
+                    GROUP BY work_item_id
+                ) AS t ON t.work_item_id = issue_id
+                WHERE work_unit_investments.from_ts < %(end_ts)s
+                  AND work_unit_investments.to_ts >= %(start_ts)s
+                  AND work_unit_investments.org_id = %(org_id)s
+                GROUP BY work_unit_id, team_id, team_label
+            )
+            GROUP BY work_unit_id
+        ) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id
+        """
+        team_filter = """
+          AND (
+              unit_team.team_label IN %(team_scope_ids)s
+              OR unit_team.team_id IN %(team_scope_ids)s
+          )
+        """
     query = f"""
         SELECT
-            sum(effort_value) AS total_effort,
-            sumIf(effort_value, evidence_quality IS NOT NULL) AS quality_known_effort,
-            sumIf(effort_value * evidence_quality, evidence_quality IS NOT NULL) AS quality_weighted,
+            count() AS total,
+            countIf(evidence_quality IS NOT NULL) AS quality_known_count,
+            avgIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_mean,
+            stddevPopIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_stddev,
             countIf(evidence_quality_band = 'high') AS high_count,
             countIf(evidence_quality_band = 'moderate') AS moderate_count,
             countIf(evidence_quality_band = 'low') AS low_count,
             countIf(evidence_quality_band = 'very_low') AS very_low_count,
-            countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count,
-            varPopIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_variance
+            countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count
         FROM work_unit_investments
+        {team_join}
         WHERE work_unit_investments.from_ts < %(end_ts)s
           AND work_unit_investments.to_ts >= %(start_ts)s
           AND work_unit_investments.org_id = %(org_id)s
         {scope_filter}
+        {team_filter}
         {category_filter}
     """
     rows = await query_dicts(sink, query, params)

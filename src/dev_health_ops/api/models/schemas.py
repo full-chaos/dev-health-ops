@@ -313,6 +313,7 @@ class EvidenceQualityStats(BaseModel):
 
     mean: float | None = None
     stddev: float | None = None
+    total: int = 0
     band_counts: dict[str, int] = Field(default_factory=dict)
     quality_drivers: list[str] = Field(default_factory=list)
 

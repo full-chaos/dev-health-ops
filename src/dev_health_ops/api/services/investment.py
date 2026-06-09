@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from datetime import datetime, time, timezone
 from typing import Any
 
@@ -90,15 +89,14 @@ def _compute_quality_stats(quality_row: dict[str, Any]) -> EvidenceQualityStats:
     if not quality_row:
         return EvidenceQualityStats()
 
-    total_effort = float(quality_row.get("total_effort") or 0.0)
-    known_effort = float(quality_row.get("quality_known_effort") or 0.0)
-    weighted = float(quality_row.get("quality_weighted") or 0.0)
-    variance = quality_row.get("quality_variance")
-
-    # Compute weighted mean
-    mean = (weighted / known_effort) if known_effort > 0 else None
-    # Compute stddev from variance
-    stddev = math.sqrt(float(variance)) if variance is not None else None
+    total = int(quality_row.get("total") or 0)
+    known_count = int(quality_row.get("quality_known_count") or 0)
+    mean_value = quality_row.get("quality_mean")
+    stddev_value = quality_row.get("quality_stddev")
+    mean = float(mean_value) if mean_value is not None and known_count > 0 else None
+    stddev = (
+        float(stddev_value) if stddev_value is not None and known_count > 0 else None
+    )
 
     band_counts = {
         "high": int(quality_row.get("high_count") or 0),
@@ -111,7 +109,7 @@ def _compute_quality_stats(quality_row: dict[str, Any]) -> EvidenceQualityStats:
     # Determine quality drivers (algorithmic reasons for low quality)
     quality_drivers: list[str] = []
     unknown_count = band_counts.get("unknown", 0)
-    total_count = sum(band_counts.values())
+    total_count = total or sum(band_counts.values())
 
     if total_count > 0 and unknown_count / total_count > 0.3:
         quality_drivers.append("missing_evidence_metadata")
@@ -126,12 +124,13 @@ def _compute_quality_stats(quality_row: dict[str, Any]) -> EvidenceQualityStats:
     if total_count > 0 and low_plus / total_count > 0.5:
         quality_drivers.append("weak_cross_links")
 
-    if known_effort > 0 and total_effort > 0 and known_effort / total_effort < 0.7:
+    if total_count > 0 and known_count / total_count < 0.7:
         quality_drivers.append("thin_component")
 
     return EvidenceQualityStats(
         mean=mean,
         stddev=stddev,
+        total=total,
         band_counts=band_counts,
         quality_drivers=quality_drivers,
     )
@@ -218,6 +217,10 @@ async def build_investment_response(
     return InvestmentResponse(
         theme_distribution=theme_distribution,
         subcategory_distribution=subcategory_distribution,
+        evidence_quality_distribution={
+            band: float(count)
+            for band, count in evidence_quality_stats.band_counts.items()
+        },
         evidence_quality_stats=evidence_quality_stats,
         edges=[],
     )

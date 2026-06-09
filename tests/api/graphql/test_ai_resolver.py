@@ -376,7 +376,12 @@ async def test_review_load_populated_aggregates_by_bucket():
     assert result.reviewer_concentration.data_available is True
     assert result.reviewer_concentration.reviewer_count == 5
     assert result.reviewer_concentration.reviewer_gini == pytest.approx(0.42)
-    assert result.missing_states == []
+    # Engagement loader is not stubbed here, so CHAOS-2194 fields are honestly
+    # unavailable: None values plus an explicit missing state — never zeros.
+    assert [state.key for state in result.missing_states] == ["review_engagement"]
+    ai_bucket = bucket_lookup[AttributionBucket.AI_ASSISTED.value]
+    assert ai_bucket.pickup_latency_hours is None
+    assert ai_bucket.review_comments_per_loc is None
 
 
 # -----------------------------------------------------------------------------
@@ -773,6 +778,14 @@ async def test_ai_attributed_prs_team_scope_filters_by_team_id():
     repo_team_map = {str(REPO_ID): "team-a", str(REPO_B): "team-b"}
     with (
         _patch_pr_loader(rows),
+        # Force the catalogs-unavailable fallback so this test keeps pinning
+        # the Wave-1 in-memory filter; the SQL prefilter path is covered by
+        # test_ai_attributed_prs_team_scope_filters_in_sql_before_limit.
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_team_repo_ids",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         patch(
             "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
             new_callable=AsyncMock,
@@ -820,6 +833,13 @@ async def test_ai_attributed_prs_team_scope_resolves_via_repo_pattern():
     repo_team_map = {str(REPO_ID): "team-a", str(REPO_B): "team-b"}
     with (
         _patch_pr_loader(rows),
+        # Catalogs unavailable → in-memory fallback path (see note in
+        # test_ai_attributed_prs_team_scope_filters_by_team_id).
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_team_repo_ids",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         patch(
             "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
             new_callable=AsyncMock,
@@ -905,3 +925,360 @@ async def test_governance_summary_awaits_async_loader_methods():
     assert result.data_available is True
     assert result.coverage[0].ai_artifacts == 10
     assert result.recent_violations[0].rule_id == "MISSING_AI_DECLARATION"
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2194 — Review Load pickup latency + review comments per LOC
+# -----------------------------------------------------------------------------
+
+
+def _patch_engagement(rows: list[dict[str, Any]]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_impact."
+        "AIImpactClickHouseLoader.load_review_engagement",
+        new_callable=AsyncMock,
+        return_value=rows,
+    )
+
+
+def _engagement_row(
+    *,
+    bucket: str,
+    day: date,
+    prs_with_first_review: int = 5,
+    pickup_latency_hours: float | None = 4.0,
+    review_comments_total: int = 20,
+    loc_total: int = 1000,
+) -> dict[str, Any]:
+    return {
+        "bucket": bucket,
+        "day": day,
+        "prs_with_first_review": prs_with_first_review,
+        "pickup_latency_hours": pickup_latency_hours,
+        "review_comments_total": review_comments_total,
+        "loc_total": loc_total,
+    }
+
+
+@pytest.mark.asyncio
+async def test_review_load_merges_engagement_fields():
+    engagement = [
+        _engagement_row(
+            bucket=AttributionBucket.AI_ASSISTED.value,
+            day=DAY_START,
+            pickup_latency_hours=4.0,
+            review_comments_total=20,
+            loc_total=1000,
+        ),
+        _engagement_row(
+            bucket=AttributionBucket.HUMAN.value,
+            day=DAY_START,
+            pickup_latency_hours=8.0,
+            review_comments_total=10,
+            loc_total=500,
+        ),
+    ]
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_reviewer_concentration(0.42, 5),
+        _patch_engagement(engagement),
+    ):
+        result = await resolve_ai_review_load(_ctx(), _range())
+
+    bucket_lookup = {row.bucket: row for row in result.by_bucket}
+    ai_row = bucket_lookup[AttributionBucket.AI_ASSISTED.value]
+    assert ai_row.pickup_latency_hours == pytest.approx(4.0)
+    assert ai_row.review_comments_per_loc == pytest.approx(0.02)
+    human_row = bucket_lookup[AttributionBucket.HUMAN.value]
+    assert human_row.pickup_latency_hours == pytest.approx(8.0)
+    assert human_row.review_comments_per_loc == pytest.approx(0.02)
+    # Buckets without engagement rows stay None (unavailable ≠ zero).
+    unknown_row = bucket_lookup[AttributionBucket.UNKNOWN.value]
+    assert unknown_row.pickup_latency_hours is None
+    assert unknown_row.review_comments_per_loc is None
+    # Daily rows merge by (bucket, day).
+    ai_daily = [
+        r for r in result.daily if r.bucket == AttributionBucket.AI_ASSISTED.value
+    ]
+    assert ai_daily[0].pickup_latency_hours == pytest.approx(4.0)
+    # No engagement missing state when engagement data exists.
+    assert "review_engagement" not in {s.key for s in result.missing_states}
+
+
+@pytest.mark.asyncio
+async def test_review_load_engagement_zero_loc_yields_none_not_zero():
+    engagement = [
+        _engagement_row(
+            bucket=AttributionBucket.AI_ASSISTED.value,
+            day=DAY_START,
+            prs_with_first_review=0,
+            pickup_latency_hours=None,
+            review_comments_total=0,
+            loc_total=0,
+        ),
+    ]
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_reviewer_concentration(0.42, 5),
+        _patch_engagement(engagement),
+    ):
+        result = await resolve_ai_review_load(_ctx(), _range())
+
+    bucket_lookup = {row.bucket: row for row in result.by_bucket}
+    ai_row = bucket_lookup[AttributionBucket.AI_ASSISTED.value]
+    assert ai_row.pickup_latency_hours is None
+    assert ai_row.review_comments_per_loc is None
+
+
+@pytest.mark.asyncio
+async def test_review_load_engagement_skipped_for_work_type_scope():
+    """work_type cannot be applied to raw PR rows — engagement must be
+    reported unavailable rather than silently mis-scoped."""
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_reviewer_concentration(0.42, 5),
+        _patch_engagement([_engagement_row(bucket="ai_assisted", day=DAY_START)]),
+    ):
+        result = await resolve_ai_review_load(
+            _ctx(), _range(), AIScopeInput(work_type="bug")
+        )
+
+    bucket_lookup = {row.bucket: row for row in result.by_bucket}
+    ai_row = bucket_lookup[AttributionBucket.AI_ASSISTED.value]
+    assert ai_row.pickup_latency_hours is None
+    assert "review_engagement" in {s.key for s in result.missing_states}
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2185 — Hotspot / complexity overlap
+# -----------------------------------------------------------------------------
+
+
+def _patch_hotspot_overlap(rows: list[dict[str, Any]]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_impact."
+        "AIImpactClickHouseLoader.load_hotspot_overlap",
+        new_callable=AsyncMock,
+        return_value=rows,
+    )
+
+
+def _patch_complexity_overlap(rows: list[dict[str, Any]]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_impact."
+        "AIImpactClickHouseLoader.load_complexity_overlap",
+        new_callable=AsyncMock,
+        return_value=rows,
+    )
+
+
+@pytest.mark.asyncio
+async def test_risk_breakdown_populated_overlaps_drop_missing_states():
+    hotspot_raw = [
+        {
+            "bucket": "ai_assisted",
+            "prs_total": 10,
+            "prs_touching_hotspots": 4,
+            "avg_hotspot_risk_score": 0.73,
+        }
+    ]
+    complexity_raw = [
+        {
+            "bucket": "ai_assisted",
+            "prs_total": 10,
+            "prs_touching_high_complexity": 2,
+        }
+    ]
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_hotspot_overlap(hotspot_raw),
+        _patch_complexity_overlap(complexity_raw),
+    ):
+        result = await resolve_ai_risk_breakdown(_ctx(), _range())
+
+    assert len(result.hotspot_overlap) == 1
+    hs = result.hotspot_overlap[0]
+    assert hs.bucket == "ai_assisted"
+    assert hs.prs_total == 10
+    assert hs.prs_touching_hotspots == 4
+    assert hs.hotspot_overlap_rate == pytest.approx(0.4)
+    assert hs.avg_hotspot_risk_score == pytest.approx(0.73)
+    cx = result.complexity_overlap[0]
+    assert cx.complexity_overlap_rate == pytest.approx(0.2)
+    # Real data present → missing states must be gone.
+    assert {s.key for s in result.missing_states} == set()
+
+
+@pytest.mark.asyncio
+async def test_risk_breakdown_empty_overlaps_keep_missing_states():
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_hotspot_overlap([]),
+        _patch_complexity_overlap([]),
+    ):
+        result = await resolve_ai_risk_breakdown(_ctx(), _range())
+
+    assert result.hotspot_overlap == []
+    assert result.complexity_overlap == []
+    assert {s.key for s in result.missing_states} == {
+        "hotspot_overlap",
+        "complexity_overlap",
+    }
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2186 — Impact per-repo / per-team breakdown
+# -----------------------------------------------------------------------------
+
+
+def _patch_repo_labels(labels: dict[str, str]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_impact."
+        "AIImpactClickHouseLoader.load_repo_labels",
+        new_callable=AsyncMock,
+        return_value=labels,
+    )
+
+
+def _patch_team_labels(labels: dict[str, str]) -> Any:
+    return patch(
+        "dev_health_ops.metrics.loaders.ai_impact."
+        "AIImpactClickHouseLoader.load_team_labels",
+        new_callable=AsyncMock,
+        return_value=labels,
+    )
+
+
+@pytest.mark.asyncio
+async def test_impact_summary_builds_repo_and_team_breakdowns():
+    with (
+        _patch_loader(_populated_rows()),
+        _patch_repo_labels({str(REPO_ID): "acme/api"}),
+        _patch_team_labels({TEAM_ID: "Team A"}),
+    ):
+        result = await resolve_ai_impact_summary(_ctx(), _range())
+
+    assert len(result.repo_breakdown) == 1
+    repo_row = result.repo_breakdown[0]
+    assert repo_row.scope_id == str(REPO_ID)
+    assert repo_row.scope_label == "acme/api"
+    # AI buckets: ai_assisted 20 + agent_created 4 = 24 of 38 total PRs.
+    assert repo_row.ai_prs_total == 24
+    assert repo_row.ai_assisted_pr_ratio == pytest.approx(24 / 38)
+    # AI rework 0.1 (both AI rows) − human rework 0.05 = +0.05.
+    assert repo_row.rework_rate_delta == pytest.approx(0.05)
+    team_row = result.team_breakdown[0]
+    assert team_row.scope_id == TEAM_ID
+    assert team_row.scope_label == "Team A"
+    assert "scope_breakdown" not in {s.key for s in result.missing_states}
+
+
+@pytest.mark.asyncio
+async def test_impact_summary_breakdowns_fall_back_to_ids_and_missing_state():
+    """Label lookups failing must degrade to ids; an all-human window emits
+    the scope_breakdown missing state instead of fabricated zero rows."""
+    human_only = [
+        _record(
+            bucket=AttributionBucket.HUMAN,
+            day=DAY_START,
+            human_prs=12,
+            prs_total=12,
+            prs_merged=11,
+        )
+    ]
+    with (
+        _patch_loader(human_only),
+        _patch_repo_labels({}),
+        _patch_team_labels({}),
+    ):
+        result = await resolve_ai_impact_summary(_ctx(), _range())
+
+    assert result.repo_breakdown == []
+    assert result.team_breakdown == []
+    assert "scope_breakdown" in {s.key for s in result.missing_states}
+
+
+@pytest.mark.asyncio
+async def test_impact_summary_empty_has_empty_breakdowns_without_missing_state():
+    with _patch_loader([]):
+        result = await resolve_ai_impact_summary(_ctx(), _range())
+
+    assert result.repo_breakdown == []
+    assert result.team_breakdown == []
+    assert "scope_breakdown" not in {s.key for s in result.missing_states}
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2180 Wave 2 — dense team-scoped pagination for attributed PRs
+# -----------------------------------------------------------------------------
+
+
+def _patch_team_repo_ids(value: Any) -> Any:
+    return patch(
+        "dev_health_ops.api.graphql.resolvers.ai._resolve_team_repo_ids",
+        new_callable=AsyncMock,
+        return_value=value,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_team_scope_filters_in_sql_before_limit():
+    """Team scope must reach the loader as repo_ids so the SQL LIMIT applies
+    to the already-filtered universe (dense pages)."""
+    rows = [_attribution_row(number=1), _attribution_row(number=2)]
+    scope = AIScopeInput(team_id="team-a")
+    repo_team_map = {str(REPO_ID): "team-a"}
+    with (
+        _patch_pr_loader(rows) as mock_load,
+        _patch_team_repo_ids([REPO_ID]),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
+            new_callable=AsyncMock,
+            return_value=repo_team_map,
+        ),
+    ):
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    assert mock_load.await_args.kwargs["repo_ids"] == [REPO_ID]
+    assert [r.number for r in result.rows] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_team_with_no_repos_returns_empty():
+    scope = AIScopeInput(team_id="team-empty")
+    with (
+        _patch_pr_loader([_attribution_row(number=1)]) as mock_load,
+        _patch_team_repo_ids([]),
+    ):
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    mock_load.assert_not_awaited()
+    assert result.rows == []
+    assert result.data_available is False
+    assert result.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_unresolvable_team_falls_back_to_memory_filter():
+    """When the team catalogs cannot be loaded (None), the resolver keeps the
+    Wave-1 in-memory filter instead of wrongly returning an empty page."""
+    REPO_B = UUID("22222222-2222-2222-2222-222222222222")
+    rows = [
+        _attribution_row(number=1),
+        {**_attribution_row(number=2), "repo_id": REPO_B},
+    ]
+    scope = AIScopeInput(team_id="team-a")
+    repo_team_map = {str(REPO_ID): "team-a", str(REPO_B): "team-b"}
+    with (
+        _patch_pr_loader(rows) as mock_load,
+        _patch_team_repo_ids(None),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
+            new_callable=AsyncMock,
+            return_value=repo_team_map,
+        ),
+    ):
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    assert mock_load.await_args.kwargs["repo_ids"] is None
+    assert [r.number for r in result.rows] == [1]

@@ -40,12 +40,15 @@ from ..models.ai import (
     AIComparison,
     AIComparisonDelta,
     AIComparisonSide,
+    AIComplexityOverlapRow,
     AIDateRangeInput,
     AIGovernanceCoverageRow,
     AIGovernanceSummary,
     AIGovernanceViolationRow,
+    AIHotspotOverlapRow,
     AIImpactBucketRow,
     AIImpactBucketTotals,
+    AIImpactScopeRollupRow,
     AIImpactSummary,
     AILeverageComponents,
     AIMissingState,
@@ -274,6 +277,92 @@ def _aggregate_bucket_totals(rows: list[Any]) -> dict[str, AIImpactBucketTotals]
 # resolve_ai_impact_summary
 # =============================================================================
 
+_SCOPE_BREAKDOWN_LIMIT = 10
+
+
+def _scope_rollups(
+    rows: list[Any],
+    *,
+    key_fn: Any,
+    labels: dict[str, str],
+) -> list[AIImpactScopeRollupRow]:
+    """Aggregate daily records into per-scope AI rollups (CHAOS-2186).
+
+    ``key_fn`` extracts the scope id (repo uuid string or team id) from a
+    record; records with no scope id are skipped. Scopes with zero
+    AI-attributed PRs are dropped — an empty list is the honest "no AI
+    activity ranked" state, not a fabricated zero row.
+    """
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        key = key_fn(row)
+        if not key:
+            continue
+        grouped[str(key)].append(row)
+
+    rollups: list[AIImpactScopeRollupRow] = []
+    for scope_id, scope_rows in grouped.items():
+        ai_rows = [
+            r for r in scope_rows if r.attribution_bucket in AI_ATTRIBUTION_BUCKETS
+        ]
+        human_rows = [r for r in scope_rows if r.attribution_bucket == _BASELINE_BUCKET]
+        ai_prs_total = sum(r.prs_total for r in ai_rows)
+        if ai_prs_total <= 0:
+            continue
+        all_prs_total = sum(r.prs_total for r in scope_rows)
+        ai_rework = _weighted_avg([(r.rework_drag_rate, r.prs_total) for r in ai_rows])
+        human_rework = _weighted_avg(
+            [(r.rework_drag_rate, r.prs_total) for r in human_rows]
+        )
+        rollups.append(
+            AIImpactScopeRollupRow(
+                scope_id=scope_id,
+                scope_label=labels.get(scope_id, scope_id),
+                ai_prs_total=ai_prs_total,
+                ai_assisted_pr_ratio=_ratio(ai_prs_total, all_prs_total),
+                rework_rate_delta=_delta(ai_rework, human_rework),
+            )
+        )
+    rollups.sort(key=lambda r: (-r.ai_prs_total, r.scope_id))
+    return rollups[:_SCOPE_BREAKDOWN_LIMIT]
+
+
+async def _load_scope_breakdowns(
+    context: GraphQLContext,
+    org_id: str,
+    rows: list[Any],
+) -> tuple[list[AIImpactScopeRollupRow], list[AIImpactScopeRollupRow]]:
+    """Build per-repo and per-team rollups with resolved display labels."""
+    if not rows:
+        return [], []
+    loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
+
+    repo_ids = sorted({str(r.repo_id) for r in rows if r.repo_id})
+    try:
+        repo_labels = await loader.load_repo_labels(repo_ids)
+    except Exception as exc:
+        logger.warning("Could not resolve repo labels for AI breakdown: %s", exc)
+        repo_labels = {}
+
+    team_ids = sorted({str(r.team_id) for r in rows if r.team_id})
+    try:
+        team_labels = await loader.load_team_labels(team_ids)
+    except Exception as exc:
+        logger.warning("Could not resolve team labels for AI breakdown: %s", exc)
+        team_labels = {}
+
+    repo_breakdown = _scope_rollups(
+        rows,
+        key_fn=lambda r: str(r.repo_id) if r.repo_id else None,
+        labels=repo_labels,
+    )
+    team_breakdown = _scope_rollups(
+        rows,
+        key_fn=lambda r: r.team_id or None,
+        labels=team_labels,
+    )
+    return repo_breakdown, team_breakdown
+
 
 async def resolve_ai_impact_summary(
     context: GraphQLContext,
@@ -291,6 +380,7 @@ async def resolve_ai_impact_summary(
 
     by_bucket = _aggregate_bucket_totals(rows)
     daily = [_row_to_impact_daily(row) for row in rows]
+    repo_breakdown, team_breakdown = await _load_scope_breakdowns(context, org_id, rows)
 
     total_prs = sum(r.prs_total for r in rows)
     ai_assisted = sum(r.ai_assisted_prs for r in rows)
@@ -304,6 +394,18 @@ async def resolve_ai_impact_summary(
         for state in [_unknown_attribution_missing_state(unknown)]
         if state is not None
     ]
+    if rows and not repo_breakdown and not team_breakdown:
+        missing_states.append(
+            _missing_state(
+                "scope_breakdown",
+                "No repo or team rollups with AI activity",
+                (
+                    "No repos or teams in this scope have AI-attributed PRs "
+                    "in the window, so ranked rollups stay empty. This is a "
+                    "no-data state, not a zero-impact signal."
+                ),
+            )
+        )
 
     return AIImpactSummary(
         org_id=org_id,
@@ -317,6 +419,8 @@ async def resolve_ai_impact_summary(
         ai_assisted_pr_ratio=_ratio(ai_assisted, total_prs),
         by_bucket=sorted(by_bucket.values(), key=lambda r: r.bucket),
         daily=daily,
+        repo_breakdown=repo_breakdown,
+        team_breakdown=team_breakdown,
         missing_states=missing_states,
         data_available=bool(rows),
         computed_at=computed_at,
@@ -437,6 +541,85 @@ async def _load_reviewer_concentration(
     )
 
 
+class _EngagementSlice:
+    """Accumulated engagement inputs for one (bucket, day) or one bucket."""
+
+    __slots__ = ("latency_pairs", "comments_total", "loc_total")
+
+    def __init__(self) -> None:
+        self.latency_pairs: list[tuple[float | None, float]] = []
+        self.comments_total = 0
+        self.loc_total = 0
+
+    def add(self, raw: dict[str, Any]) -> None:
+        latency = raw.get("pickup_latency_hours")
+        weight = float(raw.get("prs_with_first_review") or 0)
+        self.latency_pairs.append(
+            (float(latency) if latency is not None else None, weight)
+        )
+        self.comments_total += int(raw.get("review_comments_total") or 0)
+        self.loc_total += int(raw.get("loc_total") or 0)
+
+    @property
+    def pickup_latency_hours(self) -> float | None:
+        return _weighted_avg(self.latency_pairs)
+
+    @property
+    def review_comments_per_loc(self) -> float | None:
+        if self.loc_total <= 0:
+            return None
+        return self.comments_total / self.loc_total
+
+
+async def _load_engagement_slices(
+    context: GraphQLContext,
+    org_id: str,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None,
+) -> tuple[dict[tuple[str, Any], _EngagementSlice], dict[str, _EngagementSlice]]:
+    """Load CHAOS-2194 engagement metrics keyed by (bucket, day) and bucket.
+
+    A ``work_type`` scope cannot be applied to the raw-PR engagement query
+    (work types live on the linkage path only), so engagement is reported as
+    unavailable rather than silently mis-scoped. Team scopes are translated
+    to repo ids first; an unresolvable team also yields unavailable.
+    """
+    repo_id, team_id, work_type = _normalize_scope(scope)
+    if work_type:
+        return {}, {}
+
+    team_repo_ids: list[uuid.UUID] | None = None
+    if team_id:
+        team_repo_ids = await _resolve_team_repo_ids(
+            _require_client(context), org_id=org_id, team_id=team_id
+        )
+        if team_repo_ids is None or not team_repo_ids:
+            return {}, {}
+
+    start_dt = datetime.combine(date_range.start_date, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(date_range.end_date, time.max, tzinfo=timezone.utc)
+    loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
+    try:
+        raw_rows = await loader.load_review_engagement(
+            start=start_dt,
+            end=end_dt,
+            repo_id=repo_id,
+            repo_ids=team_repo_ids,
+        )
+    except Exception as exc:
+        logger.warning("AI review engagement query failed: %s", exc)
+        return {}, {}
+
+    by_day: dict[tuple[str, Any], _EngagementSlice] = {}
+    by_bucket: dict[str, _EngagementSlice] = {}
+    for raw in raw_rows:
+        bucket = str(raw.get("bucket") or "unknown")
+        day_key = (bucket, raw.get("day"))
+        by_day.setdefault(day_key, _EngagementSlice()).add(raw)
+        by_bucket.setdefault(bucket, _EngagementSlice()).add(raw)
+    return by_day, by_bucket
+
+
 async def resolve_ai_review_load(
     context: GraphQLContext,
     date_range: AIDateRangeInput,
@@ -444,22 +627,34 @@ async def resolve_ai_review_load(
 ) -> AIReviewLoadResult:
     org_id = require_org_id(context)
     rows = await _load_daily_records(context, org_id, date_range, scope)
+    engagement_by_day, engagement_by_bucket = await _load_engagement_slices(
+        context, org_id, date_range, scope
+    )
 
-    daily = [
-        AIReviewLoadRow(
-            bucket=row.attribution_bucket,
-            prs_total=row.prs_total,
-            reviews_total=_review_total_for_row(row),
-            reviews_per_pr=row.reviews_per_pr,
-            changes_requested_per_pr=row.changes_requested_per_pr,
-            review_amplification=row.ai_review_amplification,
-            post_first_review_pushes_count=row.followup_commits_count,
-            post_first_review_pushes_per_pr=_ratio(
-                row.followup_commits_count, row.prs_total
-            ),
+    def _day_engagement(bucket: str, day: Any) -> _EngagementSlice | None:
+        return engagement_by_day.get((bucket, day))
+
+    daily = []
+    for row in rows:
+        slice_ = _day_engagement(row.attribution_bucket, row.day)
+        daily.append(
+            AIReviewLoadRow(
+                bucket=row.attribution_bucket,
+                prs_total=row.prs_total,
+                reviews_total=_review_total_for_row(row),
+                reviews_per_pr=row.reviews_per_pr,
+                changes_requested_per_pr=row.changes_requested_per_pr,
+                review_amplification=row.ai_review_amplification,
+                post_first_review_pushes_count=row.followup_commits_count,
+                post_first_review_pushes_per_pr=_ratio(
+                    row.followup_commits_count, row.prs_total
+                ),
+                pickup_latency_hours=(slice_.pickup_latency_hours if slice_ else None),
+                review_comments_per_loc=(
+                    slice_.review_comments_per_loc if slice_ else None
+                ),
+            )
         )
-        for row in rows
-    ]
 
     by_bucket_acc: dict[str, list[Any]] = defaultdict(list)
     for row in rows:
@@ -470,6 +665,7 @@ async def resolve_ai_review_load(
         prs_total = sum(r.prs_total for r in bucket_rows)
         reviews_total = sum(_review_total_for_row(r) for r in bucket_rows)
         post_first_review_pushes = sum(r.followup_commits_count for r in bucket_rows)
+        bucket_slice = engagement_by_bucket.get(bucket)
         by_bucket.append(
             AIReviewLoadRow(
                 bucket=bucket,
@@ -488,6 +684,12 @@ async def resolve_ai_review_load(
                 post_first_review_pushes_per_pr=_ratio(
                     post_first_review_pushes, prs_total
                 ),
+                pickup_latency_hours=(
+                    bucket_slice.pickup_latency_hours if bucket_slice else None
+                ),
+                review_comments_per_loc=(
+                    bucket_slice.review_comments_per_loc if bucket_slice else None
+                ),
             )
         )
     by_bucket.sort(key=lambda r: r.bucket)
@@ -496,6 +698,20 @@ async def resolve_ai_review_load(
         context, org_id, date_range, scope
     )
     missing_states = []
+    if rows and not engagement_by_bucket:
+        missing_states.append(
+            _missing_state(
+                "review_engagement",
+                "Pickup latency and comment density unavailable",
+                (
+                    "Pickup latency and review comments per changed line could "
+                    "not be computed for this scope — the raw pull-request "
+                    "review timestamps or size fields are missing, or the "
+                    "scope (work type, unresolved team) cannot be applied to "
+                    "raw PR rows. Treat as no-data, not as zero."
+                ),
+            )
+        )
     if not reviewer_concentration.data_available:
         missing_states.append(
             _missing_state(
@@ -561,33 +777,140 @@ async def resolve_ai_risk_breakdown(
         )
     by_bucket.sort(key=lambda r: r.bucket)
 
+    hotspot_overlap, complexity_overlap = await _load_overlap_rows(
+        context, org_id, date_range, scope
+    )
+
+    missing_states: list[AIMissingState] = []
+    if not hotspot_overlap:
+        missing_states.append(
+            _missing_state(
+                "hotspot_overlap",
+                "Hotspot overlap has no assessable AI PRs",
+                (
+                    "No AI-attributed PRs in this window could be joined to "
+                    "hotspot files — either no AI PRs have commit/file "
+                    "linkage yet or no hotspot snapshots exist for the "
+                    "window. Treat missing overlap as no data, not as no "
+                    "risk."
+                ),
+            )
+        )
+    if not complexity_overlap:
+        missing_states.append(
+            _missing_state(
+                "complexity_overlap",
+                "Complexity overlap has no assessable AI PRs",
+                (
+                    "No AI-attributed PRs in this window could be joined to "
+                    "high-complexity files. Drill into PR and Work Graph "
+                    "evidence when available; do not infer person-level "
+                    "quality from this gap."
+                ),
+            )
+        )
+
     return AIRiskBreakdownResult(
         org_id=org_id,
         start_date=date_range.start_date,
         end_date=date_range.end_date,
         by_bucket=by_bucket,
-        missing_states=[
-            _missing_state(
-                "hotspot_overlap",
-                "Hotspot overlap detector not yet wired",
-                (
-                    "AI-attributed PRs are not yet joined to hotspot file "
-                    "overlap. Keep this visible as detector follow-up rather "
-                    "than treating missing overlap as no risk."
-                ),
-            ),
-            _missing_state(
-                "complexity_overlap",
-                "Complexity overlap detector not yet wired",
-                (
-                    "AI-attributed PRs are not yet joined to high-complexity "
-                    "file overlap. Drill into PR and Work Graph evidence when "
-                    "available; do not infer person-level quality from this gap."
-                ),
-            ),
-        ],
+        hotspot_overlap=hotspot_overlap,
+        complexity_overlap=complexity_overlap,
+        missing_states=missing_states,
         data_available=bool(rows),
     )
+
+
+async def _load_overlap_rows(
+    context: GraphQLContext,
+    org_id: str,
+    date_range: AIDateRangeInput,
+    scope: AIScopeInput | None,
+) -> tuple[list[AIHotspotOverlapRow], list[AIComplexityOverlapRow]]:
+    """Load CHAOS-2185 hotspot/complexity overlap rows (best effort).
+
+    Query failures and unresolvable scopes degrade to empty lists, which the
+    caller renders as explicit missing states — never as fabricated zeros.
+    A ``work_type`` scope cannot be applied to the raw-PR join, so overlap
+    is reported unavailable for work-type-scoped requests.
+    """
+    repo_id, team_id, work_type = _normalize_scope(scope)
+    if work_type:
+        return [], []
+
+    team_repo_ids: list[uuid.UUID] | None = None
+    if team_id:
+        team_repo_ids = await _resolve_team_repo_ids(
+            _require_client(context), org_id=org_id, team_id=team_id
+        )
+        if team_repo_ids is None or not team_repo_ids:
+            return [], []
+
+    start_dt = datetime.combine(date_range.start_date, time.min, tzinfo=timezone.utc)
+    end_dt = datetime.combine(date_range.end_date, time.max, tzinfo=timezone.utc)
+    loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
+
+    hotspot_rows: list[AIHotspotOverlapRow] = []
+    try:
+        raw_hotspots = await loader.load_hotspot_overlap(
+            start=start_dt,
+            end=end_dt,
+            start_day=date_range.start_date,
+            end_day=date_range.end_date,
+            repo_id=repo_id,
+            repo_ids=team_repo_ids,
+        )
+    except Exception as exc:
+        logger.warning("AI hotspot overlap query failed: %s", exc)
+        raw_hotspots = []
+    for raw in raw_hotspots:
+        prs_total = int(raw.get("prs_total") or 0)
+        if prs_total <= 0:
+            continue
+        touching = int(raw.get("prs_touching_hotspots") or 0)
+        avg_risk = raw.get("avg_hotspot_risk_score")
+        hotspot_rows.append(
+            AIHotspotOverlapRow(
+                bucket=str(raw.get("bucket") or "unknown"),
+                prs_total=prs_total,
+                prs_touching_hotspots=touching,
+                hotspot_overlap_rate=_ratio(touching, prs_total),
+                avg_hotspot_risk_score=(
+                    float(avg_risk) if avg_risk is not None else None
+                ),
+            )
+        )
+    hotspot_rows.sort(key=lambda r: r.bucket)
+
+    complexity_rows: list[AIComplexityOverlapRow] = []
+    try:
+        raw_complexity = await loader.load_complexity_overlap(
+            start=start_dt,
+            end=end_dt,
+            end_day=date_range.end_date,
+            repo_id=repo_id,
+            repo_ids=team_repo_ids,
+        )
+    except Exception as exc:
+        logger.warning("AI complexity overlap query failed: %s", exc)
+        raw_complexity = []
+    for raw in raw_complexity:
+        prs_total = int(raw.get("prs_total") or 0)
+        if prs_total <= 0:
+            continue
+        touching = int(raw.get("prs_touching_high_complexity") or 0)
+        complexity_rows.append(
+            AIComplexityOverlapRow(
+                bucket=str(raw.get("bucket") or "unknown"),
+                prs_total=prs_total,
+                prs_touching_high_complexity=touching,
+                complexity_overlap_rate=_ratio(touching, prs_total),
+            )
+        )
+    complexity_rows.sort(key=lambda r: r.bucket)
+
+    return hotspot_rows, complexity_rows
 
 
 # =============================================================================
@@ -832,6 +1155,55 @@ async def _resolve_repo_team_map(
     return result
 
 
+async def _resolve_team_repo_ids(
+    client: Any,
+    org_id: str,
+    team_id: str,
+) -> list[uuid.UUID] | None:
+    """Resolve a team id to the repo UUIDs whose names match its patterns.
+
+    Returns the (possibly empty) list of repo UUIDs that
+    ``RepoPatternTeamResolver`` assigns to ``team_id``, or ``None`` when the
+    team/repo catalogs cannot be loaded — callers must then fall back to
+    in-memory filtering rather than treating the team as empty.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+    from dev_health_ops.providers.teams import build_repo_pattern_resolver
+
+    if not org_id or not team_id:
+        return None
+
+    try:
+        team_rows = await query_dicts(
+            client,
+            "SELECT id, name, repo_patterns FROM teams WHERE org_id = {org_id:String}",
+            {"org_id": org_id},
+        )
+        repo_rows = await query_dicts(
+            client,
+            """
+            SELECT toString(id) AS repo_id, repo AS full_name
+            FROM repos
+            WHERE org_id = {org_id:String}
+            """,
+            {"org_id": org_id},
+        )
+    except Exception as exc:
+        logger.warning("Could not resolve team %r to repo ids: %s", team_id, exc)
+        return None
+
+    resolver = build_repo_pattern_resolver(team_rows)
+    repo_ids: list[uuid.UUID] = []
+    for row in repo_rows:
+        full_name = str(row.get("full_name") or "")
+        resolved_team, _ = resolver.resolve(full_name)
+        if (resolved_team or None) == team_id:
+            parsed = _parse_uuid(str(row.get("repo_id")))
+            if parsed is not None:
+                repo_ids.append(parsed)
+    return repo_ids
+
+
 _MAX_AI_ATTRIBUTED_PRS_PAGE = 200
 
 
@@ -862,12 +1234,34 @@ async def resolve_ai_attributed_prs(
     start_dt = datetime.combine(date_range.start_date, time.min, tzinfo=timezone.utc)
     end_dt = datetime.combine(date_range.end_date, time.max, tzinfo=timezone.utc)
 
+    # Resolve the team scope to repo UUIDs BEFORE the SQL LIMIT so pages stay
+    # dense (CHAOS-2180 Wave 2 — Wave 1 filtered in memory after LIMIT, which
+    # returned sparse pages for team-scoped requests). ``None`` means the
+    # catalogs could not be loaded; fall back to in-memory filtering then.
+    team_repo_ids: list[uuid.UUID] | None = None
+    if team_id:
+        team_repo_ids = await _resolve_team_repo_ids(
+            _require_client(context), org_id=org_id, team_id=team_id
+        )
+        if team_repo_ids is not None and not team_repo_ids:
+            # The team resolves to no repos: honestly empty, not an error.
+            return AiAttributedPrsResult(
+                org_id=org_id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+                rows=[],
+                total=0,
+                has_more=False,
+                data_available=False,
+            )
+
     loader = AIImpactClickHouseLoader(_require_client(context), org_id=org_id)
     # Fetch one extra row so we can report has_more without a COUNT(*) round-trip.
     raw_rows = await loader.load_ai_pr_attributions(
         start=start_dt,
         end=end_dt,
         repo_id=repo_id,
+        repo_ids=team_repo_ids,
         limit=page_size + 1,
         offset=page_offset,
     )

@@ -140,6 +140,22 @@ class AIImpactBucketTotals:
 
 
 @strawberry.type
+class AIImpactScopeRollupRow:
+    """Per-repo or per-team rollup of AI-attributed PR activity.
+
+    ``scope_id`` is a repo UUID string or a team id; ``scope_label`` is the
+    human-readable name (repo full-name or team name, falling back to the id
+    when the label cannot be resolved).
+    """
+
+    scope_id: str
+    scope_label: str
+    ai_prs_total: int
+    ai_assisted_pr_ratio: float | None
+    rework_rate_delta: float | None
+
+
+@strawberry.type
 class AIImpactSummary:
     """Summary of AI workflow impact across a requested time range."""
 
@@ -154,6 +170,8 @@ class AIImpactSummary:
     ai_assisted_pr_ratio: float | None
     by_bucket: list[AIImpactBucketTotals]
     daily: list[AIImpactBucketRow]
+    repo_breakdown: list[AIImpactScopeRollupRow]
+    team_breakdown: list[AIImpactScopeRollupRow]
     missing_states: list[AIMissingState]
     data_available: bool
     computed_at: datetime | None = None
@@ -201,7 +219,12 @@ class AIComparison:
 
 @strawberry.type
 class AIReviewLoadRow:
-    """Per-bucket review-load row."""
+    """Per-bucket review-load row.
+
+    ``pickup_latency_hours`` and ``review_comments_per_loc`` are computed at
+    query time from ``git_pull_requests`` (CHAOS-2194). ``None`` means the
+    underlying inputs were unavailable for the slice — never a computed zero.
+    """
 
     bucket: str
     prs_total: int
@@ -211,6 +234,8 @@ class AIReviewLoadRow:
     review_amplification: float | None
     post_first_review_pushes_count: int
     post_first_review_pushes_per_pr: float | None
+    pickup_latency_hours: float | None = None
+    review_comments_per_loc: float | None = None
 
 
 @strawberry.type
@@ -257,6 +282,40 @@ class AIRiskBreakdownRow:
 
 
 @strawberry.type
+class AIHotspotOverlapRow:
+    """Per-bucket overlap between AI-attributed PRs and hotspot files.
+
+    ``prs_total`` counts AI-attributed PRs whose changed files could be
+    resolved through the work graph (the assessable universe); PRs without
+    commit/file linkage are excluded rather than silently diluting the rate.
+
+    ``hotspot_overlap_rate`` is the share of assessable PRs touching
+    **top-decile-risk** files (top 10% of latest ``risk_score`` per repo in
+    the window, minimum one file per repo) — not merely above-average-risk
+    files, which would saturate the rate at ~1.0.
+    """
+
+    bucket: str
+    prs_total: int
+    prs_touching_hotspots: int
+    hotspot_overlap_rate: float | None
+    avg_hotspot_risk_score: float | None
+
+
+@strawberry.type
+class AIComplexityOverlapRow:
+    """Per-bucket overlap between AI-attributed PRs and high-complexity files.
+
+    Same assessable-universe semantics as :class:`AIHotspotOverlapRow`.
+    """
+
+    bucket: str
+    prs_total: int
+    prs_touching_high_complexity: int
+    complexity_overlap_rate: float | None
+
+
+@strawberry.type
 class AIRiskBreakdownResult:
     """Risk breakdown across buckets."""
 
@@ -264,6 +323,8 @@ class AIRiskBreakdownResult:
     start_date: date
     end_date: date
     by_bucket: list[AIRiskBreakdownRow]
+    hotspot_overlap: list[AIHotspotOverlapRow]
+    complexity_overlap: list[AIComplexityOverlapRow]
     missing_states: list[AIMissingState]
     data_available: bool
 

@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.fixtures.generators.base import BaseGeneratorMixin
+from dev_health_ops.metrics.testops_schemas import PipelineRunExtendedRow
 from dev_health_ops.models.git import CiPipelineRun, Deployment
 
 
@@ -46,6 +47,96 @@ class PipelinesGeneratorMixin(BaseGeneratorMixin):
                 )
             current_date += timedelta(days=1)
         return runs
+
+    def generate_pipeline_run_extended_rows(
+        self,
+        pipeline_runs: list[CiPipelineRun] | None = None,
+        days: int = 30,
+        runs_per_day: int = 3,
+        *,
+        org_id: str = "",
+    ) -> list[PipelineRunExtendedRow]:
+        """Generate CI pipeline run dicts for ClickHouse with retry_count and team_id.
+
+        Unlike generate_ci_pipeline_runs (which produces SQLAlchemy objects for
+        Postgres), this method returns PipelineRunExtendedRow dicts suitable for
+        the ClickHouse ci_pipeline_runs table and compute_pipeline_metrics_daily.
+
+        When *pipeline_runs* is provided the extended rows are derived from those
+        existing objects, guaranteeing that run_id values match the Postgres-side
+        rows.  This is the mode used by the fixture runner so that both inserts
+        share the same primary key.
+
+        When *pipeline_runs* is None the method generates rows from scratch
+        (standalone / test mode) — backward-compatible with callers that do not
+        yet have a pre-generated list.
+
+        Approximately 10% of runs have retry_count > 0 so that rerun_rate is
+        non-zero in daily metric aggregates.  Each run is attributed to a team
+        via _pick_assigned_team_id, mirroring the pattern used for job/suite rows.
+        """
+        service_id = self._get_service_id()
+        rows: list[PipelineRunExtendedRow] = []
+
+        if pipeline_runs is not None:
+            # Derive extended rows from already-generated CiPipelineRun objects.
+            # This keeps run_ids aligned between Postgres and ClickHouse.
+            for run in pipeline_runs:
+                retry_count = random.randint(1, 3) if random.random() < 0.10 else 0
+                team_id = self._pick_assigned_team_id(run.run_id)
+                row: PipelineRunExtendedRow = {
+                    "repo_id": self.repo_id,
+                    "run_id": run.run_id,
+                    "provider": "github_actions",
+                    "status": run.status or "success",
+                    "queued_at": run.queued_at or run.started_at,
+                    "started_at": run.started_at,
+                    "finished_at": run.finished_at or run.started_at,
+                    "retry_count": retry_count,
+                    "team_id": team_id,
+                    "service_id": service_id,
+                    "org_id": org_id,
+                }
+                rows.append(row)
+            return rows
+
+        # Standalone generation (backward-compatible path used in unit tests).
+        end_date = datetime.now(timezone.utc)
+        start_date = end_date - timedelta(days=days)
+        run_index = 0
+        current_date = start_date
+        while current_date <= end_date:
+            daily_count = random.randint(1, max(1, runs_per_day * 2))
+            for _ in range(daily_count):
+                queued_at = current_date + timedelta(minutes=random.randint(0, 60 * 12))
+                started_at = queued_at + timedelta(minutes=random.randint(1, 30))
+                duration_minutes = random.randint(5, 60)
+                finished_at = started_at + timedelta(minutes=duration_minutes)
+                status = random.choices(
+                    ["success", "failure", "cancelled"],
+                    weights=[0.7, 0.2, 0.1],
+                    k=1,
+                )[0]
+                run_index += 1
+                run_id = f"synth-run-{run_index}"
+                retry_count = random.randint(1, 3) if random.random() < 0.10 else 0
+                team_id = self._pick_assigned_team_id(run_id)
+                row = {
+                    "repo_id": self.repo_id,
+                    "run_id": run_id,
+                    "provider": "github_actions",
+                    "status": status,
+                    "queued_at": queued_at,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "retry_count": retry_count,
+                    "team_id": team_id,
+                    "service_id": service_id,
+                    "org_id": org_id,
+                }
+                rows.append(row)
+            current_date += timedelta(days=1)
+        return rows
 
     def generate_ci_job_runs(
         self, pipeline_runs: list[CiPipelineRun], *, org_id: str = ""

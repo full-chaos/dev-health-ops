@@ -206,3 +206,107 @@ class TestGenerateCoverageSnapshots:
 
     def test_empty_pipeline_list(self, generator: SyntheticDataGenerator) -> None:
         assert generator.generate_coverage_snapshots([], days=7) == []
+
+
+class TestGeneratePipelineRunExtendedRows:
+    """CHAOS-2173: pipeline extended rows must carry retry_count and team_id."""
+
+    def test_returns_nonempty(self, generator: SyntheticDataGenerator) -> None:
+        rows = generator.generate_pipeline_run_extended_rows(days=7, runs_per_day=3)
+        assert len(rows) > 0
+
+    def test_required_fields_present(self, generator: SyntheticDataGenerator) -> None:
+        rows = generator.generate_pipeline_run_extended_rows(days=7, runs_per_day=3)
+        required = {
+            "repo_id",
+            "run_id",
+            "provider",
+            "status",
+            "started_at",
+            "finished_at",
+        }
+        for row in rows[:10]:
+            assert required.issubset(row.keys()), f"Missing: {required - row.keys()}"
+
+    def test_retry_count_varies(self, generator: SyntheticDataGenerator) -> None:
+        """At least one run should have retry_count > 0 across 30 days (~10% rate)."""
+        rows = generator.generate_pipeline_run_extended_rows(days=30, runs_per_day=5)
+        retry_counts = [row.get("retry_count", 0) for row in rows]
+        assert any(c > 0 for c in retry_counts), (
+            "Expected some runs with retry_count > 0 (approx 10% rate)"
+        )
+
+    def test_team_id_populated_when_teams_assigned(self) -> None:
+        """team_id must be set on rows when the generator has assigned_teams."""
+        from dev_health_ops.models.teams import Team
+
+        teams = [
+            Team(id="t-alpha", name="Alpha", members=["alice@example.com"]),
+            Team(id="t-beta", name="Beta", members=["bob@example.com"]),
+        ]
+        gen = SyntheticDataGenerator(
+            repo_name="acme/demo-app", seed=42, assigned_teams=teams
+        )
+        rows = gen.generate_pipeline_run_extended_rows(days=7, runs_per_day=3)
+        team_ids = [row.get("team_id") for row in rows]
+        assert any(t is not None for t in team_ids), (
+            "Expected at least some runs to have non-NULL team_id"
+        )
+        # All assigned team IDs must come from the known list.
+        valid_ids = {"t-alpha", "t-beta", None}
+        for tid in team_ids:
+            assert tid in valid_ids, f"Unexpected team_id: {tid}"
+
+    def test_compute_gives_nonzero_rerun_rate(self) -> None:
+        """CHAOS-2173: compute_pipeline_metrics_daily must report rerun_rate > 0."""
+        from datetime import date, datetime, timezone
+        from typing import cast
+
+        from dev_health_ops.metrics.compute_testops import (
+            compute_pipeline_metrics_daily,
+        )
+        from dev_health_ops.metrics.testops_schemas import PipelineRunExtendedRow
+        from dev_health_ops.models.teams import Team
+
+        teams = [Team(id="t-alpha", name="Alpha", members=[])]
+        gen = SyntheticDataGenerator(
+            repo_name="acme/metrics-test", seed=7, assigned_teams=teams
+        )
+        target_day = date(2025, 6, 15)
+        # Build synthetic PipelineRunExtendedRow dicts for a controlled single day.
+        rows = [
+            {
+                "repo_id": gen.repo_id,
+                "run_id": "r-001",
+                "provider": "github_actions",
+                "status": "success",
+                "queued_at": datetime(2025, 6, 15, 8, 0, tzinfo=timezone.utc),
+                "started_at": datetime(2025, 6, 15, 8, 5, tzinfo=timezone.utc),
+                "finished_at": datetime(2025, 6, 15, 8, 20, tzinfo=timezone.utc),
+                "retry_count": 0,
+                "team_id": "t-alpha",
+                "org_id": "org-test",
+            },
+            {
+                "repo_id": gen.repo_id,
+                "run_id": "r-002",
+                "provider": "github_actions",
+                "status": "success",
+                "queued_at": datetime(2025, 6, 15, 9, 0, tzinfo=timezone.utc),
+                "started_at": datetime(2025, 6, 15, 9, 5, tzinfo=timezone.utc),
+                "finished_at": datetime(2025, 6, 15, 9, 25, tzinfo=timezone.utc),
+                "retry_count": 2,  # This run was retried.
+                "team_id": "t-alpha",
+                "org_id": "org-test",
+            },
+        ]
+        records = compute_pipeline_metrics_daily(
+            day=target_day,
+            pipeline_runs=cast(list[PipelineRunExtendedRow], rows),
+            job_runs=[],
+            computed_at=datetime(2025, 6, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.rerun_rate == pytest.approx(0.5)  # 1 of 2 runs has retry_count > 0
+        assert rec.team_id == "t-alpha"  # non-NULL team attribution

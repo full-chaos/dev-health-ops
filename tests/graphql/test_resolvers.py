@@ -289,3 +289,116 @@ class TestResolveAnalytics:
         assert len(captured_sql) == 1
         assert "AND org_id = %(org_id)s" in captured_sql[0]
         assert captured_params[0]["org_id"] == "tenant-123"
+
+    @pytest.mark.asyncio
+    async def test_timeseries_null_value_does_not_raise(self, monkeypatch):
+        """CHAOS-2172: NULL AVG from ClickHouse (value=None) must coerce to 0.0, not TypeError."""
+        from datetime import date as date_
+
+        from dev_health_ops.api.graphql.models.inputs import (
+            BucketIntervalInput,
+            DateRangeInput,
+            DimensionInput,
+            MeasureInput,
+            TimeseriesRequestInput,
+        )
+        from dev_health_ops.api.graphql.resolvers.analytics import (
+            _execute_timeseries_query,
+        )
+
+        async def fake_query_dicts(_client, _sql, _params):
+            # Simulate ClickHouse returning NULL for AVG on an empty bucket.
+            return [
+                {
+                    "dimension_value": "team-a",
+                    "bucket": date_(2025, 6, 1),
+                    "value": None,
+                },
+                {
+                    "dimension_value": "team-a",
+                    "bucket": date_(2025, 6, 2),
+                    "value": 3.5,
+                },
+            ]
+
+        def fake_compile_ts(_request, _org_id, _timeout, filters=None):
+            return "SELECT 1", {}
+
+        monkeypatch.setattr(
+            "dev_health_ops.api.queries.client.query_dicts",
+            fake_query_dicts,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.api.graphql.resolvers.analytics.compile_timeseries",
+            fake_compile_ts,
+        )
+
+        ts_req = TimeseriesRequestInput(
+            dimension=DimensionInput.TEAM,
+            measure=MeasureInput.COUNT,
+            interval=BucketIntervalInput.DAY,
+            date_range=DateRangeInput(
+                start_date=date_(2025, 6, 1),
+                end_date=date_(2025, 6, 7),
+            ),
+        )
+        # Must not raise TypeError.
+        results = await _execute_timeseries_query(
+            MockClient(), ts_req, "org-x", 30, False, None
+        )
+        assert len(results) == 1
+        buckets = results[0].buckets
+        assert len(buckets) == 2
+        assert buckets[0].value == 0.0  # NULL → 0.0
+        assert buckets[1].value == 3.5
+
+    @pytest.mark.asyncio
+    async def test_breakdown_null_value_does_not_raise(self, monkeypatch):
+        """CHAOS-2172: NULL value in breakdown rows must coerce to 0.0, not TypeError."""
+        from datetime import date as date_
+
+        from dev_health_ops.api.graphql.models.inputs import (
+            BreakdownRequestInput,
+            DateRangeInput,
+            DimensionInput,
+            MeasureInput,
+        )
+        from dev_health_ops.api.graphql.resolvers.analytics import (
+            _execute_breakdown_query,
+        )
+
+        async def fake_query_dicts(_client, _sql, _params):
+            return [
+                {"dimension_value": "auth-service", "value": None},
+                {"dimension_value": "api-gateway", "value": 7.2},
+            ]
+
+        def fake_compile_bd(_request, _org_id, _timeout, filters=None):
+            return "SELECT 1", {}
+
+        monkeypatch.setattr(
+            "dev_health_ops.api.queries.client.query_dicts",
+            fake_query_dicts,
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.api.graphql.resolvers.analytics.compile_breakdown",
+            fake_compile_bd,
+        )
+
+        bd_req = BreakdownRequestInput(
+            dimension=DimensionInput.TEAM,
+            measure=MeasureInput.COUNT,
+            date_range=DateRangeInput(
+                start_date=date_(2025, 6, 1),
+                end_date=date_(2025, 6, 7),
+            ),
+        )
+        # Must not raise TypeError.
+        result = await _execute_breakdown_query(
+            MockClient(), bd_req, "org-x", 30, False, None
+        )
+        assert len(result.items) == 2
+        null_item = next(i for i in result.items if i.key == "auth-service")
+        assert null_item.value == 0.0  # NULL → 0.0
+        normal_item = next(i for i in result.items if i.key == "api-gateway")
+        assert normal_item.value == 7.2

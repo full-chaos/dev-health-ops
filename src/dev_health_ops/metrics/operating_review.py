@@ -393,14 +393,15 @@ def compute_operating_review(
         _investment_section(current, prior),
         _ai_workflow_section(current, prior),
     ]
+    recommendations = _recommendations_from_sections(sections)
     return OperatingReview(
         org_id=org_id,
         team_id=team_id,
         week_start=week_start,
         prior_week_start=prior_week_start(week_start),
         sections=sections,
-        recommendations=[],
-        recommendations_empty_state="No operating review rules are configured.",
+        recommendations=recommendations,
+        recommendations_empty_state="No signals worsened this week.",
     )
 
 
@@ -742,6 +743,27 @@ def _delta_summary(metric: OperatingReviewMetric) -> str:
         "unchanged": "did not change",
     }[metric.delta.status]
     return f"{metric.label} {direction} by {metric.delta.absolute:+.1f} {metric.unit}"
+
+
+def _recommendations_from_sections(
+    sections: list[OperatingReviewSection],
+) -> list[str]:
+    """Derive plain-language recommendations from worsened metrics.
+
+    For each metric whose delta status is ``"worsened"`` across all sections,
+    emit one recommendation sentence: "Review {label}: worsened by {absolute:+.1f}
+    {unit} week-over-week."  This is a pure pass over already-computed section
+    data — no re-querying or extra computation.
+    """
+    recommendations: list[str] = []
+    for section in sections:
+        for metric in section.metrics:
+            if metric.delta.status == "worsened":
+                recommendations.append(
+                    f"Review {metric.label}: worsened by "
+                    f"{metric.delta.absolute:+.1f} {metric.unit} week-over-week."
+                )
+    return recommendations
 
 
 def _value(row: Mapping[str, Any], key: str) -> float | None:

@@ -190,11 +190,14 @@ def test_operating_review_computes_sections_and_week_over_week_deltas() -> None:
     assert ai_workflow.metric("ai_governance_coverage").value == pytest.approx(0.825)
     assert ai_workflow.metric("ai_opportunity_signals").value == 0
 
-    assert review.recommendations == []
-    assert (
-        review.recommendations_empty_state
-        == "No operating review rules are configured."
-    )
+    # WIP count max(8,12)=12 vs prior 9 → worsened (lower is better).
+    # All other delivery/risk/reliability/investment/ai metrics improved or changed.
+    assert len(review.recommendations) == 1
+    wip_rec = review.recommendations[0]
+    assert "WIP" in wip_rec
+    assert "worsened by" in wip_rec
+    assert "week-over-week" in wip_rec
+    assert review.recommendations_empty_state == "No signals worsened this week."
 
 
 def test_operating_review_renders_for_empty_team_week() -> None:
@@ -320,3 +323,70 @@ def test_compute_operating_review_all_teams_mode_emits_null_team_id() -> None:
     # Throughput sums across the two team rows (SUM aggregation contract).
     delivery = review.section("delivery_movement")
     assert delivery.metric("throughput").value == 14 + 11
+
+
+def test_recommendations_populated_from_worsened_metrics() -> None:
+    """Worsened metrics produce recommendation sentences; no worsened → empty list."""
+    # Prior week was better on throughput (higher is better: 20→10 = worsened)
+    # and cycle time got worse (lower is better: 30→48 = worsened).
+    review_with_worsened = compute_operating_review(
+        org_id="org-1",
+        team_id="team-a",
+        week_start=date(2026, 5, 18),
+        current=OperatingReviewRows(
+            work_items=[
+                {
+                    "items_completed": 10,
+                    "items_started": 8,
+                    "wip_count_end_of_day": 5,
+                    "cycle_time_p50_hours": 48.0,
+                    "wip_age_p90_hours": 60.0,
+                }
+            ],
+        ),
+        prior=OperatingReviewRows(
+            work_items=[
+                {
+                    "items_completed": 20,
+                    "items_started": 15,
+                    "wip_count_end_of_day": 8,
+                    "cycle_time_p50_hours": 30.0,
+                    "wip_age_p90_hours": 40.0,
+                }
+            ],
+        ),
+    )
+
+    recs = review_with_worsened.recommendations
+    assert len(recs) > 0, "Expected at least one recommendation for worsened metrics"
+    # Each recommendation mentions the metric label and "week-over-week".
+    for rec in recs:
+        assert "worsened by" in rec
+        assert "week-over-week" in rec
+    # Throughput is worsened (20→10, higher is better).
+    throughput_rec = next((r for r in recs if "Throughput" in r), None)
+    assert throughput_rec is not None
+    assert "+10" not in throughput_rec  # absolute is -10 for worsened
+    assert (
+        "-10" in throughput_rec or "−10" in throughput_rec or "-10.0" in throughput_rec
+    )
+
+    # Empty state is updated message.
+    assert (
+        review_with_worsened.recommendations_empty_state
+        == "No signals worsened this week."
+    )
+
+    # Review with no worsened signals has empty recommendations.
+    review_no_worsened = compute_operating_review(
+        org_id="org-1",
+        team_id="team-a",
+        week_start=date(2026, 5, 18),
+        current=OperatingReviewRows(),
+        prior=OperatingReviewRows(),
+    )
+    assert review_no_worsened.recommendations == []
+    assert (
+        review_no_worsened.recommendations_empty_state
+        == "No signals worsened this week."
+    )

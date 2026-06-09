@@ -134,3 +134,57 @@ def test_unknown_repo_provider_falls_back_to_unknown() -> None:
 
     assert len(runs) == 1
     assert runs[0].provider == "unknown"
+
+
+def test_infrastructure_errors_propagate() -> None:
+    """Review fix 2: ClickHouse failures must fail the job, not silently
+    produce an empty (= 'no AI activity') day."""
+
+    class _BrokenSink:
+        def query_dicts(self, query: str, parameters: dict[str, Any]) -> list:
+            raise RuntimeError("clickhouse unavailable")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="clickhouse unavailable"):
+        _extract_ai_workflow_for_day(
+            primary_sink=_BrokenSink(),
+            org_id=ORG_ID,
+            start=START,
+            end=END,
+            repo_id=None,
+            repo_provider_by_id={},
+        )
+
+
+def test_malformed_rows_are_dropped_row_locally() -> None:
+    """Review fix 2: one garbage row must not abort the day's extraction."""
+
+    class _MalformedRowSink(_Sink):
+        def query_dicts(
+            self, query: str, parameters: dict[str, Any]
+        ) -> list[dict[str, Any]]:
+            rows = super().query_dicts(query, parameters)
+            if "FROM git_pull_requests" in query:
+                rows = rows + [
+                    {"repo_id": "not-a-uuid", "number": 9, "title": "bad"},
+                    {"repo_id": REPO_ID, "number": None, "title": "bad"},
+                ]
+            if "FROM git_pull_request_reviews" in query:
+                rows = rows + [{"repo_id": object(), "number": 3}]
+            return rows
+
+    runs, artifacts, issues, reviews = _extract_ai_workflow_for_day(
+        primary_sink=_MalformedRowSink(),
+        org_id=ORG_ID,
+        start=START,
+        end=END,
+        repo_id=None,
+        repo_provider_by_id={str(REPO_ID): "github"},
+    )
+
+    # The well-formed rows still extract exactly as in the happy-path test.
+    assert len(runs) == 1
+    assert len(artifacts) == 1
+    assert len(issues) == 1
+    assert len(reviews) == 1

@@ -180,14 +180,17 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                         "merged_at": r.get("merged_at"),
                         "first_review_at": r.get("first_review_at"),
                         "first_comment_at": r.get("first_comment_at"),
+                        # `or 0` (not a .get default): these columns are
+                        # Nullable, so the key is present with value None and
+                        # a plain default would never apply — int(None) crash.
                         "changes_requested_count": int(
-                            r.get("changes_requested_count", 0)
+                            r.get("changes_requested_count") or 0
                         ),
-                        "reviews_count": int(r.get("reviews_count", 0)),
-                        "comments_count": int(r.get("comments_count", 0)),
-                        "additions": int(r.get("additions", 0)),
-                        "deletions": int(r.get("deletions", 0)),
-                        "changed_files": int(r.get("changed_files", 0)),
+                        "reviews_count": int(r.get("reviews_count") or 0),
+                        "comments_count": int(r.get("comments_count") or 0),
+                        "additions": int(r.get("additions") or 0),
+                        "deletions": int(r.get("deletions") or 0),
+                        "changed_files": int(r.get("changed_files") or 0),
                     }
                 )
 

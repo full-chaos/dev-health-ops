@@ -198,10 +198,32 @@ def _extract_ai_workflow_for_day(
         wf_params,
     )
 
+    # Row-local hygiene: drop rows whose repo_id/number cannot parse instead
+    # of letting one malformed row abort the whole day (the extractor calls
+    # UUID() on every row). Mirrors the pr_commit_stats per-row handling.
+    def _valid_rows(rows: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+        valid: list[dict[str, Any]] = []
+        dropped = 0
+        for row in rows:
+            try:
+                uuid.UUID(str(row.get("repo_id")))
+                int(row.get("number"))  # type: ignore[arg-type]
+            except (ValueError, TypeError, AttributeError):
+                dropped += 1
+                continue
+            valid.append(row)
+        if dropped:
+            logger.warning(
+                "AI workflow extraction dropped %d malformed %s row(s)",
+                dropped,
+                source,
+            )
+        return valid
+
+    wf_pr_rows = _valid_rows(wf_pr_rows, "git_pull_requests")
+
     issue_ids_by_pr: dict[str, list[str]] = {}
-    wf_pr_numbers = sorted(
-        {int(row["number"]) for row in wf_pr_rows if row.get("number") is not None}
-    )
+    wf_pr_numbers = sorted({int(row["number"]) for row in wf_pr_rows})
     if wf_pr_numbers:
         link_params: dict[str, Any] = {
             "org_id": org_id,
@@ -238,6 +260,7 @@ def _extract_ai_workflow_for_day(
         f"{wf_repo_filter}",
         wf_params,
     )
+    wf_review_rows = _valid_rows(wf_review_rows, "git_pull_request_reviews")
 
     prs_by_provider: dict[str, list[dict[str, Any]]] = {}
     for row in wf_pr_rows:
@@ -631,28 +654,25 @@ async def run_daily_metrics_job(
         # CHAOS-2187: extract AI workflow runs + Work Graph edges from today's
         # PRs/reviews so ai_workflow_issue_edges, ai_workflow_artifact_edges,
         # and work_graph_pr_review_outcome_edges are populated by ingestion.
-        # Extraction is best-effort: any failure degrades to "no edges today"
-        # (mirrors the pr_commit_stats pattern above), never a job abort.
-        try:
-            (
-                ai_workflow_runs,
-                ai_workflow_artifact_edges,
-                ai_workflow_issue_edges,
-                ai_review_outcome_edges,
-            ) = _extract_ai_workflow_for_day(
-                primary_sink=primary_sink,
-                org_id=org_id,
-                start=start,
-                end=end,
-                repo_id=repo_id,
-                repo_provider_by_id=repo_provider_by_id,
-            )
-        except Exception as exc:
-            logger.warning("AI workflow extraction failed for day=%s: %s", d, exc)
-            ai_workflow_runs = []
-            ai_workflow_artifact_edges = []
-            ai_workflow_issue_edges = []
-            ai_review_outcome_edges = []
+        # Infrastructure failures (ClickHouse query errors) propagate and fail
+        # the job: there is no persisted job-health table to record a partial
+        # day, and empty edge tables are indistinguishable from "no AI
+        # activity today" — swallowing here would be silent partial data.
+        # Row-local issues (malformed repo ids) are skipped inside the helper,
+        # mirroring the per-row handling in the pr_commit_stats build below.
+        (
+            ai_workflow_runs,
+            ai_workflow_artifact_edges,
+            ai_workflow_issue_edges,
+            ai_review_outcome_edges,
+        ) = _extract_ai_workflow_for_day(
+            primary_sink=primary_sink,
+            org_id=org_id,
+            start=start,
+            end=end,
+            repo_id=repo_id,
+            repo_provider_by_id=repo_provider_by_id,
+        )
 
         # Build pr_commit_stats: {(repo_id, pr_number) -> [{"file_path": ...}]} so that
         # compute_ai_impact_metrics_daily can determine which PRs touched test files.

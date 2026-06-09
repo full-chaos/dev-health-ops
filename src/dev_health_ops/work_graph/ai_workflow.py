@@ -250,10 +250,15 @@ _AI_RUN_QUERY = """
         toString(repo_id) AS repo_id,
         prompts_redacted,
         metadata
-    FROM ai_workflow_runs
+    FROM ai_workflow_runs FINAL
     WHERE org_id = {org_id:String} AND run_id IN {run_ids:Array(String)}
 """
 
+# Every branch reads its ReplacingMergeTree with FINAL (the repo precedent —
+# see the governance loaders): daily-job reruns insert new computed_at
+# versions of the same deterministic edge ids, and without FINAL those
+# duplicates are query-visible until background merges run. Duplicates would
+# also burn the traversal LIMIT and falsely mark results partial (CHAOS-2187).
 _AI_EDGE_UNION_QUERY = """
     SELECT * FROM
     (
@@ -269,7 +274,7 @@ _AI_EDGE_UNION_QUERY = """
             evidence,
             provider,
             toString(repo_id) AS repo_id
-        FROM ai_workflow_issue_edges
+        FROM ai_workflow_issue_edges FINAL
         WHERE org_id = {org_id:String}
 
         UNION ALL
@@ -286,7 +291,7 @@ _AI_EDGE_UNION_QUERY = """
             evidence,
             provider,
             toString(repo_id) AS repo_id
-        FROM ai_workflow_artifact_edges
+        FROM ai_workflow_artifact_edges FINAL
         WHERE org_id = {org_id:String}
 
         UNION ALL
@@ -303,7 +308,7 @@ _AI_EDGE_UNION_QUERY = """
             evidence,
             provider,
             toString(repo_id) AS repo_id
-        FROM work_graph_pr_review_outcome_edges
+        FROM work_graph_pr_review_outcome_edges FINAL
         WHERE org_id = {org_id:String}
 
         UNION ALL
@@ -320,7 +325,7 @@ _AI_EDGE_UNION_QUERY = """
             evidence,
             provider,
             toString(repo_id) AS repo_id
-        FROM work_graph_pr_deployment_edges
+        FROM work_graph_pr_deployment_edges FINAL
         WHERE org_id = {org_id:String}
 
         UNION ALL
@@ -337,7 +342,7 @@ _AI_EDGE_UNION_QUERY = """
             evidence,
             provider,
             toString(repo_id) AS repo_id
-        FROM work_graph_deployment_incident_edges
+        FROM work_graph_deployment_incident_edges FINAL
         WHERE org_id = {org_id:String}
     )
     WHERE

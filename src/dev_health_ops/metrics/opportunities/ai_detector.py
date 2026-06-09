@@ -440,6 +440,16 @@ class AIOpportunityDetector:
             org_expr = org_scope.expression(alias="pr")
             if org_expr:
                 filters.append(org_expr)
+            # Tenant key belongs in the JOIN predicate: an anti-join with an
+            # org filter only on the WHERE (pr) side would let org B's
+            # attribution rows suppress org A's PRs that share a repo_id and
+            # PR number. ai_attribution_resolved.org_id is UUID, hence
+            # toString (same precedent as the governance allowlist join).
+            attr_org_predicate = (
+                "\n                AND toString(attr.org_id) = {org_id:String}"
+                if org_scope
+                else ""
+            )
             where_clause = " AND ".join(filters)
             query = f"""
             SELECT
@@ -451,7 +461,7 @@ class AIOpportunityDetector:
                 ON attr.repo_id = pr.repo_id
                 AND attr.subject_type = 'pull_request'
                 AND attr.subject_id = toString(pr.number)
-                AND attr.kind IN ('ai_assisted', 'agent_created')
+                AND attr.kind IN ('ai_assisted', 'agent_created'){attr_org_predicate}
             WHERE {where_clause}
             GROUP BY repo_id
             HAVING prs_total >= {{min_prs:UInt32}}
@@ -514,7 +524,9 @@ class AIOpportunityDetector:
             countIf({_DOC_FILE_EXPR}) AS doc_changes
         FROM git_commits AS c
         INNER JOIN git_commit_stats AS s
-            ON s.repo_id = c.repo_id AND s.commit_hash = c.hash
+            ON s.repo_id = c.repo_id
+            AND s.commit_hash = c.hash
+            AND s.org_id = c.org_id
         WHERE {where_clause}
         GROUP BY repo_id
         HAVING code_commits >= {{min_commits:UInt32}} AND doc_changes = 0
@@ -574,15 +586,19 @@ class AIOpportunityDetector:
         if org_expr:
             filters.append(org_expr)
         where_clause = " AND ".join(filters)
+        # NB: the output alias must NOT shadow the source column name —
+        # ClickHouse substitutes aliases everywhere, so `AS total_cases`
+        # would turn sum(flake_rate * total_cases) into nested aggregation
+        # (ILLEGAL_AGGREGATION).
         query = f"""
         SELECT
             toString(repo_id) AS repo_id,
-            sum(total_cases) AS total_cases,
+            sum(total_cases) AS cases_total,
             sum(flake_rate * total_cases) / sum(total_cases) AS weighted_flake_rate
         FROM testops_test_metrics_daily
         WHERE {where_clause}
         GROUP BY repo_id
-        HAVING total_cases >= {{min_cases:UInt64}}
+        HAVING cases_total >= {{min_cases:UInt64}}
            AND weighted_flake_rate >= {{flake_threshold:Float64}}
         ORDER BY weighted_flake_rate DESC
         LIMIT 100
@@ -595,7 +611,7 @@ class AIOpportunityDetector:
                 continue
             repo_id = str(repo)
             flake_rate = float(row.get("weighted_flake_rate") or 0.0)
-            total_cases = int(row.get("total_cases") or 0)
+            total_cases = int(row.get("cases_total") or 0)
             opportunities.append(
                 _opportunity(
                     kind=AIOpportunityKind.FLAKY_TEST_TRIAGE,

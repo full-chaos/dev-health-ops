@@ -321,7 +321,7 @@ async def test_detector_emits_flaky_test_triage(monkeypatch: pytest.MonkeyPatch)
         return [
             {
                 "repo_id": REPO_ID,
-                "total_cases": 400,
+                "cases_total": 400,
                 "weighted_flake_rate": 0.12,
             }
         ]

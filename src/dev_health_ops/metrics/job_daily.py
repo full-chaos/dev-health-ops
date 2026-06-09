@@ -499,6 +499,93 @@ async def run_daily_metrics_job(
                 end=end,
                 repo_id=repo_id,
             )
+
+        # Build pr_commit_stats: {(repo_id, pr_number) -> [{"file_path": ...}]} so that
+        # compute_ai_impact_metrics_daily can determine which PRs touched test files.
+        #
+        # Design notes (CHAOS-2183):
+        #  • We join work_graph_pr_commit with git_commit_stats rather than using the
+        #    day-scoped commit_rows — a PR merged today may have test commits from prior
+        #    days (window-mismatch false-gap bug).
+        #  • Query is bounded to today's in-window PR numbers (not all-time), so the
+        #    scan is proportional to the batch size, not the full table.
+        #  • LEFT JOIN ensures PRs whose commits have no file-stat rows still appear in
+        #    the result (they get file_path=NULL → has_test_change=False, a real gap).
+        #  • UUID parsing is per-row so one malformed row is skipped, not fatal.
+        #  • On any outer exception, pr_commit_stats stays None and ai_impact treats
+        #    test_gap as unavailable (None), preventing the 100%-inflation false alarm.
+        pr_commit_stats: dict[tuple[uuid.UUID, int], list[Any]] | None = None
+        try:
+            # Identify which PRs fall inside today's UTC window (mirrors the logic in
+            # compute_ai_impact_metrics_daily so the sets are consistent).
+            in_window_prs: set[tuple[str, int]] = set()
+            for pr in pr_rows:
+                merged_at_raw = pr.get("merged_at")
+                event_at = _to_utc(
+                    merged_at_raw if merged_at_raw is not None else pr["created_at"]
+                )
+                if start <= event_at < end:
+                    in_window_prs.add((str(pr["repo_id"]), int(pr["number"])))
+
+            if in_window_prs:
+                # Scope to just today's PR numbers (+ optional repo filter).
+                pr_numbers: list[int] = list({pr_num for _, pr_num in in_window_prs})
+                pc_params: dict[str, Any] = {
+                    "org_id": org_id,
+                    "pr_numbers": pr_numbers,
+                }
+                pc_repo_filter = ""
+                if repo_id is not None:
+                    pc_params["repo_id"] = str(repo_id)
+                    pc_repo_filter = " AND p.repo_id = {repo_id:UUID}"
+
+                # LEFT JOIN so PRs with commits that have no file stats still appear
+                # (file_path=NULL → not a test path → has_test_change=False for that PR).
+                raw_link_rows = primary_sink.query_dicts(
+                    "SELECT p.repo_id, p.pr_number, s.file_path"
+                    " FROM work_graph_pr_commit AS p"
+                    " LEFT JOIN git_commit_stats AS s"
+                    "   ON s.repo_id = p.repo_id AND s.commit_hash = p.commit_hash"
+                    f" WHERE p.org_id = {{org_id:String}}{pc_repo_filter}"
+                    "   AND p.pr_number IN {pr_numbers:Array(UInt32)}",
+                    pc_params,
+                )
+
+                built: dict[tuple[uuid.UUID, int], list[Any]] = {}
+                for link in raw_link_rows:
+                    rid_str = str(link.get("repo_id") or "")
+                    pr_num_raw = link.get("pr_number")
+                    if not rid_str or pr_num_raw is None:
+                        continue
+                    pr_num = int(pr_num_raw)
+                    # Filter cross-repo collisions (pr_number is per-repo, not global).
+                    if (rid_str, pr_num) not in in_window_prs:
+                        continue
+                    try:
+                        rid = uuid.UUID(rid_str)
+                    except (ValueError, AttributeError):
+                        # One malformed row → skip it, don't abort the whole build.
+                        logger.debug(
+                            "Skipping malformed repo_id in work_graph_pr_commit: %r",
+                            rid_str,
+                        )
+                        continue
+                    built.setdefault((rid, pr_num), []).append(
+                        {"file_path": link.get("file_path")}
+                    )
+                pr_commit_stats = built
+            else:
+                pr_commit_stats = {}
+
+        except Exception as exc:
+            logger.warning(
+                "pr_commit_stats build failed, test_gap_rate unavailable for day=%s: %s",
+                d,
+                exc,
+            )
+            # pr_commit_stats stays None → _test_changes_by_pr returns {} → every PR
+            # gets has_test_change=None → test_gap_rate=None (unavailable, not 100%).
+
         ai_impact_metrics = compute_ai_impact_metrics_daily(
             day=d,
             org_id=org_id,
@@ -512,6 +599,7 @@ async def run_daily_metrics_job(
                 repo_team_resolver.resolve(repo_name)
             ),
             repo_names_by_id=repo_names_by_id,
+            pr_commit_stats=pr_commit_stats,
         )
 
         for s in sinks:

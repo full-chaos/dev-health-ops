@@ -251,7 +251,7 @@ _AI_RUN_QUERY = """
         prompts_redacted,
         metadata
     FROM ai_workflow_runs
-    WHERE org_id = %(org_id)s AND run_id IN %(run_ids)s
+    WHERE org_id = {org_id:String} AND run_id IN {run_ids:Array(String)}
 """
 
 _AI_EDGE_UNION_QUERY = """
@@ -270,7 +270,7 @@ _AI_EDGE_UNION_QUERY = """
             provider,
             toString(repo_id) AS repo_id
         FROM ai_workflow_issue_edges
-        WHERE org_id = %(org_id)s
+        WHERE org_id = {org_id:String}
 
         UNION ALL
 
@@ -287,7 +287,7 @@ _AI_EDGE_UNION_QUERY = """
             provider,
             toString(repo_id) AS repo_id
         FROM ai_workflow_artifact_edges
-        WHERE org_id = %(org_id)s
+        WHERE org_id = {org_id:String}
 
         UNION ALL
 
@@ -304,7 +304,7 @@ _AI_EDGE_UNION_QUERY = """
             provider,
             toString(repo_id) AS repo_id
         FROM work_graph_pr_review_outcome_edges
-        WHERE org_id = %(org_id)s
+        WHERE org_id = {org_id:String}
 
         UNION ALL
 
@@ -321,7 +321,7 @@ _AI_EDGE_UNION_QUERY = """
             provider,
             toString(repo_id) AS repo_id
         FROM work_graph_pr_deployment_edges
-        WHERE org_id = %(org_id)s
+        WHERE org_id = {org_id:String}
 
         UNION ALL
 
@@ -338,10 +338,10 @@ _AI_EDGE_UNION_QUERY = """
             provider,
             toString(repo_id) AS repo_id
         FROM work_graph_deployment_incident_edges
-        WHERE org_id = %(org_id)s
+        WHERE org_id = {org_id:String}
     )
     WHERE
-        (source_type IN %(node_types)s AND source_id IN %(node_ids)s)
-        OR (target_type IN %(node_types)s AND target_id IN %(node_ids)s)
-    LIMIT %(limit)s
+        (source_type IN {node_types:Array(String)} AND source_id IN {node_ids:Array(String)})
+        OR (target_type IN {node_types:Array(String)} AND target_id IN {node_ids:Array(String)})
+    LIMIT {limit:UInt32}
 """

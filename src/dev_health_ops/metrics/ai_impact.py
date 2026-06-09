@@ -64,7 +64,7 @@ class _PRFact:
     additions: int
     deletions: int
     changed_files: int
-    has_test_change: bool
+    has_test_change: bool | None  # None = commit-linkage unavailable for this PR
     followup_commits: int
 
 
@@ -180,7 +180,12 @@ def _aggregate(facts: Sequence[_PRFact], incidents_count: int) -> _Agg:
         for fact in facts
         if fact.deletions > fact.additions * 2 and fact.deletions >= 50
     )
-    test_gap_prs = sum(1 for fact in facts if not fact.has_test_change)
+    # Only PRs whose test-change status is *known* (True/False) contribute to the gap
+    # metric.  has_test_change=None means commit linkage was unavailable; counting those
+    # as gaps would recreate the 100%-inflation bug (CHAOS-2183) whenever the linkage
+    # table is missing or the query fails.
+    known_test_prs = sum(1 for fact in facts if fact.has_test_change is not None)
+    test_gap_prs = sum(1 for fact in facts if fact.has_test_change is False)
     return _Agg(
         prs_total=prs_total,
         prs_merged=prs_merged,
@@ -195,7 +200,7 @@ def _aggregate(facts: Sequence[_PRFact], incidents_count: int) -> _Agg:
         incidents_count=incidents_count,
         incident_rate=_ratio(incidents_count, prs_merged),
         test_gap_prs=test_gap_prs,
-        test_gap_rate=_ratio(test_gap_prs, prs_total),
+        test_gap_rate=_ratio(test_gap_prs, known_test_prs),
     )
 
 
@@ -288,7 +293,9 @@ def compute_ai_impact_metrics_daily(
                 additions=additions,
                 deletions=deletions,
                 changed_files=changed_files,
-                has_test_change=test_changes.get((repo_id, number), False),
+                # Default None (not False): if pr_commit_stats was None or this PR
+                # wasn't in the linkage table, treat as unknown rather than a gap.
+                has_test_change=test_changes.get((repo_id, number)),
                 followup_commits=0,
             )
         )

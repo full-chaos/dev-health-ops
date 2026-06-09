@@ -227,6 +227,118 @@ def test_operating_leverage_is_decomposed_not_single_score():
     assert not hasattr(leverage, "score")
 
 
+def test_test_gap_rate_below_100_when_some_prs_touch_test_files():
+    """Regression: test_gap_rate must be < 100% when some PRs include test-file commits.
+
+    Root cause (CHAOS-2183): job_daily.py never passed pr_commit_stats to
+    compute_ai_impact_metrics_daily, so _test_changes_by_pr returned {} and every PR
+    was counted as a test gap, inflating test_gap_rate to 100%.
+    """
+    repo = uuid4()
+    prs = [
+        _pr(repo, 1, created_hour=8, merged_hour=10),  # touches a test file
+        _pr(repo, 2, created_hour=8, merged_hour=10),  # no test file
+    ]
+    attrs = [
+        _attr(repo, 1, "ai_assisted"),
+        _attr(repo, 2, "ai_assisted"),
+    ]
+    test_commit: CommitStatRow = {
+        "repo_id": repo,
+        "commit_hash": "abc123",
+        "author_email": "dev@example.com",
+        "author_name": "Dev",
+        "committer_when": datetime(2026, 5, 18, 9, tzinfo=timezone.utc),
+        "file_path": "tests/test_feature.py",
+        "additions": 20,
+        "deletions": 0,
+    }
+    non_test_commit: CommitStatRow = {
+        "repo_id": repo,
+        "commit_hash": "def456",
+        "author_email": "dev@example.com",
+        "author_name": "Dev",
+        "committer_when": datetime(2026, 5, 18, 9, tzinfo=timezone.utc),
+        "file_path": "src/feature.py",
+        "additions": 10,
+        "deletions": 2,
+    }
+
+    rows = _rows(
+        prs,
+        attrs,
+        pr_commit_stats={
+            (repo, 1): [test_commit],
+            (repo, 2): [non_test_commit],
+        },
+    )
+
+    ai = _bucket(rows, "ai_assisted")
+    # PR 2 has no test change → 1 gap out of 2 PRs → 50%, not 100%
+    assert ai.test_gap_prs == 1
+    assert ai.test_gap_rate == pytest.approx(0.5)
+    assert ai.test_gap_rate < 1.0
+
+
+def test_test_gap_rate_is_unavailable_when_pr_commit_stats_absent():
+    """When pr_commit_stats=None, test_gap_rate must be None (unavailable), NOT 100%.
+
+    Before the fix, a None pr_commit_stats caused every PR to get has_test_change=False
+    → test_gap_rate=1.0 (100%).  That 100% then fed ai_detector.py's >=0.50 threshold,
+    producing a false "AI PRs had 100% test gap" recommendation (CHAOS-2183 root cause).
+    After the fix, each PR gets has_test_change=None, the known-count denominator is 0,
+    and test_gap_rate=None signals "data unavailable" rather than "every PR is a gap".
+    """
+    repo = uuid4()
+    rows = _rows(
+        [
+            _pr(repo, 1, created_hour=8, merged_hour=10),
+            _pr(repo, 2, created_hour=8, merged_hour=10),
+        ],
+        [_attr(repo, 1, "ai_assisted"), _attr(repo, 2, "ai_assisted")],
+        pr_commit_stats=None,
+    )
+    ai = _bucket(rows, "ai_assisted")
+    # No commit linkage → has_test_change=None for every PR → denominator=0 → rate=None
+    assert ai.test_gap_prs == 0
+    assert ai.test_gap_rate is None
+
+
+def test_test_gap_not_inflated_for_prior_day_test_commit():
+    """PR merged today (day N) whose test commit landed on day N-1 must NOT be a gap.
+
+    job_daily.py (post-fix) queries work_graph_pr_commit JOIN git_commit_stats for all
+    commits belonging to in-window PRs, regardless of commit date.  This verifies that
+    compute_ai_impact_metrics_daily correctly handles pr_commit_stats populated with
+    commits from outside the current day window — i.e. the formula is window-agnostic.
+    """
+    repo = uuid4()
+    pr = _pr(repo, 1, created_hour=8, merged_hour=10)  # merged on DAY (2026-05-18)
+    prior_day_test_commit: CommitStatRow = {
+        "repo_id": repo,
+        "commit_hash": "abc123",
+        "author_email": "dev@example.com",
+        "author_name": "Dev",
+        # Commit timestamp is DAY-1, outside the job's day window.
+        "committer_when": datetime(2026, 5, 17, 20, tzinfo=timezone.utc),
+        "file_path": "tests/test_auth.py",
+        "additions": 30,
+        "deletions": 0,
+    }
+
+    rows = _rows(
+        [pr],
+        [_attr(repo, 1, "ai_assisted")],
+        pr_commit_stats={(repo, 1): [prior_day_test_commit]},
+    )
+
+    ai = _bucket(rows, "ai_assisted")
+    # Prior-day test commit must be recognised → has_test_change=True → zero gaps
+    assert ai.test_gap_prs == 0
+    assert ai.test_gap_rate == pytest.approx(0.0)
+    assert ai.test_gap_rate < 1.0
+
+
 def test_clickhouse_sink_writes_ai_impact_rows_with_dimensions():
     repo = uuid4()
     rows = _rows(

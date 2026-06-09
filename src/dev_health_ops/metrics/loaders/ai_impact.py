@@ -46,6 +46,12 @@ class AIImpactClickHouseLoader:
             params["limit"] = int(limit)
             params["offset"] = max(0, int(offset))
             limit_clause = "LIMIT {limit:UInt32} OFFSET {offset:UInt32}"
+
+        # team_id is left empty here; resolvers that need team-scoped filtering
+        # resolve it in application code via RepoPatternTeamResolver (see
+        # resolve_ai_attributed_prs in resolvers/ai.py).  teams.repo_patterns is
+        # an Array(String) of fnmatch glob patterns over repo full-names, so a
+        # SQL JOIN on repo UUID would never match.
         query = f"""
         SELECT
             repo_id,
@@ -219,29 +225,45 @@ class AIImpactClickHouseLoader:
         from dev_health_ops.api.queries.client import query_dicts
 
         params: dict[str, Any] = {"start_day": start_day, "end_day": end_day}
-        filters = ["day >= {start_day:Date}", "day <= {end_day:Date}"]
+        # All filters are qualified with `umd.` to avoid "Ambiguous column" errors
+        # when the INNER JOIN subquery (ai_repos) also exposes a `repo_id` column.
+        filters = ["umd.day >= {start_day:Date}", "umd.day <= {end_day:Date}"]
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
-            filters.append("repo_id = {repo_id:UUID}")
+            filters.append("umd.repo_id = {repo_id:UUID}")
         if team_id is not None:
             params["team_id"] = team_id
-            filters.append("team_id = {team_id:String}")
+            filters.append("umd.team_id = {team_id:String}")
         params = self._scope.inject(params)
-        org_expr = self._scope.expression()
+        org_expr = self._scope.expression(alias="umd")
         if org_expr:
             filters.append(org_expr)
         where_clause = " AND ".join(filters)
+        # Narrow reviewer universe to repos that have AI-attributed PRs in the
+        # window.  This is a partial scoping: reviewers of human PRs in the same
+        # repo are included, but reviewers from purely-human repos are excluded.
+        # A full per-PR-reviewer join requires a separate PR-review events table
+        # and is deferred to a future wave.
+        org_filter_ai_attr = self._scope.filter(alias="attr")
         query = f"""
         SELECT sum(reviews_given) AS reviews_given
         FROM (
             SELECT
-                repo_id,
-                author_email,
-                day,
-                argMax(reviews_given, computed_at) AS reviews_given
-            FROM user_metrics_daily
+                umd.repo_id,
+                umd.author_email,
+                umd.day,
+                argMax(umd.reviews_given, umd.computed_at) AS reviews_given
+            FROM user_metrics_daily AS umd
+            INNER JOIN (
+                SELECT DISTINCT attr.repo_id AS repo_id
+                FROM ai_attribution_resolved AS attr
+                WHERE attr.kind IN ('ai_assisted', 'agent_created', 'ai_review')
+                  AND toDate(attr.observed_at) >= {{start_day:Date}}
+                  AND toDate(attr.observed_at) <= {{end_day:Date}}
+                  {org_filter_ai_attr}
+            ) AS ai_repos ON ai_repos.repo_id = umd.repo_id
             WHERE {where_clause}
-            GROUP BY repo_id, author_email, day
+            GROUP BY umd.repo_id, umd.author_email, umd.day
         )
         GROUP BY author_email
         """

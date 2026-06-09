@@ -432,6 +432,9 @@ async def test_opportunities_returns_ready_empty_contract():
 
     assert result.org_id == ORG_ID
     assert result.recommendations == []
+    # CHAOS-2188: detector_ready signals the detector ran successfully, NOT that
+    # it found candidates.  Empty recommendations is valid; False would mislead
+    # the frontend into showing "not connected".
     assert result.detector_ready is True
 
 
@@ -498,11 +501,12 @@ class _FakeGovernanceViolation:
 
 @pytest.mark.asyncio
 async def test_governance_summary_empty():
+    # CHAOS-2211: load_coverage / load_violations are now async; use AsyncMock.
     with patch(
         "dev_health_ops.audit.ai_governance.loaders.AIGovernanceLoader"
     ) as mock_loader:
-        mock_loader.return_value.load_coverage.return_value = []
-        mock_loader.return_value.load_violations.return_value = []
+        mock_loader.return_value.load_coverage = AsyncMock(return_value=[])
+        mock_loader.return_value.load_violations = AsyncMock(return_value=[])
         result = await resolve_ai_governance_summary(_ctx(), _range())
 
     assert result.data_available is False
@@ -515,12 +519,12 @@ async def test_governance_summary_populated():
     with patch(
         "dev_health_ops.audit.ai_governance.loaders.AIGovernanceLoader"
     ) as mock_loader:
-        mock_loader.return_value.load_coverage.return_value = [
-            _FakeGovernanceCoverage()
-        ]
-        mock_loader.return_value.load_violations.return_value = [
-            _FakeGovernanceViolation()
-        ]
+        mock_loader.return_value.load_coverage = AsyncMock(
+            return_value=[_FakeGovernanceCoverage()]
+        )
+        mock_loader.return_value.load_violations = AsyncMock(
+            return_value=[_FakeGovernanceViolation()]
+        )
         result = await resolve_ai_governance_summary(_ctx(), _range())
 
     assert result.data_available is True
@@ -744,3 +748,160 @@ async def test_ai_attributed_prs_rejects_reversed_date_range():
     bad_range = AIDateRangeInput(start_date=DAY_END, end_date=DAY_START)
     with pytest.raises(ValueError, match="end_date must be >= start_date"):
         await resolve_ai_attributed_prs(_ctx(), bad_range)
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2184 — AI-19: team_id scoping for AI attributed PRs
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_team_scope_filters_by_team_id():
+    """Rows whose resolved team_id matches the scope pass; others are dropped.
+
+    Uses two distinct repos mapped to different teams so we can verify that
+    only the team-a repo's rows survive the filter.
+    """
+    REPO_B = UUID("22222222-2222-2222-2222-222222222222")
+    rows = [
+        _attribution_row(number=1),  # REPO_ID → resolved to team-a
+        {**_attribution_row(number=2), "repo_id": REPO_B},  # team-b
+        _attribution_row(number=3),  # REPO_ID → team-a
+        {**_attribution_row(number=4), "repo_id": REPO_B},  # team-b
+    ]
+    scope = AIScopeInput(team_id="team-a")
+    repo_team_map = {str(REPO_ID): "team-a", str(REPO_B): "team-b"}
+    with (
+        _patch_pr_loader(rows),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
+            new_callable=AsyncMock,
+            return_value=repo_team_map,
+        ),
+    ):
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    assert result.data_available is True
+    assert [r.number for r in result.rows] == [1, 3]
+    assert all(r.team_id == "team-a" for r in result.rows)
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_no_team_scope_returns_all():
+    """Without a team_id scope all rows are returned regardless of their team."""
+    rows = [
+        _attribution_row(number=10, team_id="team-x"),
+        _attribution_row(number=11, team_id=None),
+    ]
+    with _patch_pr_loader(rows):
+        result = await resolve_ai_attributed_prs(_ctx(), _range())
+
+    assert [r.number for r in result.rows] == [10, 11]
+
+
+@pytest.mark.asyncio
+async def test_ai_attributed_prs_team_scope_resolves_via_repo_pattern():
+    """Team id must be resolved via RepoPatternTeamResolver, not pre-populated SQL.
+
+    The SQL loader always returns empty team_id because teams.repo_patterns
+    is Array(String) of fnmatch glob patterns over repo full-names (not UUIDs).
+    The resolver calls _resolve_repo_team_map to annotate each row before the
+    team filter runs.
+    """
+    REPO_B = UUID("22222222-2222-2222-2222-222222222222")
+    # All rows start with empty team_id — as the SQL loader produces them.
+    rows = [
+        _attribution_row(number=1, team_id=None),  # REPO_ID → team-a via pattern
+        _attribution_row(number=2, team_id=None),  # REPO_ID → team-a via pattern
+        {**_attribution_row(number=3, team_id=None), "repo_id": REPO_B},  # team-b
+    ]
+    scope = AIScopeInput(team_id="team-a")
+    # Simulate the pattern resolver resolving two repos to different teams.
+    repo_team_map = {str(REPO_ID): "team-a", str(REPO_B): "team-b"}
+    with (
+        _patch_pr_loader(rows),
+        patch(
+            "dev_health_ops.api.graphql.resolvers.ai._resolve_repo_team_map",
+            new_callable=AsyncMock,
+            return_value=repo_team_map,
+        ),
+    ):
+        result = await resolve_ai_attributed_prs(_ctx(), _range(), scope)
+
+    # Only rows belonging to team-a (REPO_ID) pass through.
+    assert [r.number for r in result.rows] == [1, 2]
+    assert all(r.team_id == "team-a" for r in result.rows)
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2188 — AI-23: detector_ready reflects real candidate availability
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detector_ready_true_when_no_recommendations():
+    """detector_ready must be True even when the detector finds no candidates.
+
+    An empty result means "no opportunities right now", not "detector broken".
+    Setting it False would cause the frontend to display a misleading
+    "detector not connected" state after a clean but empty run.
+    """
+    detector = MagicMock()
+    detector.detect = AsyncMock(return_value=[])
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.ai.AIOpportunityDetector",
+        return_value=detector,
+    ):
+        result = await resolve_ai_opportunities(_ctx())
+
+    assert result.detector_ready is True
+
+
+@pytest.mark.asyncio
+async def test_detector_ready_true_when_recommendations_exist():
+    """detector_ready must be True when the detector finds real candidates."""
+    opportunity = AIOpportunity(
+        opportunity_id="abc123",
+        kind=AIOpportunityKind.HIGH_REVIEW_LOAD,
+        repo_id=str(REPO_ID),
+        team_id=None,
+        title="High review load",
+        rationale="ratio > 1.5",
+        score=0.7,
+        evidence_refs=["ai_impact_metrics_daily:reviews_per_pr:repo-1"],
+        work_graph_drilldowns=[],
+    )
+    detector = MagicMock()
+    detector.detect = AsyncMock(return_value=[opportunity])
+    with patch(
+        "dev_health_ops.api.graphql.resolvers.ai.AIOpportunityDetector",
+        return_value=detector,
+    ):
+        result = await resolve_ai_opportunities(_ctx())
+
+    assert result.detector_ready is True
+    assert len(result.recommendations) == 1
+
+
+# -----------------------------------------------------------------------------
+# CHAOS-2211 — AI-30: governance loader methods are awaited
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_governance_summary_awaits_async_loader_methods():
+    """Verify both load_coverage and load_violations are called as coroutines."""
+    coverage_mock = AsyncMock(return_value=[_FakeGovernanceCoverage()])
+    violations_mock = AsyncMock(return_value=[_FakeGovernanceViolation()])
+    with patch(
+        "dev_health_ops.audit.ai_governance.loaders.AIGovernanceLoader"
+    ) as mock_loader:
+        mock_loader.return_value.load_coverage = coverage_mock
+        mock_loader.return_value.load_violations = violations_mock
+        result = await resolve_ai_governance_summary(_ctx(), _range())
+
+    coverage_mock.assert_awaited_once()
+    violations_mock.assert_awaited_once()
+    assert result.data_available is True
+    assert result.coverage[0].ai_artifacts == 10
+    assert result.recent_violations[0].rule_id == "MISSING_AI_DECLARATION"

@@ -611,9 +611,13 @@ async def resolve_ai_opportunities(
     org_id = require_org_id(context)
     client = _require_client(context)
     detector = AIOpportunityDetector(client)
+    recommendations = await detector.detect(org_id=org_id, scope=scope, limit=limit)
+    # detector_ready signals that the detector is wired and ran successfully,
+    # NOT that it found candidates.  An empty result is valid (no opportunities
+    # right now); False would mislead the frontend into showing "not connected".
     return AIOpportunitiesResult(
         org_id=org_id,
-        recommendations=await detector.detect(org_id=org_id, scope=scope, limit=limit),
+        recommendations=recommendations,
         detector_ready=True,
     )
 
@@ -637,14 +641,14 @@ async def resolve_ai_governance_summary(
     client = _require_client(context)
 
     loader = AIGovernanceLoader(client)
-    coverage = loader.load_coverage(
+    coverage = await loader.load_coverage(
         org_id=org_id,
         start_day=date_range.start_date,
         end_day=date_range.end_date,
         team_id=team_id,
         repo_id=repo_id,
     )
-    violations = loader.load_violations(
+    violations = await loader.load_violations(
         org_id=org_id,
         start_day=date_range.start_date,
         end_day=date_range.end_date,
@@ -764,6 +768,70 @@ async def resolve_ai_workflow_drilldown(
 # =============================================================================
 
 
+async def _resolve_repo_team_map(
+    client: Any,
+    org_id: str,
+    repo_ids: list[str],
+) -> dict[str, str | None]:
+    """Return {repo_id_str → team_id} using RepoPatternTeamResolver.
+
+    ``teams.repo_patterns`` is an Array(String) of fnmatch glob patterns over
+    repo full-names (e.g. ``"acme/*"``, ``"backend/api"``), so team membership
+    cannot be resolved with a SQL JOIN on repo UUIDs.  Instead we:
+
+    1. Load teams + patterns from ClickHouse.
+    2. Build a :class:`RepoPatternTeamResolver` from the patterns.
+    3. Load each repo's ``full_name`` (the ``repo`` column in ``repos``).
+    4. Resolve team by matching full_name against the patterns.
+
+    This mirrors the approach used by ``job_daily.py`` (build_repo_pattern_resolver).
+    Returns an empty dict on any query error so callers degrade gracefully.
+    """
+    from dev_health_ops.api.queries.client import query_dicts
+    from dev_health_ops.providers.teams import build_repo_pattern_resolver
+
+    if not repo_ids or not org_id:
+        return {}
+
+    try:
+        team_rows = await query_dicts(
+            client,
+            "SELECT id, name, repo_patterns FROM teams WHERE org_id = {org_id:String}",
+            {"org_id": org_id},
+        )
+    except Exception as exc:
+        logger.warning("Could not load teams for AI attributed PR resolution: %s", exc)
+        return {}
+
+    resolver = build_repo_pattern_resolver(team_rows)
+
+    try:
+        name_rows = await query_dicts(
+            client,
+            """
+            SELECT toString(id) AS repo_id, repo AS full_name
+            FROM repos
+            WHERE org_id = {org_id:String}
+              AND toString(id) IN {repo_ids:Array(String)}
+            """,
+            {"org_id": org_id, "repo_ids": repo_ids},
+        )
+    except Exception as exc:
+        logger.warning("Could not load repo names for team resolution: %s", exc)
+        return {}
+
+    repo_id_to_name: dict[str, str] = {
+        r["repo_id"]: str(r.get("full_name") or r["repo_id"]) for r in name_rows
+    }
+
+    result: dict[str, str | None] = {}
+    for repo_id in repo_ids:
+        full_name = repo_id_to_name.get(repo_id)
+        team_id_resolved, _ = resolver.resolve(full_name)
+        result[repo_id] = team_id_resolved or None
+    return result
+
+
 _MAX_AI_ATTRIBUTED_PRS_PAGE = 200
 
 
@@ -806,6 +874,21 @@ async def resolve_ai_attributed_prs(
 
     has_more = len(raw_rows) > page_size
     page_rows = raw_rows[:page_size]
+
+    # Resolve team IDs via RepoPatternTeamResolver before filtering.
+    # The SQL loader returns an empty team_id because teams.repo_patterns
+    # holds fnmatch glob patterns over repo full-names (e.g. "acme/*"), not
+    # repo UUIDs — a SQL JOIN on UUID would never match.  We resolve in
+    # app-code by fetching the repo name from the repos table and running the
+    # pattern matcher here.
+    if org_id:
+        distinct_repo_ids = list({str(row["repo_id"]) for row in page_rows})
+        team_map = await _resolve_repo_team_map(
+            _require_client(context), org_id=org_id, repo_ids=distinct_repo_ids
+        )
+        if team_map:
+            for row in page_rows:
+                row["team_id"] = team_map.get(str(row["repo_id"]))
 
     # team_id / work_type filtering happens here because the loader treats
     # them as projections, not WHERE-clause inputs. The PR universe is bounded

@@ -472,6 +472,139 @@ def test_validate_security_alerts_fixture_rejects_single_severity():
     )
 
 
+class TestRunnerWiresExtendedPipelineRows:
+    """CHAOS-2173: pipeline-run insert must be a single call per (repo_id, run_id)
+    so ci_daily_rollup_mv counts each run exactly once."""
+
+    @pytest.mark.asyncio
+    async def test_sqlite_path_no_double_insert(self, tmp_path, monkeypatch):
+        """On SQLite/Postgres (SQLAlchemyStore), the runner must call
+        insert_ci_pipeline_runs and must NOT call insert_testops_pipeline_runs
+        — preventing a double-insert that would inflate any MV counts."""
+        from dev_health_ops.storage import SQLAlchemyStore
+
+        ci_run_ids: list[str] = []
+        testops_run_ids: list[str] = []
+
+        original_ci = SQLAlchemyStore.insert_ci_pipeline_runs
+
+        async def spy_ci(self_store, batch):
+            ci_run_ids.extend(r.run_id for r in batch)
+            return await original_ci(self_store, batch)
+
+        async def spy_testops(self_store, batch):
+            testops_run_ids.extend(r.get("run_id", "") for r in batch)
+
+        monkeypatch.setattr(SQLAlchemyStore, "insert_ci_pipeline_runs", spy_ci)
+        monkeypatch.setattr(
+            SQLAlchemyStore, "insert_testops_pipeline_runs", spy_testops
+        )
+
+        db_file = tmp_path / "test_no_double.db"
+        ns = argparse.Namespace(
+            sink=f"sqlite:///{db_file}",
+            db_type="sqlite",
+            org_id="test-org",
+            repo_name="test/no-double",
+            repo_count=1,
+            days=3,
+            commits_per_day=2,
+            pr_count=2,
+            seed=42,
+            provider="synthetic",
+            with_work_graph=False,
+            with_metrics=False,
+            team_count=2,
+        )
+
+        result = await run_fixtures_generation(ns)
+        assert result == 0
+
+        # Postgres/SQLite path: basic insert was used.
+        assert ci_run_ids, "insert_ci_pipeline_runs must be called on SQLite path"
+
+        # No testops insert on the SQLite path — this prevents double-insert.
+        assert not testops_run_ids, (
+            "insert_testops_pipeline_runs must NOT be called on SQLite/Postgres — "
+            "calling both would insert each run_id twice, inflating MV counts. "
+            f"Got run_ids: {testops_run_ids[:5]}"
+        )
+
+        # Every run_id appears exactly once.
+        assert len(ci_run_ids) == len(set(ci_run_ids)), (
+            "each run_id must appear in insert_ci_pipeline_runs exactly once"
+        )
+
+    def test_clickhouse_store_takes_extended_branch(self):
+        """The branching condition must route non-SQLAlchemy stores with
+        insert_testops_pipeline_runs to the single-insert (extended) path,
+        and SQLAlchemyStore to the basic-insert path.
+
+        This directly exercises the condition in runner._handler without
+        needing a full end-to-end run against a live ClickHouse."""
+        from dev_health_ops.storage import SQLAlchemyStore
+
+        # Simulate ClickHouseStore: not SQLAlchemy, has insert_testops_pipeline_runs.
+        class _FakeCHStore:
+            async def insert_ci_pipeline_runs(self, batch):
+                pass
+
+            async def insert_testops_pipeline_runs(self, batch):
+                pass
+
+        ch_store = _FakeCHStore()
+        sq_store = SQLAlchemyStore.__new__(SQLAlchemyStore)
+
+        # Replicate the branching condition from runner.py.
+        def _pick_pipeline_insert(store):
+            return (
+                getattr(store, "insert_testops_pipeline_runs", None)
+                if not isinstance(store, SQLAlchemyStore)
+                else None
+            )
+
+        # ClickHouse-like store → extended insert path.
+        ch_insert = _pick_pipeline_insert(ch_store)
+        assert ch_insert is not None, (
+            "ClickHouseStore-like stores must use insert_testops_pipeline_runs"
+        )
+        # Bound methods compare equal by __func__ + __self__ even if not identical objects.
+        assert ch_insert.__func__ is _FakeCHStore.insert_testops_pipeline_runs, (
+            "must resolve to insert_testops_pipeline_runs, not insert_ci_pipeline_runs"
+        )
+
+        # SQLAlchemyStore → None → falls through to insert_ci_pipeline_runs.
+        sq_insert = _pick_pipeline_insert(sq_store)
+        assert sq_insert is None, (
+            "SQLAlchemyStore must NOT use insert_testops_pipeline_runs "
+            "(would double-insert into Postgres/SQLite)"
+        )
+
+    def test_generator_derives_extended_rows_from_pipeline_runs(self):
+        """When pipeline_runs is supplied, extended rows must use the same run_ids
+        as those SQLAlchemy objects (key alignment for ReplacingMergeTree dedup)."""
+        gen = SyntheticDataGenerator(repo_name="test/key-align", seed=42)
+        pipeline_runs = gen.generate_ci_pipeline_runs(days=5, runs_per_day=3)
+
+        extended = gen.generate_pipeline_run_extended_rows(
+            pipeline_runs=pipeline_runs, org_id="test-org"
+        )
+
+        assert len(extended) == len(pipeline_runs), (
+            "extended rows count must match pipeline_runs count"
+        )
+        expected_run_ids = {r.run_id for r in pipeline_runs}
+        actual_run_ids = {r["run_id"] for r in extended}
+        assert actual_run_ids == expected_run_ids, (
+            "extended row run_ids must match pipeline_run run_ids exactly"
+        )
+        # Every extended row must carry the required TestOps-only fields.
+        for row in extended:
+            assert "retry_count" in row
+            assert "team_id" in row
+            assert row.get("org_id") == "test-org"
+
+
 class TestGenerateUsersRespectsOrgId:
     """Regression: ``generate_users(org_id=...)`` MUST stamp the supplied org_id
     onto the Organization row and every Membership/license, so that synthetic

@@ -145,7 +145,7 @@ async def _execute_sankey_inner(
             for row in rows:
                 dim = str(row.get("dimension", ""))
                 node_id = str(row.get("node_id", ""))
-                value = float(row.get("value", 0))
+                value = float(row.get("value") or 0)
                 out.append(
                     SankeyNode(
                         id=f"{dim}:{node_id}",
@@ -169,7 +169,7 @@ async def _execute_sankey_inner(
                 target_dim = str(row.get("target_dimension", ""))
                 source = str(row.get("source", ""))
                 target = str(row.get("target", ""))
-                value = float(row.get("value", 0))
+                value = float(row.get("value") or 0)
                 out.append(
                     SankeyEdge(
                         source=f"{source_dim}:{source}",
@@ -216,7 +216,7 @@ async def _execute_timeseries_query(
     for row in rows:
         dim_val = str(row.get("dimension_value", ""))
         bucket_date = row.get("bucket")
-        value = float(row.get("value", 0))
+        value = float(row.get("value") or 0)
 
         if dim_val not in grouped:
             grouped[dim_val] = []
@@ -317,7 +317,7 @@ async def _execute_breakdown_query(
     items = [
         _build_breakdown_item(
             str(row.get("dimension_value", "")),
-            float(row.get("value", 0)),
+            float(row.get("value") or 0),
             label_map,
         )
         for row in rows

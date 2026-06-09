@@ -647,11 +647,42 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 days=ns.days, pr_numbers=pr_numbers, release_refs=release_refs
             )
             incidents = generator.generate_incidents(days=ns.days)
-            await _insert_batches(
-                store.insert_ci_pipeline_runs,
-                pipeline_runs,
-                allow_parallel=allow_parallel_inserts,
+            # Pipeline-run insert — ONE path to keep the ci_daily_rollup_mv from
+            # seeing the same (repo_id, run_id) twice.
+            #
+            # ClickHouseStore: insert_testops_pipeline_runs carries ALL fields
+            #   (retry_count, team_id, …) in a single INSERT statement so the MV
+            #   fires exactly once per run.  insert_ci_pipeline_runs is intentionally
+            #   skipped here — calling both would produce two MV events and inflate
+            #   synthetic daily totals even though ReplacingMergeTree eventually
+            #   deduplicates the source table.
+            #
+            # SQLAlchemyStore (Postgres/SQLite): insert_ci_pipeline_runs is the
+            #   standard ORM path.  There is no MV concern, and the Postgres schema
+            #   does not carry retry_count/team_id in ci_pipeline_runs.
+            _ch_pipeline_insert = (
+                getattr(store, "insert_testops_pipeline_runs", None)
+                if not isinstance(store, SQLAlchemyStore)
+                else None
             )
+            if _ch_pipeline_insert is not None:
+                # ClickHouse path: single enriched insert — MV sees each run_id once.
+                extended_pipeline_rows = generator.generate_pipeline_run_extended_rows(
+                    pipeline_runs=pipeline_runs, org_id=org_id
+                )
+                await _insert_batches(
+                    _ch_pipeline_insert,
+                    extended_pipeline_rows,
+                    allow_parallel=allow_parallel_inserts,
+                )
+            else:
+                # Postgres/SQLite path: ORM-backed insert (basic fields only).
+                await _insert_batches(
+                    store.insert_ci_pipeline_runs,
+                    pipeline_runs,
+                    allow_parallel=allow_parallel_inserts,
+                )
+
             await _insert_batches(
                 store.insert_deployments,
                 deployments,

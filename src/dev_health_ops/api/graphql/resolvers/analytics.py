@@ -449,15 +449,19 @@ async def resolve_analytics(
                                 SELECT
                                     work_unit_investments.work_unit_id AS work_unit_id,
                                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
-                                    count() AS cnt
+                                    countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
                                 FROM work_unit_investments
-                                ARRAY JOIN JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_id
+                                ARRAY JOIN arrayDistinct(arrayConcat(
+                                    JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
+                                    [work_unit_investments.work_unit_id]
+                                )) AS issue_id
                                 LEFT JOIN (
                                     SELECT
                                         work_item_id,
                                         argMax(team_id, computed_at) AS team_id,
                                         argMax(team_name, computed_at) AS team_name
                                     FROM work_item_cycle_times
+                                    WHERE org_id = %(org_id)s
                                     GROUP BY work_item_id
                                 ) AS t ON t.work_item_id = issue_id
                                 GROUP BY work_unit_id, team

@@ -100,6 +100,14 @@ class FlowMatrixResult:
 
 
 @strawberry.type
+class EvidenceQualityStats:
+    mean: float | None = None
+    stddev: float | None = None
+    total: int = 0
+    band_counts: strawberry.scalars.JSON = strawberry.field(default_factory=dict)
+
+
+@strawberry.type
 class AnalyticsResult:
     """Combined result of a batch analytics request."""
 
@@ -107,6 +115,8 @@ class AnalyticsResult:
     breakdowns: list[BreakdownResult]
     sankey: SankeyResult | None = None
     flow_matrix: FlowMatrixResult | None = None
+    evidence_quality_distribution: strawberry.scalars.JSON | None = None
+    evidence_quality_stats: EvidenceQualityStats | None = None
 
 
 @strawberry.type

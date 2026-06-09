@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Coroutine
-from datetime import date
-from typing import Any
+from datetime import date, datetime, time, timezone
+from typing import Any, cast
+
+from dev_health_ops.api.queries.investment import fetch_investment_quality_stats
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -27,6 +29,7 @@ from ..models.outputs import (
     AnalyticsResult,
     BreakdownItem,
     BreakdownResult,
+    EvidenceQualityStats,
     FlowMatrixResult,
     SankeyCoverage,
     SankeyEdge,
@@ -47,6 +50,80 @@ from ..sql.compiler import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _analytics_quality_window(batch: AnalyticsRequestInput) -> tuple[date, date] | None:
+    if batch.breakdowns:
+        date_range = batch.breakdowns[0].date_range
+        return date_range.start_date, date_range.end_date
+    if batch.timeseries:
+        date_range = batch.timeseries[0].date_range
+        return date_range.start_date, date_range.end_date
+    return None
+
+
+async def _resolve_evidence_quality_stats(
+    client: Any,
+    batch: AnalyticsRequestInput,
+    org_id: str,
+) -> EvidenceQualityStats | None:
+    if not bool(batch.use_investment):
+        return None
+    window = _analytics_quality_window(batch)
+    if window is None:
+        return None
+
+    start_date, end_date = window
+    filters = batch.filters
+    scope_filter = ""
+    scope_params: dict[str, Any] = {}
+    team_scope_ids: list[str] | None = None
+    themes: list[str] | None = None
+
+    if filters is not None:
+        if filters.scope is not None and filters.scope.ids:
+            if filters.scope.level.value == "team":
+                team_scope_ids = filters.scope.ids
+            elif filters.scope.level.value == "repo":
+                scope_filter += " AND work_unit_investments.repo_id IN %(scope_ids)s"
+                scope_params["scope_ids"] = filters.scope.ids
+        if filters.what is not None and filters.what.repos:
+            scope_filter += " AND work_unit_investments.repo_id IN %(repo_filter_ids)s"
+            scope_params["repo_filter_ids"] = filters.what.repos
+        if filters.why is not None and filters.why.work_category:
+            themes = filters.why.work_category
+
+    row = await fetch_investment_quality_stats(
+        client,
+        start_ts=datetime.combine(start_date, time.min, tzinfo=timezone.utc),
+        end_ts=datetime.combine(end_date, time.min, tzinfo=timezone.utc),
+        scope_filter=scope_filter,
+        scope_params=scope_params,
+        org_id=org_id,
+        themes=themes,
+        team_scope_ids=team_scope_ids,
+    )
+    if not row:
+        return EvidenceQualityStats()
+
+    band_counts = {
+        "high": int(row.get("high_count") or 0),
+        "moderate": int(row.get("moderate_count") or 0),
+        "low": int(row.get("low_count") or 0),
+        "very_low": int(row.get("very_low_count") or 0),
+        "unknown": int(row.get("unknown_count") or 0),
+    }
+    known_count = int(row.get("quality_known_count") or 0)
+    mean_value = row.get("quality_mean")
+    stddev_value = row.get("quality_stddev")
+    return EvidenceQualityStats(
+        mean=float(mean_value) if mean_value is not None and known_count > 0 else None,
+        stddev=float(stddev_value)
+        if stddev_value is not None and known_count > 0
+        else None,
+        total=int(row.get("total") or 0),
+        band_counts=cast(Any, band_counts),
+    )
 
 
 async def _execute_sankey_inner(
@@ -548,9 +625,20 @@ async def resolve_analytics(
 
         flow_matrix_result = FlowMatrixResult(nodes=fm_nodes, edges=fm_edges)
 
+    evidence_quality_stats = await _resolve_evidence_quality_stats(
+        client, batch, org_id
+    )
+    evidence_quality_distribution = (
+        evidence_quality_stats.band_counts
+        if evidence_quality_stats is not None
+        else None
+    )
+
     return AnalyticsResult(
         timeseries=timeseries_results,
         breakdowns=breakdown_results,
         sankey=sankey_result,
         flow_matrix=flow_matrix_result,
+        evidence_quality_distribution=evidence_quality_distribution,
+        evidence_quality_stats=evidence_quality_stats,
     )

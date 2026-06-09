@@ -1,10 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, cast
 
 import pytest
 
+from dev_health_ops.api.graphql.context import GraphQLContext
+from dev_health_ops.api.graphql.models.inputs import (
+    AnalyticsRequestInput,
+    BucketIntervalInput,
+    DateRangeInput,
+    DimensionInput,
+    MeasureInput,
+    TimeseriesRequestInput,
+)
+from dev_health_ops.api.graphql.resolvers import analytics as analytics_resolver
 from dev_health_ops.api.queries import investment as investment_queries
 from dev_health_ops.api.services.investment import _compute_quality_stats
 
@@ -81,3 +91,60 @@ def test_compute_quality_stats_exposes_band_counts_mean_stddev_total() -> None:
         "very_low": 0,
         "unknown": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_graphql_analytics_returns_evidence_quality_stats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_timeseries(*_args: Any, **_kwargs: Any):
+        return []
+
+    async def fake_quality_stats(*_args: Any, **_kwargs: Any):
+        return {
+            "total": 4,
+            "quality_known_count": 4,
+            "quality_mean": 0.6875,
+            "quality_stddev": 0.147902,
+            "high_count": 1,
+            "moderate_count": 2,
+            "low_count": 1,
+            "very_low_count": 0,
+            "unknown_count": 0,
+        }
+
+    monkeypatch.setattr(
+        analytics_resolver, "_execute_timeseries_query", fake_timeseries
+    )
+    monkeypatch.setattr(
+        analytics_resolver, "fetch_investment_quality_stats", fake_quality_stats
+    )
+
+    result = await analytics_resolver.resolve_analytics(
+        GraphQLContext(org_id="org-1", db_url="clickhouse://test", client=object()),
+        AnalyticsRequestInput(
+            timeseries=[
+                TimeseriesRequestInput(
+                    dimension=DimensionInput.THEME,
+                    measure=MeasureInput.COUNT,
+                    interval=BucketIntervalInput.DAY,
+                    date_range=DateRangeInput(
+                        start_date=date(2026, 5, 26), end_date=date(2026, 6, 9)
+                    ),
+                )
+            ],
+            use_investment=True,
+        ),
+    )
+
+    assert result.evidence_quality_distribution == {
+        "high": 1,
+        "moderate": 2,
+        "low": 1,
+        "very_low": 0,
+        "unknown": 0,
+    }
+    assert result.evidence_quality_stats is not None
+    assert result.evidence_quality_stats.mean == 0.6875
+    assert result.evidence_quality_stats.stddev == 0.147902
+    assert result.evidence_quality_stats.total == 4

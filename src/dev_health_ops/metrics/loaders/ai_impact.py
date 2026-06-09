@@ -294,6 +294,7 @@ class AIImpactClickHouseLoader:
         ReplacingMergeTree duplicates and dual-path matches.
         """
         org_filter_attr = self._scope.filter(alias="attr")
+        org_filter_link = self._scope.filter(alias="link")
         return f"""
             SELECT repo_id, number, any(kind) AS kind
             FROM (
@@ -305,7 +306,7 @@ class AIImpactClickHouseLoader:
                 INNER JOIN ai_attribution_resolved AS attr
                     ON attr.subject_type = 'pull_request'
                     AND attr.subject_id = link.work_item_id
-                WHERE 1 = 1 {org_filter_attr}
+                WHERE 1 = 1 {org_filter_link} {org_filter_attr}
                 UNION ALL
                 SELECT
                     attr.repo_id AS repo_id,
@@ -326,6 +327,20 @@ class AIImpactClickHouseLoader:
         return """((pr.created_at >= {start:DateTime} AND pr.created_at < {end:DateTime})
                 OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {start:DateTime} AND pr.merged_at < {end:DateTime}))"""
 
+    # Event-time expression shared with compute_ai_impact_metrics_daily
+    # (metrics/ai_impact.py: ``event_at = merged_at or created_at`` — a PR
+    # belongs to its merge day when merged, else its creation day). Both
+    # window membership AND the day key must use this expression so
+    # query-time slices line up with ``ai_impact_metrics_daily`` rows.
+    _PR_EVENT_EXPR = "if(pr.merged_at IS NOT NULL, pr.merged_at, pr.created_at)"
+
+    @classmethod
+    def _pr_event_window_filter(cls) -> str:
+        return (
+            f"({cls._PR_EVENT_EXPR} >= {{start:DateTime}} "
+            f"AND {cls._PR_EVENT_EXPR} < {{end:DateTime}})"
+        )
+
     def _engagement_scope_filters(
         self,
         params: dict[str, Any],
@@ -342,6 +357,41 @@ class AIImpactClickHouseLoader:
                 "\n              AND toString(pr.repo_id) IN {repo_ids:Array(String)}"
             )
         return scope_filter
+
+    def _deduped_prs_subquery(
+        self,
+        params: dict[str, Any],
+        repo_id: uuid.UUID | None,
+        repo_ids: list[uuid.UUID] | None,
+    ) -> str:
+        """Latest-version PR rows, collapsed by (repo_id, number).
+
+        ``git_pull_requests`` is a ReplacingMergeTree keyed by
+        ``(repo_id, number)`` with version column ``last_synced``; sync
+        re-runs leave multiple row versions visible until a background merge.
+        Aggregating over the raw table double-counts those versions, so every
+        aggregate read must collapse to ``argMax(..., last_synced)`` first
+        (app-code readers like ``load_ai_pr_attributions`` dedupe in Python).
+        Org and repo scope filters are applied inside, before the GROUP BY.
+        """
+        scope_filter = self._engagement_scope_filters(params, repo_id, repo_ids)
+        org_filter_pr = self._scope.filter(alias="pr")
+        return f"""
+            SELECT
+                pr.repo_id AS repo_id,
+                pr.number AS number,
+                argMax(pr.created_at, pr.last_synced) AS created_at,
+                argMax(pr.merged_at, pr.last_synced) AS merged_at,
+                argMax(pr.first_review_at, pr.last_synced) AS first_review_at,
+                argMax(pr.comments_count, pr.last_synced) AS comments_count,
+                argMax(pr.additions, pr.last_synced) AS additions,
+                argMax(pr.deletions, pr.last_synced) AS deletions
+            FROM git_pull_requests AS pr
+            WHERE 1 = 1
+              {scope_filter}
+              {org_filter_pr}
+            GROUP BY pr.repo_id, pr.number
+        """
 
     async def load_review_engagement(
         self,
@@ -362,6 +412,12 @@ class AIImpactClickHouseLoader:
         Bucket assignment mirrors compute-time ``_safe_bucket``: matched AI
         kinds keep their kind, ``human`` stays human, anything else —
         including unattributed PRs — is ``unknown``.
+
+        Window membership and the ``day`` key both use the event-time
+        expression (merge day when merged, else creation day) so rows merge
+        with ``ai_impact_metrics_daily`` cells — a PR created before the
+        window but merged inside it lands on its merge day, exactly like the
+        compute path.
         """
         from dev_health_ops.api.queries.client import query_dicts
 
@@ -369,9 +425,8 @@ class AIImpactClickHouseLoader:
             "start": start.replace(tzinfo=None),
             "end": end.replace(tzinfo=None),
         }
-        scope_filter = self._engagement_scope_filters(params, repo_id, repo_ids)
+        deduped_prs = self._deduped_prs_subquery(params, repo_id, repo_ids)
         params = self._scope.inject(params)
-        org_filter_pr = self._scope.filter(alias="pr")
         query = f"""
         SELECT
             multiIf(
@@ -380,7 +435,7 @@ class AIImpactClickHouseLoader:
                 attr_map.kind = 'human', 'human',
                 'unknown'
             ) AS bucket,
-            toDate(pr.created_at) AS day,
+            toDate({self._PR_EVENT_EXPR}) AS day,
             countIf(
                 pr.first_review_at IS NOT NULL
                 AND pr.first_review_at >= pr.created_at
@@ -394,14 +449,14 @@ class AIImpactClickHouseLoader:
             sum(
                 coalesce(pr.additions, 0) + coalesce(pr.deletions, 0)
             ) AS loc_total
-        FROM git_pull_requests AS pr
+        FROM (
+            {deduped_prs}
+        ) AS pr
         LEFT JOIN (
             {self._pr_attribution_subquery()}
         ) AS attr_map
             ON attr_map.repo_id = pr.repo_id AND attr_map.number = pr.number
-        WHERE {self._pr_window_filter()}
-          {scope_filter}
-          {org_filter_pr}
+        WHERE {self._pr_event_window_filter()}
         GROUP BY bucket, day
         ORDER BY day, bucket
         """
@@ -416,10 +471,15 @@ class AIImpactClickHouseLoader:
         """CTE body mapping AI-attributed PRs to their changed file paths.
 
         Only PRs whose commits are linked through ``work_graph_pr_commit``
-        appear — that is the assessable universe for overlap rates.
+        appear — that is the assessable universe for overlap rates. The PR
+        universe uses event-time window semantics (merge day when merged) to
+        match ``ai_impact_metrics_daily``. Every joined table is org-scoped:
+        ``work_graph_pr_commit`` and ``git_commit_stats`` both carry
+        ``org_id``, and repo_id/commit_hash values can collide across tenants.
         """
-        scope_filter = self._engagement_scope_filters(params, repo_id, repo_ids)
-        org_filter_pr = self._scope.filter(alias="pr")
+        deduped_prs = self._deduped_prs_subquery(params, repo_id, repo_ids)
+        org_filter_pc = self._scope.filter(alias="pc")
+        org_filter_cs = self._scope.filter(alias="cs")
         return f"""
             SELECT DISTINCT
                 ai.repo_id AS repo_id,
@@ -428,20 +488,22 @@ class AIImpactClickHouseLoader:
                 cs.file_path AS file_path
             FROM (
                 SELECT pr.repo_id AS repo_id, pr.number AS number, attr_map.kind AS kind
-                FROM git_pull_requests AS pr
+                FROM (
+                    {deduped_prs}
+                ) AS pr
                 INNER JOIN (
                     {self._pr_attribution_subquery()}
                 ) AS attr_map
                     ON attr_map.repo_id = pr.repo_id AND attr_map.number = pr.number
                 WHERE attr_map.kind IN ('ai_assisted', 'agent_created', 'ai_review')
-                  AND {self._pr_window_filter()}
-                  {scope_filter}
-                  {org_filter_pr}
+                  AND {self._pr_event_window_filter()}
             ) AS ai
             INNER JOIN work_graph_pr_commit AS pc
                 ON pc.repo_id = ai.repo_id AND pc.pr_number = ai.number
+                {org_filter_pc}
             INNER JOIN git_commit_stats AS cs
                 ON cs.repo_id = pc.repo_id AND cs.commit_hash = pc.commit_hash
+                {org_filter_cs}
         """
 
     async def load_hotspot_overlap(
@@ -454,11 +516,15 @@ class AIImpactClickHouseLoader:
         repo_id: uuid.UUID | None = None,
         repo_ids: list[uuid.UUID] | None = None,
     ) -> list[dict[str, Any]]:
-        """Per-bucket overlap of AI-attributed PRs with hotspot files.
+        """Per-bucket overlap of AI-attributed PRs with top-decile hotspot files.
 
-        Hotspot = latest ``risk_score > 0`` in the window, matching the
-        convention in ``recommendations/loader.py`` and
-        ``metrics/operating_review.py`` (CHAOS-2185).
+        "Hotspot" here means the top decile of latest ``risk_score`` per repo
+        within the window (minimum one file per repo when the decile is
+        degenerate), restricted to ``risk_score > 0``. A bare ``> 0`` cut is
+        NOT discriminating — risk_score is a sum of z-scores, so above-zero
+        means merely above-average and saturates the rate at ~1.0. The
+        reported ``hotspot_overlap_rate`` therefore reads as "share of
+        assessable AI PRs touching top-decile-risk files" (CHAOS-2185).
         """
         from dev_health_ops.api.queries.client import query_dicts
 
@@ -476,16 +542,31 @@ class AIImpactClickHouseLoader:
             {files_cte}
         ),
         hotspots AS (
-            SELECT
-                hs.repo_id AS repo_id,
-                hs.file_path AS file_path,
-                argMax(hs.risk_score, hs.computed_at) AS risk_score
-            FROM file_hotspot_daily AS hs
-            WHERE hs.day >= {{start_day:Date}}
-              AND hs.day <= {{end_day:Date}}
-              {org_filter_hs}
-            GROUP BY hs.repo_id, hs.file_path
-            HAVING risk_score > 0
+            SELECT repo_id, file_path, risk_score
+            FROM (
+                SELECT
+                    repo_id,
+                    file_path,
+                    risk_score,
+                    row_number() OVER (
+                        PARTITION BY repo_id
+                        ORDER BY risk_score DESC, file_path
+                    ) AS risk_rank,
+                    count() OVER (PARTITION BY repo_id) AS repo_file_count
+                FROM (
+                    SELECT
+                        hs.repo_id AS repo_id,
+                        hs.file_path AS file_path,
+                        argMax(hs.risk_score, hs.computed_at) AS risk_score
+                    FROM file_hotspot_daily AS hs
+                    WHERE hs.day >= {{start_day:Date}}
+                      AND hs.day <= {{end_day:Date}}
+                      {org_filter_hs}
+                    GROUP BY hs.repo_id, hs.file_path
+                    HAVING risk_score > 0
+                )
+            )
+            WHERE risk_rank <= greatest(1, toUInt64(ceil(repo_file_count * 0.1)))
         )
         SELECT
             bucket,

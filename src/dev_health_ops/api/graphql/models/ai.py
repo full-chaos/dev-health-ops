@@ -288,6 +288,11 @@ class AIHotspotOverlapRow:
     ``prs_total`` counts AI-attributed PRs whose changed files could be
     resolved through the work graph (the assessable universe); PRs without
     commit/file linkage are excluded rather than silently diluting the rate.
+
+    ``hotspot_overlap_rate`` is the share of assessable PRs touching
+    **top-decile-risk** files (top 10% of latest ``risk_score`` per repo in
+    the window, minimum one file per repo) — not merely above-average-risk
+    files, which would saturate the rate at ~1.0.
     """
 
     bucket: str

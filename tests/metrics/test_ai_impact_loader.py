@@ -332,8 +332,12 @@ async def test_load_hotspot_overlap_uses_risk_score_convention():
         )
 
     query = captured[0]
-    # Hotspot convention shared with recommendations/operating_review.
+    # risk_score > 0 is only a precondition; the discriminating cut is the
+    # per-repo top decile (min one file) — a bare > 0 saturates at ~1.0.
     assert "HAVING risk_score > 0" in query
+    assert "PARTITION BY repo_id" in query
+    assert "repo_file_count * 0.1" in query
+    assert "greatest(1, toUInt64(ceil(repo_file_count * 0.1)))" in query
     assert "work_graph_pr_commit" in query
     assert "git_commit_stats" in query
     assert "uniqExact((pf.repo_id, pf.number))" in query
@@ -357,3 +361,95 @@ async def test_load_complexity_overlap_counts_high_complexity_files():
     query = captured[0]
     assert "file_complexity_snapshots" in query
     assert "high_complexity_functions + fc.very_high_complexity_functions" in query
+
+
+# ---------------------------------------------------------------------------
+# Codex review fixes — org scoping + event-day semantics (CHAOS-2180 Wave 2)
+# ---------------------------------------------------------------------------
+
+
+async def _capture_query(coro_factory) -> tuple[str, dict]:
+    captured: list[tuple[str, dict]] = []
+
+    async def fake_qd(_client: Any, query: str, params: Any) -> list[dict]:
+        captured.append((query, params))
+        return []
+
+    with patch(
+        "dev_health_ops.api.queries.client.query_dicts",
+        side_effect=fake_qd,
+    ):
+        await coro_factory()
+    return captured[0]
+
+
+@pytest.mark.asyncio
+async def test_hotspot_overlap_org_scopes_every_joined_table():
+    """work_graph_pr_commit, git_commit_stats, work_graph_issue_pr and
+    file_hotspot_daily all carry org_id; repo_id/commit_hash values can
+    collide across tenants, so every join leg must be org-filtered."""
+    loader = AIImpactClickHouseLoader(object(), org_id=ORG_ID)
+    query, params = await _capture_query(
+        lambda: loader.load_hotspot_overlap(
+            start=START, end=END, start_day=START_DAY, end_day=END_DAY
+        )
+    )
+    for clause in (
+        "pc.org_id = {org_id:String}",
+        "cs.org_id = {org_id:String}",
+        "link.org_id = {org_id:String}",
+        "hs.org_id = {org_id:String}",
+        "pr.org_id = {org_id:String}",
+        "attr.org_id = {org_id:String}",
+    ):
+        assert clause in query, f"missing org scope: {clause}"
+    assert params["org_id"] == ORG_ID
+
+
+@pytest.mark.asyncio
+async def test_complexity_overlap_org_scopes_every_joined_table():
+    loader = AIImpactClickHouseLoader(object(), org_id=ORG_ID)
+    query, _params = await _capture_query(
+        lambda: loader.load_complexity_overlap(start=START, end=END, end_day=END_DAY)
+    )
+    for clause in (
+        "pc.org_id = {org_id:String}",
+        "cs.org_id = {org_id:String}",
+        "link.org_id = {org_id:String}",
+        "fc.org_id = {org_id:String}",
+        "pr.org_id = {org_id:String}",
+        "attr.org_id = {org_id:String}",
+    ):
+        assert clause in query, f"missing org scope: {clause}"
+
+
+@pytest.mark.asyncio
+async def test_review_engagement_org_scoped_and_uses_event_day():
+    """Day key and window must use event time (merged_at when present, else
+    created_at) — the same semantics as compute_ai_impact_metrics_daily — so
+    a PR created before the window but merged inside it lands its engagement
+    on the merge day and merges with the metrics daily row."""
+    loader = AIImpactClickHouseLoader(object(), org_id=ORG_ID)
+    query, _params = await _capture_query(
+        lambda: loader.load_review_engagement(start=START, end=END)
+    )
+    event = "if(pr.merged_at IS NOT NULL, pr.merged_at, pr.created_at)"
+    assert f"toDate({event}) AS day" in query
+    assert f"({event} >= {{start:DateTime}} AND {event} < {{end:DateTime}})" in query
+    # The created-OR-merged window form must be gone from this query.
+    assert "pr.created_at >= {start:DateTime} AND pr.created_at <" not in query
+    for clause in (
+        "pr.org_id = {org_id:String}",
+        "attr.org_id = {org_id:String}",
+        "link.org_id = {org_id:String}",
+    ):
+        assert clause in query, f"missing org scope: {clause}"
+
+
+@pytest.mark.asyncio
+async def test_label_lookups_are_org_scoped():
+    loader = AIImpactClickHouseLoader(object(), org_id=ORG_ID)
+    repo_query, _ = await _capture_query(lambda: loader.load_repo_labels([str(REPO_A)]))
+    assert "org_id = {org_id:String}" in repo_query
+    team_query, _ = await _capture_query(lambda: loader.load_team_labels([TEAM_A]))
+    assert "org_id = {org_id:String}" in team_query

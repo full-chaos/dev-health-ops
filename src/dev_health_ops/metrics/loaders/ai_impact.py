@@ -25,9 +25,16 @@ class AIImpactClickHouseLoader:
         start: datetime,
         end: datetime,
         repo_id: uuid.UUID | None = None,
+        repo_ids: list[uuid.UUID] | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AIPullRequestAttributionRow]:
+        """Load AI-attributed PR rows.
+
+        ``repo_ids`` narrows the PR universe in SQL *before* LIMIT/OFFSET so
+        team-scoped pagination stays dense (CHAOS-2180 Wave 2). Resolvers
+        compute it from team repo patterns; ``None`` means no constraint.
+        """
         from dev_health_ops.api.queries.client import query_dicts
 
         params: dict[str, Any] = {
@@ -38,6 +45,11 @@ class AIImpactClickHouseLoader:
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
             repo_filter = "AND pr.repo_id = {repo_id:UUID}"
+        if repo_ids is not None:
+            params["repo_ids"] = [str(r) for r in repo_ids]
+            repo_filter += (
+                "\n              AND toString(pr.repo_id) IN {repo_ids:Array(String)}"
+            )
         params = self._scope.inject(params)
         org_filter_attr = self._scope.filter(alias="attr")
         org_filter_pr = self._scope.filter(alias="pr")
@@ -272,6 +284,318 @@ class AIImpactClickHouseLoader:
         if not review_loads:
             return None, 0
         return _gini(review_loads), len(review_loads)
+
+    def _pr_attribution_subquery(self) -> str:
+        """Deduped (repo_id, number, kind) attribution map subquery.
+
+        Mirrors the two linkage paths used by ``load_ai_pr_attributions``:
+        via ``work_graph_issue_pr`` and via direct ``subject_id`` matching
+        (``"<number>"`` or ``"<repo_id>#<number>"``). ``any(kind)`` collapses
+        ReplacingMergeTree duplicates and dual-path matches.
+        """
+        org_filter_attr = self._scope.filter(alias="attr")
+        return f"""
+            SELECT repo_id, number, any(kind) AS kind
+            FROM (
+                SELECT
+                    link.repo_id AS repo_id,
+                    link.pr_number AS number,
+                    attr.kind AS kind
+                FROM work_graph_issue_pr AS link
+                INNER JOIN ai_attribution_resolved AS attr
+                    ON attr.subject_type = 'pull_request'
+                    AND attr.subject_id = link.work_item_id
+                WHERE 1 = 1 {org_filter_attr}
+                UNION ALL
+                SELECT
+                    attr.repo_id AS repo_id,
+                    toUInt32OrZero(
+                        arrayElement(splitByChar('#', attr.subject_id), -1)
+                    ) AS number,
+                    attr.kind AS kind
+                FROM ai_attribution_resolved AS attr
+                WHERE attr.subject_type = 'pull_request'
+                  AND number > 0
+                  {org_filter_attr}
+            )
+            GROUP BY repo_id, number
+        """
+
+    @staticmethod
+    def _pr_window_filter() -> str:
+        return """((pr.created_at >= {start:DateTime} AND pr.created_at < {end:DateTime})
+                OR (pr.merged_at IS NOT NULL AND pr.merged_at >= {start:DateTime} AND pr.merged_at < {end:DateTime}))"""
+
+    def _engagement_scope_filters(
+        self,
+        params: dict[str, Any],
+        repo_id: uuid.UUID | None,
+        repo_ids: list[uuid.UUID] | None,
+    ) -> str:
+        scope_filter = ""
+        if repo_id is not None:
+            params["repo_id"] = str(repo_id)
+            scope_filter += "\n              AND pr.repo_id = {repo_id:UUID}"
+        if repo_ids is not None:
+            params["repo_ids"] = [str(r) for r in repo_ids]
+            scope_filter += (
+                "\n              AND toString(pr.repo_id) IN {repo_ids:Array(String)}"
+            )
+        return scope_filter
+
+    async def load_review_engagement(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        repo_id: uuid.UUID | None = None,
+        repo_ids: list[uuid.UUID] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-(bucket, day) review engagement computed from raw PR rows.
+
+        Returns dicts with ``bucket``, ``day``, ``prs_with_first_review``,
+        ``pickup_latency_hours`` (avg open→first-review, hours),
+        ``review_comments_total`` and ``loc_total`` so the resolver can derive
+        ``review_comments_per_loc`` per slice and per bucket without losing
+        the None-vs-zero distinction (CHAOS-2194).
+
+        Bucket assignment mirrors compute-time ``_safe_bucket``: matched AI
+        kinds keep their kind, ``human`` stays human, anything else —
+        including unattributed PRs — is ``unknown``.
+        """
+        from dev_health_ops.api.queries.client import query_dicts
+
+        params: dict[str, Any] = {
+            "start": start.replace(tzinfo=None),
+            "end": end.replace(tzinfo=None),
+        }
+        scope_filter = self._engagement_scope_filters(params, repo_id, repo_ids)
+        params = self._scope.inject(params)
+        org_filter_pr = self._scope.filter(alias="pr")
+        query = f"""
+        SELECT
+            multiIf(
+                attr_map.kind IN ('ai_assisted', 'agent_created', 'ai_review'),
+                attr_map.kind,
+                attr_map.kind = 'human', 'human',
+                'unknown'
+            ) AS bucket,
+            toDate(pr.created_at) AS day,
+            countIf(
+                pr.first_review_at IS NOT NULL
+                AND pr.first_review_at >= pr.created_at
+            ) AS prs_with_first_review,
+            avgIf(
+                dateDiff('second', pr.created_at, pr.first_review_at) / 3600.0,
+                pr.first_review_at IS NOT NULL
+                AND pr.first_review_at >= pr.created_at
+            ) AS pickup_latency_hours,
+            sum(pr.comments_count) AS review_comments_total,
+            sum(
+                coalesce(pr.additions, 0) + coalesce(pr.deletions, 0)
+            ) AS loc_total
+        FROM git_pull_requests AS pr
+        LEFT JOIN (
+            {self._pr_attribution_subquery()}
+        ) AS attr_map
+            ON attr_map.repo_id = pr.repo_id AND attr_map.number = pr.number
+        WHERE {self._pr_window_filter()}
+          {scope_filter}
+          {org_filter_pr}
+        GROUP BY bucket, day
+        ORDER BY day, bucket
+        """
+        return await query_dicts(self.client, query, params)
+
+    def _ai_pr_files_cte(
+        self,
+        params: dict[str, Any],
+        repo_id: uuid.UUID | None,
+        repo_ids: list[uuid.UUID] | None,
+    ) -> str:
+        """CTE body mapping AI-attributed PRs to their changed file paths.
+
+        Only PRs whose commits are linked through ``work_graph_pr_commit``
+        appear — that is the assessable universe for overlap rates.
+        """
+        scope_filter = self._engagement_scope_filters(params, repo_id, repo_ids)
+        org_filter_pr = self._scope.filter(alias="pr")
+        return f"""
+            SELECT DISTINCT
+                ai.repo_id AS repo_id,
+                ai.number AS number,
+                ai.kind AS bucket,
+                cs.file_path AS file_path
+            FROM (
+                SELECT pr.repo_id AS repo_id, pr.number AS number, attr_map.kind AS kind
+                FROM git_pull_requests AS pr
+                INNER JOIN (
+                    {self._pr_attribution_subquery()}
+                ) AS attr_map
+                    ON attr_map.repo_id = pr.repo_id AND attr_map.number = pr.number
+                WHERE attr_map.kind IN ('ai_assisted', 'agent_created', 'ai_review')
+                  AND {self._pr_window_filter()}
+                  {scope_filter}
+                  {org_filter_pr}
+            ) AS ai
+            INNER JOIN work_graph_pr_commit AS pc
+                ON pc.repo_id = ai.repo_id AND pc.pr_number = ai.number
+            INNER JOIN git_commit_stats AS cs
+                ON cs.repo_id = pc.repo_id AND cs.commit_hash = pc.commit_hash
+        """
+
+    async def load_hotspot_overlap(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        start_day: date,
+        end_day: date,
+        repo_id: uuid.UUID | None = None,
+        repo_ids: list[uuid.UUID] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-bucket overlap of AI-attributed PRs with hotspot files.
+
+        Hotspot = latest ``risk_score > 0`` in the window, matching the
+        convention in ``recommendations/loader.py`` and
+        ``metrics/operating_review.py`` (CHAOS-2185).
+        """
+        from dev_health_ops.api.queries.client import query_dicts
+
+        params: dict[str, Any] = {
+            "start": start.replace(tzinfo=None),
+            "end": end.replace(tzinfo=None),
+            "start_day": start_day,
+            "end_day": end_day,
+        }
+        files_cte = self._ai_pr_files_cte(params, repo_id, repo_ids)
+        params = self._scope.inject(params)
+        org_filter_hs = self._scope.filter(alias="hs")
+        query = f"""
+        WITH pr_files AS (
+            {files_cte}
+        ),
+        hotspots AS (
+            SELECT
+                hs.repo_id AS repo_id,
+                hs.file_path AS file_path,
+                argMax(hs.risk_score, hs.computed_at) AS risk_score
+            FROM file_hotspot_daily AS hs
+            WHERE hs.day >= {{start_day:Date}}
+              AND hs.day <= {{end_day:Date}}
+              {org_filter_hs}
+            GROUP BY hs.repo_id, hs.file_path
+            HAVING risk_score > 0
+        )
+        SELECT
+            bucket,
+            uniqExact((pf.repo_id, pf.number)) AS prs_total,
+            uniqExactIf(
+                (pf.repo_id, pf.number), h.file_path != ''
+            ) AS prs_touching_hotspots,
+            avgIf(h.risk_score, h.file_path != '') AS avg_hotspot_risk_score
+        FROM pr_files AS pf
+        LEFT JOIN hotspots AS h
+            ON h.repo_id = pf.repo_id AND h.file_path = pf.file_path
+        GROUP BY bucket
+        ORDER BY bucket
+        """
+        return await query_dicts(self.client, query, params)
+
+    async def load_complexity_overlap(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        end_day: date,
+        repo_id: uuid.UUID | None = None,
+        repo_ids: list[uuid.UUID] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-bucket overlap of AI-attributed PRs with high-complexity files.
+
+        High-complexity = latest snapshot (as of ``end_day``) reporting at
+        least one high- or very-high-complexity function (CHAOS-2185).
+        """
+        from dev_health_ops.api.queries.client import query_dicts
+
+        params: dict[str, Any] = {
+            "start": start.replace(tzinfo=None),
+            "end": end.replace(tzinfo=None),
+            "end_day": end_day,
+        }
+        files_cte = self._ai_pr_files_cte(params, repo_id, repo_ids)
+        params = self._scope.inject(params)
+        org_filter_fc = self._scope.filter(alias="fc")
+        query = f"""
+        WITH pr_files AS (
+            {files_cte}
+        ),
+        complex_files AS (
+            SELECT
+                fc.repo_id AS repo_id,
+                fc.file_path AS file_path
+            FROM file_complexity_snapshots AS fc
+            WHERE fc.as_of_day <= {{end_day:Date}}
+              {org_filter_fc}
+            GROUP BY fc.repo_id, fc.file_path
+            HAVING argMax(
+                fc.high_complexity_functions + fc.very_high_complexity_functions,
+                fc.computed_at
+            ) > 0
+        )
+        SELECT
+            bucket,
+            uniqExact((pf.repo_id, pf.number)) AS prs_total,
+            uniqExactIf(
+                (pf.repo_id, pf.number), cf.file_path != ''
+            ) AS prs_touching_high_complexity
+        FROM pr_files AS pf
+        LEFT JOIN complex_files AS cf
+            ON cf.repo_id = pf.repo_id AND cf.file_path = pf.file_path
+        GROUP BY bucket
+        ORDER BY bucket
+        """
+        return await query_dicts(self.client, query, params)
+
+    async def load_repo_labels(self, repo_ids: list[str]) -> dict[str, str]:
+        """Map repo UUID strings to repo full-names (best effort)."""
+        from dev_health_ops.api.queries.client import query_dicts
+
+        if not repo_ids:
+            return {}
+        params: dict[str, Any] = {"repo_ids": repo_ids}
+        params = self._scope.inject(params)
+        org_expr = self._scope.expression()
+        org_filter = f"AND {org_expr}" if org_expr else ""
+        query = f"""
+        SELECT toString(id) AS repo_id, repo AS full_name
+        FROM repos
+        WHERE toString(id) IN {{repo_ids:Array(String)}}
+          {org_filter}
+        """
+        rows = await query_dicts(self.client, query, params)
+        return {
+            str(r["repo_id"]): str(r.get("full_name") or r["repo_id"]) for r in rows
+        }
+
+    async def load_team_labels(self, team_ids: list[str]) -> dict[str, str]:
+        """Map team ids to team display names (best effort)."""
+        from dev_health_ops.api.queries.client import query_dicts
+
+        if not team_ids:
+            return {}
+        params: dict[str, Any] = {"team_ids": team_ids}
+        params = self._scope.inject(params)
+        org_expr = self._scope.expression()
+        org_filter = f"AND {org_expr}" if org_expr else ""
+        query = f"""
+        SELECT toString(id) AS team_id, name
+        FROM teams
+        WHERE toString(id) IN {{team_ids:Array(String)}}
+          {org_filter}
+        """
+        rows = await query_dicts(self.client, query, params)
+        return {str(r["team_id"]): str(r.get("name") or r["team_id"]) for r in rows}
 
 
 def _to_record(raw: dict[str, Any]) -> AIImpactMetricsDailyRecord:

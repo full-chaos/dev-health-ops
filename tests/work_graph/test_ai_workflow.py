@@ -270,3 +270,75 @@ def test_non_ai_work_graph_edge_record_shape_regression() -> None:
     assert edge.target_type.value == "pr"
     assert edge.edge_type.value == "implements"
     assert edge.evidence == "Closes CHAOS-1"
+
+
+def test_edge_union_pushes_role_typed_predicates_into_each_branch() -> None:
+    """Query-shape regression for the FINAL'd UNION reader (CHAOS-2187 perf).
+
+    Every branch must repeat the frontier-id filter on its OWN key columns
+    (they are in that table's ORDER BY) so part/granule pruning happens
+    BEFORE the FINAL merge. Without these, a single-PR drilldown FINAL-merges
+    the org's entire history in all five edge tables.
+    """
+    from dev_health_ops.work_graph.ai_workflow import _AI_EDGE_UNION_QUERY
+
+    branch_predicates = {
+        "ai_workflow_issue_edges": (
+            "(issue_id IN {issue_ids:Array(String)}"
+            " OR run_id IN {run_ids:Array(String)})"
+        ),
+        "ai_workflow_artifact_edges": (
+            "(run_id IN {run_ids:Array(String)}"
+            " OR artifact_id IN {artifact_ids:Array(String)})"
+        ),
+        "work_graph_pr_review_outcome_edges": (
+            "(pr_id IN {pr_ids:Array(String)}"
+            " OR review_outcome_id IN {review_outcome_ids:Array(String)})"
+        ),
+        "work_graph_pr_deployment_edges": (
+            "(pr_id IN {pr_ids:Array(String)}"
+            " OR deployment_id IN {deployment_ids:Array(String)})"
+        ),
+        "work_graph_deployment_incident_edges": (
+            "(deployment_id IN {deployment_ids:Array(String)}"
+            " OR incident_id IN {incident_ids:Array(String)})"
+        ),
+    }
+    for table, predicate in branch_predicates.items():
+        branch = _AI_EDGE_UNION_QUERY.split(f"FROM {table} FINAL", 1)[1].split(
+            "UNION ALL", 1
+        )[0]
+        assert "org_id = {org_id:String}" in branch, table
+        assert predicate in branch, f"{table} missing pushed-down predicate"
+
+
+def test_traversal_passes_role_typed_frontier_ids() -> None:
+    """The PR-root first hop must send pr_ids=[root] and empty arrays for
+    every role absent from the frontier (empty IN [] prunes that branch)."""
+    captured: list[dict[str, object]] = []
+
+    async def fake_query(_client: object, query: str, params: dict[str, object]):
+        if "FROM ai_workflow_runs" in query:
+            return []
+        captured.append(params)
+        return []
+
+    pr_id = f"{REPO}:42"
+    with patch(
+        "dev_health_ops.api.queries.client.query_dicts",
+        new=AsyncMock(side_effect=fake_query),
+    ):
+        asyncio.run(load_ai_workflow_graph_for_pr(object(), str(ORG), pr_id, depth=1))
+
+    assert len(captured) == 1
+    params = captured[0]
+    assert params["pr_ids"] == [pr_id]
+    assert params["artifact_ids"] == [pr_id]  # superset: pr is an artifact target
+    for empty_role in (
+        "issue_ids",
+        "run_ids",
+        "review_outcome_ids",
+        "deployment_ids",
+        "incident_ids",
+    ):
+        assert params[empty_role] == [], empty_role

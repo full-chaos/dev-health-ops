@@ -68,7 +68,7 @@ def generate_ai_tool_allowlist_entries(
 ) -> list[AIToolAllowlistEntry]:
     """Build the deterministic org-level allowlist seed rows."""
     stamp = now or datetime.now(timezone.utc)
-    return [
+    entries = [
         AIToolAllowlistEntry(
             org_id=str(org_id),
             tool_name=tool_name,
@@ -80,3 +80,8 @@ def generate_ai_tool_allowlist_entries(
         )
         for tool_name, model_name, status, reason in _ALLOWLIST_SEED
     ]
+    # '' and NULL share the same ReplacingMergeTree key (ORDER BY
+    # ifNull(model_name, '')) — a blank "exact" seed row would replace the
+    # wildcard policy on merge. The dataclass normalises, this asserts.
+    assert all(entry.model_name != "" for entry in entries)
+    return entries

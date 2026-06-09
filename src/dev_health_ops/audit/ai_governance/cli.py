@@ -58,13 +58,22 @@ def _sink(ns: argparse.Namespace):
 
 def _cmd_allowlist_set(ns: argparse.Namespace) -> int:
     org_id = _require_org(ns)
-    entry = AIToolAllowlistEntry(
-        org_id=org_id,
-        tool_name=ns.tool,
-        model_name=ns.model,
-        status=ToolAllowlistStatus(ns.status),
-        reason=ns.reason,
-    )
+    try:
+        # AIToolAllowlistEntry normalises blank/whitespace --model to None
+        # (wildcard) and rejects a blank --tool: '' and NULL share the same
+        # ReplacingMergeTree key (ORDER BY ifNull(model_name, '')), so a
+        # blank "exact" row would silently replace the wildcard policy.
+        entry = AIToolAllowlistEntry(
+            org_id=org_id,
+            tool_name=ns.tool,
+            model_name=ns.model,
+            status=ToolAllowlistStatus(ns.status),
+            reason=ns.reason,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"Invalid allowlist entry: {exc}") from exc
+    if ns.model is not None and entry.model_name is None:
+        logger.info("Blank --model treated as wildcard (applies to every model).")
     sink = _sink(ns)
     sink.write_ai_tool_allowlist([entry])
     scope = (

@@ -415,3 +415,61 @@ async def test_allowlist_exact_model_beats_wildcard_without_fanout() -> None:
     }
     assert refreshed["1"].tool_allowlist_status is ToolAllowlistStatus.DEPRECATED
     assert refreshed["2"].tool_allowlist_status is ToolAllowlistStatus.ALLOWED
+
+
+async def test_blank_model_rows_resolve_as_wildcard_never_phantom_exact() -> None:
+    """Fix 2 (final pass): a legacy ''-model row (inserted raw, bypassing the
+    normalising dataclass) must behave as wildcard, and an artifact with NO
+    model evidence (JSONExtractString yields '') must resolve via wildcard —
+    never phantom-match a '' "exact" key."""
+    from dev_health_ops.audit.ai_governance.loaders import AIGovernanceLoader
+    from dev_health_ops.audit.ai_governance.models import ToolAllowlistStatus
+
+    sink = _sink()
+    org = uuid.uuid4()
+    repo = uuid.uuid4()
+    day = date.today()
+    observed = datetime.combine(day, time(hour=9), tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    # Legacy '' row written raw (the dataclass would normalise it away).
+    sink.client.insert(
+        "ai_tool_allowlist",
+        [[str(org), "legacytool", "", "disallowed", "legacy blank row", now, now]],
+        column_names=[
+            "org_id",
+            "tool_name",
+            "model_name",
+            "status",
+            "reason",
+            "updated_at",
+            "computed_at",
+        ],
+    )
+    # Artifact with tool evidence but NO model evidence.
+    _insert_attributions(
+        sink,
+        org,
+        repo,
+        ["1"],
+        evidence={"tool_name": "legacytool"},
+        observed_at=observed,
+    )
+    # Artifact WITH a model: must also resolve via the ''-as-wildcard row,
+    # never via a phantom '' exact key.
+    _insert_attributions(
+        sink,
+        org,
+        repo,
+        ["2"],
+        evidence={"tool_name": "legacytool", "model_name": "some-model"},
+        observed_at=observed,
+    )
+
+    loader = AIGovernanceLoader(sink)
+    artifacts = {
+        a.subject_id: a for a in loader.load_artifacts_for_day(org_id=str(org), day=day)
+    }
+    assert len(artifacts) == 2  # no fan-out
+    assert artifacts["1"].tool_allowlist_status is ToolAllowlistStatus.DISALLOWED
+    assert artifacts["2"].tool_allowlist_status is ToolAllowlistStatus.DISALLOWED

@@ -137,6 +137,14 @@ async def load_ai_workflow_graph(
 
         node_types = [node_type for node_type, _ in current]
         node_ids = [node_id for _, node_id in current]
+
+        # Role-typed frontier ids: each UNION branch filters on its own key
+        # columns with ONLY the ids that can play that role this hop. Empty
+        # arrays collapse a branch's predicate to constant-false, so branches
+        # with no relevant frontier nodes are pruned before their FINAL pass.
+        def ids_of(*types: str) -> list[str]:
+            return [i for t, i in current if t in types]
+
         rows = await query_dicts(
             client,
             _AI_EDGE_UNION_QUERY,
@@ -144,6 +152,18 @@ async def load_ai_workflow_graph(
                 "org_id": org_id,
                 "node_types": node_types,
                 "node_ids": node_ids,
+                "issue_ids": ids_of("issue"),
+                "run_ids": ids_of("ai_workflow_run"),
+                "pr_ids": ids_of("pr"),
+                "review_outcome_ids": ids_of("review_outcome"),
+                "deployment_ids": ids_of("deployment"),
+                "incident_ids": ids_of("incident"),
+                # Artifact targets carry their own type taxonomy (pr, diff,
+                # ...): superset of every frontier id that is not an
+                # issue/run, so unknown artifact types keep matching.
+                "artifact_ids": [
+                    i for t, i in current if t not in ("issue", "ai_workflow_run")
+                ],
                 "limit": max(limit - len(edges_by_id), 0),
             },
         )
@@ -259,6 +279,19 @@ _AI_RUN_QUERY = """
 # versions of the same deterministic edge ids, and without FINAL those
 # duplicates are query-visible until background merges run. Duplicates would
 # also burn the traversal LIMIT and falsely mark results partial (CHAOS-2187).
+#
+# Each branch ALSO repeats the frontier-id predicate on its own raw key
+# columns (issue_id/run_id/pr_id/... are all in that table's ORDER BY): the
+# key condition then prunes parts/granules BEFORE the FINAL merge, instead
+# of FINAL-merging the org's full history and filtering outside the union.
+# Predicates are role-typed (issue_ids/run_ids/pr_ids/...): an OR across two
+# key columns defeats range pruning, but a role array that is EMPTY for this
+# hop collapses its disjunct to constant-false, so inactive branches prune to
+# zero parts and the active disjunct usually prunes via the (org_id, <id>)
+# key prefix. The arrays are role supersets (artifact_ids = every frontier id
+# that is not an issue/run); the outer WHERE still enforces the exact
+# (type, id) match, so traversal semantics are unchanged and no history
+# window is introduced.
 _AI_EDGE_UNION_QUERY = """
     SELECT * FROM
     (
@@ -276,6 +309,7 @@ _AI_EDGE_UNION_QUERY = """
             toString(repo_id) AS repo_id
         FROM ai_workflow_issue_edges FINAL
         WHERE org_id = {org_id:String}
+          AND (issue_id IN {issue_ids:Array(String)} OR run_id IN {run_ids:Array(String)})
 
         UNION ALL
 
@@ -293,6 +327,7 @@ _AI_EDGE_UNION_QUERY = """
             toString(repo_id) AS repo_id
         FROM ai_workflow_artifact_edges FINAL
         WHERE org_id = {org_id:String}
+          AND (run_id IN {run_ids:Array(String)} OR artifact_id IN {artifact_ids:Array(String)})
 
         UNION ALL
 
@@ -310,6 +345,7 @@ _AI_EDGE_UNION_QUERY = """
             toString(repo_id) AS repo_id
         FROM work_graph_pr_review_outcome_edges FINAL
         WHERE org_id = {org_id:String}
+          AND (pr_id IN {pr_ids:Array(String)} OR review_outcome_id IN {review_outcome_ids:Array(String)})
 
         UNION ALL
 
@@ -327,6 +363,7 @@ _AI_EDGE_UNION_QUERY = """
             toString(repo_id) AS repo_id
         FROM work_graph_pr_deployment_edges FINAL
         WHERE org_id = {org_id:String}
+          AND (pr_id IN {pr_ids:Array(String)} OR deployment_id IN {deployment_ids:Array(String)})
 
         UNION ALL
 
@@ -344,6 +381,7 @@ _AI_EDGE_UNION_QUERY = """
             toString(repo_id) AS repo_id
         FROM work_graph_deployment_incident_edges FINAL
         WHERE org_id = {org_id:String}
+          AND (deployment_id IN {deployment_ids:Array(String)} OR incident_id IN {incident_ids:Array(String)})
     )
     WHERE
         (source_type IN {node_types:Array(String)} AND source_id IN {node_ids:Array(String)})

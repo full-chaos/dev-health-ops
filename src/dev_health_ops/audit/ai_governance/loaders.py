@@ -255,18 +255,24 @@ LEFT JOIN (
     GROUP BY repo_id
 ) AS finding ON a.repo_id = finding.repo_id
 -- Allowlist precedence (CHAOS-2209): an exact tool+model row beats a
--- wildcard (model_name IS NULL) row, and each side is deduplicated to its
--- latest version (argMax over computed_at — the table is a
--- ReplacingMergeTree) AND to one row per join key, so an artifact can never
--- fan out into multiple coverage events from overlapping policy rows.
+-- wildcard row, and each side is deduplicated to its latest version
+-- (argMax over computed_at — the table is a ReplacingMergeTree) AND to one
+-- row per join key, so an artifact can never fan out into multiple
+-- coverage events from overlapping policy rows.
+-- Wildcard means nullIf(model_name, '') IS NULL: legacy '' rows are
+-- wildcard, never exact — JSONExtractString yields '' for missing model
+-- evidence, so a '' "exact" key would phantom-match every artifact that
+-- lacks model evidence. Note migration 038's ORDER BY ifNull(model_name,'')
+-- makes NULL and '' the SAME dedup key (rows can replace each other on
+-- merge); fixing that needs a schema migration — follow-up ticket.
 LEFT JOIN (
     SELECT
         org_id,
         tool_name,
-        ifNull(model_name, '') AS model_key,
+        model_name AS model_key,
         argMax(status, computed_at) AS status
     FROM ai_tool_allowlist
-    WHERE model_name IS NOT NULL
+    WHERE nullIf(model_name, '') IS NOT NULL
     GROUP BY org_id, tool_name, model_key
 ) AS allow_exact
     ON toString(a.org_id) = allow_exact.org_id
@@ -278,7 +284,7 @@ LEFT JOIN (
         tool_name,
         argMax(status, computed_at) AS status
     FROM ai_tool_allowlist
-    WHERE model_name IS NULL
+    WHERE nullIf(model_name, '') IS NULL
     GROUP BY org_id, tool_name
 ) AS allow_wild
     ON toString(a.org_id) = allow_wild.org_id

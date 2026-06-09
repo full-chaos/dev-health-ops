@@ -138,3 +138,63 @@ def test_cli_list_reads_latest_versions(monkeypatch: Any, capsys: Any) -> None:
     assert "argMax(status, computed_at)" in query
     out = capsys.readouterr().out
     assert "claude-code / *: allowed" in out
+
+
+def test_entry_normalizes_blank_model_and_rejects_blank_tool() -> None:
+    """'' and NULL share the same RMT dedup key (ORDER BY ifNull(model_name,
+    '')), so blank models must become wildcard (None) at construction."""
+    entry = AIToolAllowlistEntry(
+        org_id=ORG_ID,
+        tool_name="  cursor  ",
+        model_name="   ",
+        status=ToolAllowlistStatus.ALLOWED,
+    )
+    assert entry.tool_name == "cursor"
+    assert entry.model_name is None
+
+    import pytest
+
+    with pytest.raises(ValueError, match="tool_name"):
+        AIToolAllowlistEntry(
+            org_id=ORG_ID, tool_name="   ", status=ToolAllowlistStatus.ALLOWED
+        )
+
+
+def test_cli_set_blank_model_writes_wildcard(monkeypatch: Any) -> None:
+    sink = MagicMock()
+    monkeypatch.setattr(allowlist_cli, "_sink", lambda _ns: sink)
+
+    ns = _parse(
+        [
+            "ai",
+            "allowlist",
+            "set",
+            "--tool",
+            "cursor",
+            "--model",
+            "",
+            "--status",
+            "allowed",
+        ]
+    )
+    assert ns.func(ns) == 0
+    (entries,) = sink.write_ai_tool_allowlist.call_args.args
+    assert entries[0].model_name is None  # wildcard, not a '' exact policy
+
+
+def test_cli_set_blank_tool_rejected(monkeypatch: Any) -> None:
+    sink = MagicMock()
+    monkeypatch.setattr(allowlist_cli, "_sink", lambda _ns: sink)
+
+    ns = _parse(["ai", "allowlist", "set", "--tool", "  ", "--status", "allowed"])
+    import pytest
+
+    with pytest.raises(SystemExit, match="Invalid allowlist entry"):
+        ns.func(ns)
+    sink.write_ai_tool_allowlist.assert_not_called()
+
+
+def test_fixture_seed_has_no_blank_models() -> None:
+    entries = generate_ai_tool_allowlist_entries(ORG_ID)
+    assert all(entry.model_name != "" for entry in entries)
+    assert all(entry.tool_name for entry in entries)

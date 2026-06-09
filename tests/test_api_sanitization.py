@@ -55,7 +55,18 @@ async def test_home_response_sanitizes_non_finite_values(monkeypatch):
         return []
 
     async def _fake_fetch_rework_theme_allocation(*_args, **_kwargs):
-        return []
+        # Carry a non-finite value through the rework-allocation path to assert
+        # the response sanitizes it (mirrors the other NaN-returning fakes).
+        return [
+            {
+                "theme": "maintenance",
+                "label": "Maintenance",
+                "allocation": float("nan"),
+                "allocation_pct": float("nan"),
+                "prs_merged": 0,
+                "churn_loc": 0,
+            }
+        ]
 
     monkeypatch.setattr(home_service, "clickhouse_client", _fake_clickhouse_client)
     monkeypatch.setattr(

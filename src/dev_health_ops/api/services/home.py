@@ -957,7 +957,17 @@ async def build_home_response(
             ),
         )
         rework_theme_allocation = [
-            ReworkThemeAllocation(**row) for row in rework_theme_allocation_rows
+            ReworkThemeAllocation(
+                **{
+                    **row,
+                    # Sanitize non-finite floats (NaN/inf) so the JSON response
+                    # stays spec-compliant, matching every other numeric field
+                    # in this payload.
+                    "allocation": safe_float(row.get("allocation")),
+                    "allocation_pct": safe_float(row.get("allocation_pct")),
+                }
+            )
+            for row in rework_theme_allocation_rows
         ]
 
         sources = {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +11,12 @@ from dev_health_ops.api.graphql.models.ai import (
 )
 from dev_health_ops.metrics.ai_impact import AI_BUCKETS, AttributionBucket
 from dev_health_ops.metrics.loaders.base import parse_uuid
+from dev_health_ops.metrics.opportunities.scoring import (
+    clamp,
+    score_delta,
+    score_ratio,
+    stable_opportunity_id,
+)
 from dev_health_ops.metrics.query_builder import OrgScopedQuery
 
 _MIN_PRS = 10
@@ -399,8 +404,7 @@ def _work_graph_refs(evidence_refs: list[str]) -> list[AIWorkGraphDrilldownRef]:
 
 
 def _stable_id(kind: AIOpportunityKind, repo_id: str, team_id: str | None) -> str:
-    raw = f"{kind.value}:{repo_id}:{team_id or ''}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return stable_opportunity_id(kind, repo_id, team_id)
 
 
 def _ratio(numerator: float, denominator: float) -> float | None:
@@ -416,19 +420,15 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _clamp(value: float) -> float:
-    return max(0.0, min(1.0, value))
+    return clamp(value)
 
 
 def _score_ratio(value: float, threshold: float) -> float:
-    if threshold <= 0:
-        return 0.0
-    return _clamp((value / threshold - 1.0) / 2.0 + 0.50)
+    return score_ratio(value, threshold)
 
 
 def _score_delta(value: float, threshold: float) -> float:
-    if threshold <= 0:
-        return 0.0
-    return _clamp((value / threshold - 1.0) / 2.0 + 0.50)
+    return score_delta(value, threshold)
 
 
 def _clamp_limit(limit: int | None) -> int:

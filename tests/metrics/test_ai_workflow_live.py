@@ -37,6 +37,7 @@ pytestmark = [
 def _sink():
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 
+    assert CLICKHOUSE_URI is not None  # skipif guard guarantees it
     sink = ClickHouseMetricsSink(CLICKHOUSE_URI)
     sink.ensure_tables()
     return sink
@@ -209,6 +210,7 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
         sink.write_ai_workflow_issue_edges(issues)
         sink.write_work_graph_pr_review_outcome_edges(reviews)
 
+    assert CLICKHOUSE_URI is not None  # skipif guard guarantees it
     client = await get_global_client(CLICKHOUSE_URI)
     pr_root = f"{repo}:7"
 
@@ -251,6 +253,7 @@ async def test_dep_update_anti_join_is_tenant_isolated() -> None:
     # Same repo_id and PR numbers, but the AI attribution lives in org B.
     _insert_attributions(sink, org_b, repo, [str(n) for n in numbers])
 
+    assert CLICKHOUSE_URI is not None  # skipif guard guarantees it
     client = await get_global_client(CLICKHOUSE_URI)
     result_a = await AIOpportunityDetector(client).detect(str(org_a), limit=50)
     kinds_a = {item.kind for item in result_a}
@@ -330,6 +333,7 @@ async def test_doc_drift_join_is_tenant_isolated() -> None:
         ],
     )
 
+    assert CLICKHOUSE_URI is not None  # skipif guard guarantees it
     client = await get_global_client(CLICKHOUSE_URI)
     result_a = await AIOpportunityDetector(client).detect(str(org_a), limit=50)
     drift = [i for i in result_a if i.kind is AIOpportunityKind.DOCUMENTATION_DRIFT]

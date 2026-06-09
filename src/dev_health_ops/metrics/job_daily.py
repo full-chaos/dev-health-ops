@@ -67,6 +67,10 @@ from dev_health_ops.utils.cli import (
     resolve_date_range,
     validate_sink,
 )
+from dev_health_ops.work_graph.extractors.ai_workflow import (
+    extract_ai_workflow_from_pull_requests,
+    extract_review_deployment_incident_edges,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +149,127 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
         return [end_day]
     start_day = end_day - timedelta(days=backfill_days - 1)
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
+
+
+def _extract_ai_workflow_for_day(
+    *,
+    primary_sink: Any,
+    org_id: str,
+    start: datetime,
+    end: datetime,
+    repo_id: uuid.UUID | None,
+    repo_provider_by_id: dict[str, str],
+) -> tuple[list[Any], list[Any], list[Any], list[Any]]:
+    """Extract AI workflow runs and Work Graph edges for one UTC day window.
+
+    Returns ``(runs, artifact_edges, issue_edges, review_outcome_edges)``.
+    Returns four empty lists when ``org_id`` is not a UUID — AIWorkflowRun
+    requires a tenant UUID by contract, so extraction without one would
+    fabricate attribution (CHAOS-2187).
+    """
+    org_uuid: uuid.UUID | None = None
+    if org_id:
+        try:
+            org_uuid = uuid.UUID(org_id)
+        except ValueError:
+            org_uuid = None
+    if org_uuid is None:
+        logger.debug("AI workflow extraction skipped: org_id %r is not a UUID", org_id)
+        return [], [], [], []
+
+    wf_params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
+    wf_repo_filter = ""
+    if repo_id is not None:
+        wf_params["repo_id"] = str(repo_id)
+        wf_repo_filter = " AND repo_id = {repo_id:UUID}"
+
+    wf_pr_rows = primary_sink.query_dicts(
+        "SELECT repo_id, number, title, body, head_branch,"
+        " author_name, author_email, created_at, merged_at,"
+        " closed_at, last_synced"
+        " FROM git_pull_requests"
+        " WHERE org_id = {org_id:String}"
+        "   AND ((created_at >= {start:DateTime64(3, 'UTC')}"
+        "         AND created_at < {end:DateTime64(3, 'UTC')})"
+        "    OR (merged_at IS NOT NULL"
+        "        AND merged_at >= {start:DateTime64(3, 'UTC')}"
+        "        AND merged_at < {end:DateTime64(3, 'UTC')}))"
+        f"{wf_repo_filter}",
+        wf_params,
+    )
+
+    issue_ids_by_pr: dict[str, list[str]] = {}
+    wf_pr_numbers = sorted(
+        {int(row["number"]) for row in wf_pr_rows if row.get("number") is not None}
+    )
+    if wf_pr_numbers:
+        link_params: dict[str, Any] = {
+            "org_id": org_id,
+            "pr_numbers": wf_pr_numbers,
+        }
+        link_repo_filter = ""
+        if repo_id is not None:
+            link_params["repo_id"] = str(repo_id)
+            link_repo_filter = " AND repo_id = {repo_id:UUID}"
+        link_rows = primary_sink.query_dicts(
+            "SELECT repo_id, pr_number, work_item_id"
+            " FROM work_graph_issue_pr"
+            " WHERE org_id = {org_id:String}"
+            "   AND pr_number IN {pr_numbers:Array(UInt32)}"
+            f"{link_repo_filter}",
+            link_params,
+        )
+        for link in link_rows:
+            wi_id = str(link.get("work_item_id") or "")
+            link_repo = str(link.get("repo_id") or "")
+            link_number = link.get("pr_number")
+            if not wi_id or not link_repo or link_number is None:
+                continue
+            issue_ids_by_pr.setdefault(f"{link_repo}:{int(link_number)}", []).append(
+                wi_id
+            )
+
+    wf_review_rows = primary_sink.query_dicts(
+        "SELECT repo_id, number, review_id, state, submitted_at, last_synced"
+        " FROM git_pull_request_reviews"
+        " WHERE org_id = {org_id:String}"
+        "   AND submitted_at >= {start:DateTime64(3, 'UTC')}"
+        "   AND submitted_at < {end:DateTime64(3, 'UTC')}"
+        f"{wf_repo_filter}",
+        wf_params,
+    )
+
+    prs_by_provider: dict[str, list[dict[str, Any]]] = {}
+    for row in wf_pr_rows:
+        row_provider = repo_provider_by_id.get(str(row.get("repo_id") or ""), "unknown")
+        prs_by_provider.setdefault(row_provider, []).append(row)
+    reviews_by_provider: dict[str, list[dict[str, Any]]] = {}
+    for row in wf_review_rows:
+        row_provider = repo_provider_by_id.get(str(row.get("repo_id") or ""), "unknown")
+        reviews_by_provider.setdefault(row_provider, []).append(row)
+
+    runs: list[Any] = []
+    artifact_edges: list[Any] = []
+    issue_edges: list[Any] = []
+    review_outcome_edges: list[Any] = []
+    for wf_provider, provider_prs in prs_by_provider.items():
+        extraction = extract_ai_workflow_from_pull_requests(
+            provider_prs,
+            org_id=org_uuid,
+            provider=wf_provider,
+            issue_ids_by_pr=issue_ids_by_pr,
+        )
+        runs.extend(extraction.runs)
+        artifact_edges.extend(extraction.artifact_edges)
+        issue_edges.extend(extraction.issue_edges)
+    for wf_provider, provider_reviews in reviews_by_provider.items():
+        review_extraction = extract_review_deployment_incident_edges(
+            org_id=org_uuid,
+            provider=wf_provider,
+            reviews=provider_reviews,
+        )
+        review_outcome_edges.extend(review_extraction.review_outcome_edges)
+    return runs, artifact_edges, issue_edges, review_outcome_edges
 
 
 def _repo_to_team_map_for_compounding_risk(
@@ -267,15 +392,18 @@ async def run_daily_metrics_job(
     team_resolver = get_team_resolver()
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
-    repo_names_by_id = {
-        r.repo_id: r.full_name
-        for r in discover_repos(
-            backend=backend,
-            primary_sink=primary_sink,
-            repo_id=repo_id,
-            repo_name=repo_name,
-            org_id=org_id,
-        )
+    discovered_repos = discover_repos(
+        backend=backend,
+        primary_sink=primary_sink,
+        repo_id=repo_id,
+        repo_name=repo_name,
+        org_id=org_id,
+    )
+    repo_names_by_id = {r.repo_id: r.full_name for r in discovered_repos}
+    # Provider per repo for AI workflow extraction (CHAOS-2187). Falls back to
+    # "unknown" so a missing provider never blocks edge extraction.
+    repo_provider_by_id = {
+        str(r.repo_id): (r.source or "unknown") for r in discovered_repos
     }
 
     loader = await _get_loader(db_url, backend, org_id=org_id)
@@ -500,6 +628,32 @@ async def run_daily_metrics_job(
                 repo_id=repo_id,
             )
 
+        # CHAOS-2187: extract AI workflow runs + Work Graph edges from today's
+        # PRs/reviews so ai_workflow_issue_edges, ai_workflow_artifact_edges,
+        # and work_graph_pr_review_outcome_edges are populated by ingestion.
+        # Extraction is best-effort: any failure degrades to "no edges today"
+        # (mirrors the pr_commit_stats pattern above), never a job abort.
+        try:
+            (
+                ai_workflow_runs,
+                ai_workflow_artifact_edges,
+                ai_workflow_issue_edges,
+                ai_review_outcome_edges,
+            ) = _extract_ai_workflow_for_day(
+                primary_sink=primary_sink,
+                org_id=org_id,
+                start=start,
+                end=end,
+                repo_id=repo_id,
+                repo_provider_by_id=repo_provider_by_id,
+            )
+        except Exception as exc:
+            logger.warning("AI workflow extraction failed for day=%s: %s", d, exc)
+            ai_workflow_runs = []
+            ai_workflow_artifact_edges = []
+            ai_workflow_issue_edges = []
+            ai_review_outcome_edges = []
+
         # Build pr_commit_stats: {(repo_id, pr_number) -> [{"file_path": ...}]} so that
         # compute_ai_impact_metrics_daily can determine which PRs touched test files.
         #
@@ -625,6 +779,18 @@ async def run_daily_metrics_job(
             s.write_ai_governance_coverage_daily(ai_governance_coverage)
             if ai_impact_metrics:
                 s.write_ai_impact_metrics(ai_impact_metrics)
+            if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
+                s.write_ai_workflow_runs(ai_workflow_runs)
+            if ai_workflow_artifact_edges and hasattr(
+                s, "write_ai_workflow_artifact_edges"
+            ):
+                s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
+            if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
+                s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
+            if ai_review_outcome_edges and hasattr(
+                s, "write_work_graph_pr_review_outcome_edges"
+            ):
+                s.write_work_graph_pr_review_outcome_edges(ai_review_outcome_edges)
             if all_file_metrics:
                 s.write_file_metrics(all_file_metrics)
 

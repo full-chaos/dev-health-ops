@@ -23,6 +23,19 @@ _MIN_PRS = 10
 _REPETITIVE_CLUSTER_MIN_PRS = 5
 _MAX_LIMIT = 100
 
+# CHAOS-2189 thresholds for the documented workflow-type rules.
+_TEST_GEN_GAP_THRESHOLD = 0.50
+_DEP_UPDATE_MIN_PRS = 5
+_MIGRATION_MIN_PRS = 5
+_DOC_DRIFT_MIN_CODE_COMMITS = 20
+_FLAKY_MIN_CASES = 50
+_FLAKY_RATE_THRESHOLD = 0.05
+
+_DOC_FILE_EXPR = (
+    "(file_path LIKE '%.md' OR file_path LIKE '%.rst' OR file_path LIKE '%.adoc'"
+    " OR file_path LIKE 'docs/%' OR file_path LIKE '%/docs/%')"
+)
+
 
 @dataclass(frozen=True)
 class _Scope:
@@ -102,6 +115,15 @@ class AIOpportunityDetector:
         opportunities.extend(
             await self._detect_repetitive_changes(org_id, normalized_scope)
         )
+        # CHAOS-2189: documented workflow-type rules (manual toil + quality
+        # signals where AI/agents should be applied next).
+        opportunities.extend(
+            await self._detect_title_pattern_toil(org_id, normalized_scope)
+        )
+        opportunities.extend(await self._detect_doc_drift(org_id, normalized_scope))
+        opportunities.extend(
+            await self._detect_flaky_test_triage(org_id, normalized_scope)
+        )
         opportunities.sort(key=lambda item: item.score, reverse=True)
         return opportunities[:bounded_limit]
 
@@ -177,6 +199,34 @@ class AIOpportunityDetector:
 
     def _metric_rules_for_repo(self, agg: _RepoAgg) -> list[AIOpportunity]:
         opportunities: list[AIOpportunity] = []
+
+        # TEST_GENERATION (CHAOS-2189) gates on the HUMAN bucket: a high
+        # human test-gap rate is the signal that AI test generation is the
+        # next workflow to apply, independent of current AI adoption.
+        human_test_gap = agg.human.test_gap_rate
+        if (
+            agg.human.prs_total >= _MIN_PRS
+            and human_test_gap is not None
+            and human_test_gap >= _TEST_GEN_GAP_THRESHOLD
+        ):
+            opportunities.append(
+                _opportunity(
+                    kind=AIOpportunityKind.TEST_GENERATION,
+                    repo_id=agg.repo_id,
+                    team_id=agg.team_id,
+                    title=f"Test generation candidate in {agg.repo_id}",
+                    rationale=(
+                        "Human-authored PRs had a "
+                        f"{human_test_gap:.0%} test gap rate across "
+                        f"{agg.human.prs_total} PRs over the last 30 days."
+                    ),
+                    score=_score_delta(human_test_gap, _TEST_GEN_GAP_THRESHOLD),
+                    evidence_refs=[
+                        f"ai_impact_metrics_daily:test_gap_rate:{agg.repo_id}"
+                    ],
+                )
+            )
+
         if agg.ai.prs_total < _MIN_PRS:
             return opportunities
 
@@ -355,6 +405,264 @@ class AIOpportunityDetector:
                 )
             )
         return opportunities
+
+    async def _detect_title_pattern_toil(
+        self, org_id: str, scope: _Scope
+    ) -> list[AIOpportunity]:
+        """DEPENDENCY_UPDATES + MECHANICAL_MIGRATIONS (CHAOS-2189).
+
+        Both rules look for clusters of human-authored PRs whose titles match
+        a documented manual-toil pattern. Bot authors are excluded because
+        their work is already automated; AI-attributed PRs are excluded via
+        anti-join for the same reason.
+        """
+        from dev_health_ops.api.queries.client import query_dicts
+
+        if scope.team_id is not None:
+            # git_pull_requests carries no team scoping here; mirror the
+            # repetitive-change rule and stay silent rather than guess.
+            return []
+
+        opportunities: list[AIOpportunity] = []
+        for rule in _TITLE_PATTERN_RULES:
+            params: dict[str, Any] = {"min_prs": rule["min_prs"]}
+            filters = [
+                "pr.created_at >= now() - INTERVAL 30 DAY",
+                str(rule["title_expr"]),
+                "lower(coalesce(pr.author_name, '')) NOT LIKE '%bot%'",
+                "lower(coalesce(pr.author_name, '')) NOT LIKE '%renovate%'",
+            ]
+            if scope.repo_id is not None:
+                params["repo_id"] = str(scope.repo_id)
+                filters.append("pr.repo_id = {repo_id:UUID}")
+            org_scope = OrgScopedQuery(org_id)
+            params = org_scope.inject(params)
+            org_expr = org_scope.expression(alias="pr")
+            if org_expr:
+                filters.append(org_expr)
+            # Tenant key belongs in the JOIN predicate: an anti-join with an
+            # org filter only on the WHERE (pr) side would let org B's
+            # attribution rows suppress org A's PRs that share a repo_id and
+            # PR number. ai_attribution_resolved.org_id is UUID, hence
+            # toString (same precedent as the governance allowlist join).
+            attr_org_predicate = (
+                "\n                AND toString(attr.org_id) = {org_id:String}"
+                if org_scope
+                else ""
+            )
+            where_clause = " AND ".join(filters)
+            query = f"""
+            SELECT
+                toString(pr.repo_id) AS repo_id,
+                count() AS prs_total,
+                groupArray(concat('git_pull_requests:', toString(pr.repo_id), ':', toString(pr.number))) AS pr_refs
+            FROM git_pull_requests AS pr
+            LEFT ANTI JOIN ai_attribution_resolved AS attr
+                ON attr.repo_id = pr.repo_id
+                AND attr.subject_type = 'pull_request'
+                AND attr.subject_id = toString(pr.number)
+                AND attr.kind IN ('ai_assisted', 'agent_created'){attr_org_predicate}
+            WHERE {where_clause}
+            GROUP BY repo_id
+            HAVING prs_total >= {{min_prs:UInt32}}
+            ORDER BY prs_total DESC
+            LIMIT 100
+            """
+            rows = await query_dicts(self.client, query, params)
+            for row in rows:
+                repo = parse_uuid(row.get("repo_id"))
+                if repo is None:
+                    continue
+                repo_id = str(repo)
+                prs_total = int(row.get("prs_total") or 0)
+                evidence_refs = [str(ref) for ref in (row.get("pr_refs") or [])][:5]
+                if not evidence_refs:
+                    continue
+                evidence_refs.append(f"{rule['metric_ref']}:{repo_id}")
+                opportunities.append(
+                    _opportunity(
+                        kind=rule["kind"],
+                        repo_id=repo_id,
+                        team_id=None,
+                        title=str(rule["title"]).format(repo_id=repo_id),
+                        rationale=str(rule["rationale"]).format(prs_total=prs_total),
+                        score=_score_delta(prs_total / float(rule["min_prs"]), 1.0),
+                        evidence_refs=evidence_refs,
+                    )
+                )
+        return opportunities
+
+    async def _detect_doc_drift(
+        self, org_id: str, scope: _Scope
+    ) -> list[AIOpportunity]:
+        """DOCUMENTATION_DRIFT (CHAOS-2189).
+
+        Flags repos with sustained code churn and zero documentation-file
+        changes in the same 30-day window — docs are drifting relative to the
+        code they describe.
+        """
+        from dev_health_ops.api.queries.client import query_dicts
+
+        if scope.team_id is not None:
+            return []
+
+        params: dict[str, Any] = {"min_commits": _DOC_DRIFT_MIN_CODE_COMMITS}
+        filters = ["c.committer_when >= now() - INTERVAL 30 DAY"]
+        if scope.repo_id is not None:
+            params["repo_id"] = str(scope.repo_id)
+            filters.append("c.repo_id = {repo_id:UUID}")
+        org_scope = OrgScopedQuery(org_id)
+        params = org_scope.inject(params)
+        org_expr = org_scope.expression(alias="c")
+        if org_expr:
+            filters.append(org_expr)
+        where_clause = " AND ".join(filters)
+        query = f"""
+        SELECT
+            toString(c.repo_id) AS repo_id,
+            uniqExactIf(c.hash, NOT {_DOC_FILE_EXPR}) AS code_commits,
+            countIf({_DOC_FILE_EXPR}) AS doc_changes
+        FROM git_commits AS c
+        INNER JOIN git_commit_stats AS s
+            ON s.repo_id = c.repo_id
+            AND s.commit_hash = c.hash
+            AND s.org_id = c.org_id
+        WHERE {where_clause}
+        GROUP BY repo_id
+        HAVING code_commits >= {{min_commits:UInt32}} AND doc_changes = 0
+        ORDER BY code_commits DESC
+        LIMIT 100
+        """
+        rows = await query_dicts(self.client, query, params)
+        opportunities: list[AIOpportunity] = []
+        for row in rows:
+            repo = parse_uuid(row.get("repo_id"))
+            if repo is None:
+                continue
+            repo_id = str(repo)
+            code_commits = int(row.get("code_commits") or 0)
+            opportunities.append(
+                _opportunity(
+                    kind=AIOpportunityKind.DOCUMENTATION_DRIFT,
+                    repo_id=repo_id,
+                    team_id=None,
+                    title=f"Documentation drift in {repo_id}",
+                    rationale=(
+                        f"{code_commits} code commits landed in the last 30 "
+                        "days with zero documentation-file changes."
+                    ),
+                    score=_score_delta(
+                        code_commits / float(_DOC_DRIFT_MIN_CODE_COMMITS), 1.0
+                    ),
+                    evidence_refs=[f"git_commit_stats:doc_changes:{repo_id}"],
+                )
+            )
+        return opportunities
+
+    async def _detect_flaky_test_triage(
+        self, org_id: str, scope: _Scope
+    ) -> list[AIOpportunity]:
+        """FLAKY_TEST_TRIAGE (CHAOS-2189).
+
+        Reads the persisted TestOps daily rollups: a sustained case-weighted
+        flake rate marks the repo as a flaky-triage automation candidate.
+        """
+        from dev_health_ops.api.queries.client import query_dicts
+
+        if scope.team_id is not None:
+            return []
+
+        params: dict[str, Any] = {
+            "min_cases": _FLAKY_MIN_CASES,
+            "flake_threshold": _FLAKY_RATE_THRESHOLD,
+        }
+        filters = ["day >= today() - 30"]
+        if scope.repo_id is not None:
+            params["repo_id"] = str(scope.repo_id)
+            filters.append("repo_id = {repo_id:UUID}")
+        org_scope = OrgScopedQuery(org_id)
+        params = org_scope.inject(params)
+        org_expr = org_scope.expression()
+        if org_expr:
+            filters.append(org_expr)
+        where_clause = " AND ".join(filters)
+        # NB: the output alias must NOT shadow the source column name —
+        # ClickHouse substitutes aliases everywhere, so `AS total_cases`
+        # would turn sum(flake_rate * total_cases) into nested aggregation
+        # (ILLEGAL_AGGREGATION).
+        query = f"""
+        SELECT
+            toString(repo_id) AS repo_id,
+            sum(total_cases) AS cases_total,
+            sum(flake_rate * total_cases) / sum(total_cases) AS weighted_flake_rate
+        FROM testops_test_metrics_daily
+        WHERE {where_clause}
+        GROUP BY repo_id
+        HAVING cases_total >= {{min_cases:UInt64}}
+           AND weighted_flake_rate >= {{flake_threshold:Float64}}
+        ORDER BY weighted_flake_rate DESC
+        LIMIT 100
+        """
+        rows = await query_dicts(self.client, query, params)
+        opportunities: list[AIOpportunity] = []
+        for row in rows:
+            repo = parse_uuid(row.get("repo_id"))
+            if repo is None:
+                continue
+            repo_id = str(repo)
+            flake_rate = float(row.get("weighted_flake_rate") or 0.0)
+            total_cases = int(row.get("cases_total") or 0)
+            opportunities.append(
+                _opportunity(
+                    kind=AIOpportunityKind.FLAKY_TEST_TRIAGE,
+                    repo_id=repo_id,
+                    team_id=None,
+                    title=f"Flaky test triage candidate in {repo_id}",
+                    rationale=(
+                        f"Test cases flaked at {flake_rate:.1%} across "
+                        f"{total_cases} executions over the last 30 days."
+                    ),
+                    score=_score_delta(flake_rate, _FLAKY_RATE_THRESHOLD),
+                    evidence_refs=[f"testops_test_metrics_daily:flake_rate:{repo_id}"],
+                )
+            )
+        return opportunities
+
+
+_TITLE_PATTERN_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "kind": AIOpportunityKind.DEPENDENCY_UPDATES,
+        "min_prs": _DEP_UPDATE_MIN_PRS,
+        "title_expr": (
+            "match(lower(coalesce(pr.title, '')),"
+            " '^(bump|update|upgrade|chore\\\\(deps\\\\)|build\\\\(deps\\\\))')"
+            " AND match(lower(coalesce(pr.title, '')),"
+            " '(depend|deps|version|package|requirement|lockfile| from .* to )')"
+        ),
+        "title": "Manual dependency updates in {repo_id}",
+        "rationale": (
+            "{prs_total} dependency-update PRs were authored by humans in the "
+            "last 30 days; dependency bumps are a documented AI automation "
+            "target."
+        ),
+        "metric_ref": "git_pull_requests:dependency_update_prs",
+    },
+    {
+        "kind": AIOpportunityKind.MECHANICAL_MIGRATIONS,
+        "min_prs": _MIGRATION_MIN_PRS,
+        "title_expr": (
+            "match(lower(coalesce(pr.title, '')),"
+            " '(migrat|mass rename|codemod|deprecat.* api|bulk (rename|move))')"
+        ),
+        "title": "Mechanical migration toil in {repo_id}",
+        "rationale": (
+            "{prs_total} migration-style PRs were authored by humans in the "
+            "last 30 days; mechanical migrations are a documented AI "
+            "automation target."
+        ),
+        "metric_ref": "git_pull_requests:migration_prs",
+    },
+)
 
 
 def _scope_from_input(scope: Any | None) -> _Scope:

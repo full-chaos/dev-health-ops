@@ -44,6 +44,40 @@ class ToolAllowlistStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class AIToolAllowlistEntry:
+    """A persisted org-level AI tool/model allowlist policy entry.
+
+    ``model_name=None`` means the policy applies to every model of the tool.
+    Rows are versioned by ``computed_at`` (ReplacingMergeTree), so updating an
+    entry is a plain re-insert with the same (org_id, tool_name, model_name).
+
+    Empty-string models are normalised to ``None`` at construction: migration
+    038's ORDER BY uses ``ifNull(model_name, '')``, so a NULL wildcard row
+    and a ``''`` "exact" row share the SAME ReplacingMergeTree dedup key and
+    would silently replace each other on background merge. Readers must
+    treat ``''`` as wildcard for the same reason (see the governance
+    loader's ``nullIf`` handling); making the key distinguish them requires
+    a schema migration — flagged as follow-up, out of scope this wave.
+    """
+
+    org_id: str
+    tool_name: str
+    status: ToolAllowlistStatus
+    model_name: str | None = None
+    reason: str | None = None
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    computed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def __post_init__(self) -> None:
+        tool = (self.tool_name or "").strip()
+        if not tool:
+            raise ValueError("AIToolAllowlistEntry.tool_name must be non-empty")
+        object.__setattr__(self, "tool_name", tool)
+        model = (self.model_name or "").strip()
+        object.__setattr__(self, "model_name", model or None)
+
+
+@dataclass(frozen=True)
 class AIGovernanceArtifact:
     """A policy-evaluation input for an AI-relevant engineering artifact."""
 

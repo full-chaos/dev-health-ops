@@ -228,7 +228,11 @@ SELECT
     finding.finding_count > 0 AS license_or_dependency_finding,
     JSONExtractString(a.evidence, 'tool_name') AS tool_name,
     JSONExtractString(a.evidence, 'model_name') AS model_name,
-    coalesce(allow.status, 'unknown') AS tool_allowlist_status,
+    multiIf(
+        allow_exact.status != '', allow_exact.status,
+        allow_wild.status != '', allow_wild.status,
+        'unknown'
+    ) AS tool_allowlist_status,
     a.source AS source,
     a.kind AS kind,
     a.confidence AS confidence,
@@ -250,10 +254,41 @@ LEFT JOIN (
     WHERE lower(coalesce(source, '')) IN ('dependabot', 'gitlab_dependency', 'dependency_scanning')
     GROUP BY repo_id
 ) AS finding ON a.repo_id = finding.repo_id
-LEFT JOIN ai_tool_allowlist AS allow
-    ON toString(a.org_id) = allow.org_id
-    AND JSONExtractString(a.evidence, 'tool_name') = allow.tool_name
-    AND (allow.model_name IS NULL OR JSONExtractString(a.evidence, 'model_name') = allow.model_name)
+-- Allowlist precedence (CHAOS-2209): an exact tool+model row beats a
+-- wildcard row, and each side is deduplicated to its latest version
+-- (argMax over computed_at — the table is a ReplacingMergeTree) AND to one
+-- row per join key, so an artifact can never fan out into multiple
+-- coverage events from overlapping policy rows.
+-- Wildcard means nullIf(model_name, '') IS NULL: legacy '' rows are
+-- wildcard, never exact — JSONExtractString yields '' for missing model
+-- evidence, so a '' "exact" key would phantom-match every artifact that
+-- lacks model evidence. Note migration 038's ORDER BY ifNull(model_name,'')
+-- makes NULL and '' the SAME dedup key (rows can replace each other on
+-- merge); fixing that needs a schema migration — follow-up ticket.
+LEFT JOIN (
+    SELECT
+        org_id,
+        tool_name,
+        model_name AS model_key,
+        argMax(status, computed_at) AS status
+    FROM ai_tool_allowlist
+    WHERE nullIf(model_name, '') IS NOT NULL
+    GROUP BY org_id, tool_name, model_key
+) AS allow_exact
+    ON toString(a.org_id) = allow_exact.org_id
+    AND JSONExtractString(a.evidence, 'tool_name') = allow_exact.tool_name
+    AND JSONExtractString(a.evidence, 'model_name') = allow_exact.model_key
+LEFT JOIN (
+    SELECT
+        org_id,
+        tool_name,
+        argMax(status, computed_at) AS status
+    FROM ai_tool_allowlist
+    WHERE nullIf(model_name, '') IS NULL
+    GROUP BY org_id, tool_name
+) AS allow_wild
+    ON toString(a.org_id) = allow_wild.org_id
+    AND JSONExtractString(a.evidence, 'tool_name') = allow_wild.tool_name
 WHERE toString(a.org_id) = {org_id:String}
   AND a.observed_at >= {start:DateTime64(3, 'UTC')}
   AND a.observed_at <= {end:DateTime64(3, 'UTC')}

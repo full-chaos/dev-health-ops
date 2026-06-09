@@ -343,6 +343,13 @@ class AIOpportunityKind(Enum):
     HIGH_REWORK = "high_rework"
     SLOW_CYCLE = "slow_cycle"
     UNCOVERED_TEST_AREA = "uncovered_test_area"
+    # CHAOS-2189: remaining workflow types documented in
+    # docs/product/ai-assisted/AI Opportunity Detection.md.
+    TEST_GENERATION = "test_gen"
+    DEPENDENCY_UPDATES = "dep_updates"
+    MECHANICAL_MIGRATIONS = "migrations"
+    DOCUMENTATION_DRIFT = "doc_drift"
+    FLAKY_TEST_TRIAGE = "flaky_triage"
 
 
 @strawberry.type

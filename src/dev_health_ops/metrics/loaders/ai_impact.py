@@ -291,7 +291,19 @@ class AIImpactClickHouseLoader:
         Mirrors the two linkage paths used by ``load_ai_pr_attributions``:
         via ``work_graph_issue_pr`` and via direct ``subject_id`` matching
         (``"<number>"`` or ``"<repo_id>#<number>"``). ``any(kind)`` collapses
-        ReplacingMergeTree duplicates and dual-path matches.
+        ReplacingMergeTree duplicates and dual-path matches. Both sides are
+        pinned to the same requested org via the WHERE parameters.
+
+        Join identity: ``work_item_id`` is NOT repo-global — an id reused by
+        another repo in the same org must not cross-link attribution onto
+        unrelated PRs — so the linkage additionally requires
+        ``attr.repo_id = link.repo_id`` whenever the attribution carries a
+        repo. ``attr.repo_id`` is Nullable: a repo-less record is a
+        work-item-level attribution whose stated meaning is "this work
+        item's PR work is AI-attributed", and the work-graph link is its
+        resolution mechanism — it binds to every PR linked to that work item
+        (including multi-repo work items). Only repo-pinned records are
+        constrained to their own repo's links.
         """
         org_filter_attr = self._scope.filter(alias="attr")
         org_filter_link = self._scope.filter(alias="link")
@@ -306,7 +318,8 @@ class AIImpactClickHouseLoader:
                 INNER JOIN ai_attribution_resolved AS attr
                     ON attr.subject_type = 'pull_request'
                     AND attr.subject_id = link.work_item_id
-                WHERE 1 = 1 {org_filter_link} {org_filter_attr}
+                WHERE (attr.repo_id IS NULL OR attr.repo_id = link.repo_id)
+                  {org_filter_link} {org_filter_attr}
                 UNION ALL
                 SELECT
                     attr.repo_id AS repo_id,
@@ -373,6 +386,14 @@ class AIImpactClickHouseLoader:
         aggregate read must collapse to ``argMax(..., last_synced)`` first
         (app-code readers like ``load_ai_pr_attributions`` dedupe in Python).
         Org and repo scope filters are applied inside, before the GROUP BY.
+
+        The candidate stage prunes to keys with ANY row version inside the
+        event window so argMax does not aggregate the org's entire PR
+        history. Filtering raw versions directly would be wrong:
+        ``merged_at`` changes between versions (NULL while open, set after
+        merge), so a key's latest version can be in-window while stale
+        versions are not — any-version-qualifies is the safe prefilter, and
+        callers re-apply the window on the deduped values (stage 3).
         """
         scope_filter = self._engagement_scope_filters(params, repo_id, repo_ids)
         org_filter_pr = self._scope.filter(alias="pr")
@@ -390,6 +411,13 @@ class AIImpactClickHouseLoader:
             WHERE 1 = 1
               {scope_filter}
               {org_filter_pr}
+              AND (pr.repo_id, pr.number) IN (
+                  SELECT pr.repo_id, pr.number
+                  FROM git_pull_requests AS pr
+                  WHERE {self._pr_event_window_filter()}
+                    {scope_filter}
+                    {org_filter_pr}
+              )
             GROUP BY pr.repo_id, pr.number
         """
 

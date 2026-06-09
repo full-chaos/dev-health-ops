@@ -45,6 +45,8 @@ pytestmark = [
 ORG = "11110000-c218-0000-0000-00000000aaaa"
 FOREIGN_ORG = "22220000-c218-0000-0000-00000000bbbb"
 REPO = uuid.UUID("33330000-c218-0000-0000-00000000cccc")
+REPO_B = uuid.UUID("44440000-c218-0000-0000-00000000dddd")
+SHARED_WORK_ITEM = "WI-C2180-SHARED"
 
 START_DAY = date(2026, 5, 1)
 END_DAY = date(2026, 5, 31)
@@ -55,6 +57,9 @@ CREATED_BEFORE_WINDOW = datetime(2026, 4, 20, 9, 0, 0)
 MERGED_IN_WINDOW = datetime(2026, 5, 10, 15, 0, 0)
 FIRST_REVIEW = datetime(2026, 4, 20, 13, 0, 0)  # 4h after creation
 NOW = datetime(2026, 5, 31, 12, 0, 0)
+# Later sync version for rows that REPLACE earlier (mis-stamped) fixture
+# versions: argMax(..., last_synced) must pick these over stale inserts.
+NOW_FIXED = datetime(2026, 6, 2, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _sync_client():
@@ -257,6 +262,131 @@ def _seed(client) -> None:
         column_names=cs_cols,
     )
 
+    # --- Cross-repo work_item_id collision (join-identity fix) ----------
+    # PR 9004 (REPO) and PR 9101 (REPO_B) link the SAME work_item_id; the
+    # only attribution for it is pinned to REPO. Without the
+    # attr.repo_id = link.repo_id constraint, 9101 would be cross-linked.
+    client.insert(
+        "git_pull_requests",
+        [
+            [
+                str(REPO),
+                9004,
+                "wi pr",
+                "",
+                "merged",
+                "a",
+                "a@x",
+                # tz-aware: naive datetimes shift local->UTC on insert and
+                # can move a 17:00 merge onto the next UTC day.
+                datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc),
+                datetime(2026, 5, 20, 17, 0, tzinfo=timezone.utc),
+                datetime(2026, 5, 20, 17, 0, tzinfo=timezone.utc),
+                "f",
+                "main",
+                20,
+                10,
+                1,
+                datetime(2026, 5, 20, 11, 0, tzinfo=timezone.utc),
+                None,
+                0,
+                1,
+                2,
+                NOW_FIXED,
+                ORG,
+            ],
+            [
+                str(REPO_B),
+                9101,
+                "wi pr other repo",
+                "",
+                "merged",
+                "a",
+                "a@x",
+                datetime(2026, 5, 21, 9, 0, tzinfo=timezone.utc),
+                datetime(2026, 5, 21, 17, 0, tzinfo=timezone.utc),
+                datetime(2026, 5, 21, 17, 0, tzinfo=timezone.utc),
+                "f",
+                "main",
+                20,
+                10,
+                1,
+                datetime(2026, 5, 21, 11, 0, tzinfo=timezone.utc),
+                None,
+                0,
+                1,
+                2,
+                NOW_FIXED,
+                ORG,
+            ],
+        ],
+        column_names=[
+            "repo_id",
+            "number",
+            "title",
+            "body",
+            "state",
+            "author_name",
+            "author_email",
+            "created_at",
+            "merged_at",
+            "closed_at",
+            "head_branch",
+            "base_branch",
+            "additions",
+            "deletions",
+            "changed_files",
+            "first_review_at",
+            "first_comment_at",
+            "changes_requested_count",
+            "reviews_count",
+            "comments_count",
+            "last_synced",
+            "org_id",
+        ],
+    )
+    link_cols = [
+        "repo_id",
+        "work_item_id",
+        "pr_number",
+        "confidence",
+        "provenance",
+        "evidence",
+        "last_synced",
+        "org_id",
+    ]
+    client.insert(
+        "work_graph_issue_pr",
+        [
+            [str(REPO), SHARED_WORK_ITEM, 9004, 1.0, "native", "test", NOW, ORG],
+            [str(REPO_B), SHARED_WORK_ITEM, 9101, 1.0, "native", "test", NOW, ORG],
+        ],
+        column_names=link_cols,
+    )
+    rid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"c2180-live-{ORG}-{SHARED_WORK_ITEM}"))
+    client.insert(
+        "ai_attribution",
+        [
+            [
+                rid,
+                ORG,
+                "github",
+                "pull_request",
+                SHARED_WORK_ITEM,
+                str(REPO),
+                "agent_created",
+                "commit_trailer",
+                0.9,
+                None,
+                "test",
+                NOW,
+                NOW,
+                NOW,
+            ]
+        ],
+        column_names=attr_cols,
+    )
+
     # --- Hotspot snapshots: 1 hot file among 10 (top decile = exactly 1) --
     hs_cols = [
         "repo_id",
@@ -389,3 +519,21 @@ async def test_hotspot_overlap_zero_when_only_low_risk_touched(seeded) -> None:
     ai = by_bucket["ai_assisted"]
     assert int(ai["prs_total"]) == 2
     assert int(ai["prs_touching_hotspots"]) == 0
+
+
+async def test_work_item_attribution_does_not_cross_link_repos(seeded) -> None:
+    """PR 9004 (REPO) and PR 9101 (REPO_B) share a work_item_id; the only
+    attribution for it is pinned to REPO. 9004 must be agent_created and
+    9101 must stay unknown — repo-pinned attributions never cross-link."""
+    loader = AIImpactClickHouseLoader(await _client(), org_id=ORG)
+    rows = await loader.load_review_engagement(start=START, end=END)
+    agent_days = {
+        r["day"]: r["prs_with_first_review"]
+        for r in rows
+        if r["bucket"] == "agent_created"
+    }
+    # Only 9004's merge day carries agent_created engagement.
+    assert agent_days == {date(2026, 5, 20): 1}, f"cross-link leak: {rows}"
+    # 9101 lands in unknown on its own merge day.
+    unknown_days = {r["day"] for r in rows if r["bucket"] == "unknown"}
+    assert date(2026, 5, 21) in unknown_days

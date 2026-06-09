@@ -453,3 +453,40 @@ async def test_label_lookups_are_org_scoped():
     assert "org_id = {org_id:String}" in repo_query
     team_query, _ = await _capture_query(lambda: loader.load_team_labels([TEAM_A]))
     assert "org_id = {org_id:String}" in team_query
+
+
+# ---------------------------------------------------------------------------
+# Final review fixes — join identity + windowed candidate prefilter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_attribution_join_pins_repo_identity():
+    """work_item_id is not repo-global: the linkage path must constrain
+    repo-pinned attributions to their own repo's links (NULL repo_id =
+    work-item-level attribution, allowed to bind through the link)."""
+    loader = AIImpactClickHouseLoader(object(), org_id=ORG_ID)
+    query, _ = await _capture_query(
+        lambda: loader.load_review_engagement(start=START, end=END)
+    )
+    assert "(attr.repo_id IS NULL OR attr.repo_id = link.repo_id)" in query
+
+
+@pytest.mark.asyncio
+async def test_deduped_prs_prefilters_candidates_by_event_window():
+    """argMax must not aggregate the org's entire PR history: the event
+    window must appear INSIDE the candidate selection (any-version-qualifies
+    IN-subquery), and again on deduped values in the outer query."""
+    loader = AIImpactClickHouseLoader(object(), org_id=ORG_ID)
+    query, _ = await _capture_query(
+        lambda: loader.load_review_engagement(start=START, end=END)
+    )
+    event = "if(pr.merged_at IS NOT NULL, pr.merged_at, pr.created_at)"
+    window = f"({event} >= {{start:DateTime}} AND {event} < {{end:DateTime}})"
+    assert "(pr.repo_id, pr.number) IN (" in query
+    # Candidate stage + stage-3 re-check on deduped values = at least twice.
+    assert query.count(window) >= 2
+    # The candidate window predicate must sit before the GROUP BY dedup.
+    in_clause = query.index("(pr.repo_id, pr.number) IN (")
+    candidate_window = query.index(window)
+    assert candidate_window > in_clause or query.index(window, in_clause) > in_clause

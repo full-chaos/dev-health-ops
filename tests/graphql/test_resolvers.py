@@ -138,9 +138,30 @@ class TestResolveCatalog:
         result = await resolve_catalog(mock_context)
 
         for measure in result.measures:
-            assert measure.description is not None
+            assert measure.description is not None, (
+                f"measure {measure.name!r} has no description"
+            )
             # Description should be meaningful (not empty)
-            assert len(measure.description) > 0
+            assert len(measure.description) > 0, (
+                f"measure {measure.name!r} has an empty description; "
+                f"add it to get_measure_descriptions()"
+            )
+
+    def test_every_measure_enum_member_has_a_description(self):
+        """Guard: get_measure_descriptions() must cover every Measure enum member.
+
+        Prevents the failure mode where a new measure is added to the enum but
+        its description is forgotten (which surfaces as an empty-string
+        description in the catalog).
+        """
+        from dev_health_ops.api.graphql.loaders.dimension_loader import (
+            get_measure_descriptions,
+        )
+        from dev_health_ops.api.graphql.sql.validate import Measure
+
+        descriptions = get_measure_descriptions()
+        missing = [m.value for m in Measure if not descriptions.get(m.value)]
+        assert not missing, f"measures missing descriptions: {missing}"
 
 
 class TestContextOrgIdRequirement:

@@ -441,6 +441,22 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             sink = ClickHouseMetricsSink(ns.sink)
             sink.ensure_tables()
 
+        # CHAOS-2209: seed the org-level AI tool allowlist so governance
+        # views render real allowlist verdicts (not permanent "unknown").
+        # Org-scoped, so it is written once — not per repo.
+        if sink is not None and hasattr(sink, "write_ai_tool_allowlist"):
+            from dev_health_ops.fixtures.generators.ai_governance import (
+                generate_ai_tool_allowlist_entries,
+            )
+
+            allowlist_entries = generate_ai_tool_allowlist_entries(org_id)
+            sink.write_ai_tool_allowlist(allowlist_entries)
+            logging.info(
+                "Seeded %d ai_tool_allowlist entries for org %s.",
+                len(allowlist_entries),
+                org_id,
+            )
+
         for i in range(repo_count):
             r_name = demo_repo_name(base_name, i, repo_count)
             logging.info(

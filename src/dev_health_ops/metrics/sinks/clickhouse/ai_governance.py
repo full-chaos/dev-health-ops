@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from dev_health_ops.audit.ai_governance.models import (
     AIGovernanceCoverageDaily,
     AIGovernanceViolation,
+    AIToolAllowlistEntry,
 )
 from dev_health_ops.metrics.sinks.clickhouse._insert import (
     DEFAULT_BATCH_SIZE,
@@ -34,6 +35,16 @@ POLICY_EVENT_COLUMNS = [
     "subject_id",
     "observed_at",
     "evidence",
+    "computed_at",
+]
+
+ALLOWLIST_COLUMNS = [
+    "org_id",
+    "tool_name",
+    "model_name",
+    "status",
+    "reason",
+    "updated_at",
     "computed_at",
 ]
 
@@ -64,6 +75,18 @@ def _policy_event_row(event: AIGovernanceViolation) -> list[object]:
         _dt_to_clickhouse_datetime(event.observed_at),
         event.evidence_json(),
         _dt_to_clickhouse_datetime(event.computed_at),
+    ]
+
+
+def _allowlist_row(entry: AIToolAllowlistEntry) -> list[object]:
+    return [
+        entry.org_id,
+        entry.tool_name,
+        entry.model_name,
+        str(entry.status),
+        entry.reason,
+        _dt_to_clickhouse_datetime(entry.updated_at),
+        _dt_to_clickhouse_datetime(entry.computed_at),
     ]
 
 
@@ -111,4 +134,19 @@ class AIGovernanceMixin(_ClickHouseSinkBase):
                 "ai_governance_coverage_daily",
                 [_coverage_row(row) for row in chunk],
                 column_names=COVERAGE_COLUMNS,
+            )
+
+    def write_ai_tool_allowlist(
+        self,
+        entries: Sequence[AIToolAllowlistEntry],
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> None:
+        """Persist allowlist policy entries (CHAOS-2209 admin-seeded path)."""
+        if not entries:
+            return
+        for chunk in _chunked(list(entries), batch_size):
+            self.client.insert(
+                "ai_tool_allowlist",
+                [_allowlist_row(entry) for entry in chunk],
+                column_names=ALLOWLIST_COLUMNS,
             )

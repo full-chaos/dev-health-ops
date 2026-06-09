@@ -336,6 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops.api import runner as api_runner
     from dev_health_ops.api.admin import cli as admin_cli
     from dev_health_ops.audit import completeness, coverage, perf, schema
+    from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
     from dev_health_ops.fixtures import runner as fixtures_runner
     from dev_health_ops.metrics import (
         job_capacity,
@@ -426,6 +427,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- admin (user/org management) ----
     admin_cli.register_commands(sub)
+
+    # ---- ai governance administration ----
+    ai_governance_cli.register_commands(sub)
 
     # ---- work-graph & investment ----
     work_graph_runner.register_commands(sub)

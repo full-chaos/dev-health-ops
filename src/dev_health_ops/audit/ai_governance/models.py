@@ -44,6 +44,24 @@ class ToolAllowlistStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class AIToolAllowlistEntry:
+    """A persisted org-level AI tool/model allowlist policy entry.
+
+    ``model_name=None`` means the policy applies to every model of the tool.
+    Rows are versioned by ``computed_at`` (ReplacingMergeTree), so updating an
+    entry is a plain re-insert with the same (org_id, tool_name, model_name).
+    """
+
+    org_id: str
+    tool_name: str
+    status: ToolAllowlistStatus
+    model_name: str | None = None
+    reason: str | None = None
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    computed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True)
 class AIGovernanceArtifact:
     """A policy-evaluation input for an AI-relevant engineering artifact."""
 

@@ -110,7 +110,9 @@ async def test_detector_honors_scope_and_limit(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_detector_emits_repetitive_change(monkeypatch: pytest.MonkeyPatch):
     async def fake_query_dicts(_client, query, _params):
-        if "ai_impact_metrics_daily" in query:
+        # Route by query shape: only the repetitive-change query selects a
+        # title_prefix column (CHAOS-2189 added more git_pull_requests rules).
+        if "title_prefix" not in query:
             return []
         return [
             {
@@ -192,3 +194,170 @@ async def test_detector_empty_data_returns_empty_list(monkeypatch: pytest.Monkey
     result = await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
 
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_detector_emits_test_generation_from_human_gap(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """TEST_GENERATION (CHAOS-2189) gates on the human bucket, not AI volume."""
+
+    async def fake_query_dicts(_client, query, _params):
+        if "ai_impact_metrics_daily" not in query:
+            return []
+        return [
+            {
+                "repo_id": REPO_ID,
+                "team_id": "team-a",
+                "attribution_bucket": "human",
+                "prs_total": 20,
+                "reviews_per_pr": 2.0,
+                "cycle_time_avg_hours": 20.0,
+                "rework_prs": 2,
+                "test_gap_prs": 12,
+            },
+            {
+                # AI bucket below the 10-PR minimum: AI rules must stay silent.
+                "repo_id": REPO_ID,
+                "team_id": "team-a",
+                "attribution_bucket": "ai_assisted",
+                "prs_total": 2,
+                "reviews_per_pr": 9.0,
+                "cycle_time_avg_hours": 90.0,
+                "rework_prs": 2,
+                "test_gap_prs": 2,
+            },
+        ]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+
+    result = await AIOpportunityDetector(MagicMock()).detect(
+        "org-a", AIScopeInput(team_id="team-a"), limit=10
+    )
+
+    assert [item.kind for item in result] == [AIOpportunityKind.TEST_GENERATION]
+    assert "60% test gap rate" in result[0].rationale
+    assert result[0].evidence_refs == [
+        f"ai_impact_metrics_daily:test_gap_rate:{REPO_ID}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_detector_emits_title_pattern_toil_kinds(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """DEPENDENCY_UPDATES + MECHANICAL_MIGRATIONS fire from title clusters."""
+
+    async def fake_query_dicts(_client, query, _params):
+        if "LEFT ANTI JOIN" not in query:
+            return []
+        if "depend" in query:
+            prs_total = 6
+        elif "migrat" in query:
+            prs_total = 8
+        else:
+            return []
+        return [
+            {
+                "repo_id": REPO_ID,
+                "prs_total": prs_total,
+                "pr_refs": [
+                    f"git_pull_requests:{REPO_ID}:{number}"
+                    for number in range(1, prs_total + 1)
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+
+    result = await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
+
+    by_kind = {item.kind: item for item in result}
+    assert AIOpportunityKind.DEPENDENCY_UPDATES in by_kind
+    assert AIOpportunityKind.MECHANICAL_MIGRATIONS in by_kind
+    assert (
+        "6 dependency-update PRs"
+        in by_kind[AIOpportunityKind.DEPENDENCY_UPDATES].rationale
+    )
+    assert (
+        "8 migration-style PRs"
+        in by_kind[AIOpportunityKind.MECHANICAL_MIGRATIONS].rationale
+    )
+    deps = by_kind[AIOpportunityKind.DEPENDENCY_UPDATES]
+    assert deps.evidence_refs[0].startswith("git_pull_requests:")
+    assert deps.evidence_refs[-1] == (
+        f"git_pull_requests:dependency_update_prs:{REPO_ID}"
+    )
+    assert deps.work_graph_drilldowns[0].root_type == "pr"
+
+
+@pytest.mark.asyncio
+async def test_detector_emits_doc_drift(monkeypatch: pytest.MonkeyPatch):
+    async def fake_query_dicts(_client, query, _params):
+        if "doc_changes" not in query:
+            return []
+        return [{"repo_id": REPO_ID, "code_commits": 42, "doc_changes": 0}]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+
+    result = await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
+
+    assert [item.kind for item in result] == [AIOpportunityKind.DOCUMENTATION_DRIFT]
+    assert "42 code commits" in result[0].rationale
+    assert result[0].evidence_refs == [f"git_commit_stats:doc_changes:{REPO_ID}"]
+
+
+@pytest.mark.asyncio
+async def test_detector_emits_flaky_test_triage(monkeypatch: pytest.MonkeyPatch):
+    async def fake_query_dicts(_client, query, _params):
+        if "testops_test_metrics_daily" not in query:
+            return []
+        return [
+            {
+                "repo_id": REPO_ID,
+                "total_cases": 400,
+                "weighted_flake_rate": 0.12,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+
+    result = await AIOpportunityDetector(MagicMock()).detect("org-a", limit=10)
+
+    assert [item.kind for item in result] == [AIOpportunityKind.FLAKY_TEST_TRIAGE]
+    assert "12.0%" in result[0].rationale
+    assert "400 executions" in result[0].rationale
+    assert result[0].evidence_refs == [
+        f"testops_test_metrics_daily:flake_rate:{REPO_ID}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sql_backed_kinds_skip_team_scope(monkeypatch: pytest.MonkeyPatch):
+    """Team-scoped requests must not run the unscoped raw-table rules."""
+    seen_queries: list[str] = []
+
+    async def fake_query_dicts(_client, query, _params):
+        seen_queries.append(query)
+        return []
+
+    monkeypatch.setattr(
+        "dev_health_ops.api.queries.client.query_dicts", fake_query_dicts
+    )
+
+    result = await AIOpportunityDetector(MagicMock()).detect(
+        "org-a", AIScopeInput(team_id="team-a"), limit=10
+    )
+
+    assert result == []
+    # Only the ai_impact_metrics_daily load runs under a team scope.
+    assert len(seen_queries) == 1
+    assert "ai_impact_metrics_daily" in seen_queries[0]

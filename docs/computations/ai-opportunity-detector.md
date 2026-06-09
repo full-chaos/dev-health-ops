@@ -15,6 +15,13 @@ CHAOS-1586 uses inline detection in the GraphQL resolver rather than adding a ne
 | `HIGH_REWORK` | AI-assisted PRs have rework rate at least 0.25 and at least +0.10 above the human baseline with at least 10 AI PRs. |
 | `SLOW_CYCLE` | AI-assisted PRs have average cycle time at least 1.25× the human baseline with at least 10 AI PRs. |
 | `UNCOVERED_TEST_AREA` | AI-assisted PRs have `test_gap_rate` at least 0.50 with at least 10 AI PRs. |
+| `TEST_GENERATION` | Human-authored PRs have `test_gap_rate` at least 0.50 with at least 10 human PRs (CHAOS-2189). |
+| `DEPENDENCY_UPDATES` | At least five human-authored, non-bot PRs in the last 30 days have dependency-bump titles (`bump`/`update`/`upgrade` plus dependency vocabulary); AI-attributed PRs are excluded via anti-join (CHAOS-2189). |
+| `MECHANICAL_MIGRATIONS` | At least five human-authored, non-bot PRs in the last 30 days have migration-style titles (`migrat…`, `codemod`, `mass rename`, …); AI-attributed PRs are excluded via anti-join (CHAOS-2189). |
+| `DOCUMENTATION_DRIFT` | At least 20 code commits landed in the last 30 days with zero documentation-file changes (`*.md`, `*.rst`, `*.adoc`, `docs/`) in the same window (CHAOS-2189). |
+| `FLAKY_TEST_TRIAGE` | Case-weighted `flake_rate` from `testops_test_metrics_daily` is at least 0.05 across at least 50 test-case executions in the last 30 days (CHAOS-2189). |
+
+The five CHAOS-2189 rules detect *human/manual* toil or quality gaps where AI should be applied next, so (unlike the AI-bucket rules) they gate on human-authored activity. The SQL-backed CHAOS-2189 rules return nothing under a team-scoped filter, mirroring `REPETITIVE_CHANGE`, because the underlying raw tables carry no team scoping.
 
 ## GraphQL contract
 
@@ -27,7 +34,7 @@ CHAOS-1586 uses inline detection in the GraphQL resolver rather than adding a ne
 Each recommendation includes:
 
 - `opportunityId`: stable hash of `(kind, repo_id, team_id)`.
-- `kind`: one of the five canonical opportunity kinds above.
+- `kind`: one of the ten canonical opportunity kinds above.
 - `repoId` / `teamId`: the scope where the rule fired.
 - `title` and `rationale`: short, numeric explanation of the breach.
 - `score`: 0..1 breach-magnitude ranking score.

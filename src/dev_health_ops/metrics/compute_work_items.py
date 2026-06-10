@@ -213,6 +213,13 @@ def compute_work_item_metrics_daily(
         team_id, team_name = None, None
         if project_key_resolver is not None:
             team_id, team_name = project_key_resolver.resolve(work_scope_id)
+            # Linear: work_scope_id is the project name when the issue sits
+            # in a project, but team mappings carry the TEAM key (the item's
+            # project_key) — retry with it before the membership fallback.
+            if team_id is None and item.project_key:
+                project_key = str(item.project_key)
+                if project_key != work_scope_id:
+                    team_id, team_name = project_key_resolver.resolve(project_key)
         if team_id is None:
             team_id, team_name = _resolve_team(team_resolver, assignee)
         team_id_norm = normalize_team_id(team_id)

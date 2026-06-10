@@ -80,7 +80,14 @@ class TeamDiscoveryService:
                             provider_team_id=team["key"],
                             name=team["name"],
                             description=team.get("description"),
-                            associations={"provider_org": "linear"},
+                            # Linear work items normalize with
+                            # project_key = team key, so the team key is the
+                            # attribution association (mirrors Jira's
+                            # project_keys / GitHub-GitLab's repo_patterns).
+                            associations={
+                                "project_keys": [team["key"]],
+                                "provider_org": "linear",
+                            },
                         )
                     )
                 return teams

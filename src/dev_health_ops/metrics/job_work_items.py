@@ -392,12 +392,21 @@ def run_work_items_sync_job(
 
             def _get_team(wi: Any) -> str:
                 if pk_resolver:
-                    t_id, _ = pk_resolver.resolve(
-                        getattr(wi, "work_scope_id", None)
-                        or getattr(wi, "project_key", None)
-                    )
-                    if t_id:
-                        return t_id
+                    # Try work_scope_id first, then project_key. For Linear
+                    # these differ when the issue sits in a project:
+                    # work_scope_id is the project name while project_key is
+                    # the TEAM key — the attribution key team mappings carry.
+                    # An `or` would hide project_key whenever work_scope_id
+                    # is non-empty but unmatched.
+                    for key in (
+                        getattr(wi, "work_scope_id", None),
+                        getattr(wi, "project_key", None),
+                    ):
+                        if not key:
+                            continue
+                        t_id, _ = pk_resolver.resolve(key)
+                        if t_id:
+                            return t_id
                 if getattr(wi, "assignees", None):
                     t_id, _ = team_resolver.resolve(wi.assignees[0])
                     if t_id:

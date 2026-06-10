@@ -89,7 +89,18 @@ class WorkItem:
         Notes:
         - Jira: uses `project_key` when present.
         - GitHub/GitLab: uses `project_id` (e.g. owner/repo, group/project) when present.
+        - Linear: uses `project_id` (the Linear PROJECT name) when the issue
+          sits in a project, else `project_key` (the Linear TEAM key).
         - May be empty when the provider object is not scoped (e.g. GitHub draft project cards).
+
+        IMPORTANT — work scope is NOT the team-attribution key. In Linear,
+        projects and teams are different things: issues always belong to a
+        team (`project_key` = team key) and only sometimes to a project
+        (`project_id`). Team attribution must therefore try `project_key`
+        when a `work_scope_id` lookup misses; see
+        ``ProjectKeyTeamResolver`` callers in ``metrics/compute_work_items.py``
+        and ``metrics/job_work_items.py``. (Jira's project-as-scope is also
+        only a fallback for attribution — teams are membership-based first.)
         """
         if self.provider == "jira" and self.project_key:
             return str(self.project_key)

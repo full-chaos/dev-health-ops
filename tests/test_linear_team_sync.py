@@ -380,7 +380,8 @@ class TestDiscoverLinear:
     def test_discover_linear_associations_set(
         self, mock_client_class: MagicMock
     ) -> None:
-        """discover_linear() sets associations with provider_org='linear'."""
+        """discover_linear() sets project_keys (= team key) for work-item
+        attribution, plus provider_org."""
         from dev_health_ops.api.services.configuration import TeamDiscoveryService
 
         mock_client = MagicMock()
@@ -399,7 +400,10 @@ class TestDiscoverLinear:
         result = asyncio.run(service.discover_linear(api_key="test-key"))
 
         assert len(result) == 1
-        assert result[0].associations == {"provider_org": "linear"}
+        assert result[0].associations == {
+            "project_keys": ["ENG"],
+            "provider_org": "linear",
+        }
 
     @patch("dev_health_ops.providers.linear.client.LinearClient")
     def test_discover_linear_client_closed_on_success(

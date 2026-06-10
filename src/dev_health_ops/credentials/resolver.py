@@ -255,8 +255,10 @@ def github_credentials_from_mapping(
 
     try:
         return GitHubCredentials(**kwargs)
-    except (ValueError, TypeError) as exc:
-        logger.debug("Incomplete GitHub credentials mapping: %s", exc)
+    except (ValueError, TypeError):
+        # Do not log the exception: it derives from credential construction and
+        # could surface field values. Callers raise a clear config error instead.
+        logger.debug("GitHub credentials mapping was incomplete or invalid")
         return None
 
 

@@ -12,8 +12,6 @@ def discover_repos_for_config(
 
     if provider == "github":
         token = _github_token_from_credentials(credentials)
-        if not token:
-            return []
         return discover_github_repos(sync_options, token)
     if provider == "gitlab":
         token = str(credentials.get("token") or "")
@@ -57,7 +55,7 @@ def discover_github_repos(
     if not owner:
         return []
 
-    g = Github(token)
+    g = Github(token) if token else Github()
     try:
         org = g.get_organization(owner)
         repos = org.get_repos()

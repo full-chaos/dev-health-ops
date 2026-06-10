@@ -27,7 +27,6 @@ from enum import Enum
 
 import strawberry
 
-
 # ── Experiments (CHAOS-2219) ──────────────────────────────────────────────────
 
 

@@ -293,7 +293,9 @@ class SyncConfiguration(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("org_id", "name", name="uq_sync_config_org_name"),
+        UniqueConstraint(
+            "org_id", "provider", "name", name="uq_sync_config_org_provider_name"
+        ),
         Index("ix_sync_config_org_provider", "org_id", "provider"),
     )
 
@@ -339,6 +341,13 @@ class ScheduledJob(Base):
     )
     job_type: Mapped[str] = mapped_column(
         Text, nullable=False, index=True, comment="Type of job (sync, metrics, etc.)"
+    )
+
+    provider: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default="",
+        comment="Provider this job belongs to (empty string for non-provider jobs)",
     )
 
     schedule_cron: Mapped[str] = mapped_column(
@@ -394,7 +403,9 @@ class ScheduledJob(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("org_id", "name", name="uq_scheduled_job_org_name"),
+        UniqueConstraint(
+            "org_id", "provider", "name", name="uq_scheduled_job_org_provider_name"
+        ),
         Index("ix_scheduled_job_org_type", "org_id", "job_type"),
         Index("ix_scheduled_job_next_run", "next_run_at"),
     )
@@ -405,6 +416,7 @@ class ScheduledJob(Base):
         job_type: str,
         schedule_cron: str,
         org_id: str | None = None,
+        provider: str = "",
         job_config: dict[str, Any] | None = None,
         sync_config_id: uuid.UUID | None = None,
         tz: str = "UTC",
@@ -414,6 +426,7 @@ class ScheduledJob(Base):
         self.org_id = org_id or ""
         self.name = name
         self.job_type = job_type
+        self.provider = provider
         self.schedule_cron = schedule_cron
         self.timezone = tz
         self.job_config = job_config or {}

@@ -62,6 +62,7 @@ nav:
   - Connectors:
       - Usage: connectors/usage.md
       - Private Repos: connectors/private-repo-testing.md
+      - GitHub App Auth: user-guide/github-app-auth.md
   - Metrics:
       - Overview: metrics.md
       - Inventory: metrics-inventory.md

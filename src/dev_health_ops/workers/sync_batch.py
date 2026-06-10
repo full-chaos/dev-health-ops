@@ -23,6 +23,7 @@ from dev_health_ops.workers.task_utils import (
     _get_db_url,
     _inject_provider_token,
     _merge_sync_flags,
+    _normalize_sync_targets,
     _resolve_env_credentials,
 )
 
@@ -152,7 +153,9 @@ def dispatch_batch_sync(
                 raise ValueError(f"Sync configuration not found: {config_id}")
 
             provider = (config.provider or "").lower()
-            sync_targets = list(config.sync_targets or [])
+            sync_targets = _normalize_sync_targets(
+                provider, list(config.sync_targets or [])
+            )
             sync_options = dict(config.sync_options or {})
             config_name = config.name
 
@@ -182,7 +185,7 @@ def dispatch_batch_sync(
                 config_id,
                 disc_exc,
             )
-            run_sync_config.apply_async(
+            getattr(run_sync_config, "apply_async")(
                 kwargs={
                     "config_id": config_id,
                     "org_id": org_id,
@@ -224,7 +227,7 @@ def dispatch_batch_sync(
                 per_repo_options.pop("group", None)
 
             child_tasks.append(
-                _run_sync_for_repo.s(
+                getattr(_run_sync_for_repo, "s")(
                     config_id=config_id,
                     org_id=org_id,
                     triggered_by=triggered_by,
@@ -245,7 +248,7 @@ def dispatch_batch_sync(
         all_tasks = [task for batch in batches for task in batch]
         chord(
             group(all_tasks),
-            _batch_sync_callback.s(
+            getattr(_batch_sync_callback, "s")(
                 provider=provider,
                 sync_targets=sync_targets,
                 org_id=org_id,
@@ -313,6 +316,7 @@ def _run_sync_for_repo(
     )
 
     try:
+        sync_targets = _normalize_sync_targets(provider, list(sync_targets or []))
         result_payload: dict[str, Any] = {
             "provider": provider,
             "config_id": config_id,
@@ -320,7 +324,11 @@ def _run_sync_for_repo(
             "triggered_by": triggered_by,
         }
 
-        if provider == "github":
+        code_sync_targets = [
+            target for target in sync_targets if target != "work-items"
+        ]
+
+        if provider == "github" and code_sync_targets:
             owner = str(sync_options_override.get("owner", ""))
             repo_name = str(sync_options_override.get("repo", ""))
             github_credentials = github_credentials_from_mapping(credentials)
@@ -331,7 +339,7 @@ def _run_sync_for_repo(
                     f"owner={owner}, repo={repo_name}"
                 )
 
-            merged_flags = _merge_sync_flags(sync_targets)
+            merged_flags = _merge_sync_flags(code_sync_targets)
 
             async def _github_handler(store):
                 await process_github_repo(
@@ -350,7 +358,7 @@ def _run_sync_for_repo(
             run_async(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
             result_payload.update({"owner": owner, "repo": repo_name})
 
-        elif provider == "gitlab":
+        elif provider == "gitlab" and code_sync_targets:
             project_id = sync_options_override.get("project_id")
             token = str(credentials.get("token") or "")
             gitlab_url = str(
@@ -363,7 +371,10 @@ def _run_sync_for_repo(
                     f"project_id={project_id}"
                 )
 
-            merged_flags = _merge_sync_flags(sync_targets)
+            gitlab_targets = [
+                target for target in code_sync_targets if target != "work-items"
+            ]
+            merged_flags = _merge_sync_flags(gitlab_targets)
 
             async def _gitlab_handler(store):
                 await process_gitlab_project(
@@ -382,6 +393,11 @@ def _run_sync_for_repo(
             run_async(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))
             result_payload.update(
                 {"project_id": int(project_id), "gitlab_url": gitlab_url}
+            )
+
+        elif provider not in {"github", "gitlab"} and "work-items" not in sync_targets:
+            raise ValueError(
+                f"Unsupported batch sync provider/targets: provider={provider} targets={sync_targets}"
             )
 
         if "work-items" in sync_targets:

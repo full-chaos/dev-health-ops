@@ -24,6 +24,7 @@ from dev_health_ops.workers.task_utils import (
     _get_db_url,
     _inject_provider_token,
     _merge_sync_flags,
+    _normalize_sync_targets,
     _resolve_env_credentials,
 )
 
@@ -392,7 +393,9 @@ def run_sync_config(
 
             provider = _as_str(config.provider).lower()
             config_name = _as_str(config.name)
-            sync_targets = _as_str_list(config.sync_targets)
+            sync_targets = _normalize_sync_targets(
+                provider, _as_str_list(config.sync_targets)
+            )
             sync_options = _as_dict(config.sync_options)
 
             if config.credential_id:
@@ -426,7 +429,7 @@ def run_sync_config(
                 job = ScheduledJob(
                     name=f"sync-config-{_as_uuid(config.id)}",
                     job_type="sync",
-                    schedule_cron="0 * * * *",
+                    schedule_cron=str(sync_options.get("schedule_cron") or "0 * * * *"),
                     org_id=org_id,
                     job_config={
                         "provider": provider,
@@ -437,6 +440,12 @@ def run_sync_config(
                 )
                 session.add(job)
                 session.flush()
+            else:
+                setattr(
+                    job,
+                    "schedule_cron",
+                    str(sync_options.get("schedule_cron") or "0 * * * *"),
+                )
 
             job_id = _as_uuid(job.id)
 
@@ -466,7 +475,11 @@ def run_sync_config(
         full_resync = bool(sync_options.get("full_resync"))
         repo_id_for_watermark: str | None = None
 
-        if provider == "github":
+        code_sync_targets = [
+            target for target in sync_targets if target != "work-items"
+        ]
+
+        if provider == "github" and code_sync_targets:
             _owr = _extract_owner_repo(
                 config_name=config_name, sync_options=sync_options
             )
@@ -512,7 +525,7 @@ def run_sync_config(
                     "Missing GitHub token or App credentials for sync configuration"
                 )
 
-            merged_flags = _merge_sync_flags(sync_targets)
+            merged_flags = _merge_sync_flags(code_sync_targets)
 
             async def _github_handler(store):
                 await process_github_repo(
@@ -533,10 +546,12 @@ def run_sync_config(
                 }
             )
 
-        elif provider == "gitlab":
-            feature_flag_requested = "feature-flags" in sync_targets
+        elif provider == "gitlab" and code_sync_targets:
+            feature_flag_requested = "feature-flags" in code_sync_targets
             gitlab_targets = [
-                target for target in sync_targets if target != "feature-flags"
+                target
+                for target in code_sync_targets
+                if target not in {"feature-flags", "work-items"}
             ]
             if feature_flag_requested:
                 result_payload["feature_flags"] = _sync_gitlab_feature_flags(
@@ -604,6 +619,11 @@ def run_sync_config(
                 org_id=org_id,
             )
             result_payload["backfill_days"] = backfill_days
+
+        elif provider not in {"github", "gitlab"} and "work-items" not in sync_targets:
+            raise ValueError(
+                f"Unsupported sync provider/targets: provider={provider} targets={sync_targets}"
+            )
 
         if "work-items" in sync_targets and provider != "jira":
             token = _extract_provider_token(provider, credentials)

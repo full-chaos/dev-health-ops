@@ -371,7 +371,7 @@ class TestGeneratorCoherence:
         gen = _make_gen(seed)
         records = gen.generate_work_item_metrics(days=14)
         # Convert dataclass records to dicts for the validator
-        row_dicts = [r.__dict__ if hasattr(r, "__dict__") else dict(r) for r in records]
+        row_dicts = [vars(r) for r in records]
         bundle = FixtureBundle(work_item_metrics=row_dicts)
         validate_all(bundle)
 
@@ -380,7 +380,7 @@ class TestGeneratorCoherence:
         gen = _make_gen(seed)
         commits = gen.generate_commits(days=14)
         stats = gen.generate_commit_stats(commits)
-        stat_dicts = [s.__dict__ if hasattr(s, "__dict__") else dict(s) for s in stats]
+        stat_dicts = [vars(s) for s in stats]
         bundle = FixtureBundle(commit_stats=stat_dicts)
         validate_all(bundle)
 
@@ -399,12 +399,8 @@ class TestGeneratorCoherence:
         bundle = FixtureBundle(
             coverage_snapshots=snapshots,
             test_suite_results=executions["suite_results"],
-            work_item_metrics=[
-                r.__dict__ if hasattr(r, "__dict__") else dict(r) for r in wi_records
-            ],
-            commit_stats=[
-                s.__dict__ if hasattr(s, "__dict__") else dict(s) for s in stats
-            ],
+            work_item_metrics=[vars(r) for r in wi_records],
+            commit_stats=[vars(s) for s in stats],
         )
         validate_all(bundle)
 

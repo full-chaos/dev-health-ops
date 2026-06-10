@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.middleware.rate_limit import AUTH_REFRESH_LIMIT, limiter
 from dev_health_ops.api.services.refresh_tokens import (
@@ -18,6 +19,7 @@ from dev_health_ops.api.services.refresh_tokens import (
 from dev_health_ops.api.utils.audit import emit_audit_log
 from dev_health_ops.api.utils.errors import error_detail
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
+from dev_health_ops.models.refresh_token import RefreshToken
 from dev_health_ops.models.users import Membership, Organization, User
 
 from .common import (
@@ -53,6 +55,47 @@ class TokenRefreshResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserInfo | None = None
+
+
+async def _reject_if_deactivated(
+    db: AsyncSession,
+    *,
+    user: User,
+    token_record: RefreshToken,
+    refresh_org_id: str,
+    user_id: str,
+    request: Request,
+) -> None:
+    """Revoke the token family and raise 401 when the user is deactivated.
+
+    Deactivation must cut off token issuance, not just API access:
+    get_current_user already blocks deactivated users per-request, but without
+    this check a deactivated user could keep rotating refresh tokens and
+    minting fresh access tokens indefinitely (CHAOS-2238).
+    """
+    if user.is_active:
+        return
+    await revoke_family(db, str(token_record.family_id))
+    parsed_org_id = _parse_uuid(refresh_org_id)
+    if parsed_org_id is not None:
+        emit_audit_log(
+            db,
+            org_id=parsed_org_id,
+            action=AuditAction.LOGIN_FAILED,
+            resource_type=AuditResourceType.SESSION,
+            resource_id=user_id,
+            user_id=_require_uuid(user.id, "user.id"),
+            description="Token refresh failed: user deactivated",
+            request=request,
+            status="failure",
+            error_message="Account is disabled",
+        )
+    await db.commit()
+    logger.warning("Refresh rejected for deactivated user: %s", user_id)
+    raise HTTPException(
+        status_code=401,
+        detail=error_detail("Account is disabled"),
+    )
 
 
 @router.post("/refresh", response_model=TokenRefreshResponse)
@@ -152,6 +195,14 @@ async def refresh_token(
                         )
                         user = user_result.scalar_one_or_none()
                         if user is not None:
+                            await _reject_if_deactivated(
+                                db,
+                                user=user,
+                                token_record=token_record,
+                                refresh_org_id=refresh_org_id,
+                                user_id=user_id,
+                                request=request,
+                            )
                             role = "member"
                             if refresh_org_id:
                                 membership_result = await db.execute(
@@ -246,6 +297,15 @@ async def refresh_token(
                 status_code=401,
                 detail=error_detail("User not found"),
             )
+
+        await _reject_if_deactivated(
+            db,
+            user=user,
+            token_record=token_record,
+            refresh_org_id=refresh_org_id,
+            user_id=user_id,
+            request=request,
+        )
 
         role = "member"
         if refresh_org_id:

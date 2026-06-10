@@ -27,6 +27,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
 from .common import get_session
 
@@ -134,6 +135,23 @@ NON_REPO_SYNC_PROVIDERS = {"jira", "linear"}
 DEFAULT_SYNC_CRON = "0 * * * *"
 
 
+def _sync_options_with_top_level_fields(
+    sync_options: dict[str, Any] | None,
+    *,
+    schedule_cron: str | None = None,
+    timezone: str | None = None,
+    initial_sync_depth: int | None = None,
+) -> dict[str, Any]:
+    merged = dict(sync_options or {})
+    if schedule_cron is not None:
+        merged["schedule_cron"] = schedule_cron
+    if timezone is not None:
+        merged["timezone"] = timezone
+    if initial_sync_depth is not None:
+        merged["initial_sync_depth"] = initial_sync_depth
+    return merged
+
+
 def _schedule_cron_for_config(config: object) -> str:
     sync_options = dict(getattr(config, "sync_options") or {})
     return str(sync_options.get("schedule_cron") or DEFAULT_SYNC_CRON)
@@ -150,6 +168,13 @@ async def _upsert_scheduled_job(
     )
     result = await session.execute(stmt)
     job = result.scalar_one_or_none()
+    sync_options = dict(getattr(config, "sync_options") or {})
+    provider = str(getattr(config, "provider")).lower()
+    tz = str(sync_options.get("timezone") or "UTC")
+    job_config = {
+        "provider": provider,
+        "sync_config_id": str(sync_config_id),
+    }
     status = (
         JobStatus.ACTIVE.value
         if getattr(config, "is_active")
@@ -162,17 +187,19 @@ async def _upsert_scheduled_job(
                 job_type="sync",
                 schedule_cron=_schedule_cron_for_config(config),
                 org_id=org_id,
-                job_config={
-                    "provider": str(getattr(config, "provider")).lower(),
-                    "sync_config_id": str(sync_config_id),
-                },
+                provider=provider,
+                job_config=job_config,
                 sync_config_id=sync_config_id,
+                tz=tz,
                 status=status,
             )
         )
         return
 
     job.schedule_cron = _schedule_cron_for_config(config)
+    job.provider = provider
+    job.timezone = tz
+    job.job_config = job_config
     job.status = status
 
 
@@ -340,7 +367,14 @@ async def create_sync_config(
         raise HTTPException(status_code=403, detail=reason or "Repo limit exceeded")
 
     # Fix 5 (LOW): Validate initial_sync_depth against tier limits.
-    initial_sync_depth = payload.sync_options.get("initial_sync_depth")
+    sync_options = _sync_options_with_top_level_fields(
+        payload.sync_options,
+        schedule_cron=payload.schedule_cron,
+        timezone=payload.timezone,
+        initial_sync_depth=payload.initial_sync_depth,
+    )
+
+    initial_sync_depth = sync_options.get("initial_sync_depth")
     if initial_sync_depth is not None:
 
         def _check_backfill_depth(sync_session) -> tuple[bool, str | None]:
@@ -358,7 +392,7 @@ async def create_sync_config(
 
     # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron interval and gate
     # scheduled jobs behind the "scheduled_jobs" feature (Team+ only).
-    schedule_cron = payload.sync_options.get("schedule_cron")
+    schedule_cron = sync_options.get("schedule_cron")
     if schedule_cron:
         # Fix 4: Gate scheduled_jobs feature — Community tier cannot set schedules.
         async def _check_scheduled_jobs_feature(
@@ -412,7 +446,7 @@ async def create_sync_config(
         name=payload.name,
         provider=payload.provider,
         sync_targets=payload.sync_targets,
-        sync_options=payload.sync_options,
+        sync_options=sync_options,
         credential_id=payload.credential_id,
     )
     await _upsert_scheduled_job(session, config, org_id)
@@ -446,7 +480,15 @@ async def update_sync_config(
         raise HTTPException(status_code=404, detail="Sync configuration not found")
 
     # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron when updating sync_options.
-    schedule_cron = (payload.sync_options or {}).get("schedule_cron")
+    sync_options = _sync_options_with_top_level_fields(
+        payload.sync_options,
+        schedule_cron=payload.schedule_cron,
+        timezone=payload.timezone,
+        initial_sync_depth=payload.initial_sync_depth,
+    )
+    sync_options_provided = bool(sync_options)
+
+    schedule_cron = sync_options.get("schedule_cron")
     if schedule_cron:
         # Fix 4: Gate scheduled_jobs feature — Community tier cannot set schedules.
         from dev_health_ops.licensing.gating import _check_org_feature_async
@@ -489,15 +531,18 @@ async def update_sync_config(
                 ),
             )
 
-    updated = await svc.update(
-        name=str(getattr(config, "name")),
-        provider=str(getattr(config, "provider")),
-        sync_targets=payload.sync_targets,
-        sync_options=payload.sync_options,
-        is_active=payload.is_active,
-    )
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
+    mutable_config = cast(_MutableSyncConfiguration, config)
+    if payload.sync_targets is not None:
+        mutable_config.sync_targets = payload.sync_targets
+    if sync_options_provided:
+        mutable_config.sync_options = {
+            **dict(getattr(config, "sync_options") or {}),
+            **sync_options,
+        }
+    if payload.is_active is not None:
+        mutable_config.is_active = payload.is_active
+    await session.flush()
+    updated = config
 
     await _upsert_scheduled_job(session, updated, org_id)
 
@@ -515,11 +560,11 @@ async def update_sync_config(
             if payload.is_active is not None:
                 mutable_child.is_active = payload.is_active
             # Propagate schedule/timezone/depth from sync_options if provided
-            if payload.sync_options:
+            if sync_options_provided:
                 for key in ("schedule_cron", "timezone", "initial_sync_depth"):
-                    if key in payload.sync_options:
+                    if key in sync_options:
                         child_sync_options = dict(getattr(child, "sync_options") or {})
-                        child_sync_options[key] = payload.sync_options[key]
+                        child_sync_options[key] = sync_options[key]
                         mutable_child.sync_options = child_sync_options
         if children:
             for child in children:
@@ -597,9 +642,13 @@ async def trigger_sync_config(
                 pass
 
     try:
-        from dev_health_ops.workers.sync_tasks import run_sync_config
+        from dev_health_ops.workers.sync_tasks import (
+            dispatch_batch_sync,
+            run_sync_config,
+        )
 
-        result = getattr(run_sync_config, "delay")(
+        task = dispatch_batch_sync if _is_batch_eligible(config) else run_sync_config
+        result = getattr(task, "delay")(
             config_id=str(config.id),
             org_id=org_id,
             triggered_by="manual",

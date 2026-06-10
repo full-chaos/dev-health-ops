@@ -40,7 +40,7 @@ def _sync_launchdarkly_feature_flags(
     since_dt: datetime | None,
 ) -> dict[str, Any]:
     from dev_health_ops.connectors.launchdarkly import LaunchDarklyConnector
-    from dev_health_ops.metrics.sinks.factory import get_process_sink
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.processors.launchdarkly import (
         normalize_audit_events,
         normalize_flags,
@@ -109,7 +109,7 @@ def _sync_launchdarkly_feature_flags(
                 for event in events
             ]
 
-        sink = get_process_sink(db_url)
+        sink = ClickHouseMetricsSink(db_url)
         setattr(sink, "org_id", org_id)
         builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
         try:
@@ -156,6 +156,7 @@ def _sync_launchdarkly_feature_flags(
                 )
         finally:
             builder.close()
+            sink.close()
 
         return {
             "flags_synced": len(flags),
@@ -175,7 +176,7 @@ def _sync_gitlab_feature_flags(
     sync_options: dict[str, Any],
 ) -> dict[str, Any]:
     from dev_health_ops.connectors.gitlab import GitLabConnector
-    from dev_health_ops.metrics.sinks.factory import get_process_sink
+    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.processors.gitlab_feature_flags import (
         normalize_gitlab_feature_flags,
         snapshot_gitlab_feature_flag_events,
@@ -223,7 +224,7 @@ def _sync_gitlab_feature_flags(
         repo_id=repo_id,
     )
 
-    sink = get_process_sink(db_url)
+    sink = ClickHouseMetricsSink(db_url)
     setattr(sink, "org_id", org_id)
     builder = WorkGraphBuilder(BuildConfig(dsn=db_url, org_id=org_id))
     try:
@@ -270,6 +271,7 @@ def _sync_gitlab_feature_flags(
             )
     finally:
         builder.close()
+        sink.close()
 
     return {
         "flags_synced": len(flags),

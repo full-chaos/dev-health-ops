@@ -163,7 +163,7 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
     sink = _FakeClickHouseSink("clickhouse://test")
 
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
-    monkeypatch.setattr(job, "get_process_sink", lambda _dsn: sink)
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
     monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
     monkeypatch.setattr(
         job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])

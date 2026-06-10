@@ -1,18 +1,11 @@
 """Celery application factory and instance."""
 
 import logging
-import os
 import time
 from typing import Any
 
 from celery import Celery
-from celery.signals import (
-    task_postrun,
-    task_prerun,
-    worker_init,
-    worker_process_init,
-    worker_process_shutdown,
-)
+from celery.signals import task_postrun, task_prerun
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
@@ -55,49 +48,6 @@ def _task_finished(
             "Celery task metrics recording failed (non-fatal)",
             exc_info=True,
         )
-
-
-@worker_init.connect
-def _run_migrations_on_startup(**kwargs: Any) -> None:
-    """Apply pending Alembic migrations when the worker process starts.
-
-    Gated behind DEV_HEALTH_WORKER_AUTO_MIGRATE env var (default OFF).
-    Migrations belong in a deploy/init step; auto-migrating from workers
-    races Alembic across workers and gives workers schema write-authority.
-    """
-    _logger = logging.getLogger(__name__)
-    auto_migrate = os.environ.get("DEV_HEALTH_WORKER_AUTO_MIGRATE", "").strip().lower()
-    if auto_migrate not in ("1", "true"):
-        _logger.info(
-            "worker auto-migrate disabled; run 'dev-hops migrate' as a deploy step"
-        )
-        return
-    try:
-        from alembic import command
-
-        from dev_health_ops.migrate import _make_alembic_config
-
-        cfg = _make_alembic_config()
-        command.upgrade(cfg, "head")
-        _logger.info("Alembic migrations applied (upgrade to head)")
-    except (ImportError, RuntimeError, OSError):
-        _logger.exception("Auto-migration on worker startup failed (non-fatal)")
-
-
-@worker_process_init.connect
-def _worker_process_init(**kwargs: Any) -> None:
-    """Reset process-local sink cache on worker process fork."""
-    from dev_health_ops.metrics.sinks import factory
-
-    factory.reset_process_sinks()
-
-
-@worker_process_shutdown.connect
-def _worker_process_shutdown(**kwargs: Any) -> None:
-    """Close and clear process-local sink cache on worker process shutdown."""
-    from dev_health_ops.metrics.sinks import factory
-
-    factory.reset_process_sinks()
 
 
 def create_celery_app() -> Celery:

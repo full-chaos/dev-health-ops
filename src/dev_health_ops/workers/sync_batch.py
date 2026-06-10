@@ -15,6 +15,7 @@ from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.sync_runtime import (
     _dispatch_post_sync_tasks,
+    _TerminalSyncError,
     run_sync_config,
 )
 from dev_health_ops.workers.task_utils import (
@@ -166,7 +167,7 @@ def dispatch_batch_sync(
                 .one_or_none()
             )
             if config is None:
-                raise ValueError(f"Sync configuration not found: {config_id}")
+                raise _TerminalSyncError(f"Sync configuration not found: {config_id}")
 
             provider = (config.provider or "").lower()
             sync_targets = _normalize_sync_targets(
@@ -186,7 +187,9 @@ def dispatch_batch_sync(
                     .one_or_none()
                 )
                 if credential is None:
-                    raise ValueError(f"Credential not found: {config.credential_id}")
+                    raise _TerminalSyncError(
+                        f"Credential not found: {config.credential_id}"
+                    )
                 credentials = _decrypt_credential_sync(credential)
             else:
                 credentials = _resolve_env_credentials(provider)
@@ -486,4 +489,11 @@ def _run_sync_for_repo(
             provider,
             exc,
         )
+        if isinstance(exc, _TerminalSyncError):
+            logger.error(
+                "Batch child sync failed permanently (no retry): config=%s error=%s",
+                config_id,
+                exc,
+            )
+            raise exc
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))

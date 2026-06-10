@@ -599,6 +599,8 @@ async def trigger_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
+    if str(getattr(config, "org_id", "")) != org_id:
+        raise HTTPException(status_code=404, detail="Sync configuration not found")
 
     # Fix 6 (LOW-MEDIUM): Check work items count against tier limit before triggering.
     if "work-items" in (config.sync_targets or []):
@@ -650,7 +652,7 @@ async def trigger_sync_config(
         task = dispatch_batch_sync if _is_batch_eligible(config) else run_sync_config
         result = getattr(task, "delay")(
             config_id=str(config.id),
-            org_id=org_id,
+            org_id=str(config.org_id),
             triggered_by="manual",
         )
         return {

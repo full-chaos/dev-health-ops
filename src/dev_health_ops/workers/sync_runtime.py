@@ -31,6 +31,10 @@ from dev_health_ops.workers.task_utils import (
 logger = logging.getLogger(__name__)
 
 
+class _TerminalSyncError(Exception):
+    pass
+
+
 def _sync_launchdarkly_feature_flags(
     *,
     db_url: str,
@@ -332,6 +336,10 @@ def _dispatch_post_sync_tasks(
         )
 
 
+def _is_terminal_sync_error(exc: Exception) -> bool:
+    return isinstance(exc, (_TerminalSyncError, ValueError))
+
+
 @celery_app.task(bind=True, max_retries=3, queue="sync")
 def run_sync_config(
     self,
@@ -389,7 +397,7 @@ def run_sync_config(
                 .one_or_none()
             )
             if config is None:
-                raise ValueError(f"Sync configuration not found: {config_id}")
+                raise _TerminalSyncError(f"Sync configuration not found: {config_id}")
 
             provider = _as_str(config.provider).lower()
             config_name = _as_str(config.name)
@@ -408,7 +416,7 @@ def run_sync_config(
                     .one_or_none()
                 )
                 if credential is None:
-                    raise ValueError(
+                    raise _TerminalSyncError(
                         f"Credential not found for sync configuration: {config.credential_id}"
                     )
 
@@ -766,5 +774,14 @@ def run_sync_config(
                     session.flush()
         except Exception as update_error:
             logger.error("Failed updating job run failure state: %s", update_error)
+
+        if _is_terminal_sync_error(exc):
+            logger.error(
+                "Sync config task failed terminally; not retrying: config_id=%s org_id=%s error=%s",
+                config_id,
+                org_id,
+                exc,
+            )
+            raise
 
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))

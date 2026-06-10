@@ -48,6 +48,32 @@ class WorkItemsGeneratorMixin(BaseGeneratorMixin):
         for i in range(days):
             day = end_date - timedelta(days=i)
             for team_id, team_name in teams_to_use:
+                # --- Coherence-safe allocation (Rule 1) -------------------
+                # Unassigned sub-counts must be subsets of their totals.
+                # Lead time must be ≥ cycle time (lead = queue + cycle).
+                # Percentile pairs must be non-decreasing (p50 ≤ p90).
+                items_started = random.randint(2, 8)
+                items_started_unassigned = random.randint(0, items_started)
+                items_completed = random.randint(1, 6)
+                items_completed_unassigned = random.randint(0, items_completed)
+                wip_count = random.randint(5, 15)
+                wip_unassigned = random.randint(0, wip_count)
+
+                # Build cycle / lead times so all four constraints hold:
+                #   ct_p50 ≤ ct_p90, lt_p50 ≤ lt_p90, ct_p50 ≤ lt_p50, ct_p90 ≤ lt_p90
+                # Strategy: generate base cycle-p50, add deltas for p90 and
+                # queue, so every derived value is monotonically larger.
+                ct_p50 = float(random.randint(24, 72))
+                ct_p90 = ct_p50 + float(random.randint(0, 48))
+                queue_p50 = float(random.randint(12, 48))
+                queue_p90 = queue_p50 + float(random.randint(0, 24))
+                lt_p50 = ct_p50 + queue_p50
+                lt_p90 = ct_p90 + queue_p90
+
+                # WIP age: p50 then p90 ≥ p50
+                wip_age_p50 = float(random.randint(12, 48))
+                wip_age_p90 = float(random.randint(48, 168))
+
                 records.append(
                     WorkItemMetricsDailyRecord(
                         day=day,
@@ -55,18 +81,18 @@ class WorkItemsGeneratorMixin(BaseGeneratorMixin):
                         work_scope_id=self.repo_name,
                         team_id=team_id,
                         team_name=team_name,
-                        items_started=random.randint(2, 8),
-                        items_completed=random.randint(1, 6),
-                        items_started_unassigned=random.randint(0, 2),
-                        items_completed_unassigned=random.randint(0, 1),
-                        wip_count_end_of_day=random.randint(5, 15),
-                        wip_unassigned_end_of_day=random.randint(1, 3),
-                        cycle_time_p50_hours=float(random.randint(24, 72)),
-                        cycle_time_p90_hours=float(random.randint(72, 120)),
-                        lead_time_p50_hours=float(random.randint(48, 96)),
-                        lead_time_p90_hours=float(random.randint(96, 240)),
-                        wip_age_p50_hours=float(random.randint(12, 48)),
-                        wip_age_p90_hours=float(random.randint(48, 168)),
+                        items_started=items_started,
+                        items_completed=items_completed,
+                        items_started_unassigned=items_started_unassigned,
+                        items_completed_unassigned=items_completed_unassigned,
+                        wip_count_end_of_day=wip_count,
+                        wip_unassigned_end_of_day=wip_unassigned,
+                        cycle_time_p50_hours=ct_p50,
+                        cycle_time_p90_hours=ct_p90,
+                        lead_time_p50_hours=lt_p50,
+                        lead_time_p90_hours=lt_p90,
+                        wip_age_p50_hours=wip_age_p50,
+                        wip_age_p90_hours=wip_age_p90,
                         bug_completed_ratio=random.uniform(0.1, 0.4),
                         story_points_completed=float(random.randint(10, 50)),
                         # Phase 2 metrics

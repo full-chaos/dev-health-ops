@@ -148,13 +148,47 @@ def test_discover_github_pat_passes_token_through() -> None:
     assert discover.call_args.args[1] == "ghp_x"
 
 
-def test_discover_github_returns_empty_without_credentials() -> None:
+def test_discover_github_attempts_anonymous_without_credentials() -> None:
+    """Without credentials we still attempt anonymous public-repo discovery.
+
+    Regression guard for CHAOS-2246: a credential-less GitHub config must not
+    short-circuit to ``[]`` before discovery; it should attempt anonymous
+    public-repo discovery with an empty token.
+    """
     from dev_health_ops.discovery import repos as repos_mod
 
     config = _make_config("github", {"search": "my-org/*"})
 
     with patch.object(repos_mod, "discover_github_repos") as discover:
+        discover.return_value = [("my-org", "public-api")]
         result = repos_mod.discover_repos_for_config(config, {})
 
-    assert result == []
-    discover.assert_not_called()
+    assert result == [("my-org", "public-api")]
+    discover.assert_called_once()
+    # Empty token signals the anonymous discovery path.
+    assert discover.call_args.args[1] == ""
+
+
+def test_discover_github_repos_uses_anonymous_client_without_token() -> None:
+    """``discover_github_repos`` uses an unauthenticated client when token is empty."""
+    from dev_health_ops.discovery import repos as repos_mod
+
+    with patch("github.Github") as github_cls:
+        client = github_cls.return_value
+        client.get_organization.return_value.get_repos.return_value = []
+        repos_mod.discover_github_repos({"search": "my-org/*"}, "")
+
+    # No token => anonymous client constructed with no arguments.
+    github_cls.assert_called_once_with()
+
+
+def test_discover_github_repos_uses_token_client_when_present() -> None:
+    """``discover_github_repos`` passes the token to the client when present."""
+    from dev_health_ops.discovery import repos as repos_mod
+
+    with patch("github.Github") as github_cls:
+        client = github_cls.return_value
+        client.get_organization.return_value.get_repos.return_value = []
+        repos_mod.discover_github_repos({"search": "my-org/*"}, "ghp_x")
+
+    github_cls.assert_called_once_with("ghp_x")

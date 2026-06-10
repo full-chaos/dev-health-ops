@@ -23,6 +23,7 @@ from .models.ai import (
     AIWorkflowRootTypeInput,
 )
 from .models.data_health import DataHealth
+from .models.improve import ExperimentsResult
 from .models.inputs import (
     AnalyticsRequestInput,
     CapacityForecastFilterInput,
@@ -476,6 +477,27 @@ class Query:
 
         context = get_context(info)
         return await resolve_recommendations(context, str(team), window)
+
+    @strawberry.field(
+        description=(
+            "Experiments derived from opportunity suggested_experiments (CHAOS-2219). "
+            "v1: computed at query-time — no persistence table. "
+            "Each experiment is a typed promotion of a suggestion string with "
+            "hypothesis / metric / owner / stop_condition. "
+            "``derived_from_opportunities`` is False when the opportunities "
+            "service was unavailable; items will be empty in that case."
+        )
+    )
+    async def experiments(
+        self,
+        info: Info,
+        org_id: str,
+        filters: FilterInput | None = None,
+    ) -> ExperimentsResult:
+        from .resolvers.improve import resolve_experiments
+
+        context = get_context(info)
+        return await resolve_experiments(context, filters)
 
     @strawberry.field(
         description="AI workflow impact summary across the requested time range."

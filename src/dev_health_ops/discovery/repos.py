@@ -9,13 +9,34 @@ def discover_repos_for_config(
 ) -> list[tuple[str, ...]]:
     provider = (config.provider or "").lower()
     sync_options = dict(config.sync_options or {})
-    token = str(credentials.get("token") or "")
 
     if provider == "github":
+        token = _github_token_from_credentials(credentials)
+        if not token:
+            return []
         return discover_github_repos(sync_options, token)
     if provider == "gitlab":
+        token = str(credentials.get("token") or "")
         return discover_gitlab_repos(sync_options, token)
     return []
+
+
+def _github_token_from_credentials(credentials: dict[str, Any]) -> str:
+    """Resolve a usable GitHub token from a credentials mapping.
+
+    Supports both PAT (``token``) and GitHub App auth; for App auth an
+    installation token is minted via the GitHub connector.
+    """
+    from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+
+    gh_credentials = github_credentials_from_mapping(credentials)
+    if gh_credentials is None:
+        return ""
+    if gh_credentials.is_app_auth:
+        from dev_health_ops.connectors.github import GitHubConnector
+
+        return GitHubConnector(credentials=gh_credentials).token
+    return gh_credentials.token or ""
 
 
 def discover_github_repos(

@@ -414,6 +414,43 @@ class TestRunSyncConfigWatermarks:
         assert mock_run_work_items.call_args.kwargs["provider"] == "linear"
 
     @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
+    @patch(
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials", return_value={}
+    )
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_github_work_items_only_does_not_require_owner_repo(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_post_sync,
+        mock_run_work_items,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_runtime import run_sync_config
+
+        config = _make_config(
+            provider="github",
+            sync_options={"search": "full-chaos"},
+            sync_targets=["work-items"],
+            name="github-work-items",
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
+
+        task = cast(Any, run_sync_config)
+        task.push_request(id="github-work-items-only")
+        try:
+            result = task(config_id=str(config.id), org_id=ORG_ID)
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "success"
+        mock_run_work_items.assert_called_once()
+
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
     def test_batch_child_empty_targets_defaults_to_work_items(
         self, mock_run_work_items
     ):

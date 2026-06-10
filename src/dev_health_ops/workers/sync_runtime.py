@@ -431,11 +431,13 @@ def run_sync_config(
                     job_type="sync",
                     schedule_cron=str(sync_options.get("schedule_cron") or "0 * * * *"),
                     org_id=org_id,
+                    provider=provider,
                     job_config={
                         "provider": provider,
                         "sync_config_id": str(_as_uuid(config.id)),
                     },
                     sync_config_id=_as_uuid(config.id),
+                    tz=str(sync_options.get("timezone") or "UTC"),
                     status=JobStatus.ACTIVE.value,
                 )
                 session.add(job)
@@ -509,7 +511,7 @@ def run_sync_config(
                 if valid and len(valid) == len(sync_targets):
                     since_dt = min(valid)
 
-        if provider == "github":
+        if provider == "github" and code_sync_targets:
             owner_repo = _extract_owner_repo(
                 config_name=config_name, sync_options=sync_options
             )

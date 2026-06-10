@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from dev_health_ops.fixtures.coherence import FixtureBundle, validate_all
 from dev_health_ops.fixtures.demo_identity import (
     DEFAULT_DEMO_REPO_NAME,
     demo_repo_name,
@@ -473,6 +474,13 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 assigned_teams=assigned_teams,
             )
 
+            # Coherence-bundle accumulators: populated during generation,
+            # validated before the loop advances to the next repo.
+            _coh_commit_stats: list[dict] = []
+            _coh_pipeline_runs: list[dict] = []
+            _coh_suite_results: list[dict] | None = None
+            _coh_coverage: list[dict] | None = None
+
             # 1. Repo
             repo = generator.generate_repo()
             await store.insert_repo(repo)
@@ -493,6 +501,15 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 allow_parallel=allow_parallel_inserts,
             )
             stats = generator.generate_commit_stats(commits)
+            _coh_commit_stats = [
+                {
+                    "commit_hash": getattr(s, "commit_hash", None),
+                    "file_path": getattr(s, "file_path", None),
+                    "additions": getattr(s, "additions", 0),
+                    "deletions": getattr(s, "deletions", 0),
+                }
+                for s in stats
+            ]
             await _insert_batches(
                 store.insert_git_commit_stats,
                 stats,
@@ -658,6 +675,16 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             # 6. CI/CD + Deployments + Incidents
             pr_numbers = [pr.number for pr in prs]
             pipeline_runs = generator.generate_ci_pipeline_runs(days=ns.days)
+            _coh_pipeline_runs = [
+                {
+                    "run_id": getattr(r, "run_id", None),
+                    "status": getattr(r, "status", None),
+                    "queued_at": getattr(r, "queued_at", None),
+                    "started_at": getattr(r, "started_at", None),
+                    "finished_at": getattr(r, "finished_at", None),
+                }
+                for r in pipeline_runs
+            ]
             release_refs = ff_release_refs = generator._default_release_refs(ns.days)
             deployments = generator.generate_deployments(
                 days=ns.days, pr_numbers=pr_numbers, release_refs=release_refs
@@ -749,6 +776,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 test_data = generator.generate_test_executions(
                     job_runs, days=ns.days, org_id=org_id
                 )
+                _coh_suite_results = test_data["suite_results"]
                 if hasattr(store, "insert_test_suite_results"):
                     await _insert_batches(
                         store.insert_test_suite_results,
@@ -765,6 +793,7 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 coverage_snapshots = generator.generate_coverage_snapshots(
                     pipeline_runs, days=ns.days, org_id=org_id
                 )
+                _coh_coverage = coverage_snapshots
                 if hasattr(store, "insert_coverage_snapshots"):
                     await _insert_batches(
                         store.insert_coverage_snapshots,
@@ -779,6 +808,20 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                 blame_data,
                 allow_parallel=allow_parallel_inserts,
             )
+
+            # Coherence gate: validate all generated fixture rows before advancing
+            # to the next repo.  Raises CoherenceError (a ValueError subclass) if
+            # any invariant is violated.  Pass --skip-coherence-validation to
+            # bypass this gate (e.g., during performance-sensitive bulk runs).
+            if not getattr(ns, "skip_coherence_validation", False):
+                validate_all(
+                    FixtureBundle(
+                        pipeline_runs=_coh_pipeline_runs,
+                        commit_stats=_coh_commit_stats,
+                        test_suite_results=_coh_suite_results,
+                        coverage_snapshots=_coh_coverage,
+                    )
+                )
 
             # 8. Metrics
             if ns.with_metrics and sink:
@@ -1935,6 +1978,16 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         type=int,
         default=10,
         help="Number of synthetic teams to create.",
+    )
+    fix_gen.add_argument(
+        "--skip-coherence-validation",
+        action="store_true",
+        dest="skip_coherence_validation",
+        default=False,
+        help=(
+            "Bypass metric-coherence validation after generation. "
+            "Off by default; use only when generation performance is the bottleneck."
+        ),
     )
     fix_gen.set_defaults(func=run_fixtures_generation)
 

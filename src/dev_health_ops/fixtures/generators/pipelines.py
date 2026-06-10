@@ -311,20 +311,33 @@ class PipelinesGeneratorMixin(BaseGeneratorMixin):
             else:
                 pass_rate = random.uniform(0.85, 0.98)
 
-            passed = int(total_tests * pass_rate)
             flake_rate = random.uniform(0.02, 0.15)
             flaky_count = max(0, int(total_tests * flake_rate))
-            skipped = random.randint(0, max(1, total_tests // 20))
-            error_count = max(0, int(total_tests * random.uniform(0.02, 0.05)))
             quarantined_count = max(0, int(total_tests * random.uniform(0.01, 0.03)))
-            failed = total_tests - passed - skipped - error_count
-            failed = max(failed, len(persistent_failures))
-            if failed < 0:
-                overflow = -failed
-                failed = 0
-                passed = max(0, passed - overflow)
-            if passed + skipped + failed + error_count > total_tests:
-                passed = max(0, total_tests - skipped - failed - error_count)
+
+            # --- Coherence-safe allocation --------------------------------
+            # Allocate sub-counts so that their sum never exceeds total_count
+            # (Rule 1: figures must reconcile under their stated denominator).
+            # Strategy: fill slots in order — error → skipped → failed → passed.
+            remaining = total_tests
+            error_count = min(
+                max(0, int(total_tests * random.uniform(0.02, 0.05))), remaining
+            )
+            remaining -= error_count
+
+            skipped = min(random.randint(0, max(1, total_tests // 20)), remaining)
+            remaining -= skipped
+
+            # Ensure at least len(persistent_failures) failed tests so that
+            # the per-case generation below can assign them deterministically.
+            min_failed = min(len(persistent_failures), remaining)
+            failed = min(
+                max(min_failed, int(remaining * (1.0 - pass_rate))),
+                remaining,
+            )
+            remaining -= failed
+
+            passed = remaining  # absorbs any rounding residual
 
             suite_duration = random.uniform(30.0, 600.0)
 

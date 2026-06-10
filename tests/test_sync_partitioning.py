@@ -82,6 +82,27 @@ class TestIsBatchEligible:
         )
         assert _is_batch_eligible(config) is True
 
+    def test_github_bare_org_search_is_batch_eligible(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(provider="github", sync_options={"search": "full-chaos"})
+        assert _is_batch_eligible(config) is True
+
+    def test_github_owner_without_repo_is_batch_eligible(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(provider="github", sync_options={"owner": "full-chaos"})
+        assert _is_batch_eligible(config) is True
+
+    def test_github_owner_repo_remains_single_config(self):
+        from dev_health_ops.workers.sync_batch import _is_batch_eligible
+
+        config = _make_config(
+            provider="github",
+            sync_options={"search": "full-chaos/dev-health"},
+        )
+        assert _is_batch_eligible(config) is False
+
     def test_github_without_wildcard_not_eligible(self):
         from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
@@ -192,6 +213,22 @@ class TestDiscoverGithubRepos:
         assert len(result) == 3
 
     @patch("github.Github")
+    def test_bare_org_search_lists_all_org_repos(self, mock_github_cls):
+        from dev_health_ops.discovery.repos import discover_github_repos
+
+        repos = [SimpleNamespace(name="api"), SimpleNamespace(name="web")]
+        mock_org = MagicMock()
+        mock_org.get_repos.return_value = repos
+        mock_github_cls.return_value.get_organization.return_value = mock_org
+
+        result = discover_github_repos({"search": "full-chaos"}, "token")
+
+        mock_github_cls.return_value.get_organization.assert_called_once_with(
+            "full-chaos"
+        )
+        assert result == [("full-chaos", "api"), ("full-chaos", "web")]
+
+    @patch("github.Github")
     def test_falls_back_to_user_repos_on_org_error(self, mock_github_cls):
         from dev_health_ops.discovery.repos import discover_github_repos
 
@@ -237,6 +274,21 @@ class TestDiscoverGitlabRepos:
 
         result = discover_gitlab_repos({"search": "my-group/api*"}, "glpat_token")
         assert result == [("100",)]
+
+    @patch("gitlab.Gitlab")
+    def test_bare_group_search_lists_all_group_projects(self, mock_gitlab_cls):
+        from dev_health_ops.discovery.repos import discover_gitlab_repos
+
+        proj_a = SimpleNamespace(name="api", id=100)
+        proj_b = SimpleNamespace(name="web", id=200)
+        mock_grp = MagicMock()
+        mock_grp.projects.list.return_value = [proj_a, proj_b]
+        mock_gitlab_cls.return_value.groups.get.return_value = mock_grp
+
+        result = discover_gitlab_repos({"search": "my-group"}, "glpat_token")
+
+        mock_gitlab_cls.return_value.groups.get.assert_called_once_with("my-group")
+        assert result == [("100",), ("200",)]
 
     @patch("gitlab.Gitlab")
     def test_returns_empty_on_group_error(self, mock_gitlab_cls):
@@ -476,6 +528,52 @@ class TestDispatchBatchSync:
 
         assert result["total_repos"] == 7
         assert result["batch_count"] == 4
+
+    @patch("dev_health_ops.workers.sync_batch._run_sync_for_repo")
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_github_child_work_items_search_is_scoped_to_repo(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        mock_run_for_repo,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        captured_kwargs = []
+
+        def _capture_signature(**kwargs):
+            captured_kwargs.append(kwargs)
+            return MagicMock()
+
+        mock_run_for_repo.s.side_effect = _capture_signature
+        config = _make_config(
+            provider="github",
+            sync_options={"search": "org/*"},
+            sync_targets=["git", "work-items"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.return_value = [("org", "repo-1")]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-dispatch-work-items")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        assert captured_kwargs[0]["sync_options_override"]["search"] == "org/repo-1"
 
 
 class TestBatchSyncCallback:

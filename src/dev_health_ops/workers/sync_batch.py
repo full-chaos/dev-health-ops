@@ -36,6 +36,7 @@ def _is_batch_eligible(config) -> bool:
     A config is batch-eligible when:
     - Provider is github or gitlab
     - sync_options contains a 'search' key with a wildcard pattern (e.g. "org/*")
+    - OR sync_options names an org/group without a concrete repo/project
     - OR sync_options contains 'discover: true'
     """
     provider = (config.provider or "").lower()
@@ -48,8 +49,23 @@ def _is_batch_eligible(config) -> bool:
         return True
 
     search = sync_options.get("search")
-    if isinstance(search, str) and ("*" in search or "?" in search):
-        return True
+    if isinstance(search, str):
+        if "*" in search or "?" in search:
+            return True
+        if search.strip() and "/" not in search:
+            return True
+
+    if provider == "github":
+        owner = sync_options.get("owner")
+        repo = sync_options.get("repo")
+        if owner and not repo:
+            return True
+
+    if provider == "gitlab":
+        group = sync_options.get("group")
+        project = sync_options.get("project_id") or sync_options.get("repo")
+        if group and not project:
+            return True
 
     return False
 
@@ -219,7 +235,10 @@ def dispatch_batch_sync(
                 owner, repo_name = repo_tuple[0], repo_tuple[1]
                 per_repo_options["owner"] = owner
                 per_repo_options["repo"] = repo_name
-                per_repo_options.pop("search", None)
+                if "work-items" in sync_targets:
+                    per_repo_options["search"] = f"{owner}/{repo_name}"
+                else:
+                    per_repo_options.pop("search", None)
             elif provider == "gitlab":
                 project_id = repo_tuple[0]
                 per_repo_options["project_id"] = int(project_id)

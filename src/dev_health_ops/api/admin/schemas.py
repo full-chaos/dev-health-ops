@@ -114,6 +114,9 @@ class SyncConfigCreate(BaseModel):
     credential_id: str | None = None
     sync_targets: list[str] = Field(default_factory=list)
     sync_options: dict[str, Any] = Field(default_factory=dict)
+    schedule_cron: str | None = None
+    timezone: str | None = None
+    initial_sync_depth: int | None = None
 
 
 class SyncConfigBatchCreate(BaseModel):
@@ -140,6 +143,9 @@ class SyncConfigUpdate(BaseModel):
     sync_targets: list[str] | None = None
     sync_options: dict[str, Any] | None = None
     is_active: bool | None = None
+    schedule_cron: str | None = None
+    timezone: str | None = None
+    initial_sync_depth: int | None = None
 
 
 class DiscoveredRepo(BaseModel):

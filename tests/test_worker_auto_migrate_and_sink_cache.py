@@ -266,3 +266,34 @@ def test_get_process_sink_raises_without_dsn(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="No sink DSN provided"):
         get_process_sink()
+
+
+def test_hot_path_reuses_process_sink_across_invocations() -> None:
+    """Simulates two sequential task invocations: get_process_sink must return
+    the same instance both times (no re-create, no churn).
+    """
+    mock_sink = _make_mock_sink()
+    call_count = 0
+
+    def _factory(dsn: str):
+        nonlocal call_count
+        call_count += 1
+        return mock_sink
+
+    with patch(
+        "dev_health_ops.metrics.sinks.clickhouse.ClickHouseMetricsSink",
+        side_effect=_factory,
+    ):
+        from dev_health_ops.metrics.sinks.factory import get_process_sink
+
+        # First task invocation
+        s1 = get_process_sink(DSN)
+        # Second task invocation (same process, same DSN)
+        s2 = get_process_sink(DSN)
+
+    assert s1 is s2, "process sink must be reused, not re-created"
+    assert call_count == 1, (
+        f"ClickHouseMetricsSink constructed {call_count} times; expected 1"
+    )
+    # Sink must NOT have been closed between invocations
+    mock_sink.close.assert_not_called()

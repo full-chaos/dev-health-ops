@@ -23,7 +23,7 @@ from dev_health_ops.metrics.schemas import (
     InvestmentMetricsRecord,
     IssueTypeMetricsRecord,
 )
-from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+from dev_health_ops.metrics.sinks.factory import get_process_sink
 from dev_health_ops.metrics.work_items import (
     fetch_github_project_v2_items,
     fetch_gitlab_work_items,
@@ -109,12 +109,11 @@ def run_work_items_sync_job(
     since_dt = datetime.combine(min(days), time.min, tzinfo=timezone.utc)
     until_dt = datetime.combine(max(days), time.max, tzinfo=timezone.utc)
 
-    primary_sink = ClickHouseMetricsSink(db_url)
+    primary_sink = get_process_sink(db_url)
     sinks: list[Any] = [primary_sink]
     for s in sinks:
         setattr(s, "org_id", org_id)
 
-    try:
         for s in sinks:
             s.ensure_tables()
 
@@ -577,12 +576,6 @@ def run_work_items_sync_job(
                     s.write_investment_classifications(investment_classifications)
                 if hasattr(s, "write_investment_metrics") and investment_metrics_rows:
                     s.write_investment_metrics(investment_metrics_rows)
-    finally:
-        for s in sinks:
-            try:
-                s.close()
-            except Exception:
-                logger.exception("Error closing sink %s", type(s).__name__)
 
 
 def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:

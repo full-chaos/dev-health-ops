@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from dev_health_ops.api.middleware.rate_limit import AUTH_VALIDATE_LIMIT, limiter
+from dev_health_ops.api.middleware.rate_limit import (
+    AUTH_VALIDATE_LIMIT,
+    get_validate_key,
+    limiter,
+)
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.refresh_tokens import revoke_token
 from dev_health_ops.api.utils.audit import emit_audit_log
@@ -202,7 +206,7 @@ async def switch_org(
 
 
 @router.post("/validate", response_model=TokenValidateResponse)
-@limiter.limit(AUTH_VALIDATE_LIMIT)
+@limiter.limit(AUTH_VALIDATE_LIMIT, key_func=get_validate_key)
 async def validate_token(
     payload: TokenValidateRequest,
     request: Request,

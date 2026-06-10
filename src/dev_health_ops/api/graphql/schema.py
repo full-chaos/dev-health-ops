@@ -581,7 +581,6 @@ class Query:
     async def improve_opportunities(
         self,
         info: Info,
-        org_id: str,
         scope: AIScopeInput | None = None,
         limit: int = 10,
         window_days: int = 30,

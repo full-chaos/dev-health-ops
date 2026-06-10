@@ -295,3 +295,92 @@ async def test_list_sync_config_jobs_empty(client):
 
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Provider-scoped uniqueness tests (CHAOS-2243)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_same_name_different_providers_can_coexist(client):
+    """Two configs with the same name but different providers must both be created."""
+    ac, _ = client
+
+    resp_gh = await _create_sync_config(ac, name="chaos", provider="github")
+    assert resp_gh.status_code == 201, resp_gh.text
+
+    resp_lin = await _create_sync_config(ac, name="chaos", provider="linear")
+    assert resp_lin.status_code == 201, resp_lin.text
+
+    assert resp_gh.json()["id"] != resp_lin.json()["id"]
+
+    list_resp = await ac.get("/api/v1/admin/sync-configs")
+    assert list_resp.status_code == 200
+    names = [c["name"] for c in list_resp.json()]
+    assert names.count("chaos") == 2
+
+
+@pytest.mark.asyncio
+async def test_same_name_same_provider_is_rejected(client):
+    """Two configs with the same (name, provider) must fail with a DB-level error."""
+    from sqlalchemy.exc import IntegrityError
+
+    ac, _ = client
+
+    resp1 = await _create_sync_config(ac, name="dup-config", provider="github")
+    assert resp1.status_code == 201, resp1.text
+
+    # Second create with identical (name, provider) must raise a DB integrity error.
+    # The ASGI test transport propagates the unhandled IntegrityError as an exception
+    # rather than returning an HTTP response, so we catch it here.
+    with pytest.raises((IntegrityError, Exception)) as exc_info:
+        await _create_sync_config(ac, name="dup-config", provider="github")
+    assert "UNIQUE" in str(exc_info.value) or "unique" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_targets_correct_provider(client, session_maker):
+    """Deleting a config by ID removes only the matching provider row."""
+    ac, _ = client
+
+    resp_gh = await _create_sync_config(ac, name="shared-name", provider="github")
+    resp_lin = await _create_sync_config(ac, name="shared-name", provider="linear")
+    assert resp_gh.status_code == 201
+    assert resp_lin.status_code == 201
+
+    gh_id = resp_gh.json()["id"]
+    lin_id = resp_lin.json()["id"]
+
+    del_resp = await ac.delete(f"/api/v1/admin/sync-configs/{gh_id}")
+    assert del_resp.status_code == 204
+
+    # GitHub config gone, Linear config still present.
+    assert (await ac.get(f"/api/v1/admin/sync-configs/{gh_id}")).status_code == 404
+    assert (await ac.get(f"/api/v1/admin/sync-configs/{lin_id}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_update_targets_correct_provider(client):
+    """Updating a config by ID only modifies the matching provider row."""
+    ac, _ = client
+
+    resp_gh = await _create_sync_config(ac, name="upd-name", provider="github")
+    resp_lin = await _create_sync_config(ac, name="upd-name", provider="linear")
+    assert resp_gh.status_code == 201
+    assert resp_lin.status_code == 201
+
+    gh_id = resp_gh.json()["id"]
+    lin_id = resp_lin.json()["id"]
+
+    patch_resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{gh_id}",
+        json={"is_active": False},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["is_active"] is False
+
+    # Linear config must remain active.
+    lin_resp = await ac.get(f"/api/v1/admin/sync-configs/{lin_id}")
+    assert lin_resp.status_code == 200
+    assert lin_resp.json()["is_active"] is True

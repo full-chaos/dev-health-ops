@@ -21,12 +21,16 @@ class SyncConfigurationService:
         self.session = session
         self.org_id = org_id
 
-    async def get(self, name: str) -> SyncConfiguration | None:
-        """Get a sync configuration by name."""
+    async def get(
+        self, name: str, provider: str | None = None
+    ) -> SyncConfiguration | None:
+        """Get a sync configuration by name (and optionally provider)."""
         stmt = select(SyncConfiguration).where(
             SyncConfiguration.org_id == self.org_id,
             SyncConfiguration.name == name,
         )
+        if provider is not None:
+            stmt = stmt.where(SyncConfiguration.provider == provider)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -71,12 +75,13 @@ class SyncConfigurationService:
     async def update(
         self,
         name: str,
+        provider: str | None = None,
         sync_targets: list[str] | None = None,
         sync_options: dict[str, Any] | None = None,
         is_active: bool | None = None,
     ) -> SyncConfiguration | None:
         """Update a sync configuration."""
-        config: Any | None = await self.get(name)
+        config: Any | None = await self.get(name, provider=provider)
         if config is None:
             return None
 
@@ -100,9 +105,9 @@ class SyncConfigurationService:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def delete(self, name: str) -> bool:
+    async def delete(self, name: str, provider: str | None = None) -> bool:
         """Delete a sync configuration."""
-        config = await self.get(name)
+        config = await self.get(name, provider=provider)
         if config is None:
             return False
 

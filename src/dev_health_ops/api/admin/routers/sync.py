@@ -425,6 +425,7 @@ async def update_sync_config(
 
     updated = await svc.update(
         name=str(getattr(config, "name")),
+        provider=str(getattr(config, "provider")),
         sync_targets=payload.sync_targets,
         sync_options=payload.sync_options,
         is_active=payload.is_active,
@@ -468,7 +469,9 @@ async def delete_sync_config(
     config = await svc.get_by_id(config_id)
     if config is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
-    await svc.delete(str(getattr(config, "name")))
+    await svc.delete(
+        str(getattr(config, "name")), provider=str(getattr(config, "provider"))
+    )
 
 
 @router.post("/sync-configs/{config_id}/trigger", status_code=202)

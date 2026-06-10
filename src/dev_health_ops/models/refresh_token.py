@@ -39,6 +39,13 @@ class RefreshToken(Base):
         DateTime(timezone=True), nullable=True
     )
     replaced_by_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Plain JTI (UUID string) of the successor token, written atomically by
+    # rotate_token.  A concurrent request that presents a just-revoked token
+    # within the grace window can use this to re-issue the *same* successor
+    # JWT instead of triggering family-revocation.  Storing the raw JTI (not
+    # its hash) is intentional: reconstruction of the successor JWT requires
+    # the JWT_SECRET_KEY too, so DB read-access alone is insufficient.
+    successor_jti: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

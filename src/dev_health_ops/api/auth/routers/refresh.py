@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_mod
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -10,6 +11,7 @@ from sqlalchemy import select
 from dev_health_ops.api.middleware.rate_limit import AUTH_REFRESH_LIMIT, limiter
 from dev_health_ops.api.services.refresh_tokens import (
     find_by_hash,
+    find_by_hash_for_update,
     revoke_family,
     rotate_token,
 )
@@ -29,6 +31,16 @@ from .common import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Concurrent-rotation grace window.  When a token is presented and found
+# already revoked, but it was rotated less than this many seconds ago AND a
+# successor is recorded, we treat the presentation as an idempotent replay of
+# the racing concurrent refresh rather than as malicious reuse.  The window is
+# intentionally small: large enough to cover typical round-trip latency between
+# two browser tabs hitting the endpoint simultaneously, but short enough that a
+# genuinely stolen-and-replayed old token (outside this window) is still caught
+# and the family revoked.
+ROTATION_GRACE_WINDOW_SECONDS: int = 30
 
 
 class TokenRefreshRequest(BaseModel):
@@ -94,7 +106,13 @@ async def refresh_token(
         )
 
     async with get_postgres_session() as db:
-        token_record = await find_by_hash(db, str(token_jti))
+        # Acquire a row-level write lock before reading the token state.
+        # On Postgres this serializes concurrent rotations of the same token:
+        # the second request blocks here until the first commits, then reads
+        # the committed state (revoked + successor_jti populated).
+        # On SQLite (tests) with_for_update() is a no-op; correctness still
+        # holds because the grace-window check below handles that path.
+        token_record = await find_by_hash_for_update(db, str(token_jti))
         if token_record is None:
             raise HTTPException(
                 status_code=401,
@@ -102,7 +120,104 @@ async def refresh_token(
             )
 
         if token_record.revoked_at is not None:
+            # ── Grace-window / idempotency check ─────────────────────────────
+            # A token that was rotated very recently may be presented a second
+            # time by a concurrent request (e.g. two browser tabs hitting the
+            # refresh endpoint simultaneously).  In that case the token was
+            # legitimately rotated by the first request; the second presentation
+            # is NOT malicious reuse.  If the successor is recorded and still
+            # valid, return the *same* successor JWT instead of revoking the
+            # family.
+            if (
+                token_record.successor_jti is not None
+                and token_record.revoked_at is not None
+            ):
+                # Normalise to UTC-aware before arithmetic; SQLite returns naive
+                # datetimes even when the column is DateTime(timezone=True).
+                revoked_at = token_record.revoked_at
+                if revoked_at.tzinfo is None:
+                    revoked_at = revoked_at.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(timezone.utc) - revoked_at).total_seconds()
+                if elapsed <= ROTATION_GRACE_WINDOW_SECONDS:
+                    successor_record = await find_by_hash(
+                        db, token_record.successor_jti
+                    )
+                    if (
+                        successor_record is not None
+                        and successor_record.revoked_at is None
+                    ):
+                        # Load user for access-token generation.
+                        user_result = await db.execute(
+                            select(User).where(User.id == uuid_mod.UUID(user_id))
+                        )
+                        user = user_result.scalar_one_or_none()
+                        if user is not None:
+                            role = "member"
+                            if refresh_org_id:
+                                membership_result = await db.execute(
+                                    select(Membership).where(
+                                        Membership.user_id == user.id,
+                                        Membership.org_id
+                                        == uuid_mod.UUID(refresh_org_id),
+                                    )
+                                )
+                                membership = membership_result.scalar_one_or_none()
+                                if membership:
+                                    role = str(membership.role)
+
+                            # Re-issue the *same* successor JWT (same JTI that
+                            # was already committed to the DB by the first
+                            # request).  This keeps exactly one valid token in
+                            # circulation for this rotation slot.
+                            reissued_refresh_token = (
+                                auth_service.create_refresh_token_with_jti(
+                                    jti=token_record.successor_jti,
+                                    user_id=user_id,
+                                    org_id=refresh_org_id,
+                                    family_id=str(token_record.family_id),
+                                    expires_at=successor_record.expires_at,
+                                )
+                            )
+                            new_access_token = auth_service.create_access_token(
+                                user_id=user_id,
+                                email=str(user.email),
+                                org_id=refresh_org_id,
+                                role=role,
+                                is_superuser=bool(user.is_superuser),
+                                username=(
+                                    str(user.username)
+                                    if user.username is not None
+                                    else None
+                                ),
+                                full_name=(
+                                    str(user.full_name)
+                                    if user.full_name is not None
+                                    else None
+                                ),
+                            )
+                            logger.debug(
+                                "Concurrent-rotation grace window: replayed successor "
+                                "for family %s (elapsed %.2fs)",
+                                token_record.family_id,
+                                elapsed,
+                            )
+                            return TokenRefreshResponse(
+                                access_token=new_access_token,
+                                refresh_token=reissued_refresh_token,
+                                token_type="bearer",
+                                expires_in=3600,
+                                user=UserInfo(
+                                    id=user_id,
+                                    email=str(user.email),
+                                    org_id=refresh_org_id,
+                                    role=role,
+                                    is_superuser=bool(user.is_superuser),
+                                ),
+                            )
+
+            # ── Genuine reuse (outside grace window or no successor) ──────────
             await revoke_family(db, str(token_record.family_id))
+            await db.commit()
             raise HTTPException(
                 status_code=401,
                 detail=error_detail("Refresh token reuse detected"),

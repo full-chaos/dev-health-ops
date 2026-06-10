@@ -672,3 +672,123 @@ async def test_update_targets_correct_provider(client):
     lin_resp = await ac.get(f"/api/v1/admin/sync-configs/{lin_id}")
     assert lin_resp.status_code == 200
     assert lin_resp.json()["is_active"] is True
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-2255: PENDING JobRun created at trigger time
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_trigger_creates_pending_job_run(client, session_maker):
+    """Trigger must persist a PENDING JobRun before dispatching the Celery task."""
+    from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="pending-run-test", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    mock_task = MagicMock(id="pending-task-id")
+    mock_run = MagicMock()
+    mock_run.delay.return_value = mock_task
+
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "triggered"
+    assert "run_id" in data
+    run_id = data["run_id"]
+
+    # Verify a PENDING JobRun row was persisted.
+    async with session_maker() as session:
+        result = await session.execute(
+            select(JobRun).where(JobRun.id == uuid.UUID(run_id))
+        )
+        run = result.scalar_one_or_none()
+
+    assert run is not None
+    assert run.status == JobRunStatus.PENDING.value
+    assert run.triggered_by == "manual"
+
+
+@pytest.mark.asyncio
+async def test_trigger_passes_pending_run_id_to_task(client):
+    """Trigger must pass pending_run_id kwarg to the dispatched Celery task."""
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="run-id-thread-test", provider="github"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    mock_task = MagicMock(id="threaded-task-id")
+    mock_run = MagicMock()
+    mock_run.delay.return_value = mock_task
+
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202
+    run_id = resp.json()["run_id"]
+
+    # The task must have been called with pending_run_id matching the returned run_id.
+    call_kwargs = mock_run.delay.call_args.kwargs
+    assert call_kwargs.get("pending_run_id") == run_id
+
+
+@pytest.mark.asyncio
+async def test_trigger_batch_creates_pending_job_run(client, session_maker):
+    """Batch-eligible trigger must also persist a PENDING JobRun."""
+    from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+    ac, _ = client
+
+    create_resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "batch-pending-run",
+            "provider": "github",
+            "sync_targets": ["git"],
+            "sync_options": {"search": "full-chaos"},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    mock_task = MagicMock(id="batch-pending-task-id")
+    mock_batch = MagicMock()
+    mock_batch.delay.return_value = mock_task
+    mock_run = MagicMock()
+
+    with (
+        patch("dev_health_ops.workers.sync_tasks.dispatch_batch_sync", mock_batch),
+        patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run),
+    ):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert "run_id" in data
+    run_id = data["run_id"]
+
+    # Verify a PENDING JobRun row was persisted for the batch parent.
+    async with session_maker() as session:
+        result = await session.execute(
+            select(JobRun).where(JobRun.id == uuid.UUID(run_id))
+        )
+        run = result.scalar_one_or_none()
+
+    assert run is not None
+    assert run.status == JobRunStatus.PENDING.value
+
+    # Batch task must have been called with pending_run_id.
+    call_kwargs = mock_batch.delay.call_args.kwargs
+    assert call_kwargs.get("pending_run_id") == run_id
+    mock_run.delay.assert_not_called()

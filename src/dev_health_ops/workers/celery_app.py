@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 from celery import Celery
-from celery.signals import task_postrun, task_prerun, worker_init
+from celery.signals import task_postrun, task_prerun
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
@@ -48,27 +48,6 @@ def _task_finished(
             "Celery task metrics recording failed (non-fatal)",
             exc_info=True,
         )
-
-
-@worker_init.connect
-def _run_migrations_on_startup(**kwargs: Any) -> None:
-    """Apply pending Alembic migrations when the worker process starts.
-
-    This ensures the Postgres schema is always up-to-date before tasks run,
-    preventing errors like missing columns (e.g. org_id on metric_checkpoints).
-    The upgrade is idempotent — a no-op when already at head.
-    """
-    _logger = logging.getLogger(__name__)
-    try:
-        from alembic import command
-
-        from dev_health_ops.migrate import _make_alembic_config
-
-        cfg = _make_alembic_config()
-        command.upgrade(cfg, "head")
-        _logger.info("Alembic migrations applied (upgrade to head)")
-    except (ImportError, RuntimeError, OSError):
-        _logger.exception("Auto-migration on worker startup failed (non-fatal)")
 
 
 def create_celery_app() -> Celery:

@@ -109,6 +109,7 @@ nav:
   - Plans:
       - Dead Code Cleanup: plans/dead-code-cleanup-plan.md
       - Atlassian Client Integration: plans/atlassian-client-integration.md
+      - GitHub App Marketplace + Install: plans/github-app-marketplace.md
   - Appendix:
       - Legacy: appendix/legacy/index.md
       - Export Schema Usage Audit: appendix/legacy/export-schema-usage-audit.md

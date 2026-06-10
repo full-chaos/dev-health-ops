@@ -32,6 +32,22 @@ _PR_EDGE_ID_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Incident status → customer-facing label.  Unknown statuses fall back to a
+# neutral "Incident" label so raw enum strings never reach customer copy.
+_INCIDENT_STATUS_LABELS: dict[str, str] = {
+    "open": "Open",
+    "triggered": "Triggered",
+    "acknowledged": "Acknowledged",
+    "investigating": "Investigating",
+    "resolved": "Resolved",
+    "closed": "Closed",
+}
+
+
+def _incident_label(status: str) -> str:
+    """Map a raw incident status string to a normalised customer-facing label."""
+    return _INCIDENT_STATUS_LABELS.get(status.lower(), "Incident")
+
 
 def _map_node_type(value: str) -> WorkGraphNodeType:
     try:
@@ -150,6 +166,7 @@ async def _batch_resolve_display_names(
                 repo_uuids.add(repo_uuid)
 
         if pr_lookups and repo_uuids:
+            pr_numbers = sorted({pr_num for _, pr_num in pr_lookups.values()})
             try:
                 pr_rows = await query_dicts(
                     client,
@@ -158,22 +175,29 @@ async def _batch_resolve_display_names(
                     FROM git_pull_requests FINAL
                     WHERE org_id = %(org_id)s
                       AND toString(repo_id) IN %(repo_ids)s
+                      AND number IN %(pr_numbers)s
                     """,
-                    {"org_id": org_id, "repo_ids": sorted(repo_uuids)},
+                    {
+                        "org_id": org_id,
+                        "repo_ids": sorted(repo_uuids),
+                        "pr_numbers": pr_numbers,
+                    },
                 )
                 # Build (repo_id_lower, number) → title lookup.
                 pr_title_map: dict[tuple[str, int], str] = {}
                 for r in pr_rows:
                     repo_id = str(r.get("repo_id") or "").lower()
                     number = int(r.get("number") or 0)
-                    title = str(r.get("title") or "").strip()
-                    if repo_id and number and title:
-                        pr_title_map[(repo_id, number)] = title
+                    # Keep variable name distinct from the outer loop's `resolved_title`
+                    # to avoid mypy seeing str | None rebind the earlier `str` annotation.
+                    row_title = str(r.get("title") or "").strip()
+                    if repo_id and number and row_title:
+                        pr_title_map[(repo_id, number)] = row_title
 
                 for pr_id, (repo_uuid, pr_num) in pr_lookups.items():
-                    title = pr_title_map.get((repo_uuid, pr_num))
-                    if title:
-                        resolved[pr_id] = title
+                    resolved_title: str | None = pr_title_map.get((repo_uuid, pr_num))
+                    if resolved_title:
+                        resolved[pr_id] = resolved_title
             except Exception:
                 logger.warning("PR display-name lookup failed", exc_info=True)
 
@@ -194,8 +218,11 @@ async def _batch_resolve_display_names(
             for r in dep_rows:
                 dep_id = str(r.get("deployment_id") or "")
                 env = str(r.get("environment") or "").strip()
-                if dep_id:
-                    resolved[dep_id] = f"{env} deploy" if env else dep_id
+                # Only store a label when we have a meaningful environment string.
+                # Empty env → omit from resolved so _display_name_for returns None
+                # (Unresolved badge) rather than leaking the raw UUID (A8).
+                if dep_id and env:
+                    resolved[dep_id] = f"{env} deploy"
         except Exception:
             logger.warning("Deployment display-name lookup failed", exc_info=True)
 
@@ -216,8 +243,11 @@ async def _batch_resolve_display_names(
             for r in inc_rows:
                 inc_id = str(r.get("incident_id") or "")
                 status = str(r.get("status") or "").strip()
-                if inc_id:
-                    resolved[inc_id] = f"incident ({status})" if status else inc_id
+                # Empty status → omit from resolved (→ Unresolved badge, not raw UUID).
+                # Known statuses are normalised to customer-facing labels; unknown
+                # statuses map to the neutral "Incident" label via _incident_label().
+                if inc_id and status:
+                    resolved[inc_id] = f"incident ({_incident_label(status)})"
         except Exception:
             logger.warning("Incident display-name lookup failed", exc_info=True)
 

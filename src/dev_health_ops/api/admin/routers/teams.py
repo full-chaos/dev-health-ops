@@ -15,6 +15,7 @@ from dev_health_ops.api.admin.schemas import (
     TeamMappingUpdate,
 )
 from dev_health_ops.api.services.configuration import (
+    AmbiguousCredentialError,
     IntegrationCredentialsService,
     TeamDiscoveryService,
     TeamMappingService,
@@ -107,12 +108,18 @@ async def delete_team(
 @router.get("/teams/discover", response_model=TeamDiscoverResponse)
 async def discover_teams(
     provider: str = Query(..., pattern="^(github|gitlab|jira|linear)$"),
+    credential_id: str | None = Query(None),
+    credential_name: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamDiscoverResponse:
     creds_svc = IntegrationCredentialsService(session, org_id)
-    credential = await creds_svc.get(provider, "default")
-    decrypted = await creds_svc.get_decrypted_credentials(provider, "default")
+    try:
+        credential, decrypted = await creds_svc.resolve_with_fallback(
+            provider, name=credential_name, credential_id=credential_id
+        )
+    except AmbiguousCredentialError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if credential is None or decrypted is None:
         raise HTTPException(
             status_code=404,

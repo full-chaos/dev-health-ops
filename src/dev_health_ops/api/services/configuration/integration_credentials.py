@@ -22,6 +22,19 @@ from ._helpers import _normalize_credential_keys
 logger = logging.getLogger(__name__)
 
 
+class AmbiguousCredentialError(ValueError):
+    """Raised when a provider has multiple active credentials and no
+    explicit name/id was given to disambiguate."""
+
+    def __init__(self, provider: str, names: list[str]):
+        self.provider = provider
+        self.names = sorted(names)
+        super().__init__(
+            f"Multiple active credentials exist for provider '{provider}' "
+            f"({', '.join(self.names)}); specify credential_name or credential_id"
+        )
+
+
 class IntegrationCredentialsService:
     """Service for managing integration credentials with encryption."""
 
@@ -100,6 +113,55 @@ class IntegrationCredentialsService:
                 sanitize_for_log(name),
             )
             return None
+
+    async def resolve_with_fallback(
+        self,
+        provider: str,
+        name: str | None = None,
+        credential_id: str | None = None,
+    ) -> tuple[IntegrationCredential | None, dict[str, Any] | None]:
+        """Resolve a credential for a provider, falling back when unnamed.
+
+        Resolution order:
+        1. ``credential_id`` (must belong to ``provider``)
+        2. explicit ``name``
+        3. the ``"default"`` name
+        4. the single active credential for the provider
+
+        Returns ``(credential, decrypted_dict)``; both ``None`` when nothing
+        matches. Raises :class:`AmbiguousCredentialError` if step 4 finds more
+        than one active credential.
+        """
+        if credential_id:
+            decrypted, cred = await self.get_decrypted_credentials_by_id(credential_id)
+            if cred is not None and str(getattr(cred, "provider")) != provider:
+                return None, None
+            return cred, decrypted
+
+        if name:
+            cred = await self.get(provider, name)
+            if cred is None:
+                return None, None
+            return cred, await self.get_decrypted_credentials(provider, name)
+
+        cred = await self.get(provider, "default")
+        if cred is not None:
+            return cred, await self.get_decrypted_credentials(provider, "default")
+
+        candidates = [
+            c
+            for c in await self.list_by_provider(provider)
+            if bool(getattr(c, "is_active"))
+        ]
+        if not candidates:
+            return None, None
+        if len(candidates) > 1:
+            raise AmbiguousCredentialError(
+                provider, [str(getattr(c, "name")) for c in candidates]
+            )
+        only = candidates[0]
+        only_name = str(getattr(only, "name"))
+        return only, await self.get_decrypted_credentials(provider, only_name)
 
     async def set(
         self,

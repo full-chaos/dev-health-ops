@@ -17,6 +17,7 @@ from dev_health_ops.api.admin.schemas import (
     TeamMembersDiscoverResponse,
 )
 from dev_health_ops.api.services.configuration import (
+    AmbiguousCredentialError,
     IdentityMappingService,
     IntegrationCredentialsService,
     JiraActivityInferenceService,
@@ -80,6 +81,8 @@ async def create_or_update_identity(
 async def discover_team_members(
     team_id: str,
     provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
+    credential_id: str | None = Query(None),
+    credential_name: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamMembersDiscoverResponse:
@@ -89,8 +92,12 @@ async def discover_team_members(
         raise HTTPException(status_code=404, detail="Team not found")
 
     creds_svc = IntegrationCredentialsService(session, org_id)
-    credential = await creds_svc.get(provider, "default")
-    decrypted = await creds_svc.get_decrypted_credentials(provider, "default")
+    try:
+        credential, decrypted = await creds_svc.resolve_with_fallback(
+            provider, name=credential_name, credential_id=credential_id
+        )
+    except AmbiguousCredentialError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if credential is None or decrypted is None:
         raise HTTPException(
             status_code=404,
@@ -205,6 +212,8 @@ async def confirm_team_members(
 async def infer_team_members_from_jira_activity(
     team_id: str,
     window_days: int = Query(90, ge=1, le=365),
+    credential_id: str | None = Query(None),
+    credential_name: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> JiraActivityInferenceResponse:
@@ -226,8 +235,12 @@ async def infer_team_members_from_jira_activity(
         )
 
     creds_svc = IntegrationCredentialsService(session, org_id)
-    credential = await creds_svc.get("jira", "default")
-    decrypted = await creds_svc.get_decrypted_credentials("jira", "default")
+    try:
+        credential, decrypted = await creds_svc.resolve_with_fallback(
+            "jira", name=credential_name, credential_id=credential_id
+        )
+    except AmbiguousCredentialError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if credential is None or decrypted is None:
         raise HTTPException(
             status_code=404,

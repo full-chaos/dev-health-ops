@@ -31,7 +31,10 @@ from ._helpers import (
 )
 from .generic import SettingsService
 from .identity_mapping import IdentityMappingService
-from .integration_credentials import IntegrationCredentialsService
+from .integration_credentials import (
+    AmbiguousCredentialError,
+    IntegrationCredentialsService,
+)
 from .jira_activity_inference import JiraActivityInferenceService
 from .sync_configuration import SyncConfigurationService
 from .team_discovery import TeamDiscoveryService
@@ -40,6 +43,7 @@ from .team_mapping import TeamMappingService
 from .team_membership import TeamMembershipService
 
 __all__ = [
+    "AmbiguousCredentialError",
     "IdentityMappingService",
     "IntegrationCredentialsService",
     "JiraActivityInferenceService",

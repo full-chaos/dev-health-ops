@@ -218,6 +218,50 @@ class CredentialResolver:
         return cred_type(**cred_dict)
 
 
+def github_credentials_from_mapping(
+    cred_dict: dict[str, Any],
+    *,
+    source: CredentialSource = CredentialSource.DATABASE,
+    credential_name: str = "default",
+) -> GitHubCredentials | None:
+    """Build :class:`GitHubCredentials` (PAT or App auth) from a credentials mapping.
+
+    Accepts a decrypted credentials dict (as persisted in ``integration_credentials``
+    or assembled from environment variables) and returns a typed credential the
+    GitHub connector can consume directly. A ``private_key_path`` is resolved to the
+    ``private_key`` contents when only the path is present.
+
+    Returns ``None`` when the mapping contains neither a ``token`` nor a complete
+    App-auth triple (``app_id`` + ``private_key``/``private_key_path`` +
+    ``installation_id``), so callers can surface a clear configuration error.
+    """
+    cred_dict = {k: v for k, v in cred_dict.items() if v is not None}
+    if not cred_dict:
+        return None
+
+    if "private_key" not in cred_dict:
+        private_key_path = cred_dict.get("private_key_path")
+        if private_key_path:
+            try:
+                with open(str(private_key_path), encoding="utf-8") as key_file:
+                    cred_dict["private_key"] = key_file.read()
+            except OSError as exc:
+                logger.debug("Could not read GitHub App private key path: %s", exc)
+
+    allowed = {"token", "app_id", "private_key", "installation_id", "base_url"}
+    kwargs = {k: v for k, v in cred_dict.items() if k in allowed}
+    kwargs["source"] = source
+    kwargs["credential_name"] = credential_name
+
+    try:
+        return GitHubCredentials(**kwargs)
+    except (ValueError, TypeError):
+        # Do not log the exception: it derives from credential construction and
+        # could surface field values. Callers raise a clear config error instead.
+        logger.debug("GitHub credentials mapping was incomplete or invalid")
+        return None
+
+
 def resolve_credentials_sync(
     provider: str,
     org_id: str | None = None,

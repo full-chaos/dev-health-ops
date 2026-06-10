@@ -8,6 +8,7 @@ from typing import Any
 
 from celery import chord, group
 
+from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -322,11 +323,11 @@ def _run_sync_for_repo(
         if provider == "github":
             owner = str(sync_options_override.get("owner", ""))
             repo_name = str(sync_options_override.get("repo", ""))
-            token = str(credentials.get("token") or "")
+            github_credentials = github_credentials_from_mapping(credentials)
 
-            if not owner or not repo_name or not token:
+            if not owner or not repo_name or github_credentials is None:
                 raise ValueError(
-                    f"Missing GitHub owner/repo/token for batch sync: "
+                    f"Missing GitHub owner/repo/credentials for batch sync: "
                     f"owner={owner}, repo={repo_name}"
                 )
 
@@ -337,7 +338,7 @@ def _run_sync_for_repo(
                     store=store,
                     owner=owner,
                     repo_name=repo_name,
-                    token=token,
+                    token=github_credentials,
                     blame_only=merged_flags.get("blame_only", False),
                     sync_git=merged_flags.get("sync_git", False),
                     sync_prs=merged_flags.get("sync_prs", False),

@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from dev_health_ops.credentials.resolver import github_credentials_from_mapping
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -505,9 +506,11 @@ def run_sync_config(
                 )
 
             owner, repo_name = owner_repo
-            token = str(credentials.get("token") or "")
-            if not token:
-                raise ValueError("Missing GitHub token for sync configuration")
+            github_credentials = github_credentials_from_mapping(credentials)
+            if github_credentials is None:
+                raise ValueError(
+                    "Missing GitHub token or App credentials for sync configuration"
+                )
 
             merged_flags = _merge_sync_flags(sync_targets)
 
@@ -516,7 +519,7 @@ def run_sync_config(
                     store=store,
                     owner=owner,
                     repo_name=repo_name,
-                    token=token,
+                    token=github_credentials,
                     since=since_dt,
                     **merged_flags,
                 )

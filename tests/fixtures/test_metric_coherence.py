@@ -34,7 +34,9 @@ from dev_health_ops.fixtures.generator import SyntheticDataGenerator
 
 
 def _make_gen(seed: int = 42) -> SyntheticDataGenerator:
-    return SyntheticDataGenerator(repo_name="acme/test-repo", provider="github", seed=seed)
+    return SyntheticDataGenerator(
+        repo_name="acme/test-repo", provider="github", seed=seed
+    )
 
 
 def _valid_coverage_row(**overrides) -> dict:
@@ -174,23 +176,32 @@ class TestCheckTestSuiteResults:
 
     def test_sum_equals_total_is_valid(self) -> None:
         row = _valid_suite_row(
-            total_count=100, passed_count=80, failed_count=10,
-            skipped_count=5, error_count=5,
+            total_count=100,
+            passed_count=80,
+            failed_count=10,
+            skipped_count=5,
+            error_count=5,
         )
         assert check_test_suite_results([row]) == []
 
     def test_sum_less_than_total_is_valid(self) -> None:
         # quarantined tests may not appear in any sub-count bucket
         row = _valid_suite_row(
-            total_count=100, passed_count=70, failed_count=10,
-            skipped_count=5, error_count=5,
+            total_count=100,
+            passed_count=70,
+            failed_count=10,
+            skipped_count=5,
+            error_count=5,
         )
         assert check_test_suite_results([row]) == []
 
     def test_sum_exceeds_total_is_violation(self) -> None:
         row = _valid_suite_row(
-            total_count=100, passed_count=90, failed_count=10,
-            skipped_count=5, error_count=5,
+            total_count=100,
+            passed_count=90,
+            failed_count=10,
+            skipped_count=5,
+            error_count=5,
         )
         violations = check_test_suite_results([row])
         assert len(violations) == 1
@@ -199,8 +210,11 @@ class TestCheckTestSuiteResults:
     def test_overflow_from_min_failed_floor(self) -> None:
         """Regression: forcing min failed ≥ N while pass_rate is high used to overflow."""
         row = _valid_suite_row(
-            total_count=50, passed_count=47, failed_count=10,
-            skipped_count=2, error_count=2,
+            total_count=50,
+            passed_count=47,
+            failed_count=10,
+            skipped_count=2,
+            error_count=2,
         )
         violations = check_test_suite_results([row])
         assert violations  # 47+10+2+2=61 > 50
@@ -236,16 +250,12 @@ class TestCheckWorkItemMetrics:
         assert any("cycle_time_p90" in v for v in violations)
 
     def test_lead_time_less_than_cycle_time(self) -> None:
-        row = _valid_work_item_row(
-            cycle_time_p50_hours=60.0, lead_time_p50_hours=48.0
-        )
+        row = _valid_work_item_row(cycle_time_p50_hours=60.0, lead_time_p50_hours=48.0)
         violations = check_work_item_metrics([row])
         assert any("lead_time_p50" in v for v in violations)
 
     def test_lead_time_equals_cycle_time_is_valid(self) -> None:
-        row = _valid_work_item_row(
-            cycle_time_p50_hours=48.0, lead_time_p50_hours=48.0
-        )
+        row = _valid_work_item_row(cycle_time_p50_hours=48.0, lead_time_p50_hours=48.0)
         assert check_work_item_metrics([row]) == []
 
     def test_wip_age_p90_less_than_p50(self) -> None:
@@ -286,8 +296,13 @@ class TestValidateAllCollectsViolations:
                 _valid_coverage_row(line_coverage_pct=50.0, branch_coverage_pct=80.0)
             ],
             test_suite_results=[
-                _valid_suite_row(total_count=10, passed_count=9, failed_count=5,
-                                 skipped_count=0, error_count=0)
+                _valid_suite_row(
+                    total_count=10,
+                    passed_count=9,
+                    failed_count=5,
+                    skipped_count=0,
+                    error_count=0,
+                )
             ],
         )
         with pytest.raises(CoherenceError) as exc_info:
@@ -368,8 +383,7 @@ class TestGeneratorCoherence:
             coverage_snapshots=snapshots,
             test_suite_results=executions["suite_results"],
             work_item_metrics=[
-                r.__dict__ if hasattr(r, "__dict__") else dict(r)
-                for r in wi_records
+                r.__dict__ if hasattr(r, "__dict__") else dict(r) for r in wi_records
             ],
             commit_stats=[
                 s.__dict__ if hasattr(s, "__dict__") else dict(s) for s in stats

@@ -69,6 +69,16 @@ class TeamResolver:
 
 @dataclass(frozen=True)
 class ProjectKeyTeamResolver:
+    """Resolves a team from a provider attribution key.
+
+    "Project key" here is the provider's team-attribution key, not
+    necessarily a project: Jira → project key, Linear → TEAM key (Linear
+    projects are a separate concept carried in ``WorkItem.project_id``).
+    Callers should try ``work_scope_id`` first and fall back to
+    ``project_key`` — for Linear issues inside a project the two differ.
+    Membership-based ``TeamResolver`` remains the next fallback.
+    """
+
     project_key_to_team: Mapping[str, tuple[str, str]]
 
     def resolve(self, work_scope_id: str | None) -> tuple[str | None, str | None]:

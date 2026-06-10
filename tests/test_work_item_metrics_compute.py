@@ -88,3 +88,50 @@ def test_work_item_cycle_time_percentiles() -> None:
     assert user.user_identity == "alice@example.com"
     assert user.items_completed == 5
     assert user.cycle_time_p50_hours == 4.0
+
+
+def test_linear_item_in_project_attributes_team_via_project_key() -> None:
+    """A Linear issue inside a project has work_scope_id = project name, but
+    team mappings carry the TEAM key (project_key) — attribution must retry
+    with project_key when the work_scope_id lookup misses (CHAOS-2262)."""
+    from dev_health_ops.providers.teams import build_project_key_resolver
+
+    day = date(2025, 2, 1)
+    start = datetime(2025, 2, 1, tzinfo=timezone.utc)
+
+    item = WorkItem(
+        work_item_id="linear:ENG-1",
+        provider="linear",
+        project_key="ENG",  # Linear TEAM key
+        project_id="Q1 Platform Revamp",  # Linear PROJECT name
+        title="In-project issue",
+        type="task",
+        status="done",
+        status_raw="Done",
+        assignees=[],  # no membership fallback available
+        reporter=None,
+        created_at=start - timedelta(days=2),
+        updated_at=start + timedelta(hours=2),
+        started_at=start,
+        completed_at=start + timedelta(hours=2),
+        closed_at=start + timedelta(hours=2),
+        labels=[],
+    )
+
+    resolver = build_project_key_resolver(
+        [{"id": "ENG", "name": "Engineering", "project_keys": ["ENG"]}]
+    )
+
+    group_rows, _, cycle_rows = compute_work_item_metrics_daily(
+        day=day,
+        work_items=[item],
+        transitions=[],
+        computed_at=start,
+        team_resolver=TeamResolver(member_to_team={}),
+        project_key_resolver=resolver,
+    )
+
+    assert group_rows, "expected at least one group row"
+    assert group_rows[0].work_scope_id == "Q1 Platform Revamp"
+    assert group_rows[0].team_id == "ENG"
+    assert cycle_rows[0].team_id == "ENG"

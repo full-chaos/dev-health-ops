@@ -68,6 +68,15 @@ pending tests, which the UI labels explicitly.
 |---|---|
 | `deletions ≤ additions` (per file per commit) | The synthetic generator models organic change: files that are edited have more added/rewritten content than deleted content. |
 
+### CI pipeline runs
+
+| Invariant | Rationale |
+|---|---|
+| `status` is a known value | Each run belongs to exactly one status bucket (`success`, `failure`/`failed`, `cancelled`/`canceled`, `timeout`, `running`, `queued`, `skipped`). The denominator Rule 1 note applies: `success_rate + failure_rate` need not total 100 % because some runs are `cancelled` — the frontend copy already explains this. The ops contract ensures no run uses an unrecognised status that the UI cannot categorise. |
+| `queued_at ≤ started_at ≤ finished_at` | Timeline order is required for duration and queue-wait calculations to be non-negative. Violated ordering would produce negative latency values on the CI metrics views. |
+
+Note: each pipeline run is allocated a **single** status by construction in the generator, so there is no `sum of buckets = total` check needed. The denominator reconciles trivially — the check validates status validity and time ordering only.
+
 ### Already-enforced invariants (pre-CHAOS-2040)
 
 These were correct before this work; they are documented here for completeness.
@@ -108,9 +117,23 @@ except CoherenceError as exc:
 `validate_all` **collects every violation** before raising, so callers get the
 full picture in one pass rather than stopping at the first problem.
 
-Individual check functions (`check_coverage_snapshots`, `check_test_suite_results`,
-`check_work_item_metrics`, `check_commit_stats`) are also exported for
-targeted use.
+Individual check functions (`check_pipeline_runs`, `check_coverage_snapshots`,
+`check_test_suite_results`, `check_work_item_metrics`, `check_commit_stats`)
+are also exported for targeted use.
+
+### CLI escape hatch
+
+`dev-hops fixtures generate` runs `validate_all` by default after generating
+each repo's data.  To bypass validation (e.g., during profiling or bulk
+historical backfills where you trust the generator):
+
+```bash
+dev-hops fixtures generate --sink $CLICKHOUSE_URI --skip-coherence-validation
+```
+
+The flag is intentionally off by default; it should only be needed when
+generation performance is the bottleneck and you have independent confidence
+in the generator's correctness.
 
 ---
 
@@ -124,12 +147,24 @@ Unit tests live in `tests/fixtures/test_metric_coherence.py`.  They cover:
 3. **Generator regression** — `SyntheticDataGenerator` output passes
    `validate_all` for seeds `[0, 1, 7, 42, 99, 137, 255, 1024]`.
 
+4. **Runner integration** — `run_fixtures_generation` propagates
+   `CoherenceError` when the validator fires; `--skip-coherence-validation`
+   is verified to bypass the gate without calling the validator.
+
 Run with:
 
 ```bash
 cd ops/
 uv run pytest tests/fixtures/test_metric_coherence.py -v
 ```
+
+> **Same-seed determinism note:** the `seed` parameter controls the
+> numeric shape of generated values (counts, percentiles, pass rates) but
+> does not fix wall-clock timestamps — generators call `datetime.now()`
+> internally.  Two runs with the same seed produce coherent data with
+> identical statistical profiles, but with different absolute timestamps.
+> The coherence invariants are timestamp-order invariants, not absolute
+> value invariants, so this does not affect the validation guarantees.
 
 ---
 

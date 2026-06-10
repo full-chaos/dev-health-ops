@@ -11,9 +11,13 @@ Test charter
 3. Generator methods produce rows that pass ``validate_all`` across a
    range of seeds (non-flaky regression surface).
 4. Deliberately broken rows trigger the correct per-check function.
+5. ``run_fixtures_generation`` is wired to call ``validate_all``; a
+   deliberately-broken validator raises ``CoherenceError`` to the caller.
 """
 
 from __future__ import annotations
+
+import argparse
 
 import pytest
 
@@ -22,6 +26,7 @@ from dev_health_ops.fixtures.coherence import (
     FixtureBundle,
     check_commit_stats,
     check_coverage_snapshots,
+    check_pipeline_runs,
     check_test_suite_results,
     check_work_item_metrics,
     validate_all,
@@ -94,6 +99,18 @@ def _valid_commit_stat_row(**overrides) -> dict:
         "file_path": "src/foo.py",
         "additions": 50,
         "deletions": 20,
+    }
+    base.update(overrides)
+    return base
+
+
+def _valid_pipeline_run_row(**overrides) -> dict:
+    base = {
+        "run_id": "run-42",
+        "status": "success",
+        "queued_at": "2024-01-01T10:00:00",
+        "started_at": "2024-01-01T10:01:00",
+        "finished_at": "2024-01-01T10:05:00",
     }
     base.update(overrides)
     return base
@@ -390,3 +407,155 @@ class TestGeneratorCoherence:
             ],
         )
         validate_all(bundle)
+
+
+# ---------------------------------------------------------------------------
+# check_pipeline_runs
+# ---------------------------------------------------------------------------
+
+
+class TestCheckPipelineRuns:
+    def test_valid_row_produces_no_violations(self) -> None:
+        assert check_pipeline_runs([_valid_pipeline_run_row()]) == []
+
+    def test_known_statuses_are_valid(self) -> None:
+        for status in (
+            "success",
+            "failure",
+            "failed",
+            "cancelled",
+            "canceled",
+            "timeout",
+            "running",
+            "queued",
+            "skipped",
+        ):
+            row = _valid_pipeline_run_row(status=status)
+            assert check_pipeline_runs([row]) == [], f"Expected {status!r} to be valid"
+
+    def test_unknown_status_is_violation(self) -> None:
+        row = _valid_pipeline_run_row(status="bogus_status")
+        violations = check_pipeline_runs([row])
+        assert len(violations) == 1
+        assert "bogus_status" in violations[0]
+
+    def test_started_before_queued_is_violation(self) -> None:
+        row = _valid_pipeline_run_row(
+            queued_at="2024-01-01T10:05:00",
+            started_at="2024-01-01T10:00:00",
+        )
+        violations = check_pipeline_runs([row])
+        assert any("started_at" in v and "queued_at" in v for v in violations)
+
+    def test_finished_before_started_is_violation(self) -> None:
+        row = _valid_pipeline_run_row(
+            started_at="2024-01-01T10:05:00",
+            finished_at="2024-01-01T10:00:00",
+        )
+        violations = check_pipeline_runs([row])
+        assert any("finished_at" in v and "started_at" in v for v in violations)
+
+    def test_missing_timestamps_are_ignored(self) -> None:
+        """Partial timestamps (e.g. still-running job) should not raise."""
+        row = _valid_pipeline_run_row(started_at=None, finished_at=None)
+        assert check_pipeline_runs([row]) == []
+
+    def test_none_status_is_ignored(self) -> None:
+        """Rows with no status field should not raise (optional field)."""
+        row = _valid_pipeline_run_row(status=None)
+        assert check_pipeline_runs([row]) == []
+
+    @pytest.mark.parametrize("seed", SEEDS)
+    def test_generator_pipeline_runs_are_coherent(self, seed: int) -> None:
+        gen = _make_gen(seed)
+        pipeline_runs = gen.generate_ci_pipeline_runs(days=14)
+        rows = [
+            {
+                "run_id": getattr(r, "run_id", None),
+                "status": getattr(r, "status", None),
+                "queued_at": getattr(r, "queued_at", None),
+                "started_at": getattr(r, "started_at", None),
+                "finished_at": getattr(r, "finished_at", None),
+            }
+            for r in pipeline_runs
+        ]
+        bundle = FixtureBundle(pipeline_runs=rows)
+        validate_all(bundle)
+
+
+# ---------------------------------------------------------------------------
+# Runner integration — validate_all is wired into run_fixtures_generation
+# ---------------------------------------------------------------------------
+
+
+class TestRunnerCoherenceWiring:
+    """Prove that run_fixtures_generation calls validate_all.
+
+    We monkeypatch ``validate_all`` in the runner module to raise
+    ``CoherenceError`` unconditionally, then run a minimal generation
+    against an in-memory SQLite DB and assert the error propagates.
+    """
+
+    @pytest.mark.asyncio
+    async def test_coherence_error_propagates_from_runner(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        import dev_health_ops.fixtures.runner as runner_mod
+
+        def _always_raise(bundle):
+            raise CoherenceError(["deliberate violation injected by test"])
+
+        monkeypatch.setattr(runner_mod, "validate_all", _always_raise)
+
+        db_path = tmp_path / "test_coherence.db"
+        ns = argparse.Namespace(
+            sink=f"sqlite:///{db_path}",
+            db_type=None,
+            days=3,
+            commits_per_day=2,
+            pr_count=5,
+            seed=42,
+            provider="synthetic",
+            with_metrics=False,
+            with_work_graph=False,
+            team_count=2,
+            repo_count=1,
+            skip_coherence_validation=False,
+            repo_name="test/coherence-wire",
+        )
+        with pytest.raises(CoherenceError) as exc_info:
+            await runner_mod.run_fixtures_generation(ns)
+        assert "deliberate violation" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_skip_coherence_validation_bypasses_gate(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """--skip-coherence-validation=True means validate_all is never called."""
+        import dev_health_ops.fixtures.runner as runner_mod
+
+        called = []
+        monkeypatch.setattr(
+            runner_mod,
+            "validate_all",
+            lambda bundle: called.append(bundle),
+        )
+
+        db_path = tmp_path / "test_skip.db"
+        ns = argparse.Namespace(
+            sink=f"sqlite:///{db_path}",
+            db_type=None,
+            days=3,
+            commits_per_day=2,
+            pr_count=5,
+            seed=42,
+            provider="synthetic",
+            with_metrics=False,
+            with_work_graph=False,
+            team_count=2,
+            repo_count=1,
+            skip_coherence_validation=True,
+            repo_name="test/coherence-skip",
+        )
+        await runner_mod.run_fixtures_generation(ns)
+        assert called == [], "validate_all should not be called when skip flag is set"

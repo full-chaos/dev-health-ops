@@ -81,14 +81,79 @@ def check_coverage_snapshots(rows: list[dict[str, Any]]) -> list[str]:
     return violations
 
 
+def check_pipeline_runs(rows: list[dict[str, Any]]) -> list[str]:
+    """Invariants for CI pipeline run rows.
+
+    1. ``status`` is a known terminal or in-flight value.
+       The denominator Rule 1 note from ``web/docs/metric-coherence.md``
+       applies here: ``success_rate + failure_rate`` need not equal 100 %
+       because some runs are ``cancelled`` or still ``running``.  The
+       ops-side contract is that *each run is counted in exactly one status
+       bucket* — no run contributes to two categories simultaneously — so
+       the status distribution naturally reconciles without manual clamping.
+
+    2. ``queued_at ≤ started_at ≤ finished_at`` (when all three are present).
+       Timeline order is required for duration and queue-wait calculations
+       to be non-negative.
+    """
+    _VALID_STATUSES = frozenset(
+        {
+            "success",
+            "failure",
+            "failed",
+            "cancelled",
+            "canceled",
+            "timeout",
+            "running",
+            "queued",
+            "skipped",
+        }
+    )
+    violations: list[str] = []
+    for i, row in enumerate(rows):
+        run_id = row.get("run_id", f"row[{i}]")
+        status = row.get("status")
+
+        if status is not None and str(status).lower() not in _VALID_STATUSES:
+            violations.append(
+                f"pipeline_run/{run_id}: unknown status '{status}'; "
+                f"expected one of {sorted(_VALID_STATUSES)}"
+            )
+
+        queued_at = row.get("queued_at")
+        started_at = row.get("started_at")
+        finished_at = row.get("finished_at")
+
+        if queued_at and started_at and started_at < queued_at:
+            violations.append(
+                f"pipeline_run/{run_id}: started_at ({started_at}) "
+                f"< queued_at ({queued_at})"
+            )
+        if started_at and finished_at and finished_at < started_at:
+            violations.append(
+                f"pipeline_run/{run_id}: finished_at ({finished_at}) "
+                f"< started_at ({started_at})"
+            )
+    return violations
+
+
 def check_test_suite_results(rows: list[dict[str, Any]]) -> list[str]:
     """Invariants for test suite result rows.
 
     ``passed_count + failed_count + skipped_count + error_count ≤ total_count``
 
-    The sub-counts are shares of the total.  They may be *less than*
-    total_count (quarantined / pending tests are not in any sub-count),
-    but they must never *exceed* it.
+    The sub-counts are shares of the total.  They will equal *exactly*
+    ``total_count`` in fixture-generated data (the generator uses sequential
+    slot allocation so passed absorbs all remaining capacity).  They may be
+    *less than* total_count in real-world data where some tests are pending
+    or in an unrecognised state.
+
+    **Quarantined count:** ``quarantined_count`` is a separate *annotation*
+    on tests that may overlap with any status bucket.  A quarantined test
+    is still run and still falls into passed / failed / skipped / error; its
+    quarantine flag only suppresses the result from the build health signal.
+    Quarantined count therefore does NOT participate in the denominator check
+    — it is not a fifth exclusive slot.
     """
     violations: list[str] = []
     for i, row in enumerate(rows):
@@ -222,6 +287,7 @@ def check_commit_stats(rows: list[dict[str, Any]]) -> list[str]:
 
 #: Map of domain name → check function for ``validate_all``.
 _CHECKS: dict[str, Any] = {
+    "pipeline_runs": check_pipeline_runs,
     "coverage_snapshots": check_coverage_snapshots,
     "test_suite_results": check_test_suite_results,
     "work_item_metrics": check_work_item_metrics,
@@ -237,6 +303,7 @@ class FixtureBundle:
     skipped silently (useful when a caller does not generate every domain).
     """
 
+    pipeline_runs: list[dict[str, Any]] | None = None
     coverage_snapshots: list[dict[str, Any]] | None = None
     test_suite_results: list[dict[str, Any]] | None = None
     work_item_metrics: list[dict[str, Any]] | None = None

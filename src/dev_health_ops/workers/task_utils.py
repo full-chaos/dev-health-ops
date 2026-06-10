@@ -180,6 +180,20 @@ def _as_dict(value: object | None) -> dict[str, Any]:
 
 _GIT_TARGETS = {"git", "prs"}
 _WORK_ITEM_TARGETS = {"work-items"}
+_WORK_ITEM_PROVIDERS = {"github", "gitlab", "jira", "linear"}
+
+
+def _normalize_sync_targets(provider: str, sync_targets: list[str]) -> list[str]:
+    provider = provider.lower()
+    if sync_targets:
+        return sync_targets
+    if provider in _WORK_ITEM_PROVIDERS:
+        logger.warning(
+            "Sync configuration for provider=%s has no sync targets; defaulting to work-items",
+            provider,
+        )
+        return ["work-items"]
+    raise ValueError(f"Sync configuration for provider={provider} has no sync targets")
 
 
 def _invalidate_metrics_cache(day: str, org_id: str) -> None:

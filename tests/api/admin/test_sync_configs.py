@@ -26,6 +26,7 @@ from tests._helpers import tables_of
 
 admin_router_module = importlib.import_module("dev_health_ops.api.admin")
 auth_router_module = importlib.import_module("dev_health_ops.api.auth.router")
+sync_router_module = importlib.import_module("dev_health_ops.api.admin.routers.sync")
 
 _TABLES = tables_of(
     User,
@@ -166,6 +167,72 @@ async def test_create_sync_config_persists_to_db(client, session_maker):
 
 
 @pytest.mark.asyncio
+async def test_create_sync_config_creates_scheduled_job(client, session_maker):
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs",
+        json={
+            "name": "scheduled-linear",
+            "provider": "linear",
+            "sync_targets": ["work-items"],
+            "sync_options": {},
+        },
+    )
+
+    assert resp.status_code == 201
+    config_id = uuid.UUID(resp.json()["id"])
+    async with session_maker() as session:
+        result = await session.execute(
+            select(ScheduledJob).where(ScheduledJob.sync_config_id == config_id)
+        )
+        job = result.scalar_one_or_none()
+
+    assert job is not None
+    assert job.schedule_cron == "0 * * * *"
+
+
+@pytest.mark.asyncio
+async def test_batch_create_linear_without_repos_creates_active_config_and_job(
+    client, session_maker
+):
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "linear-work-items",
+            "provider": "linear",
+            "sync_targets": ["work-items"],
+            "sync_options": {},
+            "repos": [],
+            "schedule_cron": "15 * * * *",
+        },
+    )
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["children"] == []
+    assert data["parent"]["is_active"] is True
+    config_id = uuid.UUID(data["parent"]["id"])
+    async with session_maker() as session:
+        config_result = await session.execute(
+            select(SyncConfiguration).where(SyncConfiguration.id == config_id)
+        )
+        config = config_result.scalar_one_or_none()
+        job_result = await session.execute(
+            select(ScheduledJob).where(ScheduledJob.sync_config_id == config_id)
+        )
+        job = job_result.scalar_one_or_none()
+
+    assert config is not None
+    assert config.is_active is True
+    assert config.sync_options["schedule_cron"] == "15 * * * *"
+    assert job is not None
+    assert job.schedule_cron == "15 * * * *"
+
+
+@pytest.mark.asyncio
 async def test_get_sync_config_by_id(client):
     ac, _ = client
 
@@ -207,6 +274,41 @@ async def test_update_sync_config_changes_is_active(client):
     data = resp.json()
     assert data["is_active"] is False
     assert data["id"] == config_id
+
+
+@pytest.mark.asyncio
+async def test_schedule_job_upsert_propagates_schedule_cron(
+    client, session_maker, seeded_state
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(
+        ac, name="schedule-update", provider="linear"
+    )
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        config_result = await session.execute(
+            select(SyncConfiguration).where(
+                SyncConfiguration.id == uuid.UUID(config_id)
+            )
+        )
+        config = config_result.scalar_one()
+        config.sync_options = {"schedule_cron": "5 * * * *"}
+        await sync_router_module._upsert_scheduled_job(
+            session, config, seeded_state["org_id"]
+        )
+        await session.flush()
+        result = await session.execute(
+            select(ScheduledJob).where(
+                ScheduledJob.sync_config_id == uuid.UUID(config_id)
+            )
+        )
+        job = result.scalar_one_or_none()
+
+    assert job is not None
+    assert job.schedule_cron == "5 * * * *"
 
 
 @pytest.mark.asyncio

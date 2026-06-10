@@ -21,7 +21,12 @@ from dev_health_ops.api.admin.schemas import (
 )
 from dev_health_ops.api.services.configuration import SyncConfigurationService
 from dev_health_ops.api.services.licensing import TierLimitService
-from dev_health_ops.models.settings import JobRun, ScheduledJob, SyncConfiguration
+from dev_health_ops.models.settings import (
+    JobRun,
+    JobStatus,
+    ScheduledJob,
+    SyncConfiguration,
+)
 
 from .common import get_session
 
@@ -125,6 +130,51 @@ PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
     "launchdarkly": ["feature-flags"],
 }
 
+NON_REPO_SYNC_PROVIDERS = {"jira", "linear"}
+DEFAULT_SYNC_CRON = "0 * * * *"
+
+
+def _schedule_cron_for_config(config: object) -> str:
+    sync_options = dict(getattr(config, "sync_options") or {})
+    return str(sync_options.get("schedule_cron") or DEFAULT_SYNC_CRON)
+
+
+async def _upsert_scheduled_job(
+    session: AsyncSession, config: object, org_id: str
+) -> None:
+    sync_config_id = getattr(config, "id")
+    stmt = select(ScheduledJob).where(
+        ScheduledJob.org_id == org_id,
+        ScheduledJob.sync_config_id == sync_config_id,
+        ScheduledJob.job_type == "sync",
+    )
+    result = await session.execute(stmt)
+    job = result.scalar_one_or_none()
+    status = (
+        JobStatus.ACTIVE.value
+        if getattr(config, "is_active")
+        else JobStatus.PAUSED.value
+    )
+    if job is None:
+        session.add(
+            ScheduledJob(
+                name=f"sync-config-{sync_config_id}",
+                job_type="sync",
+                schedule_cron=_schedule_cron_for_config(config),
+                org_id=org_id,
+                job_config={
+                    "provider": str(getattr(config, "provider")).lower(),
+                    "sync_config_id": str(sync_config_id),
+                },
+                sync_config_id=sync_config_id,
+                status=status,
+            )
+        )
+        return
+
+    job.schedule_cron = _schedule_cron_for_config(config)
+    job.status = status
+
 
 @router.get("/sync-targets")
 async def get_provider_sync_targets() -> dict[str, list[str]]:
@@ -197,9 +247,17 @@ async def batch_create_sync_configs(
             detail=reason or f"Repo limit exceeded (adding {new_count} repos)",
         )
 
-    # Create parent config (template — not synced directly)
+    provider = payload.provider.lower()
+    parent_is_active = provider in NON_REPO_SYNC_PROVIDERS
+
     parent_options = dict(payload.sync_options)
     parent_options.pop("repo", None)  # parent has no single repo
+    if payload.schedule_cron is not None:
+        parent_options["schedule_cron"] = payload.schedule_cron
+    if payload.timezone is not None:
+        parent_options["timezone"] = payload.timezone
+    if payload.initial_sync_depth is not None:
+        parent_options["initial_sync_depth"] = payload.initial_sync_depth
     parent = SyncConfiguration(
         name=payload.name,
         provider=payload.provider,
@@ -209,7 +267,7 @@ async def batch_create_sync_configs(
         else None,
         sync_targets=payload.sync_targets,
         sync_options=parent_options,
-        is_active=False,  # parent is a template, children are the active jobs
+        is_active=parent_is_active,
     )
     session.add(parent)
     await session.flush()  # need parent.id for children
@@ -246,6 +304,12 @@ async def batch_create_sync_configs(
         children.append(child)
 
     session.add_all(children)
+    await session.flush()
+
+    if parent_is_active:
+        await _upsert_scheduled_job(session, parent, org_id)
+    for child in children:
+        await _upsert_scheduled_job(session, child, org_id)
     await session.flush()
 
     return SyncConfigBatchResponse(
@@ -351,6 +415,8 @@ async def create_sync_config(
         sync_options=payload.sync_options,
         credential_id=payload.credential_id,
     )
+    await _upsert_scheduled_job(session, config, org_id)
+    await session.flush()
     return _sync_config_to_response(config)
 
 
@@ -433,6 +499,8 @@ async def update_sync_config(
     if updated is None:
         raise HTTPException(status_code=404, detail="Sync configuration not found")
 
+    await _upsert_scheduled_job(session, updated, org_id)
+
     # Cascade shared settings to children when updating a parent config
     if getattr(updated, "parent_id") is None:
         stmt = select(SyncConfiguration).where(
@@ -454,6 +522,8 @@ async def update_sync_config(
                         child_sync_options[key] = payload.sync_options[key]
                         mutable_child.sync_options = child_sync_options
         if children:
+            for child in children:
+                await _upsert_scheduled_job(session, child, org_id)
             await session.flush()
 
     return _sync_config_to_response(updated)

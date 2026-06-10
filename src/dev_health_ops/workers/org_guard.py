@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from dev_health_ops.models.users import Organization
+
+logger = logging.getLogger(__name__)
 
 
 def organization_exists_sync(session: Any, org_id: str | None) -> bool:
@@ -16,12 +19,15 @@ def organization_exists_sync(session: Any, org_id: str | None) -> bool:
     except ValueError:
         return True
     try:
-        return (
+        exists = (
             session.query(Organization.id)
             .filter(Organization.id == org_uuid)
             .one_or_none()
             is not None
         )
+        if not exists:
+            logger.warning("Skipping sync for missing organization org_id=%s", org_id)
+        return exists
     except SQLAlchemyError:
         # Fail open: this guard only skips work for already-deleted orgs. If
         # existence cannot be verified (DB error, or a narrow test/migration

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -51,7 +53,7 @@ def _make_config(
         name=name,
         provider=provider,
         org_id=org_id,
-        sync_targets=sync_targets or ["git", "prs"],
+        sync_targets=["git", "prs"] if sync_targets is None else sync_targets,
         sync_options=sync_options or {},
         is_active=is_active,
     )
@@ -197,7 +199,7 @@ class TestRunSyncConfigWatermarks:
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_run_with_store.return_value = None
 
-        task = run_sync_config
+        task = cast(Any, run_sync_config)
         task.push_request(id="watermark-test-1")
         try:
             result = task(config_id=str(config.id), org_id=ORG_ID)
@@ -246,7 +248,7 @@ class TestRunSyncConfigWatermarks:
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_run_with_store.return_value = None
 
-        task = run_sync_config
+        task = cast(Any, run_sync_config)
         task.push_request(id="watermark-test-2")
         try:
             result = task(config_id=str(config.id), org_id=ORG_ID)
@@ -283,7 +285,7 @@ class TestRunSyncConfigWatermarks:
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_run_with_store.return_value = None
 
-        task = run_sync_config
+        task = cast(Any, run_sync_config)
         task.push_request(id="watermark-test-3")
         try:
             result = task(config_id=str(config.id), org_id=ORG_ID)
@@ -322,7 +324,7 @@ class TestRunSyncConfigWatermarks:
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_run_with_store.side_effect = RuntimeError("API failure")
 
-        task = run_sync_config
+        task = cast(Any, run_sync_config)
         task.push_request(id="watermark-test-4")
         try:
             with pytest.raises((Retry, RuntimeError)):
@@ -360,7 +362,7 @@ class TestRunSyncConfigWatermarks:
 
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
 
-        task = run_sync_config
+        task = cast(Any, run_sync_config)
         task.push_request(id="watermark-test-5")
         try:
             result = task(config_id=str(config.id), org_id=ORG_ID)
@@ -370,6 +372,73 @@ class TestRunSyncConfigWatermarks:
         assert result["status"] == "success"
         count = db_session.query(SyncWatermark).count()
         assert count == 0
+
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
+    @patch(
+        "dev_health_ops.workers.sync_runtime._resolve_env_credentials",
+        return_value={"api_key": "lin_test"},
+    )
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_linear_empty_targets_defaults_to_work_items(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_post_sync,
+        mock_run_work_items,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_runtime import run_sync_config
+
+        config = _make_config(
+            provider="linear",
+            sync_options={"backfill_days": 2},
+            sync_targets=[],
+            name="linear-config",
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
+
+        task = cast(Any, run_sync_config)
+        task.push_request(id="linear-work-items-test")
+        try:
+            result = task(config_id=str(config.id), org_id=ORG_ID)
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "success"
+        assert result["result"]["sync_targets"] == ["work-items"]
+        mock_run_work_items.assert_called_once()
+        assert mock_run_work_items.call_args.kwargs["provider"] == "linear"
+
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    def test_batch_child_empty_targets_defaults_to_work_items(
+        self, mock_run_work_items
+    ):
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
+
+        task = cast(Any, _run_sync_for_repo)
+        task.push_request(id="batch-linear-work-items-test")
+        try:
+            result = task(
+                config_id=str(uuid.uuid4()),
+                org_id=ORG_ID,
+                triggered_by="manual",
+                provider="linear",
+                sync_targets=[],
+                sync_options_override={"backfill_days": 3},
+                credentials={"api_key": "lin_test"},
+                config_name="linear-config",
+            )
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "success"
+        assert result["result"]["sync_targets"] == ["work-items"]
+        mock_run_work_items.assert_called_once()
+        assert mock_run_work_items.call_args.kwargs["provider"] == "linear"
 
     @patch("dev_health_ops.storage.run_with_store")
     @patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks")
@@ -402,7 +471,7 @@ class TestRunSyncConfigWatermarks:
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_run_with_store.return_value = None
 
-        task = run_sync_config
+        task = cast(Any, run_sync_config)
         task.push_request(id="watermark-test-6")
         try:
             result = task(config_id=str(config.id), org_id=ORG_ID)
@@ -447,7 +516,7 @@ class TestRunSyncConfigWatermarks:
         mock_get_session.side_effect = lambda: _fake_session_ctx(db_session)
         mock_run_with_store.return_value = None
 
-        task = run_sync_config
+        task = cast(Any, run_sync_config)
         task.push_request(id="watermark-test-7")
         try:
             result = task(config_id=str(config.id), org_id=ORG_ID)

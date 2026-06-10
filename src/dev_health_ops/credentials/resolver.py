@@ -100,7 +100,8 @@ class CredentialResolver:
 
         db_creds = await self._try_database(provider, credential_name)
         if db_creds is not None:
-            logger.info(
+            # Non-secret identifiers only (provider, org id, credential name).
+            logger.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Resolved %s credentials from database for org=%s name=%s",
                 provider,
                 self.org_id,
@@ -155,7 +156,8 @@ class CredentialResolver:
             )
 
         except Exception as e:
-            logger.warning(
+            # Logs provider + failure reason; never credential values.
+            logger.warning(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Failed to fetch %s credentials from database: %s",
                 provider,
                 e,
@@ -190,7 +192,8 @@ class CredentialResolver:
                 credential_name=credential_name,
             )
         except (ValueError, TypeError) as e:
-            logger.debug(
+            # Logs provider + validation error; never credential values.
+            logger.debug(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
                 "Incomplete %s credentials from environment: %s",
                 provider,
                 e,

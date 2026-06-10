@@ -51,6 +51,9 @@ def discover_github_repos(
         parts = search.split("/", 1)
         owner = parts[0]
         repo_pattern = parts[1]
+    elif isinstance(search, str) and search.strip() and not owner:
+        owner = search.strip()
+        repo_pattern = "*"
     else:
         repo_pattern = "*"
 
@@ -89,6 +92,9 @@ def discover_gitlab_repos(
         parts = search.split("/", 1)
         group_path = parts[0]
         project_pattern = parts[1]
+    elif isinstance(search, str) and search.strip() and not group_path:
+        group_path = search.strip()
+        project_pattern = "*"
     else:
         project_pattern = "*"
 

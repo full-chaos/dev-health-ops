@@ -95,6 +95,52 @@ class TeamMembershipService:
 
         return await asyncio.to_thread(_discover)
 
+    async def discover_members_linear(
+        self,
+        api_key: str,
+        team_key: str,
+    ) -> list[DiscoveredMember]:
+        """Discover members of a Linear team by its key (e.g. "ENG").
+
+        Linear assignees normalize to emails, so the member email doubles as
+        the provider identity (falling back to the user id when absent).
+        """
+
+        def _discover() -> list[DiscoveredMember]:
+            from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+
+            DiscoveredMember = _get_discovered_member_cls()
+            normalized_key = team_key.removeprefix("linear:")
+            with LinearClient(auth=LinearAuth(api_key=api_key)) as client:
+                for team in client.iter_teams():
+                    if team.get("key") != normalized_key:
+                        continue
+                    members_page = team.get("members") or {}
+                    nodes = list(members_page.get("nodes") or [])
+                    if (members_page.get("pageInfo") or {}).get("hasNextPage"):
+                        nodes = client.get_team_members(str(team.get("id") or ""))
+                    members: list[Any] = []
+                    for node in nodes:
+                        if node.get("active") is False:
+                            continue
+                        member_email = node.get("email")
+                        provider_identity = member_email or node.get("id")
+                        if not provider_identity:
+                            continue
+                        members.append(
+                            DiscoveredMember(
+                                provider_type="linear",
+                                provider_identity=str(provider_identity),
+                                display_name=node.get("name"),
+                                email=member_email,
+                                role=None,
+                            )
+                        )
+                    return members
+            return []
+
+        return await asyncio.to_thread(_discover)
+
     async def discover_members_jira(
         self,
         email: str,

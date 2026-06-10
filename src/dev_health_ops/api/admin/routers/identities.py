@@ -80,7 +80,7 @@ async def create_or_update_identity(
 )
 async def discover_team_members(
     team_id: str,
-    provider: str = Query(..., pattern="^(github|gitlab|jira)$"),
+    provider: str = Query(..., pattern="^(github|gitlab|jira|linear)$"),
     credential_id: str | None = Query(None),
     credential_name: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
@@ -138,6 +138,17 @@ async def discover_team_members(
             token=token,
             group_path=group_path,
             url=url,
+        )
+    elif provider == "linear":
+        api_key = decrypted.get("apiKey") or decrypted.get("api_key")
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="Linear credentials require apiKey",
+            )
+        members = await membership_svc.discover_members_linear(
+            api_key=api_key,
+            team_key=provider_team_id,
         )
     else:
         email = decrypted.get("email")

@@ -1,12 +1,23 @@
-"""Strawberry GraphQL types for the Improve area — Experiments sub-area.
+"""Strawberry GraphQL types for the Improve area — Experiments + Automations.
 
-v1 design decision: experiments are DERIVED (computed) from the per-opportunity
-``suggested_experiments`` strings already produced by the opportunities service.
-No persistence table is needed for v1 — each ``Experiment`` is assembled at
-query-time from ``OpportunityCard.suggested_experiments``.  The ``status``
-field and the ``opportunity_id`` back-reference keep the schema honest about
-the derivation path so the promotion flow (user assigns owner/metric and saves)
-can be added in v2 without a breaking change.
+This module holds ALL Improve-area types:
+
+- **Experiments** (CHAOS-2219): DERIVED types assembled at query-time from
+  ``OpportunityCard.suggested_experiments``.  No persistence table is needed
+  for v1 — the type contract is stable so persistence can be added in v2
+  without a breaking change.
+
+- **Automations / Flow opportunities** (CHAOS-2220): Non-AI flow opportunity
+  types powering the Improve → Automations surface.  They mirror the domain
+  models in ``dev_health_ops.metrics.opportunities.models`` but carry
+  ``@strawberry`` decorators for direct schema serving.  Defined here (not in
+  ``models/ai.py``) because the Improve opportunity kinds are **non-AI** — the
+  detector fires on flow / cycle / rework signals from ``repo_metrics_daily``
+  and ``work_item_metrics_daily``, not on AI attribution data.
+
+The ``AIScopeInput`` re-use for Automations is intentional: the scope shape
+(optional repo_id, team_id) is the same; introducing a duplicate input type
+would be noise.
 """
 
 from __future__ import annotations
@@ -15,6 +26,9 @@ from datetime import date
 from enum import Enum
 
 import strawberry
+
+
+# ── Experiments (CHAOS-2219) ──────────────────────────────────────────────────
 
 
 @strawberry.enum
@@ -98,3 +112,56 @@ class ExperimentsResult:
 
     items: list[Experiment]
     derived_from_opportunities: bool
+
+
+# ── Automations / Flow opportunities (CHAOS-2220) ─────────────────────────────
+
+
+@strawberry.enum
+class ImproveOpportunityKind(Enum):
+    """Non-AI flow opportunity kinds detected by FlowOpportunityDetector.
+
+    Each value maps to one of the seven threshold rules implemented in
+    ``metrics.opportunities.flow_detector``.
+    """
+
+    HIGH_REVIEW_LATENCY = "high_review_latency"
+    SLOW_CYCLE_TIME = "slow_cycle_time"
+    HIGH_REWORK = "high_rework"
+    HIGH_WIP = "high_wip"
+    LOW_THROUGHPUT = "low_throughput"
+    HIGH_CHURN = "high_churn"
+    HIGH_CHANGE_FAILURE = "high_change_failure"
+
+
+@strawberry.type
+class ImproveOpportunity:
+    """A single scored flow / improve opportunity (non-AI kind)."""
+
+    opportunity_id: str
+    kind: ImproveOpportunityKind
+    entity_type: str
+    entity_id: str
+    title: str
+    rationale: str
+    score: float
+    severity: str
+    evidence_refs: list[str]
+    recommended_action: str
+
+
+@strawberry.type
+class ImproveOpportunitiesResult:
+    """Improve automations surface: non-AI flow opportunity candidates.
+
+    ``detector_ready`` is ``True`` whenever the FlowOpportunityDetector ran
+    without a total failure (it can return an empty list when no thresholds
+    fire — that is a valid "all green" state, not an error).
+    ``detector_ready = False`` means the detector could not connect to
+    ClickHouse or the org scope could not be resolved.
+    """
+
+    org_id: str
+    opportunities: list[ImproveOpportunity]
+    detector_ready: bool
+    total_count: int

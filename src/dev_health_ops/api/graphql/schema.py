@@ -23,7 +23,7 @@ from .models.ai import (
     AIWorkflowRootTypeInput,
 )
 from .models.data_health import DataHealth
-from .models.improve import ExperimentsResult
+from .models.improve import ExperimentsResult, ImproveOpportunitiesResult
 from .models.inputs import (
     AnalyticsRequestInput,
     CapacityForecastFilterInput,
@@ -72,6 +72,7 @@ from .resolvers.cognitive_load import resolve_cognitive_load
 from .resolvers.complexity import resolve_complexity_timeseries, resolve_hotspots
 from .resolvers.compounding_risk import resolve_compounding_risk
 from .resolvers.data_health import resolve_data_health
+from .resolvers.improve import resolve_improve_opportunities
 from .resolvers.product_telemetry import (
     resolve_product_telemetry_dashboard,
     resolve_product_telemetry_platform_dashboard,
@@ -567,6 +568,26 @@ class Query:
     ) -> AIOpportunitiesResult:
         context = get_context(info)
         return await resolve_ai_opportunities(context, scope, limit)
+
+    @strawberry.field(
+        description=(
+            "Non-AI flow opportunity recommendations for the Improve surface "
+            "(CHAOS-2220). Fires threshold rules over repo and team metrics "
+            "(review latency, cycle time, rework, WIP, throughput, churn, "
+            "change failure) and returns scored candidates. "
+            "An empty list means all metrics are within thresholds — not an error."
+        )
+    )
+    async def improve_opportunities(
+        self,
+        info: Info,
+        org_id: str,
+        scope: AIScopeInput | None = None,
+        limit: int = 10,
+        window_days: int = 30,
+    ) -> ImproveOpportunitiesResult:
+        context = get_context(info)
+        return await resolve_improve_opportunities(context, scope, limit, window_days)
 
     @strawberry.field(
         description="AI governance coverage and recent policy violations."

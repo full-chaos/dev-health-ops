@@ -214,6 +214,36 @@ class AuthService:
 
         return jwt.encode(payload, self.secret_key, algorithm=JWT_ALGORITHM)
 
+    def create_refresh_token_with_jti(
+        self,
+        jti: str,
+        user_id: str,
+        org_id: str,
+        family_id: str,
+        expires_at: datetime,
+    ) -> str:
+        """Re-issue a refresh JWT reusing a *specific* JTI.
+
+        Used exclusively by the concurrent-rotation grace window: when a
+        second request presents a just-rotated token within the idempotency
+        window, the router reconstructs the successor JWT (same JTI that was
+        already committed to the DB) instead of minting a brand-new token.
+        This guarantees that only *one* valid successor token exists per
+        rotation, satisfying the security invariant.
+        """
+        payload = {
+            "sub": user_id,
+            "org_id": org_id,
+            "family_id": family_id,
+            "type": "refresh",
+            "iss": self.issuer,
+            "aud": self.audience,
+            "exp": expires_at,
+            "iat": datetime.now(timezone.utc),
+            "jti": jti,
+        }
+        return jwt.encode(payload, self.secret_key, algorithm=JWT_ALGORITHM)
+
     def create_token_pair(
         self,
         user_id: str,

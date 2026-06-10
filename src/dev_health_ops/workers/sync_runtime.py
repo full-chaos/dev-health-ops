@@ -338,6 +338,7 @@ def run_sync_config(
     config_id: str,
     org_id: str,
     triggered_by: str = "manual",
+    pending_run_id: str | None = None,
 ) -> dict:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
@@ -451,13 +452,31 @@ def run_sync_config(
 
             job_id = _as_uuid(job.id)
 
-            run = JobRun(
-                job_id=job_id,
-                triggered_by=triggered_by,
-                status=JobRunStatus.PENDING.value,
-            )
-            session.add(run)
-            session.flush()
+            if pending_run_id is not None:
+                # Reuse the PENDING row created at trigger time.
+                _existing = (
+                    session.query(JobRun)
+                    .filter(JobRun.id == uuid.UUID(pending_run_id))
+                    .one_or_none()
+                )
+                if _existing is not None:
+                    run = _existing
+                else:
+                    run = JobRun(
+                        job_id=job_id,
+                        triggered_by=triggered_by,
+                        status=JobRunStatus.PENDING.value,
+                    )
+                    session.add(run)
+                    session.flush()
+            else:
+                run = JobRun(
+                    job_id=job_id,
+                    triggered_by=triggered_by,
+                    status=JobRunStatus.PENDING.value,
+                )
+                session.add(run)
+                session.flush()
             run_id = _as_uuid(run.id)
 
             setattr(run, "status", JobRunStatus.RUNNING.value)

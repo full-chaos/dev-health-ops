@@ -23,6 +23,7 @@ from dev_health_ops.api.services.configuration import SyncConfigurationService
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.models.settings import (
     JobRun,
+    JobRunStatus,
     JobStatus,
     ScheduledJob,
     SyncConfiguration,
@@ -647,16 +648,67 @@ async def trigger_sync_config(
             run_sync_config,
         )
 
-        task = dispatch_batch_sync if _is_batch_eligible(config) else run_sync_config
+        # Create a PENDING JobRun synchronously so the UI shows status immediately.
+        # Ensure the ScheduledJob row exists first (worker also does this, but we
+        # need the job_id to create the JobRun).
+        def _create_pending_run(sync_session) -> str:
+            import uuid as _uuid
+
+            config_uuid = _uuid.UUID(str(config.id))
+            job = (
+                sync_session.query(ScheduledJob)
+                .filter(
+                    ScheduledJob.org_id == org_id,
+                    ScheduledJob.sync_config_id == config_uuid,
+                    ScheduledJob.job_type == "sync",
+                )
+                .one_or_none()
+            )
+            if job is None:
+                _sync_options = dict(config.sync_options or {})
+                _provider = str(config.provider or "")
+                job = ScheduledJob(
+                    name=f"sync-config-{config_uuid}",
+                    job_type="sync",
+                    schedule_cron=str(
+                        _sync_options.get("schedule_cron") or "0 * * * *"
+                    ),
+                    org_id=org_id,
+                    provider=_provider,
+                    job_config={
+                        "provider": _provider,
+                        "sync_config_id": str(config_uuid),
+                    },
+                    sync_config_id=config_uuid,
+                    tz=str(_sync_options.get("timezone") or "UTC"),
+                    status=JobStatus.ACTIVE.value,
+                )
+                sync_session.add(job)
+                sync_session.flush()
+            run = JobRun(
+                job_id=_uuid.UUID(str(job.id)),
+                triggered_by="manual",
+                status=JobRunStatus.PENDING.value,
+            )
+            sync_session.add(run)
+            sync_session.flush()
+            return str(run.id)
+
+        pending_run_id: str = await session.run_sync(_create_pending_run)
+
+        is_batch = _is_batch_eligible(config)
+        task = dispatch_batch_sync if is_batch else run_sync_config
         result = getattr(task, "delay")(
             config_id=str(config.id),
             org_id=org_id,
             triggered_by="manual",
+            pending_run_id=pending_run_id,
         )
         return {
             "status": "triggered",
             "config_id": str(config.id),
             "task_id": result.id,
+            "run_id": pending_run_id,
         }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Task queue unavailable: {e}")

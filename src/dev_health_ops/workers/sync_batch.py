@@ -30,6 +30,32 @@ from dev_health_ops.workers.task_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _mark_batch_run_complete(run_id: str, results: list) -> None:
+    """Update the parent JobRun to SUCCESS after all batch children complete."""
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+    try:
+        with get_postgres_session_sync() as session:
+            run_record = (
+                session.query(JobRun)
+                .filter(JobRun.id == uuid.UUID(run_id))
+                .one_or_none()
+            )
+            if run_record is not None:
+                completed_at = datetime.now(timezone.utc)
+                setattr(run_record, "status", JobRunStatus.SUCCESS.value)
+                setattr(run_record, "completed_at", completed_at)
+                setattr(
+                    run_record,
+                    "result",
+                    {"child_results": len(results) if results else 0},
+                )
+                session.flush()
+    except Exception as exc:
+        logger.error("Failed to mark batch run %s complete: %s", run_id, exc)
+
+
 def _is_batch_eligible(config) -> bool:
     """Check if a SyncConfiguration should be dispatched as a batch.
 
@@ -91,6 +117,7 @@ def _batch_sync_callback(
     provider: str,
     sync_targets: list[str],
     org_id: str,
+    run_id: str | None = None,
 ) -> dict:
     """Chord callback: dispatch post-sync tasks after all batch children complete."""
     logger.info(
@@ -102,6 +129,8 @@ def _batch_sync_callback(
         sync_targets=sync_targets,
         org_id=org_id,
     )
+    if run_id is not None:
+        _mark_batch_run_complete(run_id, results)
     return {
         "status": "post_sync_dispatched",
         "child_results": len(results) if results else 0,
@@ -119,6 +148,7 @@ def dispatch_batch_sync(
     config_id: str,
     org_id: str,
     triggered_by: str = "schedule",
+    pending_run_id: str | None = None,
 ) -> dict:
     """Fan out a batch-eligible SyncConfiguration into per-repo Celery tasks.
 
@@ -206,6 +236,7 @@ def dispatch_batch_sync(
                     "config_id": config_id,
                     "org_id": org_id,
                     "triggered_by": triggered_by,
+                    "pending_run_id": pending_run_id,
                 },
                 queue="sync",
             )
@@ -271,6 +302,7 @@ def dispatch_batch_sync(
                 provider=provider,
                 sync_targets=sync_targets,
                 org_id=org_id,
+                run_id=pending_run_id,
             ),
         )()
 

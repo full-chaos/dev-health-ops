@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +13,7 @@ import pytest
 import dev_health_ops.metrics.job_work_items as job
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.models.ai_attribution import AIAttributionRecord
+from dev_health_ops.providers.github.client import GitHubAuth
 
 
 @dataclass(frozen=True)
@@ -203,7 +206,8 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
         lambda: client,
     )
 
-    job.run_work_items_sync_job(
+    run_job: Any = job.run_work_items_sync_job
+    run_job(
         db_url="clickhouse://test",
         day=date(2026, 5, 2),
         backfill_days=1,
@@ -226,3 +230,100 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
     assert not any(
         row.subject_id == "ghpr:fullchaos/dev-health#14" for row in sink.ai_attributions
     )
+
+
+def _run_github_work_items_with_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    credentials: dict[str, object],
+) -> GitHubAuth:
+    org_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    sink = _FakeClickHouseSink("clickhouse://test")
+    captured_auth: list[GitHubAuth] = []
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
+    monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
+    monkeypatch.setattr(
+        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
+    )
+    monkeypatch.setattr(
+        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
+    )
+    monkeypatch.setattr(job, "parse_github_projects_v2_env", lambda: [])
+    monkeypatch.setattr(
+        job,
+        "_discover_repos",
+        lambda **_kwargs: [
+            DiscoveredRepo(
+                repo_id=repo_id,
+                full_name="fullchaos/dev-health",
+                source="github",
+                settings={},
+            )
+        ],
+    )
+
+    from dev_health_ops.providers.github.client import GitHubWorkClient
+
+    def capture_init(self: Any, *, auth: GitHubAuth, **_kwargs: object) -> None:
+        captured_auth.append(auth)
+        self.auth = auth
+
+    monkeypatch.setattr(GitHubWorkClient, "__init__", capture_init)
+    monkeypatch.setattr(GitHubWorkClient, "iter_repo_milestones", lambda *_, **__: [])
+    monkeypatch.setattr(GitHubWorkClient, "iter_issues", lambda *_, **__: [])
+    monkeypatch.setattr(GitHubWorkClient, "iter_pull_requests", lambda *_, **__: [])
+
+    before = os.environ.get("GITHUB_TOKEN")
+    run_job: Any = job.run_work_items_sync_job
+    run_job(
+        db_url="clickhouse://test",
+        day=date(2026, 5, 2),
+        backfill_days=1,
+        provider="github",
+        org_id=str(org_id),
+        credentials=credentials,
+    )
+
+    assert os.environ.get("GITHUB_TOKEN") == before
+    assert captured_auth
+    return captured_auth[0]
+
+
+def test_github_work_items_sync_uses_db_pat_without_env_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth = _run_github_work_items_with_credentials(
+        monkeypatch,
+        {"token": "ghp_database_token"},
+    )
+
+    assert auth.token == "ghp_database_token"
+    assert auth.is_app_auth is False
+
+
+def test_github_work_items_sync_uses_db_app_auth_without_env_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key = "\n".join(
+        [
+            "-----BEGIN" + " PRIVATE KEY-----",
+            "test",
+            "-----END" + " PRIVATE KEY-----",
+        ]
+    )
+    auth = _run_github_work_items_with_credentials(
+        monkeypatch,
+        {
+            "app_id": "12345",
+            "private_key": private_key,
+            "installation_id": "67890",
+        },
+    )
+
+    assert auth.token is None
+    assert auth.app_id == "12345"
+    assert auth.private_key == private_key
+    assert auth.installation_id == "67890"
+    assert auth.is_app_auth is True

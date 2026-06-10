@@ -173,9 +173,11 @@ class ProviderWithClient(Provider, Generic[_TClient]):
         *,
         status_mapping: StatusMapping | None = None,
         identity: IdentityResolver | None = None,
+        client: _TClient | None = None,
     ) -> None:
         self._status_mapping = status_mapping
         self._identity = identity
+        self._client = client
 
     @property
     def status_mapping(self) -> StatusMapping:
@@ -194,11 +196,20 @@ class ProviderWithClient(Provider, Generic[_TClient]):
         return self._identity
 
     def _make_client(self) -> _TClient:
-        """Build a client instance via ``client_cls.from_env()``.
+        """Build a client instance.
 
-        Resolved on ``type(self)`` at call-time, which lets tests patch the
-        classmethod directly (e.g. ``patch("pkg.client.Cls.from_env")``).
+        Returns the client injected via ``__init__`` when one was provided.
+        Injection is how callers thread config-resolved credentials and the
+        organization id into the client (e.g. work-items sync) instead of the
+        global environment side-channel. When no client is injected, falls
+        back to ``client_cls.from_env()``.
+
+        ``from_env`` is resolved on ``type(self)`` at call-time, which lets
+        tests patch the classmethod directly (e.g.
+        ``patch("pkg.client.Cls.from_env")``).
         """
+        if self._client is not None:
+            return self._client
         return self.client_cls.from_env()
 
     def _validate_ctx(self, ctx: IngestionContext) -> None:

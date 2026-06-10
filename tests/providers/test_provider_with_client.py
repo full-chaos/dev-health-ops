@@ -104,3 +104,36 @@ class TestProviderWithClient:
         provider = _ManualProvider()
         result = provider.ingest(IngestionContext(window=IngestionWindow()))
         assert isinstance(result, ProviderBatch)
+
+    def test_make_client_returns_injected_client(self) -> None:
+        """An injected client is returned verbatim, bypassing from_env()."""
+        sentinel = _FakeClient()
+        provider = _FakeProvider(client=sentinel)
+        assert provider._make_client() is sentinel
+
+    def test_ingest_uses_injected_client_without_from_env(self) -> None:
+        """ingest() must not call from_env() when a client is injected."""
+        call_log: list[str] = []
+
+        class _SpyClient:
+            @classmethod
+            def from_env(cls) -> _SpyClient:
+                call_log.append("from_env")
+                return cls()
+
+        class _SpyProvider(ProviderWithClient[_SpyClient]):
+            name = "spy"
+            capabilities = ProviderCapabilities(work_items=True)
+            client_cls = _SpyClient
+
+            def _ingest_with_client(
+                self, *, client: _SpyClient, ctx: IngestionContext
+            ) -> ProviderBatch:
+                call_log.append(f"ingest:{type(client).__name__}")
+                return ProviderBatch()
+
+        injected = _SpyClient()
+        call_log.clear()
+        provider = _SpyProvider(client=injected)
+        provider.ingest(IngestionContext(window=IngestionWindow()))
+        assert call_log == ["ingest:_SpyClient"]

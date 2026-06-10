@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -84,6 +85,31 @@ def get_forwarded_ip(request: Request) -> str:
     if forwarded and peer in _trusted_proxies():
         return forwarded.split(",")[0].strip()
     return peer
+
+
+def get_validate_key(request: Request) -> str:
+    """Rate-limit key for POST /auth/validate: per-token, not per-IP.
+
+    The web app calls /validate server-side, so every user shares the same
+    TCP peer (the web container). Keying on IP collapses all users into one
+    bucket and the limit becomes a deployment-wide throughput cap (CHAOS-2232).
+    Key on a digest of the submitted token instead — never the raw token,
+    which must not appear in limiter storage or error messages.
+    """
+    body = getattr(request, "_body", None)
+    if isinstance(body, (bytes, bytearray)) and body:
+        try:
+            payload = json.loads(body)
+            if isinstance(payload, dict):
+                token = payload.get("token")
+                if isinstance(token, str) and token:
+                    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+                    return f"validate-token:{digest}"
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            logging.getLogger(__name__).debug(
+                "Could not parse request body for validate rate-limit key"
+            )
+    return f"validate-ip:{get_forwarded_ip(request)}"
 
 
 def get_admin_user_key(request: Request) -> str:

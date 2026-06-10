@@ -71,6 +71,7 @@ async def rotate_token(
     old_token_hash: str,
     new_token_hash: str,
     new_expires_at: datetime,
+    existing_record: RefreshToken | None = None,
 ) -> RefreshToken | None:
     """Revoke *old_token_hash* and create its successor.
 
@@ -81,8 +82,13 @@ async def rotate_token(
       that the grace-window path in the router can re-issue the *same* JWT
       without minting a second token
     - inserts and flushes the new successor row
+
+    *existing_record* — if the caller already holds a FOR UPDATE–locked
+    reference to the old row (as the router does after
+    ``find_by_hash_for_update``), pass it here to skip the redundant
+    unlocked re-fetch and keep the serialisation contract explicit.
     """
-    old_record = await find_by_hash(db, old_token_hash)
+    old_record = existing_record or await find_by_hash(db, old_token_hash)
     if old_record is None:
         return None
 

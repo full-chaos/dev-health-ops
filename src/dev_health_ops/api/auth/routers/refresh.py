@@ -280,11 +280,14 @@ async def refresh_token(
                 detail=error_detail("Unable to rotate refresh token"),
             )
 
+        # Pass the already-locked record so rotate_token reuses the FOR UPDATE
+        # reference instead of issuing an unlocked re-fetch.
         rotated = await rotate_token(
             db=db,
             old_token_hash=str(token_jti),
             new_token_hash=str(new_refresh_payload["jti"]),
             new_expires_at=new_expires_at,
+            existing_record=token_record,
         )
         if rotated is None:
             raise HTTPException(

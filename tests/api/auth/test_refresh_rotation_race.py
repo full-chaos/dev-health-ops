@@ -10,23 +10,28 @@ rotated within ROTATION_GRACE_WINDOW_SECONDS and has a recorded successor,
 return the *same* successor JWT instead of revoking the family.
 
 Tests in this module:
-- concurrent_same_token_both_succeed: asyncio.gather fires two requests with
-  the same token; family must NOT be revoked; at least one response succeeds
-  and the winner's token is still usable for a subsequent rotation.
-- grace_window_returns_same_successor: serial simulation — after request A
-  completes, request B (within grace window) gets back the same successor JWT
-  that A already minted; subsequent rotation from B's token works; only one
-  valid successor ever existed.
+- concurrent_same_token_family_not_revoked: A completes → B presents same
+  token immediately (within grace window) → BOTH return 200 with the SAME
+  successor JTI; subsequent rotation works; family alive.  (On Postgres the
+  FOR UPDATE lock enforces A-before-B ordering at the DB level; here we
+  achieve the same by sequencing A to completion first — deterministic on
+  SQLite too.)
+- grace_window_returns_same_successor: service-layer serial simulation —
+  after rotate_token commits, a direct grace-window replay returns the same
+  JTI; T2→T3 rotation succeeds.
 - stale_reuse_revokes_family: same token presented well outside the grace
   window is treated as genuine reuse; family is revoked; 401 returned.
 - grace_window_does_not_extend_lifetime: the successor JWT re-issued via the
   grace window carries the same expiry as the originally committed successor,
   not a freshly extended expiry.
+- grace_aborted_when_successor_revoked_toctou: if the successor token was
+  itself revoked (e.g. by an earlier family-revoke sweep) before the stale
+  token is replayed, the grace window gate (successor_record.revoked_at is
+  None) must abort and return 401 — no live token issued.
 """
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import uuid
 from contextlib import asynccontextmanager
@@ -50,6 +55,7 @@ from dev_health_ops.api.services.refresh_tokens import (
 )
 from dev_health_ops.api.services.refresh_tokens import (
     find_by_hash,
+    revoke_family,
     rotate_token,
 )
 from dev_health_ops.models.audit import AuditLog
@@ -196,45 +202,56 @@ async def client(monkeypatch: pytest.MonkeyPatch, session_maker):
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — concurrent requests with the same token (asyncio.gather)
+# Test 1 — concurrent same-token: both return 200 with the SAME successor JTI
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_concurrent_same_token_family_not_revoked(client, session_maker, seed):
-    """Two simultaneous refresh requests with the same token must not revoke
-    the family.  At least one must succeed and the winning token must still be
-    usable for a subsequent rotation.
+    """Regression: two rapid requests with the same refresh token must both
+    return 200, carry the *same* successor JTI, and leave the family alive.
+
+    On Postgres the SELECT FOR UPDATE lock enforces A-before-B serialisation
+    at the database level.  On SQLite (tests) we replicate that ordering by
+    completing A fully before sending B — the same logical invariant, tested
+    deterministically on both backends.
+
+    Key assertions
+    ──────────────
+    • Both requests return 200 (no 401, no family revoke)
+    • Both returned refresh JWTs contain the SAME JTI — one rotation, not two
+    • A subsequent rotation with the shared successor also returns 200
     """
-    refresh_jwt, jti = await _mint_and_store_token(session_maker, seed)
+    refresh_jwt, _ = await _mint_and_store_token(session_maker, seed)
 
-    # Fire two requests concurrently with the exact same refresh_token.
-    r1, r2 = await asyncio.gather(
-        client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_jwt}),
-        client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_jwt}),
+    # Request A: the first presenter rotates T1 → T2.
+    r1 = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_jwt})
+    assert r1.status_code == 200, f"Request A failed: {r1.status_code} {r1.text}"
+
+    # Request B: the racing presenter arrives with the same (now-stale) T1.
+    # The grace window must return the SAME successor as A, not mint a new one.
+    r2 = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_jwt})
+    assert r2.status_code == 200, (
+        f"Request B (grace-window replay) failed: {r2.status_code} {r2.text}"
     )
 
-    statuses = {r1.status_code, r2.status_code}
-    # At least one request must succeed.
-    assert 200 in statuses, (
-        f"Expected at least one 200; got {r1.status_code}, {r2.status_code}"
+    p1 = AUTH_SERVICE.validate_token(r1.json()["refresh_token"], token_type="refresh")
+    p2 = AUTH_SERVICE.validate_token(r2.json()["refresh_token"], token_type="refresh")
+    assert p1 is not None and p2 is not None
+    assert str(p1["jti"]) == str(p2["jti"]), (
+        "Grace window must return the same successor JTI to both requests "
+        "(exactly one rotation, not two independent rotations)"
     )
 
-    # Pick the successful response (if both are 200 that is also fine).
-    winner = r1 if r1.status_code == 200 else r2
-    winner_token = winner.json()["refresh_token"]
-
-    # Verify the family is NOT fully revoked by doing a third rotation.
-    r3 = await client.post("/api/v1/auth/refresh", json={"refresh_token": winner_token})
+    # Family still alive: subsequent rotation with the shared successor works.
+    r3 = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": r1.json()["refresh_token"]}
+    )
     assert r3.status_code == 200, (
-        f"Subsequent rotation after concurrent race failed: {r3.status_code} {r3.text}"
+        f"Subsequent rotation after race failed: {r3.status_code} {r3.text}"
     )
 
-    # Confirm: the original family_id is still alive (its active token is the
-    # winner's successor from the third rotation, not revoked).
-    winner_payload = AUTH_SERVICE.validate_token(winner_token, token_type="refresh")
-    assert winner_payload is not None
-    family_id = str(winner_payload["family_id"])
+    family_id = str(p1["family_id"])
     async with session_maker() as session:
         result = await session.execute(
             select(RefreshToken).where(
@@ -243,7 +260,10 @@ async def test_concurrent_same_token_family_not_revoked(client, session_maker, s
             )
         )
         active_tokens = result.scalars().all()
-    assert len(active_tokens) >= 1, "Token family should have at least one active token"
+    assert len(active_tokens) == 1, (
+        f"Exactly one active token expected in family after race; "
+        f"got {len(active_tokens)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -461,4 +481,96 @@ async def test_grace_window_does_not_extend_token_lifetime(session_maker, seed):
     assert delta < 2, (
         f"Re-issued token expiry ({reissued_exp}) must match committed successor "
         f"expiry ({committed_exp}), not a fresh 7-day window; delta={delta:.1f}s"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — TOCTOU: grace window aborted when successor is already revoked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_grace_aborted_when_successor_revoked_toctou(client, session_maker, seed):
+    """Security regression: if the successor token (T2) was itself revoked
+    (e.g. by a revoke_family sweep or concurrent logout) BEFORE the stale
+    T1 is replayed, the grace-window gate must abort and return 401.
+
+    Attack scenario
+    ───────────────
+    1.  T1 rotated → T2 (normal flow, within grace window).
+    2.  Something revokes T2: admin revocation, concurrent logout, or another
+        rotation that also swept the family (revoke_family).
+    3.  T1 is presented again within ROTATION_GRACE_WINDOW_SECONDS.
+    4.  The grace-window path checks ``successor_record.revoked_at is None``
+        (refresh.py:147).  If T2 is revoked, that check must fail and the
+        router must fall through to the genuine-reuse path → 401.
+
+    Pinned predicate: ``successor_record is not None and
+    successor_record.revoked_at is None`` in the router grace-window block.
+    """
+    family_id = str(uuid.uuid4())
+    refresh_jwt_1, jti_1 = await _mint_and_store_token(
+        session_maker, seed, family_id=family_id
+    )
+
+    # Step 1: rotate T1 → T2.
+    t2_jti = str(uuid.uuid4())
+    t2_exp = datetime.now(timezone.utc) + timedelta(days=7)
+    async with session_maker() as session:
+        await rotate_token(
+            db=session,
+            old_token_hash=jti_1,
+            new_token_hash=t2_jti,
+            new_expires_at=t2_exp,
+        )
+        await session.commit()
+
+    # Confirm T1 is within grace window and has successor_jti set.
+    async with session_maker() as session:
+        t1_rec = await find_by_hash(session, jti_1)
+    assert t1_rec is not None
+    assert t1_rec.successor_jti == t2_jti
+    revoked_at = t1_rec.revoked_at
+    assert revoked_at is not None
+    if revoked_at.tzinfo is None:
+        revoked_at = revoked_at.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - revoked_at).total_seconds()
+    assert elapsed < 30, "T1 must be within the grace window for the TOCTOU to apply"
+
+    # Step 2: revoke T2 (simulates revoke_family or a concurrent logout).
+    async with session_maker() as session:
+        await revoke_family(session, family_id)
+        await session.commit()
+
+    # Confirm T2 is now revoked.
+    async with session_maker() as session:
+        t2_rec = await find_by_hash(session, t2_jti)
+    assert t2_rec is not None
+    assert t2_rec.revoked_at is not None, "T2 must be revoked before the replay"
+
+    # Step 3: replay T1 within the grace window — must get 401, not a live T2.
+    response = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": refresh_jwt_1}
+    )
+    assert response.status_code == 401, (
+        f"Expected 401 (grace window aborted: successor revoked), "
+        f"got {response.status_code} {response.text}"
+    )
+    # Exact error message may be "reuse detected" or generic — just confirm no live token.
+    response_body = response.json()
+    assert "refresh_token" not in response_body, (
+        "No refresh_token must be present in a 401 response"
+    )
+
+    # Family must remain fully revoked (no active tokens).
+    async with session_maker() as session:
+        result = await session.execute(
+            select(RefreshToken).where(
+                RefreshToken.family_id == uuid.UUID(family_id),
+                RefreshToken.revoked_at.is_(None),
+            )
+        )
+        still_active = result.scalars().all()
+    assert still_active == [], (
+        "Family must have no active tokens after the TOCTOU check aborted the grace window"
     )

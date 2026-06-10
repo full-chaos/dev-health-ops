@@ -373,3 +373,351 @@ class TestWorkGraphEdgeDisplayNames:
         assert result.edges[0].target_display_name == "INC-2"
         assert result.edges[1].source_display_name is None
         assert result.edges[1].target_display_name == "INC-5"
+
+
+class TestWorkGraphEdgeLookupResolution:
+    """CHAOS-2120: Lookup-backed display-name resolution for WorkGraph edges.
+
+    UUID-derived ids that appear in persisted edges are resolved to
+    human-readable labels via one ClickHouse query per entity type (no N+1).
+    Lookup-resolved names take precedence over the pattern-based fallback.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pr_uuid_id_resolved_to_title(self, mock_context):
+        """PR id in {uuid}#pr{N} format resolves to PR title via git_pull_requests."""
+        repo_uuid = "4e00fff2-df66-5028-8ebd-e4535332300b"
+        pr_id = f"{repo_uuid}#pr160"
+        edge_rows = [
+            make_edge_row(
+                source_type="pr",
+                source_id=pr_id,
+                target_type="deployment",
+                target_id="synth-deploy-1",
+            )
+        ]
+        pr_lookup_rows = [
+            {"repo_id": repo_uuid, "number": 160, "title": "Add feature X"}
+        ]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, pr_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].source_display_name == "Add feature X"
+        # Human-readable target passes through unchanged
+        assert result.edges[0].target_display_name == "synth-deploy-1"
+
+    @pytest.mark.asyncio
+    async def test_pr_uuid_id_with_no_db_match_yields_none(self, mock_context):
+        """PR id in {uuid}#pr{N} format with no matching title in DB → None (A8)."""
+        repo_uuid = "4e00fff2-df66-5028-8ebd-e4535332300b"
+        pr_id = f"{repo_uuid}#pr999"
+        edge_rows = [
+            make_edge_row(source_type="pr", source_id=pr_id, target_id="deploy-xyz")
+        ]
+        # Empty result — PR not in git_pull_requests
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].source_display_name is None
+
+    @pytest.mark.asyncio
+    async def test_human_readable_id_passes_through_without_lookup(self, mock_context):
+        """Human-readable ids need no table lookup; query_dicts called exactly once."""
+        edge_rows = [make_edge_row(source_id="PROJ-123", target_id="deploy-prod")]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = edge_rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        # Only the edge query — no batch lookup needed
+        assert mock_query.call_count == 1
+        assert result.edges[0].source_display_name == "PROJ-123"
+        assert result.edges[0].target_display_name == "deploy-prod"
+
+    @pytest.mark.asyncio
+    async def test_opaque_hex_id_never_triggers_lookup(self, mock_context):
+        """Opaque hex ids are not resolvable; no extra query is issued (call_count == 1)."""
+        hex_id = "032adec80b86fd88759f19e65f133d6cacc136f3276cabc79e851ccd22de1cd2"
+        edge_rows = [make_edge_row(source_id=hex_id, target_id="INC-001")]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.return_value = edge_rows
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert mock_query.call_count == 1
+        assert result.edges[0].source_display_name is None
+
+    @pytest.mark.asyncio
+    async def test_batching_multiple_pr_ids_use_one_query(self, mock_context):
+        """Multiple unresolved PR ids from the same batch resolve in ONE query (no N+1)."""
+        repo_uuid = "4e00fff2-df66-5028-8ebd-e4535332300b"
+        edge_rows = [
+            make_edge_row(
+                edge_id="e1",
+                source_type="pr",
+                source_id=f"{repo_uuid}#pr10",
+                target_type="issue",
+                target_id="PROJ-1",
+            ),
+            make_edge_row(
+                edge_id="e2",
+                source_type="pr",
+                source_id=f"{repo_uuid}#pr20",
+                target_type="issue",
+                target_id="PROJ-2",
+            ),
+        ]
+        pr_lookup_rows = [
+            {"repo_id": repo_uuid, "number": 10, "title": "PR Ten"},
+            {"repo_id": repo_uuid, "number": 20, "title": "PR Twenty"},
+        ]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, pr_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        # 2 calls: 1 edge query + 1 batch PR lookup (not one per PR)
+        assert mock_query.call_count == 2
+        assert result.edges[0].source_display_name == "PR Ten"
+        assert result.edges[1].source_display_name == "PR Twenty"
+
+    @pytest.mark.asyncio
+    async def test_deployment_uuid_resolved_to_environment_label(self, mock_context):
+        """UUID deployment_id is resolved to '{env} deploy' via the deployments table."""
+        dep_uuid = "aabbccdd-1234-5678-9abc-ddeeff001122"
+        edge_rows = [
+            make_edge_row(
+                source_type="deployment",
+                source_id=dep_uuid,
+                target_type="incident",
+                target_id="INC-001",
+            )
+        ]
+        dep_lookup_rows = [{"deployment_id": dep_uuid, "environment": "production"}]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, dep_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].source_display_name == "production deploy"
+
+    @pytest.mark.asyncio
+    async def test_incident_uuid_resolved_to_status_label(self, mock_context):
+        """UUID incident_id is resolved to 'incident ({status})' via the incidents table."""
+        inc_uuid = "11223344-aabb-ccdd-eeff-001122334455"
+        edge_rows = [
+            make_edge_row(
+                source_type="deployment",
+                source_id="synth-deploy-1",
+                target_type="incident",
+                target_id=inc_uuid,
+            )
+        ]
+        inc_lookup_rows = [{"incident_id": inc_uuid, "status": "resolved"}]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, inc_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        # Status normalised to title-case customer label (not raw enum string)
+        assert result.edges[0].target_display_name == "incident (Resolved)"
+
+    @pytest.mark.asyncio
+    async def test_deployment_empty_environment_yields_none(self, mock_context):
+        """UUID deployment_id with empty environment in DB → None (A8 — no raw UUID)."""
+        dep_uuid = "aabbccdd-1234-5678-9abc-ddeeff001122"
+        edge_rows = [
+            make_edge_row(
+                source_type="deployment",
+                source_id=dep_uuid,
+                target_id="INC-001",
+            )
+        ]
+        # Row exists in DB but environment is empty/null
+        dep_lookup_rows = [{"deployment_id": dep_uuid, "environment": ""}]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, dep_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        # Must not leak the raw UUID — Unresolved badge (None)
+        assert result.edges[0].source_display_name is None
+
+    @pytest.mark.asyncio
+    async def test_incident_empty_status_yields_none(self, mock_context):
+        """UUID incident_id with empty status in DB → None (A8 — no raw UUID)."""
+        inc_uuid = "11223344-aabb-ccdd-eeff-001122334455"
+        edge_rows = [
+            make_edge_row(
+                source_type="deployment",
+                source_id="synth-deploy-1",
+                target_type="incident",
+                target_id=inc_uuid,
+            )
+        ]
+        inc_lookup_rows = [{"incident_id": inc_uuid, "status": ""}]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, inc_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].target_display_name is None
+
+    @pytest.mark.asyncio
+    async def test_incident_unknown_status_uses_neutral_label(self, mock_context):
+        """Unknown incident status normalises to the neutral 'Incident' label."""
+        inc_uuid = "11223344-aabb-ccdd-eeff-001122334455"
+        edge_rows = [
+            make_edge_row(
+                source_type="deployment",
+                source_id="synth-deploy-1",
+                target_type="incident",
+                target_id=inc_uuid,
+            )
+        ]
+        inc_lookup_rows = [{"incident_id": inc_uuid, "status": "some_future_status"}]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, inc_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        assert result.edges[0].target_display_name == "incident (Incident)"
+
+    @pytest.mark.asyncio
+    async def test_lookup_sql_includes_org_id_for_pr(self, mock_context):
+        """PR batch lookup query must include org_id to prevent cross-tenant leaks."""
+        repo_uuid = "4e00fff2-df66-5028-8ebd-e4535332300b"
+        edge_rows = [
+            make_edge_row(source_type="pr", source_id=f"{repo_uuid}#pr5", target_id="X")
+        ]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            await resolve_work_graph_edges(mock_context)
+
+        # Second call is the PR lookup — verify org_id in params
+        pr_lookup_call = mock_query.call_args_list[1]
+        pr_lookup_params = pr_lookup_call[0][2]
+        assert "org_id" in pr_lookup_params
+        assert pr_lookup_params["org_id"] == "test-org"
+
+    @pytest.mark.asyncio
+    async def test_lookup_sql_includes_org_id_for_deployment(self, mock_context):
+        """Deployment batch lookup query must include org_id."""
+        dep_uuid = "aabbccdd-1234-5678-9abc-ddeeff001122"
+        edge_rows = [
+            make_edge_row(source_type="deployment", source_id=dep_uuid, target_id="X")
+        ]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            await resolve_work_graph_edges(mock_context)
+
+        dep_lookup_call = mock_query.call_args_list[1]
+        dep_lookup_params = dep_lookup_call[0][2]
+        assert "org_id" in dep_lookup_params
+        assert dep_lookup_params["org_id"] == "test-org"
+
+    @pytest.mark.asyncio
+    async def test_lookup_sql_includes_org_id_for_incident(self, mock_context):
+        """Incident batch lookup query must include org_id."""
+        inc_uuid = "11223344-aabb-ccdd-eeff-001122334455"
+        edge_rows = [
+            make_edge_row(
+                source_type="deployment",
+                source_id="synth-deploy-1",
+                target_type="incident",
+                target_id=inc_uuid,
+            )
+        ]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            await resolve_work_graph_edges(mock_context)
+
+        inc_lookup_call = mock_query.call_args_list[1]
+        inc_lookup_params = inc_lookup_call[0][2]
+        assert "org_id" in inc_lookup_params
+        assert inc_lookup_params["org_id"] == "test-org"
+
+    @pytest.mark.asyncio
+    async def test_lookup_resolved_name_beats_pattern_fallback(self, mock_context):
+        """Lookup result takes precedence over the pattern-based pass-through (A7)."""
+        repo_uuid = "4e00fff2-df66-5028-8ebd-e4535332300b"
+        pr_id = f"{repo_uuid}#pr1"
+        edge_rows = [make_edge_row(source_type="pr", source_id=pr_id, target_id="X")]
+        # Lookup returns a title
+        pr_lookup_rows = [{"repo_id": repo_uuid, "number": 1, "title": "Lookup Title"}]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, pr_lookup_rows]
+            result = await resolve_work_graph_edges(mock_context)
+
+        # Lookup win — not the raw {uuid}#pr1 id, not None
+        assert result.edges[0].source_display_name == "Lookup Title"
+
+    @pytest.mark.asyncio
+    async def test_pr_lookup_filters_by_number(self, mock_context):
+        """PR batch lookup params include number list to avoid fetching all repo PRs."""
+        repo_uuid = "4e00fff2-df66-5028-8ebd-e4535332300b"
+        edge_rows = [
+            make_edge_row(
+                source_type="pr", source_id=f"{repo_uuid}#pr42", target_id="X"
+            )
+        ]
+
+        with patch(
+            "dev_health_ops.api.queries.client.query_dicts",
+            new_callable=AsyncMock,
+        ) as mock_query:
+            mock_query.side_effect = [edge_rows, []]
+            await resolve_work_graph_edges(mock_context)
+
+        pr_lookup_params = mock_query.call_args_list[1][0][2]
+        assert "pr_numbers" in pr_lookup_params
+        assert 42 in pr_lookup_params["pr_numbers"]

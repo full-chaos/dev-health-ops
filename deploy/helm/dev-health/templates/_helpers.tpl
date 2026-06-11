@@ -139,6 +139,49 @@ imagePullSecrets:
 {{- end }}
 
 {{/*
+Shared non-secret config data — used by the main ConfigMap and the migration
+hook ConfigMap (the latter exists because pre-install hooks run before the
+chart's regular resources are created).
+*/}}
+{{- define "dev-health.configData" -}}
+{{- $redisAuto := and .Values.valkey.enabled (not .Values.config.CELERY_BROKER_URL) }}
+{{- $redisKeys := list "CELERY_BROKER_URL" "CELERY_RESULT_BACKEND" "REDIS_URL" }}
+{{- range $key, $value := .Values.config }}
+{{- if or $value (not (and $redisAuto (has $key $redisKeys))) }}
+{{ $key }}: {{ $value | quote }}
+{{- end }}
+{{- end }}
+{{- if $redisAuto }}
+CELERY_BROKER_URL: {{ include "dev-health.redisURL" . | quote }}
+CELERY_RESULT_BACKEND: {{ include "dev-health.redisURL" . | quote }}
+REDIS_URL: {{ include "dev-health.redisURL" . | quote }}
+{{- end }}
+{{- if not (hasKey .Values.config "AUTO_RUN_MIGRATIONS") }}
+{{- /* CHAOS-2304: when the migration hook owns schema changes, app pods must
+   never ambient-migrate. Set config.AUTO_RUN_MIGRATIONS to override. */}}
+AUTO_RUN_MIGRATIONS: {{ ternary "false" "true" .Values.migrations.hook.enabled | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
+Shared secret stringData — used by the main Secret and the migration hook
+Secret.
+*/}}
+{{- define "dev-health.secretData" -}}
+{{- range $key, $value := .Values.secrets.data }}
+{{- if $value }}
+{{ $key }}: {{ $value | quote }}
+{{- end }}
+{{- end }}
+{{- if and .Values.clickhouse.enabled (not (index .Values.secrets.data "CLICKHOUSE_URI")) }}
+CLICKHOUSE_URI: {{ include "dev-health.clickhouseURI" . | quote }}
+{{- end }}
+{{- if and .Values.postgresql.enabled (not (index .Values.secrets.data "DATABASE_URI")) }}
+DATABASE_URI: {{ include "dev-health.postgresURI" . | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
 Component labels helper — call with (dict "component" "api" "context" $)
 */}}
 {{- define "dev-health.componentLabels" -}}

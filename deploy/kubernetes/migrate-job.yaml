@@ -1,0 +1,70 @@
+---
+# Database migration Job (CHAOS-2304)
+#
+# Applies PostgreSQL (Alembic, when POSTGRES_URI is set) and ClickHouse schema
+# migrations, then exits. App pods run with AUTO_RUN_MIGRATIONS=false (see
+# configmap.yaml) so they never ambient-migrate — migration 042+ does
+# shadow-table rebuilds that are not safe to run concurrently from workers.
+#
+# IMPORTANT — ordering: Kubernetes Jobs do NOT gate Deployments. This Job must
+# complete BEFORE rolling out new api/worker images. Recommended sequence:
+#
+#   kubectl -n dev-health delete job dev-health-migrate --ignore-not-found
+#   kubectl apply -k deploy/kubernetes/   # or apply this file alone
+#   kubectl -n dev-health wait --for=condition=complete --timeout=600s \
+#     job/dev-health-migrate
+#   # ...then roll out the app Deployments (kubectl rollout restart ...)
+#
+# A Job is used (not a migrating initContainer on the api Deployment) because
+# api/worker run multiple replicas under HPAs — per-pod initContainers would
+# run the same DDL concurrently, which is exactly the race this Job removes.
+# The api/worker `wait-for-migrations` initContainers are NOT that: they only
+# poll the read-only `dev-hops migrate clickhouse status --check` (no DDL)
+# until this Job has brought the schema current.
+#
+# POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
+# transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.
+# See docs/ops/database-connection-pooling.md.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dev-health-migrate
+  namespace: dev-health
+  labels:
+    app.kubernetes.io/name: dev-health-migrate
+    app.kubernetes.io/component: migrate
+    app.kubernetes.io/part-of: dev-health-ops
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dev-health-migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: migrate
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - >-
+              if [ -n "$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+              && dev-hops migrate clickhouse
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"

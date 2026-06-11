@@ -19,9 +19,47 @@ spec:
       labels:
         app.kubernetes.io/name: dev-health-worker
     spec:
+      securityContext:
+        runAsNonRoot: true
+      # CHAOS-2304 safety net: see api.yaml — blocks worker start until all
+      # ClickHouse migrations are applied. Read-only `status --check` loop,
+      # no DDL; the migrate Job is the only migration runner.
+      initContainers:
+        - name: wait-for-migrations
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              attempts=0
+              until dev-hops migrate clickhouse status --check; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 60 ]; then
+                  echo "ClickHouse migrations still pending after $attempts checks; exiting for restart backoff" >&2
+                  exit 1
+                fi
+                echo "ClickHouse migrations pending; re-checking in 5s (attempt $attempts/60)"
+                sleep 5
+              done
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
       containers:
         - name: worker
           image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
           command:
             - celery
             - -A

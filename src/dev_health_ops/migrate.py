@@ -102,8 +102,16 @@ def _run_clickhouse_upgrade(ns: argparse.Namespace) -> int:
 
 
 def _run_clickhouse_status(ns: argparse.Namespace) -> int:
+    """Show applied/pending ClickHouse migrations (read-only — no DDL).
+
+    With ``--check``, exit 1 when any migration is pending and 0 when the
+    schema is current. This gives deploy tooling (e.g. the Kubernetes
+    ``wait-for-migrations`` initContainers) a clean read-only wait primitive
+    that can never race the canonical ``migrate clickhouse`` upgrade path.
+    """
     import clickhouse_connect
 
+    check = bool(getattr(ns, "check", False))
     uri = resolve_sink_uri(ns)
     client = clickhouse_connect.get_client(dsn=uri)
     try:
@@ -113,6 +121,7 @@ def _run_clickhouse_status(ns: argparse.Namespace) -> int:
             )
             applied = {row[0]: row[1] for row in (result.result_rows or [])}
         except Exception:
+            # No schema_migrations table yet — nothing has been applied.
             applied = {}
 
         available = sorted(
@@ -138,6 +147,9 @@ def _run_clickhouse_status(ns: argparse.Namespace) -> int:
         print(
             f"{len(applied)} applied, {pending_count} pending, {len(available)} total"
         )
+
+        if check and pending_count:
+            return 1
     finally:
         client.close()
     return 0
@@ -289,6 +301,15 @@ def _register_clickhouse_subcommands(
     ch_up.set_defaults(func=_run_clickhouse_upgrade)
 
     ch_status = sub.add_parser("status", help="Show applied and pending migrations.")
+    ch_status.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Exit 1 if any migration is pending, 0 if the schema is current. "
+            "Read-only — never applies DDL. Used as a wait primitive by "
+            "deploy tooling (e.g. Kubernetes initContainers)."
+        ),
+    )
     ch_status.set_defaults(func=_run_clickhouse_status)
 
     ch_repair = sub.add_parser(

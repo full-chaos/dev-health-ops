@@ -48,6 +48,7 @@ class TestMigrateRouting:
             (["migrate", "clickhouse"], "_run_clickhouse_upgrade"),
             (["migrate", "clickhouse", "upgrade"], "_run_clickhouse_upgrade"),
             (["migrate", "clickhouse", "status"], "_run_clickhouse_status"),
+            (["migrate", "clickhouse", "status", "--check"], "_run_clickhouse_status"),
             (["migrate", "clickhouse", "repair"], "_run_clickhouse_repair"),
             (["migrate", "clickhouse", "repair", "--apply"], "_run_clickhouse_repair"),
             (
@@ -75,6 +76,15 @@ class TestMigrateRouting:
     def test_clickhouse_bare_defaults_to_upgrade(self):
         ns = self.parser.parse_args(["migrate", "clickhouse"])
         assert ns.func.__name__ == "_run_clickhouse_upgrade"
+
+    def test_status_check_flag_parses(self):
+        ns = self.parser.parse_args(["migrate", "clickhouse", "status", "--check"])
+        assert ns.func.__name__ == "_run_clickhouse_status"
+        assert ns.check is True
+
+    def test_status_check_flag_defaults_false(self):
+        ns = self.parser.parse_args(["migrate", "clickhouse", "status"])
+        assert ns.check is False
 
     def test_repair_preserves_root_org_flag(self):
         ns = self.parser.parse_args(
@@ -315,6 +325,122 @@ class TestClickhouseStatus:
                 _run_clickhouse_status(_ns())
 
         mock_client.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _run_clickhouse_status --check (CHAOS-2304 k8s wait primitive)
+# ---------------------------------------------------------------------------
+
+
+class TestClickhouseStatusCheck:
+    """`status --check` is the read-only wait primitive used by the
+    Kubernetes wait-for-migrations initContainers: exit 1 while any
+    migration is pending, 0 once the schema is current. It must never
+    apply DDL."""
+
+    def _make_mock_client(self, applied_rows: list | None = None):
+        mock_client = MagicMock()
+        result = MagicMock()
+        result.result_rows = applied_rows or []
+        mock_client.query.return_value = result
+        return mock_client
+
+    @patch(
+        "dev_health_ops.migrate.resolve_sink_uri",
+        return_value="clickhouse://fake:8123/test",
+    )
+    def test_exits_nonzero_when_pending(self, _mock_uri, tmp_path, capsys):
+        (tmp_path / "000_init.sql").write_text("SELECT 1")
+        (tmp_path / "001_add_col.sql").write_text("SELECT 1")
+
+        applied_rows = [("000_init.sql", datetime(2026, 6, 1))]
+        mock_client = self._make_mock_client(applied_rows)
+
+        with (
+            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
+            patch("clickhouse_connect.get_client", return_value=mock_client),
+        ):
+            result = _run_clickhouse_status(_ns(check=True))
+
+        assert result == 1
+        assert "1 applied, 1 pending, 2 total" in capsys.readouterr().out
+        # Read-only contract: no DDL/commands issued, only the SELECT query.
+        mock_client.command.assert_not_called()
+        mock_client.close.assert_called_once()
+
+    @patch(
+        "dev_health_ops.migrate.resolve_sink_uri",
+        return_value="clickhouse://fake:8123/test",
+    )
+    def test_exits_zero_when_current(self, _mock_uri, tmp_path):
+        (tmp_path / "000_init.sql").write_text("SELECT 1")
+
+        applied_rows = [("000_init.sql", datetime(2026, 6, 1))]
+        mock_client = self._make_mock_client(applied_rows)
+
+        with (
+            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
+            patch("clickhouse_connect.get_client", return_value=mock_client),
+        ):
+            result = _run_clickhouse_status(_ns(check=True))
+
+        assert result == 0
+        mock_client.close.assert_called_once()
+
+    @patch(
+        "dev_health_ops.migrate.resolve_sink_uri",
+        return_value="clickhouse://fake:8123/test",
+    )
+    def test_exits_nonzero_on_fresh_database(self, _mock_uri, tmp_path):
+        """First boot: no schema_migrations table yet — everything is
+        pending, so --check must fail (this is exactly the state the
+        initContainer waits out while the migrate Job runs)."""
+        (tmp_path / "000_init.sql").write_text("SELECT 1")
+
+        mock_client = MagicMock()
+        mock_client.query.side_effect = Exception("Unknown table")
+
+        with (
+            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
+            patch("clickhouse_connect.get_client", return_value=mock_client),
+        ):
+            result = _run_clickhouse_status(_ns(check=True))
+
+        assert result == 1
+        mock_client.close.assert_called_once()
+
+    @patch(
+        "dev_health_ops.migrate.resolve_sink_uri",
+        return_value="clickhouse://fake:8123/test",
+    )
+    def test_exits_zero_when_no_migration_files(self, _mock_uri, tmp_path):
+        mock_client = self._make_mock_client()
+
+        with (
+            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
+            patch("clickhouse_connect.get_client", return_value=mock_client),
+        ):
+            result = _run_clickhouse_status(_ns(check=True))
+
+        assert result == 0
+
+    @patch(
+        "dev_health_ops.migrate.resolve_sink_uri",
+        return_value="clickhouse://fake:8123/test",
+    )
+    def test_without_check_pending_still_exits_zero(self, _mock_uri, tmp_path):
+        """Plain `status` keeps its informational exit-0 behavior."""
+        (tmp_path / "000_init.sql").write_text("SELECT 1")
+
+        mock_client = self._make_mock_client()
+
+        with (
+            patch("dev_health_ops.migrate._CH_MIGRATIONS_DIR", tmp_path),
+            patch("clickhouse_connect.get_client", return_value=mock_client),
+        ):
+            result = _run_clickhouse_status(_ns(check=False))
+
+        assert result == 0
 
 
 # ---------------------------------------------------------------------------

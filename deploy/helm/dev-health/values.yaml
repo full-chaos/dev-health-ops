@@ -183,6 +183,34 @@ web:
   extraEnv: []
 
 # =============================================================================
+# Database migrations (CHAOS-2304)
+# =============================================================================
+# When enabled, a pre-install/pre-upgrade Helm hook Job applies PostgreSQL
+# (Alembic) + ClickHouse migrations before the release's workloads are
+# (re)deployed, and the shared ConfigMap sets AUTO_RUN_MIGRATIONS=false so
+# api/worker/beat never ambient-migrate. Set config.AUTO_RUN_MIGRATIONS
+# explicitly to override the computed value.
+#
+# The Postgres URI used for migrations must point DIRECTLY at Postgres
+# (port 5432), never at a transaction-mode pooler (PgBouncer/RDS Proxy) —
+# migrations run raw DDL. See docs/ops/database-connection-pooling.md.
+migrations:
+  hook:
+    enabled: true
+    backoffLimit: 2
+    activeDeadlineSeconds: 1800
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+    # -- Extra environment variables for the migration Job (e.g. a direct
+    #    POSTGRES_URI when the app's DATABASE_URI points at a pooler)
+    extraEnv: []
+
+# =============================================================================
 # CronJobs
 # =============================================================================
 cronjobs:

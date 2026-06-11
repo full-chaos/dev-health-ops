@@ -48,6 +48,51 @@ services:
     networks:
       - dev-health
 
+  # ===========================================================================
+  # Database migrations (one-shot — runs before app services)
+  # ===========================================================================
+  # Applies PostgreSQL (Alembic, when POSTGRES_URI is set) and ClickHouse
+  # schema migrations, then exits 0. App services gate on this completing
+  # successfully via depends_on.condition: service_completed_successfully and
+  # run with AUTO_RUN_MIGRATIONS=false so they never ambient-migrate
+  # (CHAOS-2304 — migration 042+ does shadow-table rebuilds that are not safe
+  # to run concurrently from workers).
+  #
+  # POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
+  # transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.
+  # See docs/ops/database-connection-pooling.md.
+  #
+  # OPERATOR RECOVERY — failed migrate run: with restart: "no", a failed
+  # migrate is NOT retried, and api/billing-edge/worker stay gated (Created,
+  # never started) until it completes successfully. To inspect and re-run:
+  #
+  #   docker compose -f compose.production.yml logs migrate   # why it failed
+  #   docker compose -f compose.production.yml up migrate     # re-run just migrations
+  #   docker compose -f compose.production.yml up -d          # then start the rest
+  #
+  # `dev-hops migrate clickhouse status` (read-only) shows applied vs pending
+  # migrations; `--check` makes it exit 1 while any migration is pending.
+  migrate:
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
+    container_name: dev-health-migrate
+    restart: "no"
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        if [ -n "$$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+        && dev-hops migrate clickhouse
+    environment:
+      # Direct Postgres URI (5432), NOT pgbouncer — empty skips the Alembic step.
+      POSTGRES_URI: ${POSTGRES_URI:-}
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - dev-health
+
   api:
     image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
     container_name: dev-health-api
@@ -70,6 +115,9 @@ services:
       JIRA_BASE_URL: ${JIRA_BASE_URL:-}
       JIRA_EMAIL: ${JIRA_EMAIL:-}
       JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      # Schema is applied by the one-shot `migrate` service (gated via
+      # depends_on) — the API must never run migrations itself (CHAOS-2304).
+      AUTO_RUN_MIGRATIONS: "false"
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -77,6 +125,8 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -120,6 +170,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "${BILLING_EDGE_PORT:-8010}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -161,11 +214,16 @@ services:
       JIRA_BASE_URL: ${JIRA_BASE_URL:-}
       JIRA_EMAIL: ${JIRA_EMAIL:-}
       JIRA_API_TOKEN: ${JIRA_API_TOKEN:-}
+      # Schema is applied by the one-shot `migrate` service (gated via
+      # depends_on) — workers must never run migrations themselves (CHAOS-2304).
+      AUTO_RUN_MIGRATIONS: "false"
     depends_on:
       clickhouse:
         condition: service_healthy
       valkey:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - dev-health
     deploy:

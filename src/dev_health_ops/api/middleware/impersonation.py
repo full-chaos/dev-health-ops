@@ -4,9 +4,15 @@ Checks every incoming request for an active impersonation session. If found,
 overrides _current_org_id and _impersonation_ctx so all downstream code
 (GraphQL, queries, audit) sees the impersonated user's context.
 
-Middleware ordering in main.py:
-  app.add_middleware(OrgIdMiddleware)         # inner - sets org_id from header/JWT
-  app.add_middleware(ImpersonationMiddleware) # outer - overrides it when impersonating
+Middleware registration order in _middleware.py (CHAOS-2303):
+  app.add_middleware(ImpersonationMiddleware)  # inner - runs LAST, overrides org
+  app.add_middleware(OrgIdMiddleware)          # outer - runs FIRST, sets base org
+
+Starlette wraps the last-added middleware as the outermost, so on the request
+path OrgIdMiddleware runs first (sets _current_org_id from header/JWT) and this
+middleware runs after it, getting the final write to _current_org_id. Registering
+ImpersonationMiddleware *after* OrgIdMiddleware would make it outer (run first),
+and OrgIdMiddleware would then clobber the impersonated org back to the admin's.
 """
 
 from __future__ import annotations

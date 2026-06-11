@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
@@ -26,6 +27,14 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _auto_run_migrations_enabled() -> bool:
+    return os.getenv("AUTO_RUN_MIGRATIONS", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 class ClickHouseCore(BaseMetricsSink):
@@ -221,8 +230,21 @@ class ClickHouseCore(BaseMetricsSink):
                 parameters={"version": version},
             )
 
-    def ensure_schema(self) -> None:
-        """Create ClickHouse tables via SQL migrations."""
+    def ensure_schema(self, *, force: bool = False) -> None:
+        """Create ClickHouse tables via SQL migrations.
+
+        Schema management belongs to the dedicated migration entrypoint
+        (``dev-hops migrate clickhouse`` / the one-shot ``migrate`` compose
+        service), not to task execution. Services that are guaranteed to start
+        after migrations (worker, beat) set ``AUTO_RUN_MIGRATIONS=false`` to
+        turn the ambient ``ensure_tables()`` calls into no-ops; ``force=True``
+        bypasses the flag for the CLI runner.
+        """
+        if not force and not _auto_run_migrations_enabled():
+            logger.debug(
+                "Skipping ClickHouse auto-migration (AUTO_RUN_MIGRATIONS=false)"
+            )
+            return
         self._apply_sql_migrations()
 
     # Alias for backward compatibility

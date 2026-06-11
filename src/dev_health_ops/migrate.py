@@ -92,7 +92,9 @@ def _run_clickhouse_upgrade(ns: argparse.Namespace) -> int:
     uri = resolve_sink_uri(ns)
     sink = ClickHouseMetricsSink(dsn=uri)
     try:
-        sink.ensure_schema()
+        # The CLI is the canonical migration entrypoint — bypass the
+        # AUTO_RUN_MIGRATIONS opt-out that disables ambient auto-migration.
+        sink.ensure_schema(force=True)
     finally:
         sink.close()
     logger.info("ClickHouse migrations applied successfully.")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
@@ -61,6 +62,19 @@ class GitHubProvider(ProviderWithClient[GitHubWorkClient]):
         priority=True,
     )
     client_cls = GitHubWorkClient
+
+    def __init__(
+        self,
+        *,
+        status_mapping: Any | None = None,
+        identity: Any | None = None,
+        client: GitHubWorkClient | None = None,
+    ) -> None:
+        super().__init__(
+            status_mapping=status_mapping,
+            identity=identity,
+            client=client,
+        )
 
     def _validate_ctx(self, ctx: IngestionContext) -> None:
         if not ctx.repo:

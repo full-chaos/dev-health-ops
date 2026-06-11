@@ -338,7 +338,6 @@ def run_sync_config(
     config_id: str,
     org_id: str,
     triggered_by: str = "manual",
-    pending_run_id: str | None = None,
 ) -> dict:
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
@@ -452,31 +451,13 @@ def run_sync_config(
 
             job_id = _as_uuid(job.id)
 
-            if pending_run_id is not None:
-                # Reuse the PENDING row created at trigger time.
-                _existing = (
-                    session.query(JobRun)
-                    .filter(JobRun.id == uuid.UUID(pending_run_id))
-                    .one_or_none()
-                )
-                if _existing is not None:
-                    run = _existing
-                else:
-                    run = JobRun(
-                        job_id=job_id,
-                        triggered_by=triggered_by,
-                        status=JobRunStatus.PENDING.value,
-                    )
-                    session.add(run)
-                    session.flush()
-            else:
-                run = JobRun(
-                    job_id=job_id,
-                    triggered_by=triggered_by,
-                    status=JobRunStatus.PENDING.value,
-                )
-                session.add(run)
-                session.flush()
+            run = JobRun(
+                job_id=job_id,
+                triggered_by=triggered_by,
+                status=JobRunStatus.PENDING.value,
+            )
+            session.add(run)
+            session.flush()
             run_id = _as_uuid(run.id)
 
             setattr(run, "status", JobRunStatus.RUNNING.value)
@@ -647,9 +628,10 @@ def run_sync_config(
             )
 
         if "work-items" in sync_targets and provider != "jira":
-            token = _extract_provider_token(provider, credentials)
-            if token:
-                _inject_provider_token(provider, token)
+            if provider != "github":
+                token = _extract_provider_token(provider, credentials)
+                if token:
+                    _inject_provider_token(provider, token)
             backfill_days = int(sync_options.get("backfill_days", 1))
             run_work_items_sync_job(
                 db_url=db_url,
@@ -659,6 +641,7 @@ def run_sync_config(
                 repo_name=sync_options.get("repo"),
                 search_pattern=sync_options.get("search"),
                 org_id=org_id,
+                credentials=credentials if provider == "github" else None,
             )
             result_payload["work_items_synced"] = True
 

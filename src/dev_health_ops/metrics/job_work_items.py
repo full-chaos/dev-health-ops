@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import uuid
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -55,6 +56,52 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
 
 
+def _build_github_work_client(
+    *, org_id: str, credentials: dict[str, Any] | None = None
+) -> Any:
+    """Construct a GitHub work-items client from config-resolved credentials.
+
+    Threads the sync config's organization id into credential resolution so a
+    database-stored credential (PAT or GitHub App auth) is honored, instead of
+    relying on a ``GITHUB_TOKEN`` environment side-channel. Falls back to
+    environment-based resolution only when no organization scope is available
+    (e.g. a pure-CLI run without a configured organization).
+    """
+    from dev_health_ops.credentials.resolver import (
+        github_credentials_from_mapping,
+        resolve_credentials_sync,
+    )
+    from dev_health_ops.credentials.types import GitHubCredentials
+    from dev_health_ops.providers.github.client import GitHubAuth, GitHubWorkClient
+
+    if credentials:
+        github_credentials = github_credentials_from_mapping(credentials)
+        if github_credentials is None:
+            raise ValueError(
+                "Missing GitHub token or App credentials for work-items sync configuration"
+            )
+        return GitHubWorkClient(auth=GitHubAuth.from_credentials(github_credentials))
+
+    has_env_credentials = any(
+        os.getenv(name)
+        for name in (
+            "GITHUB_TOKEN",
+            "GITHUB_APP_ID",
+            "GITHUB_APP_PRIVATE_KEY_PATH",
+            "GITHUB_APP_INSTALLATION_ID",
+        )
+    )
+    if not org_id or has_env_credentials:
+        return GitHubWorkClient.from_env()
+
+    resolved_credentials = resolve_credentials_sync(
+        "github", org_id=org_id, allow_env_fallback=True
+    )
+    if not isinstance(resolved_credentials, GitHubCredentials):
+        raise ValueError("Resolved credentials are not GitHub credentials")
+    return GitHubWorkClient(auth=GitHubAuth.from_credentials(resolved_credentials))
+
+
 def run_work_items_sync_job(
     *,
     db_url: str,
@@ -66,6 +113,7 @@ def run_work_items_sync_job(
     repo_name: str | None = None,
     search_pattern: str | None = None,
     org_id: str = "",
+    credentials: dict[str, Any] | None = None,
 ) -> None:
     """
     Sync work tracking facts from provider APIs and write derived work item tables.
@@ -205,6 +253,9 @@ def run_work_items_sync_job(
             github_provider = GitHubProvider(
                 status_mapping=status_mapping,
                 identity=identity,
+                client=_build_github_work_client(
+                    org_id=org_id, credentials=credentials
+                ),
             )
             github_org_id = UUID(org_id) if org_id else None
             for discovered_repo in discovered_repos:
@@ -392,21 +443,12 @@ def run_work_items_sync_job(
 
             def _get_team(wi: Any) -> str:
                 if pk_resolver:
-                    # Try work_scope_id first, then project_key. For Linear
-                    # these differ when the issue sits in a project:
-                    # work_scope_id is the project name while project_key is
-                    # the TEAM key — the attribution key team mappings carry.
-                    # An `or` would hide project_key whenever work_scope_id
-                    # is non-empty but unmatched.
-                    for key in (
-                        getattr(wi, "work_scope_id", None),
-                        getattr(wi, "project_key", None),
-                    ):
-                        if not key:
-                            continue
-                        t_id, _ = pk_resolver.resolve(key)
-                        if t_id:
-                            return t_id
+                    t_id, _ = pk_resolver.resolve(
+                        getattr(wi, "work_scope_id", None)
+                        or getattr(wi, "project_key", None)
+                    )
+                    if t_id:
+                        return t_id
                 if getattr(wi, "assignees", None):
                     t_id, _ = team_resolver.resolve(wi.assignees[0])
                     if t_id:

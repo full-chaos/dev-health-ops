@@ -613,6 +613,69 @@ class TestResolveCredentialsSync:
             with pytest.raises(CredentialResolutionError):
                 resolve_credentials_sync("github", allow_env_fallback=False)
 
+    # All GitHub env credentials _EnvOnlyResolver reads; ambient values on the
+    # test host (e.g. a developer's GITHUB_APP_ID) must not flip outcomes.
+    _GITHUB_ENV_VARS = (
+        "GITHUB_TOKEN",
+        "GITHUB_APP_ID",
+        "GITHUB_APP_PRIVATE_KEY_PATH",
+        "GITHUB_APP_INSTALLATION_ID",
+    )
+
+    def test_env_fallback_when_db_url_set_but_no_org_id(self):
+        """Env credentials must win when DATABASE_URI is set but no org scope.
+
+        Regression test for CHAOS-2292: a configured DATABASE_URI used to
+        skip the env-only branch entirely, so org-less callers (e.g.
+        ``GitHubWorkClient.from_env``) always raised even with GITHUB_TOKEN
+        set in the worker environment.
+        """
+        env_patch = {
+            "DATABASE_URI": "postgresql+asyncpg://u:p@db:5432/devhealth",
+            "GITHUB_TOKEN": "ghp_env_with_db_url",
+        }
+
+        with patch.dict(os.environ, env_patch, clear=False):
+            for var in self._GITHUB_ENV_VARS[1:]:
+                os.environ.pop(var, None)
+
+            result = resolve_credentials_sync("github")
+
+            assert isinstance(result, GitHubCredentials)
+            assert result.token == "ghp_env_with_db_url"
+            assert result.source == CredentialSource.ENVIRONMENT
+
+    def test_error_db_url_set_no_org_id_no_env(self):
+        """No org_id and no env credentials still raises with DATABASE_URI set."""
+        env_patch = {
+            "DATABASE_URI": "postgresql+asyncpg://u:p@db:5432/devhealth",
+        }
+
+        with patch.dict(os.environ, env_patch, clear=False):
+            for var in self._GITHUB_ENV_VARS:
+                os.environ.pop(var, None)
+
+            with pytest.raises(CredentialResolutionError) as exc_info:
+                resolve_credentials_sync("github")
+
+            assert "Organization ID is required" in str(exc_info.value)
+
+    def test_no_env_fallback_with_db_url_when_disabled(self):
+        """allow_env_fallback=False keeps the org_id requirement strict."""
+        env_patch = {
+            "DATABASE_URI": "postgresql+asyncpg://u:p@db:5432/devhealth",
+            "GITHUB_TOKEN": "ghp_should_not_use",
+        }
+
+        with patch.dict(os.environ, env_patch, clear=False):
+            for var in self._GITHUB_ENV_VARS[1:]:
+                os.environ.pop(var, None)
+
+            with pytest.raises(CredentialResolutionError) as exc_info:
+                resolve_credentials_sync("github", allow_env_fallback=False)
+
+            assert "Organization ID is required" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # CredentialResolutionError Tests

@@ -588,13 +588,15 @@ class TestDispatchBatchSync:
         actual_countdowns = [sig.options.get("countdown") for sig in signatures]
         assert actual_countdowns == expected_countdowns
 
-        # Chord callback still attached with unchanged kwargs.
+        # Chord callback still attached with unchanged kwargs (config_id
+        # added by CHAOS-2267/#852 so the callback can stamp last_sync_*).
         assert callback.task == _batch_sync_callback.name
         assert callback.kwargs == {
             "provider": "github",
             "sync_targets": ["git"],
             "org_id": "default",
             "run_id": None,
+            "config_id": str(config.id),
         }
 
     @patch("dev_health_ops.workers.sync_batch._run_sync_for_repo")

@@ -160,6 +160,12 @@ def _sync_options_with_top_level_fields(
     return merged
 
 
+def _config_has_explicit_schedule(config: object) -> bool:
+    """True when the config carries a user-set schedule_cron (not manual-only)."""
+    sync_options = dict(getattr(config, "sync_options") or {})
+    return bool(sync_options.get("schedule_cron"))
+
+
 def _schedule_cron_for_config(config: object) -> str:
     sync_options = dict(getattr(config, "sync_options") or {})
     return str(sync_options.get("schedule_cron") or DEFAULT_SYNC_CRON)
@@ -183,9 +189,12 @@ async def _upsert_scheduled_job(
         "provider": provider,
         "sync_config_id": str(sync_config_id),
     }
+    # Manual-only configs (no explicit schedule_cron) must not auto-sync
+    # (CHAOS-2297). Keep the job row (manual triggers anchor JobRuns to it)
+    # but park it PAUSED; the stored cron is only a non-null placeholder.
     status = (
         JobStatus.ACTIVE.value
-        if getattr(config, "is_active")
+        if getattr(config, "is_active") and _config_has_explicit_schedule(config)
         else JobStatus.PAUSED.value
     )
     if job is None:
@@ -692,13 +701,30 @@ async def update_sync_config(
         raise HTTPException(status_code=404, detail="Sync configuration not found")
 
     # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron when updating sync_options.
-    sync_options = _sync_options_with_top_level_fields(
-        payload.sync_options,
-        schedule_cron=payload.schedule_cron,
-        timezone=payload.timezone,
-        initial_sync_depth=payload.initial_sync_depth,
+    # PATCH semantics for schedule fields: an explicitly provided null clears the
+    # stored value, while an omitted field leaves it untouched. Top-level fields
+    # own these keys and override any (possibly stale) copies nested inside
+    # payload.sync_options, so a stale client payload can never resurrect an old
+    # schedule.
+    provided_fields = payload.model_fields_set
+    top_level_schedule_fields = {
+        "schedule_cron": payload.schedule_cron,
+        "timezone": payload.timezone,
+        "initial_sync_depth": payload.initial_sync_depth,
+    }
+    sync_options = dict(payload.sync_options or {})
+    cleared_keys: set[str] = set()
+    for key, value in top_level_schedule_fields.items():
+        if key not in provided_fields:
+            continue
+        if value is None:
+            cleared_keys.add(key)
+            sync_options.pop(key, None)
+        else:
+            sync_options[key] = value
+    sync_options_provided = payload.sync_options is not None or bool(
+        provided_fields & top_level_schedule_fields.keys()
     )
-    sync_options_provided = bool(sync_options)
 
     schedule_cron = sync_options.get("schedule_cron")
     if schedule_cron:
@@ -747,10 +773,13 @@ async def update_sync_config(
     if payload.sync_targets is not None:
         mutable_config.sync_targets = payload.sync_targets
     if sync_options_provided:
-        mutable_config.sync_options = {
+        merged_options = {
             **dict(getattr(config, "sync_options") or {}),
             **sync_options,
         }
+        for key in cleared_keys:
+            merged_options.pop(key, None)
+        mutable_config.sync_options = merged_options
     if payload.is_active is not None:
         mutable_config.is_active = payload.is_active
     await session.flush()
@@ -773,11 +802,18 @@ async def update_sync_config(
                 mutable_child.is_active = payload.is_active
             # Propagate schedule/timezone/depth from sync_options if provided
             if sync_options_provided:
+                child_sync_options = dict(getattr(child, "sync_options") or {})
+                child_changed = False
                 for key in ("schedule_cron", "timezone", "initial_sync_depth"):
-                    if key in sync_options:
-                        child_sync_options = dict(getattr(child, "sync_options") or {})
+                    if key in cleared_keys:
+                        if key in child_sync_options:
+                            del child_sync_options[key]
+                            child_changed = True
+                    elif key in sync_options:
                         child_sync_options[key] = sync_options[key]
-                        mutable_child.sync_options = child_sync_options
+                        child_changed = True
+                if child_changed:
+                    mutable_child.sync_options = child_sync_options
         if children:
             for child in children:
                 await _upsert_scheduled_job(session, child, org_id)
@@ -880,12 +916,11 @@ async def trigger_sync_config(
             if job is None:
                 _sync_options = dict(config.sync_options or {})
                 _provider = str(config.provider or "")
+                _explicit_cron = _sync_options.get("schedule_cron")
                 job = ScheduledJob(
                     name=f"sync-config-{config_uuid}",
                     job_type="sync",
-                    schedule_cron=str(
-                        _sync_options.get("schedule_cron") or "0 * * * *"
-                    ),
+                    schedule_cron=str(_explicit_cron or "0 * * * *"),
                     org_id=org_id,
                     provider=_provider,
                     job_config={
@@ -894,7 +929,13 @@ async def trigger_sync_config(
                     },
                     sync_config_id=config_uuid,
                     tz=str(_sync_options.get("timezone") or "UTC"),
-                    status=JobStatus.ACTIVE.value,
+                    # Manual-only configs keep the job row for JobRun anchoring
+                    # but must not be picked up by the scheduler (CHAOS-2297).
+                    status=(
+                        JobStatus.ACTIVE.value
+                        if bool(config.is_active) and _explicit_cron
+                        else JobStatus.PAUSED.value
+                    ),
                 )
                 sync_session.add(job)
                 sync_session.flush()

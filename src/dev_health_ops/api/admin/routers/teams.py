@@ -17,6 +17,7 @@ from dev_health_ops.api.admin.schemas import (
 from dev_health_ops.api.services.configuration import (
     AmbiguousCredentialError,
     IntegrationCredentialsService,
+    SyncConfigurationService,
     TeamDiscoveryService,
     TeamMappingService,
 )
@@ -24,6 +25,50 @@ from dev_health_ops.api.services.configuration import (
 from .common import get_session
 
 router = APIRouter()
+
+
+def _string_value(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+async def _derive_owners_from_sync_configs(
+    session: AsyncSession,
+    org_id: str,
+    provider: str,
+    option_keys: tuple[str, ...],
+) -> list[str]:
+    """Derive distinct owner/group values from the org's sync configurations.
+
+    Repo sync stores the GitHub org / GitLab group in
+    ``SyncConfiguration.sync_options`` (key ``owner``, see the sync-config
+    batch endpoint), so orgs with a working repo sync can discover teams
+    without any extra configuration.
+    """
+    svc = SyncConfigurationService(session, org_id)
+    configs = await svc.list_all(active_only=True)
+    owners: list[str] = []
+    for config in configs:
+        if str(getattr(config, "provider", "")).lower() != provider:
+            continue
+        options: dict[str, Any] = dict(getattr(config, "sync_options") or {})
+        for key in option_keys:
+            value = _string_value(options.get(key))
+            if value and value not in owners:
+                owners.append(value)
+    return owners
+
+
+def _dedupe_teams(teams: list[Any]) -> list[Any]:
+    """Dedupe discovered teams by provider team key/slug."""
+    seen: set[str] = set()
+    unique: list[Any] = []
+    for team in teams:
+        key = str(getattr(team, "provider_team_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(team)
+    return unique
 
 
 class _MutableTeamMapping(Protocol):
@@ -110,6 +155,12 @@ async def discover_teams(
     provider: str = Query(..., pattern="^(github|gitlab|jira|linear)$"),
     credential_id: str | None = Query(None),
     credential_name: str | None = Query(None),
+    org: str | None = Query(
+        None, description="GitHub organization to discover teams from"
+    ),
+    group: str | None = Query(
+        None, description="GitLab group path to discover teams from"
+    ),
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> TeamDiscoverResponse:
@@ -131,30 +182,72 @@ async def discover_teams(
 
     if provider == "github":
         token = decrypted.get("token")
-        org_name_value = config.get("org")
-        org_name = org_name_value if isinstance(org_name_value, str) else None
-        if not token or not org_name:
+        if not token:
             raise HTTPException(
                 status_code=400,
-                detail="GitHub credentials require token and config.org",
+                detail="GitHub credentials require a token",
             )
-        teams = await discovery_svc.discover_github(token=token, org_name=org_name)
+        # Resolution order: explicit query param -> credential config ->
+        # owners derived from existing repo sync configurations.
+        if org:
+            org_names = [org]
+        elif _string_value(config.get("org")):
+            org_names = [cast(str, _string_value(config.get("org")))]
+        else:
+            org_names = await _derive_owners_from_sync_configs(
+                session, org_id, "github", ("owner", "org")
+            )
+        if not org_names:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not determine a GitHub organization for team "
+                    "discovery. Pass ?org=<org-name>, set config.org on the "
+                    "credential, or configure a GitHub repository sync first."
+                ),
+            )
+        discovered: list[Any] = []
+        for org_name in org_names:
+            discovered.extend(
+                await discovery_svc.discover_github(token=token, org_name=org_name)
+            )
+        teams = _dedupe_teams(discovered)
     elif provider == "gitlab":
         token = decrypted.get("token")
-        group_path_value = config.get("group")
-        group_path = group_path_value if isinstance(group_path_value, str) else None
         url_value = config.get("url", "https://gitlab.com")
         url = url_value if isinstance(url_value, str) else "https://gitlab.com"
-        if not token or not group_path:
+        if not token:
             raise HTTPException(
                 status_code=400,
-                detail="GitLab credentials require token and config.group",
+                detail="GitLab credentials require a token",
             )
-        teams = await discovery_svc.discover_gitlab(
-            token=token,
-            group_path=group_path,
-            url=url,
-        )
+        if group:
+            group_paths = [group]
+        elif _string_value(config.get("group")):
+            group_paths = [cast(str, _string_value(config.get("group")))]
+        else:
+            group_paths = await _derive_owners_from_sync_configs(
+                session, org_id, "gitlab", ("group", "owner")
+            )
+        if not group_paths:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not determine a GitLab group for team discovery. "
+                    "Pass ?group=<group-path>, set config.group on the "
+                    "credential, or configure a GitLab repository sync first."
+                ),
+            )
+        discovered_gitlab: list[Any] = []
+        for group_path in group_paths:
+            discovered_gitlab.extend(
+                await discovery_svc.discover_gitlab(
+                    token=token,
+                    group_path=group_path,
+                    url=url,
+                )
+            )
+        teams = _dedupe_teams(discovered_gitlab)
     elif provider == "linear":
         api_key = decrypted.get("apiKey") or decrypted.get("api_key")
         if not api_key:

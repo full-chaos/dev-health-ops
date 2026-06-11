@@ -15,9 +15,12 @@
 #     job/dev-health-migrate
 #   # ...then roll out the app Deployments (kubectl rollout restart ...)
 #
-# A Job is used (not an initContainer on the api Deployment) because api/worker
-# run multiple replicas under HPAs — per-pod initContainers would run the same
-# DDL concurrently, which is exactly the race this Job removes.
+# A Job is used (not a migrating initContainer on the api Deployment) because
+# api/worker run multiple replicas under HPAs — per-pod initContainers would
+# run the same DDL concurrently, which is exactly the race this Job removes.
+# The api/worker `wait-for-migrations` initContainers are NOT that: they only
+# poll the read-only `dev-hops migrate clickhouse status --check` (no DDL)
+# until this Job has brought the schema current.
 #
 # POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
 # transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.

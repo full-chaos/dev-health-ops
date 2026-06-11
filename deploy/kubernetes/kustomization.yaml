@@ -12,6 +12,9 @@ resources:
   - redis.yaml
   # NOTE (CHAOS-2304): Jobs do not gate Deployments. The migrate Job must
   # complete before api/worker roll out — see migrate-job.yaml and README.md.
+  # Safety net: api/worker carry a read-only `wait-for-migrations`
+  # initContainer that blocks app start until the schema is current, so a
+  # naive `kubectl apply -k` cannot serve against an unmigrated schema.
   - migrate-job.yaml
   - api.yaml
   - worker.yaml

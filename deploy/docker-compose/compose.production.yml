@@ -61,6 +61,17 @@ services:
   # POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
   # transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.
   # See docs/ops/database-connection-pooling.md.
+  #
+  # OPERATOR RECOVERY — failed migrate run: with restart: "no", a failed
+  # migrate is NOT retried, and api/billing-edge/worker stay gated (Created,
+  # never started) until it completes successfully. To inspect and re-run:
+  #
+  #   docker compose -f compose.production.yml logs migrate   # why it failed
+  #   docker compose -f compose.production.yml up migrate     # re-run just migrations
+  #   docker compose -f compose.production.yml up -d          # then start the rest
+  #
+  # `dev-hops migrate clickhouse status` (read-only) shows applied vs pending
+  # migrations; `--check` makes it exit 1 while any migration is pending.
   migrate:
     image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
     container_name: dev-health-migrate

@@ -19,10 +19,54 @@ spec:
       labels:
         app.kubernetes.io/name: dev-health-api
     spec:
+      securityContext:
+        runAsNonRoot: true
+      # CHAOS-2304 safety net: a naive `kubectl apply -k deploy/kubernetes/`
+      # rolls Deployments without waiting for the migrate Job. This
+      # initContainer blocks app start until all ClickHouse migrations are
+      # applied. It is strictly READ-ONLY (`status --check` — exit 0 when
+      # current, 1 when pending); the one-shot Job (migrate-job.yaml) remains
+      # the only thing that runs DDL. After 60 pending checks (~5 min) it
+      # exits 1 and relies on kubelet restart backoff as the overall timeout.
+      # The recommended deploy flow (README.md: `kubectl wait` on the Job)
+      # still applies — this is the safety net, not the primary ordering.
+      initContainers:
+        - name: wait-for-migrations
+          image: ghcr.io/your-org/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - sh
+            - -c
+            - |
+              attempts=0
+              until dev-hops migrate clickhouse status --check; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 60 ]; then
+                  echo "ClickHouse migrations still pending after $attempts checks; exiting for restart backoff" >&2
+                  exit 1
+                fi
+                echo "ClickHouse migrations pending; re-checking in 5s (attempt $attempts/60)"
+                sleep 5
+              done
+          envFrom:
+            - configMapRef:
+                name: dev-health-config
+            - secretRef:
+                name: dev-health-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
       containers:
         - name: api
           image: ghcr.io/your-org/dev-health-ops:latest
           # Or use: your-registry/dev-health-ops:latest
+          securityContext:
+            allowPrivilegeEscalation: false
           args:
             - "--host"
             - "0.0.0.0"

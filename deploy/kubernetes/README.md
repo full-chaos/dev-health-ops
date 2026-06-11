@@ -35,8 +35,31 @@ If the Job fails, inspect it before retrying:
 kubectl -n dev-health logs job/dev-health-migrate
 ```
 
+### Safety net: `wait-for-migrations` initContainers
+
+The explicit `kubectl wait` flow above is the recommended path, but a naive
+`kubectl apply -k deploy/kubernetes/` is also safe: the api and worker
+Deployments carry a `wait-for-migrations` initContainer that blocks app start
+until `dev-hops migrate clickhouse status --check` reports the schema current.
+
+- The check is strictly **read-only** (it lists applied vs pending migrations
+  and exits 1 while any are pending) — it never runs DDL, so multiple replicas
+  polling concurrently cannot race. The migrate Job remains the only thing
+  that applies schema.
+- Each initContainer run polls every 5s for up to ~5 minutes, then exits
+  nonzero and relies on the kubelet's restart backoff as the overall timeout.
+  Pods stuck in `Init:...` mean the migrate Job has not completed — check
+  `kubectl -n dev-health logs job/dev-health-migrate`.
+- The check covers **ClickHouse only**. Postgres is external/optional in this
+  stack (the Alembic step is skipped when `POSTGRES_URI` is unset) and Alembic
+  has no equally cheap read-only pending-check wired into `dev-hops`; if you
+  run Postgres, use the explicit `kubectl wait` flow above for full ordering.
+
 Notes:
 
+- `CLICKHOUSE_URI` (in `dev-health-secrets`) is the DSN that
+  `dev-hops migrate clickhouse` and `status --check` resolve — keep it in sync
+  with `DATABASE_URI` (the app connection string).
 - `POSTGRES_URI` (in `dev-health-secrets`) must point **directly** at Postgres
   (port 5432), never at a transaction-mode pooler (PgBouncer/RDS Proxy) —
   migrations run raw DDL. See `docs/ops/database-connection-pooling.md`.

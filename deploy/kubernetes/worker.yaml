@@ -67,7 +67,7 @@ spec:
             - worker
             - --loglevel=info
             - -Q
-            - default,metrics,sync
+            - default,metrics,sync,monitoring
           envFrom:
             - configMapRef:
                 name: dev-health-config

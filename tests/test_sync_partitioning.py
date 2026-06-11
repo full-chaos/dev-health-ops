@@ -529,6 +529,76 @@ class TestDispatchBatchSync:
         assert result["total_repos"] == 7
         assert result["batch_count"] == 4
 
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_staggers_batches_with_countdown(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_batch import (
+            BATCH_STAGGER_SECONDS,
+            _batch_sync_callback,
+            dispatch_batch_sync,
+        )
+
+        config = _make_config(
+            provider="github",
+            sync_options={"search": "org/*", "batch_size": 2},
+            sync_targets=["git"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.return_value = [("org", f"repo-{i}") for i in range(5)]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-dispatch-stagger")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        assert result["batch_count"] == 3
+
+        args, _ = mock_chord.call_args
+        header_group, callback = args[0], args[1]
+        signatures = list(header_group.tasks)
+
+        # Total dispatched count unchanged: one task per repo.
+        assert len(signatures) == 5
+
+        # Batch 0 starts immediately (no countdown); batch N is staggered.
+        expected_countdowns = [
+            None,
+            None,
+            BATCH_STAGGER_SECONDS,
+            BATCH_STAGGER_SECONDS,
+            2 * BATCH_STAGGER_SECONDS,
+        ]
+        actual_countdowns = [sig.options.get("countdown") for sig in signatures]
+        assert actual_countdowns == expected_countdowns
+
+        # Chord callback still attached with unchanged kwargs (config_id
+        # added by CHAOS-2267/#852 so the callback can stamp last_sync_*).
+        assert callback.task == _batch_sync_callback.name
+        assert callback.kwargs == {
+            "provider": "github",
+            "sync_targets": ["git"],
+            "org_id": "default",
+            "run_id": None,
+            "config_id": str(config.id),
+        }
+
     @patch("dev_health_ops.workers.sync_batch._run_sync_for_repo")
     @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
@@ -981,6 +1051,11 @@ class TestTaskRegistration:
         from dev_health_ops.workers.sync_batch import _run_sync_for_repo
 
         assert _run_sync_for_repo.queue == "sync"
+
+    def test_run_sync_for_repo_rate_limit(self):
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
+
+        assert _run_sync_for_repo.rate_limit == "30/m"
 
 
 class TestInjectProviderToken:

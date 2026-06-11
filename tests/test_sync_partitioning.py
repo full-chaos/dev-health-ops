@@ -11,10 +11,6 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-_fake_croniter_mod = MagicMock()
-if "croniter" not in sys.modules:
-    sys.modules["croniter"] = _fake_croniter_mod
-
 from dev_health_ops.models.git import Base  # noqa: E402
 from dev_health_ops.models.settings import (  # noqa: E402
     SyncConfiguration,
@@ -911,11 +907,13 @@ class TestBatchRunStateManagement:
         assert config.last_sync_stats == {"child_results": 2}
 
 
-def _setup_croniter_mock():
+def _setup_croniter_mock(monkeypatch: pytest.MonkeyPatch):
     mock_cron_instance = MagicMock()
     mock_cron_instance.get_next.return_value = datetime(2000, 1, 1, tzinfo=timezone.utc)
     mock_cron_cls = MagicMock(return_value=mock_cron_instance)
-    sys.modules["croniter"].croniter = mock_cron_cls  # type: ignore[attr-defined]
+    monkeypatch.setitem(
+        sys.modules, "croniter", SimpleNamespace(croniter=mock_cron_cls)
+    )
     return mock_cron_cls
 
 
@@ -924,11 +922,11 @@ class TestDispatchScheduledSyncsRouting:
     @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_routes_batch_eligible_to_dispatch_batch_sync(
-        self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
+        self, mock_get_session, mock_run_sync, mock_batch_sync, db_session, monkeypatch
     ):
         from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
-        _setup_croniter_mock()
+        _setup_croniter_mock(monkeypatch)
 
         config = _make_config(
             provider="github",
@@ -956,11 +954,11 @@ class TestDispatchScheduledSyncsRouting:
     @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_routes_normal_config_to_run_sync_config(
-        self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
+        self, mock_get_session, mock_run_sync, mock_batch_sync, db_session, monkeypatch
     ):
         from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
-        _setup_croniter_mock()
+        _setup_croniter_mock(monkeypatch)
 
         config = _make_config(
             provider="github",
@@ -992,11 +990,11 @@ class TestDispatchScheduledSyncsRouting:
     @patch("dev_health_ops.workers.sync_scheduler.run_sync_config")
     @patch("dev_health_ops.db.get_postgres_session_sync")
     def test_mixed_configs_route_correctly(
-        self, mock_get_session, mock_run_sync, mock_batch_sync, db_session
+        self, mock_get_session, mock_run_sync, mock_batch_sync, db_session, monkeypatch
     ):
         from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 
-        _setup_croniter_mock()
+        _setup_croniter_mock(monkeypatch)
 
         batch_config = _make_config(
             provider="github",

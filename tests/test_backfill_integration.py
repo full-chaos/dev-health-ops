@@ -359,7 +359,9 @@ def test_dispatch_scheduled_syncs_ignores_backfill_jobs(
             name="sync-integration",
             provider="github",
             sync_targets=[],
-            sync_options={},
+            # CHAOS-2297: scheduled dispatch requires an explicit cron; this
+            # test covers sync-vs-backfill job filtering, not manual-only mode.
+            sync_options={"schedule_cron": "0 * * * *"},
             is_active=True,
         )
         config.id = sync_config_id

@@ -87,3 +87,20 @@ async def test_testops_job_and_case_queries_alias_column(mock_query_dicts):
     await loader.load_testops_test_data(start, end, repo_id=uuid.uuid4())
     case_sql = mock_query_dicts.call_args_list[1].args[1]
     assert "s.repo_id = {repo_id:UUID}" in case_sql
+
+
+@pytest.mark.asyncio
+async def test_testops_join_predicates_scope_org_id(mock_query_dicts):
+    """Joins must carry org_id equality so cross-org child rows never match."""
+    loader = ClickHouseDataLoader(client=object(), org_id="acme-corp")
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(days=1)
+
+    await loader.load_testops_pipeline_data(start, end, repo_id=uuid.uuid4())
+    job_sql = mock_query_dicts.call_args_list[1].args[1]
+    assert "(p.org_id = j.org_id)" in job_sql
+
+    mock_query_dicts.reset_mock()
+    await loader.load_testops_test_data(start, end, repo_id=uuid.uuid4())
+    case_sql = mock_query_dicts.call_args_list[1].args[1]
+    assert "(s.org_id = c.org_id)" in case_sql

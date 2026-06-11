@@ -377,6 +377,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         FROM ci_job_runs AS j
         INNER JOIN ci_pipeline_runs AS p
           ON (p.repo_id = j.repo_id) AND (p.run_id = j.run_id)
+         AND (p.org_id = j.org_id)
         WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
         {job_repo_filter}
         {self._org_filter(alias="p")}
@@ -458,6 +459,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           ON (s.repo_id = c.repo_id)
          AND (s.run_id = c.run_id)
          AND (s.suite_id = c.suite_id)
+         AND (s.org_id = c.org_id)
         WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
           AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
         {case_repo_filter}

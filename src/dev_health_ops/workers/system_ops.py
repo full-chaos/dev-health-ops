@@ -121,6 +121,18 @@ def send_billing_notification(
 
     try:
         org_uuid = uuid.UUID(org_id)
+    except ValueError:
+        # A malformed org_id is permanently bad — retrying can never succeed.
+        # Seen via Stripe TEST webhooks whose metadata carries fixture ids like
+        # "org-abc"; the retry loop just spams the worker.
+        logger.error(
+            "Billing email %s dropped: org_id=%r is not a UUID (non-retryable)",
+            email_type,
+            org_id,
+        )
+        return {"status": "dropped", "reason": "invalid_org_id", "org_id": org_id}
+
+    try:
         run_async(fn(org_uuid))
         return {"status": "sent", "email_type": email_type, "org_id": org_id}
     except Exception as exc:

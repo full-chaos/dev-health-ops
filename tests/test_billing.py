@@ -1603,3 +1603,29 @@ def test_subscription_billing_plan_fk_has_no_cascade():
             )
             return
     raise AssertionError("billing_plan_id column not found on Subscription model")
+
+
+# ---------------------------------------------------------------------------
+# Poison-message guards: non-UUID org_id must never enqueue or retry
+# ---------------------------------------------------------------------------
+
+
+class TestInvalidOrgIdGuards:
+    def test_task_drops_invalid_org_id_without_retry(self):
+        """A malformed org_id is permanently bad — the task must drop it
+        instead of retry-looping (observed live with Stripe TEST webhook
+        fixture ids like 'org-abc')."""
+        from dev_health_ops.workers.system_ops import send_billing_notification
+
+        task = send_billing_notification
+        task.push_request(id="billing-bad-org", retries=0)
+        try:
+            result = task("subscription_cancelled", "org-abc", tier="team")
+        finally:
+            task.pop_request()
+
+        assert result == {
+            "status": "dropped",
+            "reason": "invalid_org_id",
+            "org_id": "org-abc",
+        }

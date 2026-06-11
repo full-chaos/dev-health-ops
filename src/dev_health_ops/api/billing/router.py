@@ -380,6 +380,17 @@ async def _handle_invoice_webhook(
     if pending_email:
         email_type, org_str, kwargs = pending_email
         try:
+            uuid.UUID(str(org_str))
+        except ValueError:
+            # Stripe TEST events carry fixture metadata (e.g. org_id="org-abc");
+            # enqueuing them creates poison tasks that can never succeed.
+            logger.warning(
+                "Skipping %s email: webhook org_id=%r is not a UUID",
+                email_type,
+                org_str,
+            )
+            return
+        try:
             send_billing_notification.delay(email_type, org_str, **kwargs)
         except Exception:
             logger.debug(

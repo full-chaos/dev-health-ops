@@ -323,9 +323,13 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
     ) -> tuple[list[PipelineRunExtendedRow], list[JobRunRow]]:
         params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         repo_filter = ""
+        job_repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
             repo_filter = " AND repo_id = {repo_id:UUID}"
+            # Alias-qualify only the column; the {repo_id:UUID} parameter name
+            # must stay dot-free (ClickHouse rejects dotted param names).
+            job_repo_filter = " AND p.repo_id = {repo_id:UUID}"
 
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
@@ -374,7 +378,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         INNER JOIN ci_pipeline_runs AS p
           ON (p.repo_id = j.repo_id) AND (p.run_id = j.run_id)
         WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
-        {repo_filter.replace("repo_id", "p.repo_id") if repo_id is not None else ""}
+        {job_repo_filter}
         {self._org_filter(alias="p")}
         """
 
@@ -395,9 +399,13 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
     ) -> tuple[list[TestSuiteResultRow], list[TestCaseResultRow]]:
         params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
         repo_filter = ""
+        case_repo_filter = ""
         if repo_id is not None:
             params["repo_id"] = str(repo_id)
             repo_filter = " AND repo_id = {repo_id:UUID}"
+            # Alias-qualify only the column; the {repo_id:UUID} parameter name
+            # must stay dot-free (ClickHouse rejects dotted param names).
+            case_repo_filter = " AND s.repo_id = {repo_id:UUID}"
 
         org_filter = self._org_filter()
         params = self._inject_org_id(params)
@@ -452,7 +460,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
          AND (s.suite_id = c.suite_id)
         WHERE coalesce(s.started_at, s.finished_at) >= {{start:DateTime}}
           AND coalesce(s.started_at, s.finished_at) < {{end:DateTime}}
-        {repo_filter.replace("repo_id", "s.repo_id") if repo_id is not None else ""}
+        {case_repo_filter}
         {self._org_filter(alias="s")}
         """
 

@@ -107,7 +107,7 @@ class _GitHubMilestoneLike(Protocol):
     state: object
 
 
-class _GitHubIssueLike(Protocol):
+class _GitHubIssueBaseLike(Protocol):
     number: object
     title: object
     body: object
@@ -122,15 +122,21 @@ class _GitHubIssueLike(Protocol):
     url: object
     pull_request: object
 
-    def get_events(self) -> Iterable[_GitHubEventLike]: ...
-
     def get_comments(self) -> Iterable[_GitHubCommentLike]: ...
 
 
-class _GitHubPullRequestLike(_GitHubIssueLike, Protocol):
+class _GitHubIssueLike(_GitHubIssueBaseLike, Protocol):
+    def get_events(self) -> Iterable[_GitHubEventLike]: ...
+
+
+class _GitHubPullRequestLike(_GitHubIssueBaseLike, Protocol):
     merged: object
     merged_at: object
     draft: object
+
+    # PyGithub's PullRequest exposes the issue-events endpoint as
+    # get_issue_events(); only Issue has get_events().
+    def get_issue_events(self) -> Iterable[_GitHubEventLike]: ...
 
     def get_review_comments(self) -> Iterable[_GitHubCommentLike]: ...
 
@@ -295,12 +301,22 @@ class GitHubWorkClient:
         )
 
     def iter_issue_events(
-        self, issue: _GitHubIssueLike, *, limit: int | None = None
+        self,
+        issue: _GitHubIssueLike | _GitHubPullRequestLike,
+        *,
+        limit: int | None = None,
     ) -> Iterable[_GitHubEventLike]:
         """
         Iterate issue events (labeled/unlabeled/closed/reopened/assigned/...) via REST.
+
+        Accepts both Issues and PullRequests: PyGithub's Issue exposes the
+        endpoint as get_events(), PullRequest as get_issue_events().
         """
-        yield from self._iter_with_limit(issue.get_events(), limit=limit)
+        if hasattr(issue, "get_events"):
+            events = issue.get_events()
+        else:
+            events = issue.get_issue_events()
+        yield from self._iter_with_limit(events, limit=limit)
 
     def iter_pull_requests(
         self,
@@ -320,7 +336,7 @@ class GitHubWorkClient:
         yield from self._iter_with_limit(pulls, limit=limit)
 
     def iter_issue_comments(
-        self, issue: _GitHubIssueLike, *, limit: int | None = None
+        self, issue: _GitHubIssueBaseLike, *, limit: int | None = None
     ) -> Iterable[_GitHubCommentLike]:
         """
         Iterate comments on an issue via REST.

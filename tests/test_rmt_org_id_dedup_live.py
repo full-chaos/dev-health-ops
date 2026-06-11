@@ -215,3 +215,121 @@ def test_test_suite_results_dedup_does_not_cross_tenants(sink) -> None:
         assert survivors == {org_a, org_b}
     finally:
         _cleanup(sink, "test_suite_results", org_a, org_b)
+
+
+def test_ci_job_runs_dedup_does_not_cross_tenants(sink) -> None:
+    """Same (repo_id, run_id, job_id) under two orgs must survive a merge."""
+    org_a, org_b = _two_orgs()
+    repo_id = uuid.uuid4()
+    run_id = f"run-{uuid.uuid4()}"
+    job_id = "job-1"
+    now = datetime.now(timezone.utc)
+
+    try:
+        sink.client.insert(
+            "ci_job_runs",
+            [[repo_id, run_id, job_id, "build", now, org] for org in (org_a, org_b)],
+            column_names=[
+                "repo_id",
+                "run_id",
+                "job_id",
+                "job_name",
+                "last_synced",
+                "org_id",
+            ],
+        )
+
+        survivors = _surviving_orgs(
+            sink,
+            "ci_job_runs",
+            "repo_id = {repo_id:UUID} AND run_id = {rid:String} "
+            "AND job_id = {jid:String}",
+            {"repo_id": str(repo_id), "rid": run_id, "jid": job_id},
+        )
+        assert survivors == {org_a, org_b}, (
+            f"cross-tenant dedup in ci_job_runs: got {survivors}"
+        )
+    finally:
+        _cleanup(sink, "ci_job_runs", org_a, org_b)
+
+
+def test_test_case_results_dedup_does_not_cross_tenants(sink) -> None:
+    """Same (repo_id, run_id, suite_id, case_id) under two orgs must survive."""
+    org_a, org_b = _two_orgs()
+    repo_id = uuid.uuid4()
+    run_id = f"run-{uuid.uuid4()}"
+    suite_id = "suite-1"
+    case_id = "case-1"
+    now = datetime.now(timezone.utc)
+
+    try:
+        sink.client.insert(
+            "test_case_results",
+            [
+                [repo_id, run_id, suite_id, case_id, "test_case", "passed", now, org]
+                for org in (org_a, org_b)
+            ],
+            column_names=[
+                "repo_id",
+                "run_id",
+                "suite_id",
+                "case_id",
+                "case_name",
+                "status",
+                "last_synced",
+                "org_id",
+            ],
+        )
+
+        survivors = _surviving_orgs(
+            sink,
+            "test_case_results",
+            "repo_id = {repo_id:UUID} AND run_id = {rid:String} "
+            "AND suite_id = {sid:String} AND case_id = {cid:String}",
+            {
+                "repo_id": str(repo_id),
+                "rid": run_id,
+                "sid": suite_id,
+                "cid": case_id,
+            },
+        )
+        assert survivors == {org_a, org_b}, (
+            f"cross-tenant dedup in test_case_results: got {survivors}"
+        )
+    finally:
+        _cleanup(sink, "test_case_results", org_a, org_b)
+
+
+def test_coverage_snapshots_dedup_does_not_cross_tenants(sink) -> None:
+    """Same (repo_id, run_id, snapshot_id) under two orgs must survive."""
+    org_a, org_b = _two_orgs()
+    repo_id = uuid.uuid4()
+    run_id = f"run-{uuid.uuid4()}"
+    snapshot_id = "snap-1"
+    now = datetime.now(timezone.utc)
+
+    try:
+        sink.client.insert(
+            "coverage_snapshots",
+            [[repo_id, run_id, snapshot_id, now, org] for org in (org_a, org_b)],
+            column_names=[
+                "repo_id",
+                "run_id",
+                "snapshot_id",
+                "last_synced",
+                "org_id",
+            ],
+        )
+
+        survivors = _surviving_orgs(
+            sink,
+            "coverage_snapshots",
+            "repo_id = {repo_id:UUID} AND run_id = {rid:String} "
+            "AND snapshot_id = {sid:String}",
+            {"repo_id": str(repo_id), "rid": run_id, "sid": snapshot_id},
+        )
+        assert survivors == {org_a, org_b}, (
+            f"cross-tenant dedup in coverage_snapshots: got {survivors}"
+        )
+    finally:
+        _cleanup(sink, "coverage_snapshots", org_a, org_b)

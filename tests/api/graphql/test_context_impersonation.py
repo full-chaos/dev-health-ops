@@ -110,8 +110,9 @@ async def test_get_context_uses_jwt_org_without_impersonation(
 def _superuser_graphql_context(org_id: str = "org-x"):
     """Build a minimal GraphQLContext whose user is a real superuser."""
     from dev_health_ops.api.graphql.context import GraphQLContext
+    from dev_health_ops.api.services.auth import AuthenticatedUser
 
-    user = types.SimpleNamespace(
+    user = AuthenticatedUser(
         user_id="admin-1",
         email="admin@example.com",
         org_id=org_id,

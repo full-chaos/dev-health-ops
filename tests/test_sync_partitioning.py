@@ -2014,3 +2014,74 @@ class TestRunSyncConfigGitLabCredentialConfig:
 
         assert result["status"] == "success"
         assert processor.await_args.kwargs["gitlab_url"] == "https://opt.example.com"
+
+
+class TestGitLabWorkItemsUrlInjection:
+    """Self-hosted GitLab work-items must reach the configured instance.
+
+    fetch_gitlab_work_items builds GitLabWorkClient.from_env() (GITLAB_URL), so
+    _run_sync_for_repo injects the resolved URL before the work-items chunk
+    (post-rebase Codex finding on CHAOS-2282).
+    """
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    @patch("dev_health_ops.workers.sync_batch._get_db_url")
+    def test_gitlab_url_env_injected_from_credentials(
+        self, mock_get_db_url, mock_run_job
+    ):
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
+
+        mock_get_db_url.return_value = "clickhouse://ch:ch@clickhouse:8123/default"
+        os.environ.pop("GITLAB_URL", None)
+
+        task = _run_sync_for_repo
+        task.push_request(id="repo-sync-gl-url")
+        try:
+            task(
+                config_id="cfg-1",
+                org_id="org-1",
+                triggered_by="schedule",
+                provider="gitlab",
+                sync_targets=["work-items"],
+                sync_options_override={"project_id": 42},
+                credentials={
+                    "token": "glpat-child",
+                    "url": "https://gitlab.example.com",
+                },
+                config_name="gl-batch",
+            )
+        finally:
+            task.pop_request()
+
+        assert os.environ.get("GITLAB_URL") == "https://gitlab.example.com"
+        assert mock_run_job.call_args.kwargs["provider"] == "gitlab"
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch("dev_health_ops.sync.watermarks.set_watermark")
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    @patch("dev_health_ops.workers.sync_batch._get_db_url")
+    def test_gitlab_work_items_only_child_stamps_no_watermark(
+        self, mock_get_db_url, mock_run_job, mock_set_watermark
+    ):
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
+
+        mock_get_db_url.return_value = "clickhouse://ch:ch@clickhouse:8123/default"
+
+        task = _run_sync_for_repo
+        task.push_request(id="repo-sync-gl-wm")
+        try:
+            task(
+                config_id="cfg-1",
+                org_id="org-1",
+                triggered_by="schedule",
+                provider="gitlab",
+                sync_targets=["work-items"],
+                sync_options_override={"project_id": 42},
+                credentials={"token": "glpat-child"},
+                config_name="gl-batch",
+            )
+        finally:
+            task.pop_request()
+
+        mock_set_watermark.assert_not_called()

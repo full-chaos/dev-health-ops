@@ -558,7 +558,10 @@ def _run_sync_for_repo(
             _repo = str(sync_options_override.get("repo", ""))
             if _owner and _repo:
                 repo_id_for_watermark = f"{_owner}/{_repo}"
-        elif provider == "gitlab":
+        elif provider == "gitlab" and code_sync_targets:
+            # Gate on code targets like GitHub: work-items windows come from
+            # backfill_days, so a work-items-only child must not stamp a
+            # misleading watermark row.
             _pid = sync_options_override.get("project_id") or sync_options_override.get(
                 "repo"
             )
@@ -653,6 +656,15 @@ def _run_sync_for_repo(
             token = _extract_provider_token(provider, credentials)
             if token:
                 _inject_provider_token(provider, token)
+            if provider == "gitlab":
+                # fetch_gitlab_work_items builds GitLabWorkClient.from_env(),
+                # which reads GITLAB_URL — inject the resolved instance URL so
+                # self-hosted work-items don't fall back to gitlab.com while
+                # code sync above talks to the right host.
+                os.environ["GITLAB_URL"] = resolve_gitlab_url(
+                    sync_options_override,
+                    gitlab_credentials_from_mapping(credentials),
+                )
             backfill_days = int(sync_options_override.get("backfill_days", 1))
             chunk_index = int(sync_options_override.get("chunk_index", 0))
             chunk_since = sync_options_override.get("since")

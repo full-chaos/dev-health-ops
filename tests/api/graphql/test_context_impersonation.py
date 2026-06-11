@@ -105,3 +105,47 @@ async def test_get_context_uses_jwt_org_without_impersonation(
     ctx = await gql_app.get_context(request)  # type: ignore[arg-type]
 
     assert ctx.org_id == admin_org
+
+
+def _superuser_graphql_context(org_id: str = "org-x"):
+    """Build a minimal GraphQLContext whose user is a real superuser."""
+    from dev_health_ops.api.graphql.context import GraphQLContext
+
+    user = types.SimpleNamespace(
+        user_id="admin-1",
+        email="admin@example.com",
+        org_id=org_id,
+        role="owner",
+        is_superuser=True,
+    )
+    return GraphQLContext(org_id=org_id, db_url="", user=user)
+
+
+def test_require_platform_admin_denied_during_impersonation() -> None:
+    """A superuser impersonating a non-platform user cannot reach platform-admin
+    GraphQL operations -- the impersonated identity is not a platform admin."""
+    from dev_health_ops.api.graphql.authz import require_platform_admin
+    from dev_health_ops.api.graphql.errors import AuthorizationError
+
+    ctx = _superuser_graphql_context()
+    token = set_impersonation_context(
+        target_user_id="target-user",
+        target_org_id="org-target",
+        target_role="viewer",
+        real_user_id="admin-1",
+    )
+    try:
+        with pytest.raises(AuthorizationError):
+            require_platform_admin(ctx)
+    finally:
+        _impersonation_ctx.reset(token)
+
+
+def test_require_platform_admin_allowed_for_superuser_without_impersonation() -> None:
+    """Without an active impersonation session a real superuser still passes."""
+    from dev_health_ops.api.graphql.authz import require_platform_admin
+
+    _impersonation_ctx.set(None)
+    ctx = _superuser_graphql_context()
+    # Must not raise.
+    require_platform_admin(ctx)

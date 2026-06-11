@@ -172,6 +172,18 @@ def require_platform_admin(context: GraphQLContext) -> None:
     user = context.user
     if user is None:
         raise AuthorizationError("Authentication required")
+    # While an impersonation session is active the effective identity is the
+    # impersonated target user (always a non-superuser -- start_impersonation
+    # rejects superuser targets). Platform-admin, cross-org operations must not be
+    # reachable through impersonation even though the real user is a superuser.
+    # This mirrors has_permission(), which derives permissions from the target
+    # role during impersonation instead of honoring the superuser bypass.
+    # (CHAOS-2303)
+    from dev_health_ops.api.services.auth import get_impersonation_context
+
+    imp_ctx = get_impersonation_context()
+    if imp_ctx is not None and getattr(imp_ctx, "is_active", False):
+        raise AuthorizationError("Platform admin access required")
     if not getattr(user, "is_superuser", False):
         raise AuthorizationError("Platform admin access required")
 

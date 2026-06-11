@@ -71,8 +71,15 @@ def register_middleware(app: FastAPI) -> None:
     )
 
     app.add_middleware(SlowAPIMiddleware)
-    app.add_middleware(OrgIdMiddleware)
+    # ImpersonationMiddleware is registered BEFORE OrgIdMiddleware so it ends up
+    # INNER on the request path (Starlette wraps last-added as outermost). On the
+    # request path OrgIdMiddleware runs first and sets _current_org_id from the
+    # X-Org-Id header / JWT, then ImpersonationMiddleware runs and overrides it to
+    # the impersonated target org. The inner middleware gets the FINAL write to the
+    # contextvar before the endpoint executes, so impersonation wins (CHAOS-2303).
+    # Do NOT swap these two lines.
     app.add_middleware(ImpersonationMiddleware)
+    app.add_middleware(OrgIdMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
 
 

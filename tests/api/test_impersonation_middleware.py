@@ -416,3 +416,132 @@ async def test_asgi_middleware_passthrough_for_non_superuser():
     assert response.status_code == 200
     assert "x-impersonating" not in response.headers
     mock_session.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test 5+6: Integration with OrgIdMiddleware (regression for CHAOS-2303)
+#
+# ImpersonationMiddleware and OrgIdMiddleware BOTH write _current_org_id. In
+# production OrgIdMiddleware must run FIRST (outer) and ImpersonationMiddleware
+# AFTER it (inner), so the impersonated target org is the final value the
+# endpoint sees. The original registration order was inverted, so
+# OrgIdMiddleware clobbered the impersonated org back to the admin's own org and
+# impersonation had no effect on returned data. The earlier tests in this file
+# exercised ImpersonationMiddleware in isolation and therefore never caught it.
+# ---------------------------------------------------------------------------
+
+_ORGID_USER_PATCH = "dev_health_ops.api.middleware.get_authenticated_user_from_headers"
+
+
+def _build_stacked_app(
+    *,
+    impersonation_inner: bool,
+    state_user: Any,
+    captured: dict,
+) -> Any:
+    """Build a stack containing BOTH OrgIdMiddleware and ImpersonationMiddleware.
+
+    ``impersonation_inner=True`` mirrors the production order (OrgId outer,
+    Impersonation inner) so impersonation wins. ``False`` reproduces the original
+    buggy order (Impersonation outer, OrgId inner) where OrgId clobbers the org.
+    """
+    from dev_health_ops.api.middleware import OrgIdMiddleware
+
+    async def _handler(scope: Any, receive: Any, send: Any) -> None:
+        captured["org_id"] = get_current_org_id()
+        captured["imp_ctx"] = get_impersonation_context()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    if impersonation_inner:
+        app: Any = OrgIdMiddleware(ImpersonationMiddleware(_handler))
+    else:
+        app = ImpersonationMiddleware(OrgIdMiddleware(_handler))
+
+    # _UserStateMiddleware injects the superuser into scope state for
+    # ImpersonationMiddleware._extract_user(); OrgIdMiddleware reads headers.
+    return _UserStateMiddleware(app, state_user)
+
+
+@pytest.mark.asyncio
+async def test_impersonation_overrides_orgid_when_inner():
+    """Production order: Impersonation (inner) overrides OrgId's org_id."""
+    admin_id = "admin-stack-1"
+    admin_org = "org-admin-stack-1"
+    target_org = "org-target-stack-1"
+    target_user = "target-stack-1"
+
+    session = _fake_session(admin_id, target_user, target_org)
+    state_user = _fake_superuser(admin_id)
+    state_user.org_id = admin_org
+
+    captured: dict = {}
+    app = _build_stacked_app(
+        impersonation_inner=True, state_user=state_user, captured=captured
+    )
+
+    with (
+        patch(_PATCH_TARGET, AsyncMock(return_value=session)),
+        patch(_ORGID_USER_PATCH, return_value=state_user),
+    ):
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                response = await client.get("/", headers={"X-Org-Id": admin_org})
+        finally:
+            _current_org_id.set(None)
+            _impersonation_ctx.set(None)
+
+    assert response.status_code == 200
+    assert captured["org_id"] == target_org, (
+        "Impersonation (inner) must override OrgIdMiddleware's org_id; "
+        f"expected {target_org!r}, got {captured['org_id']!r}"
+    )
+    assert response.headers.get("x-impersonating") == "true"
+
+
+@pytest.mark.asyncio
+async def test_orgid_clobbers_impersonation_when_orgid_inner():
+    """Original buggy order: OrgId (inner) clobbers the impersonated org.
+
+    Documents WHY the registration order matters. If the middleware order is
+    re-inverted, the impersonated org is lost and this test fails loudly.
+    """
+    admin_id = "admin-stack-2"
+    admin_org = "org-admin-stack-2"
+    target_org = "org-target-stack-2"
+    target_user = "target-stack-2"
+
+    session = _fake_session(admin_id, target_user, target_org)
+    state_user = _fake_superuser(admin_id)
+    state_user.org_id = admin_org
+
+    captured: dict = {}
+    app = _build_stacked_app(
+        impersonation_inner=False, state_user=state_user, captured=captured
+    )
+
+    with (
+        patch(_PATCH_TARGET, AsyncMock(return_value=session)),
+        patch(_ORGID_USER_PATCH, return_value=state_user),
+    ):
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                response = await client.get("/", headers={"X-Org-Id": admin_org})
+        finally:
+            _current_org_id.set(None)
+            _impersonation_ctx.set(None)
+
+    assert response.status_code == 200
+    assert captured["org_id"] == admin_org

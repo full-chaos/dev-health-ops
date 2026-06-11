@@ -292,6 +292,16 @@ def resolve_credentials_sync(
         )
 
     if not org_id:
+        # Database resolution needs an org scope, but env credentials do not:
+        # without this fallback a configured DATABASE_URI makes org-less
+        # callers (e.g. GitHubWorkClient.from_env) fail even when the
+        # provider's env variables are set (CHAOS-2292).
+        if allow_env_fallback:
+            resolver = _EnvOnlyResolver()
+            creds = resolver.resolve_from_env(provider, credential_name)
+            if creds is not None:
+                return creds
+
         raise CredentialResolutionError(
             provider=provider,
             message="Organization ID is required for database credential resolution.",

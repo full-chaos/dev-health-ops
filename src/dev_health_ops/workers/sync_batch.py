@@ -629,6 +629,10 @@ def _run_sync_for_repo(
                 },
             )
             started_backfill = datetime.now(timezone.utc)
+            # Pass the decrypted credentials explicitly: the env-injection above
+            # is invisible to resolve_credentials_sync once DATABASE_URI is set,
+            # so relying on it sends the job down a dead from_env() path
+            # (CHAOS-2292).
             run_work_items_sync_job(
                 db_url=db_url,
                 day=utc_today(),
@@ -637,6 +641,7 @@ def _run_sync_for_repo(
                 repo_name=sync_options_override.get("repo"),
                 search_pattern=sync_options_override.get("search"),
                 org_id=org_id,
+                credentials=credentials or None,
             )
             duration_ms = int(
                 (datetime.now(timezone.utc) - started_backfill).total_seconds() * 1000

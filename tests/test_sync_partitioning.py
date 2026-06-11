@@ -1196,3 +1196,107 @@ class TestNormalizeCredentialKeys:
             "github", {"token": "ghp_xxx", "baseUrl": "https://gh.example.com"}
         )
         assert result == {"token": "ghp_xxx", "base_url": "https://gh.example.com"}
+
+
+from dev_health_ops.metrics.job_work_items import (  # noqa: E402
+    run_work_items_sync_job as _real_run_work_items_sync_job,
+)
+
+
+class TestRunSyncForRepoCredentials:
+    """_run_sync_for_repo must thread credentials into the work-items job.
+
+    Regression tests for CHAOS-2292: the work-items chunk used to rely on
+    env-var injection only, which resolve_credentials_sync ignores once
+    DATABASE_URI is configured — so GitHub App credentials (no "token" key)
+    and PATs alike died in GitHubWorkClient.from_env().
+    """
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    @patch("dev_health_ops.workers.sync_batch._get_db_url")
+    def test_work_items_job_receives_credentials(self, mock_get_db_url, mock_run_job):
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
+
+        mock_get_db_url.return_value = "clickhouse://ch:ch@clickhouse:8123/default"
+        credentials = {"token": "ghp_batch_child", "org": "full-chaos"}
+
+        task = _run_sync_for_repo
+        task.push_request(id="repo-sync-creds")
+        try:
+            result = task(
+                config_id="cfg-1",
+                org_id="org-1",
+                triggered_by="schedule",
+                provider="github",
+                sync_targets=["work-items"],
+                sync_options_override={"owner": "full-chaos", "repo": "threads-cli"},
+                credentials=credentials,
+                config_name="chaos-all",
+            )
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "success"
+        mock_run_job.assert_called_once()
+        kwargs = mock_run_job.call_args.kwargs
+        assert kwargs["credentials"] == credentials
+        assert kwargs["org_id"] == "org-1"
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    @patch("dev_health_ops.workers.sync_batch._get_db_url")
+    def test_work_items_job_kwargs_match_signature(self, mock_get_db_url, mock_run_job):
+        """Producer-side contract: every kwarg exists on the job signature."""
+        import inspect
+
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
+
+        mock_get_db_url.return_value = "clickhouse://ch:ch@clickhouse:8123/default"
+
+        task = _run_sync_for_repo
+        task.push_request(id="repo-sync-contract")
+        try:
+            task(
+                config_id="cfg-1",
+                org_id="org-1",
+                triggered_by="schedule",
+                provider="github",
+                sync_targets=["work-items"],
+                sync_options_override={"owner": "full-chaos", "repo": "threads-cli"},
+                credentials={"token": "ghp_contract"},
+                config_name="chaos-all",
+            )
+        finally:
+            task.pop_request()
+
+        sig_params = set(inspect.signature(_real_run_work_items_sync_job).parameters)
+        passed = set(mock_run_job.call_args.kwargs)
+        assert passed <= sig_params, f"kwargs drifted: {passed - sig_params}"
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch("dev_health_ops.metrics.job_work_items.run_work_items_sync_job")
+    @patch("dev_health_ops.workers.sync_batch._get_db_url")
+    def test_empty_credentials_passed_as_none(self, mock_get_db_url, mock_run_job):
+        """An empty credentials dict must not masquerade as real credentials."""
+        from dev_health_ops.workers.sync_batch import _run_sync_for_repo
+
+        mock_get_db_url.return_value = "clickhouse://ch:ch@clickhouse:8123/default"
+
+        task = _run_sync_for_repo
+        task.push_request(id="repo-sync-empty-creds")
+        try:
+            task(
+                config_id="cfg-1",
+                org_id="org-1",
+                triggered_by="schedule",
+                provider="github",
+                sync_targets=["work-items"],
+                sync_options_override={"owner": "full-chaos", "repo": "threads-cli"},
+                credentials={},
+                config_name="chaos-all",
+            )
+        finally:
+            task.pop_request()
+
+        assert mock_run_job.call_args.kwargs["credentials"] is None

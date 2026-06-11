@@ -30,6 +30,11 @@ from dev_health_ops.workers.task_utils import (
 
 logger = logging.getLogger(__name__)
 
+# Seconds between the start of consecutive batches when fanning out per-repo
+# sync tasks. Staggering avoids hammering the provider API with every repo at
+# once (GitHub secondary rate limits, CHAOS-2272). Batch 0 starts immediately.
+BATCH_STAGGER_SECONDS = 60
+
 
 def _set_run_duration(run_record, completed_at: datetime) -> None:
     """Compute duration_seconds from started_at when available."""
@@ -432,6 +437,16 @@ def dispatch_batch_sync(
         ]
         total_batches = len(batches)
 
+        # Stagger batches so all repos don't sync concurrently: tasks in
+        # batch N start ~N*BATCH_STAGGER_SECONDS after dispatch. The single
+        # chord over all tasks is preserved so the callback still fires
+        # exactly once after every child completes.
+        for batch_index, batch in enumerate(batches):
+            if batch_index == 0:
+                continue
+            for child in batch:
+                child.set(countdown=batch_index * BATCH_STAGGER_SECONDS)
+
         all_tasks = [task for batch in batches for task in batch]
         chord(
             group(all_tasks),
@@ -475,6 +490,7 @@ def dispatch_batch_sync(
     bind=True,
     max_retries=3,
     queue="sync",
+    rate_limit="30/m",
     name="dev_health_ops.workers.tasks._run_sync_for_repo",
 )
 def _run_sync_for_repo(

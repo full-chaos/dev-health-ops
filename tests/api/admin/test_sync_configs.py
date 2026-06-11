@@ -394,6 +394,101 @@ async def test_update_sync_config_merges_top_level_schedule_fields(
 
 
 @pytest.mark.asyncio
+async def test_update_sync_config_explicit_null_clears_schedule(client, session_maker):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(ac, name="clear-schedule")
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    with (
+        patch(
+            "dev_health_ops.licensing.gating._check_org_feature_async",
+            return_value=True,
+        ),
+        patch.object(sync_router_module, "Croniter", _CroniterStub),
+    ):
+        set_resp = await ac.patch(
+            f"/api/v1/admin/sync-configs/{config_id}",
+            json={"schedule_cron": "0 0 * * *", "timezone": "America/Los_Angeles"},
+        )
+    assert set_resp.status_code == 200, set_resp.text
+
+    # Clear the schedule. The payload also carries a stale nested copy of the
+    # old cron (what a stale client sends); it must NOT resurrect the schedule.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={
+            "schedule_cron": None,
+            "timezone": "America/Los_Angeles",
+            "sync_options": {
+                "owner": "full-chaos",
+                "schedule_cron": "0 0 * * *",
+            },
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "schedule_cron" not in data["sync_options"]
+    assert data["sync_options"]["owner"] == "full-chaos"
+    assert data["sync_options"]["timezone"] == "America/Los_Angeles"
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+    assert "schedule_cron" not in config.sync_options
+    assert config.sync_options["owner"] == "full-chaos"
+
+
+@pytest.mark.asyncio
+async def test_update_sync_config_omitted_schedule_fields_left_unchanged(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(ac, name="omit-schedule")
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    with (
+        patch(
+            "dev_health_ops.licensing.gating._check_org_feature_async",
+            return_value=True,
+        ),
+        patch.object(sync_router_module, "Croniter", _CroniterStub),
+    ):
+        set_resp = await ac.patch(
+            f"/api/v1/admin/sync-configs/{config_id}",
+            json={"schedule_cron": "30 2 * * *", "timezone": "Europe/Berlin"},
+        )
+    assert set_resp.status_code == 200, set_resp.text
+
+    # Omitting schedule fields entirely must leave the stored values untouched.
+    resp = await ac.patch(
+        f"/api/v1/admin/sync-configs/{config_id}",
+        json={"is_active": False},
+    )
+
+    assert resp.status_code == 200, resp.text
+    async with session_maker() as session:
+        config = (
+            await session.execute(
+                select(SyncConfiguration).where(
+                    SyncConfiguration.id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+    assert config.is_active is False
+    assert config.sync_options["schedule_cron"] == "30 2 * * *"
+    assert config.sync_options["timezone"] == "Europe/Berlin"
+
+
+@pytest.mark.asyncio
 async def test_schedule_job_upsert_propagates_schedule_cron(
     client, session_maker, seeded_state
 ):

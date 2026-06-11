@@ -932,6 +932,201 @@ class TestLinearProviderIngest:
         }
 
 
+class TestLinearClientRetry:
+    """Retry/backoff behaviour of LinearClient._execute (CHAOS-2280)."""
+
+    @staticmethod
+    def _make_client() -> Any:
+        from dev_health_ops.providers.linear.client import LinearAuth, LinearClient
+
+        return LinearClient(auth=LinearAuth(api_key="test-key"))
+
+    @staticmethod
+    def _response(
+        status_code: int,
+        *,
+        json_data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        import httpx
+
+        from dev_health_ops.providers.linear.client import LINEAR_API_URL
+
+        return httpx.Response(
+            status_code,
+            json=json_data if json_data is not None else {},
+            headers=headers,
+            request=httpx.Request("POST", LINEAR_API_URL),
+        )
+
+    @pytest.fixture
+    def sleeps(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        recorded: list[float] = []
+        monkeypatch.setattr(
+            "time.sleep", lambda seconds: recorded.append(float(seconds))
+        )
+        return recorded
+
+    def test_429_retry_after_honored(self, sleeps: list[float]) -> None:
+        client = self._make_client()
+        client._client.post = MagicMock(
+            side_effect=[
+                self._response(429, headers={"Retry-After": "7"}),
+                self._response(200, json_data={"data": {"ok": True}}),
+            ]
+        )
+
+        result = client._execute("query { viewer { id } }")
+
+        assert result == {"ok": True}
+        assert client._client.post.call_count == 2
+        assert sleeps, "expected a backoff sleep after the 429"
+        assert sleeps[0] == pytest.approx(7.0, abs=0.5)
+
+    def test_429_retry_after_clamped_to_max_backoff(self, sleeps: list[float]) -> None:
+        client = self._make_client()
+        client._client.post = MagicMock(
+            side_effect=[
+                self._response(429, headers={"Retry-After": "100000"}),
+                self._response(200, json_data={"data": {}}),
+            ]
+        )
+
+        client._execute("query { viewer { id } }")
+
+        assert sleeps[0] == pytest.approx(300.0, abs=0.5)
+
+    def test_429_retries_bounded(self, sleeps: list[float]) -> None:
+        from dev_health_ops.providers.linear.client import LinearRateLimitError
+
+        client = self._make_client()
+        client._client.post = MagicMock(
+            side_effect=lambda *a, **kw: self._response(429)
+        )
+
+        with pytest.raises(LinearRateLimitError, match="giving up after 5 attempts"):
+            client._execute("query { viewer { id } }")
+
+        assert client._client.post.call_count == 5
+
+    def test_429_backoff_grows_exponentially(self, sleeps: list[float]) -> None:
+        from dev_health_ops.providers.linear.client import LinearRateLimitError
+
+        client = self._make_client()
+        client._client.post = MagicMock(
+            side_effect=lambda *a, **kw: self._response(429)
+        )
+
+        with pytest.raises(LinearRateLimitError):
+            client._execute("query { viewer { id } }")
+
+        # 5 attempts -> 4 backoff sleeps between attempts: ~1s, 2s, 4s, 8s.
+        assert len(sleeps) == 4
+        for expected, actual in zip([1.0, 2.0, 4.0, 8.0], sleeps, strict=True):
+            assert actual == pytest.approx(expected, abs=0.5)
+
+    def test_success_after_retry_resets_backoff(self, sleeps: list[float]) -> None:
+        client = self._make_client()
+        client._client.post = MagicMock(
+            side_effect=[
+                self._response(429),
+                self._response(200, json_data={"data": {"ok": 1}}),
+            ]
+        )
+
+        result = client._execute("query { viewer { id } }")
+
+        assert result == {"ok": 1}
+        # Gate backoff state is reset on success so the next 429 starts
+        # from the initial backoff again, not the escalated one.
+        assert client.gate._current_backoff == pytest.approx(1.0)
+
+    def test_graphql_error_not_retried(self, sleeps: list[float]) -> None:
+        from dev_health_ops.providers.linear.client import LinearGraphQLError
+
+        client = self._make_client()
+        client._client.post = MagicMock(
+            return_value=self._response(
+                200, json_data={"errors": [{"message": "boom"}]}
+            )
+        )
+
+        with pytest.raises(LinearGraphQLError, match="boom"):
+            client._execute("query { viewer { id } }")
+
+        assert client._client.post.call_count == 1
+
+    def test_graphql_error_is_runtime_error_for_back_compat(self) -> None:
+        from dev_health_ops.providers.linear.client import LinearGraphQLError
+
+        assert issubclass(LinearGraphQLError, RuntimeError)
+
+    def test_complexity_error_raises_distinct_type_without_retry(
+        self, sleeps: list[float]
+    ) -> None:
+        from dev_health_ops.providers.linear.client import LinearComplexityLimitError
+
+        client = self._make_client()
+        client._client.post = MagicMock(
+            return_value=self._response(
+                400,
+                json_data={
+                    "errors": [
+                        {
+                            "message": (
+                                "Query too complex to execute. Complexity 13145 "
+                                "exceeds maximum complexity of 10000."
+                            )
+                        }
+                    ]
+                },
+            )
+        )
+
+        with pytest.raises(LinearComplexityLimitError, match="restructured"):
+            client._execute("query { everything }")
+
+        assert client._client.post.call_count == 1
+
+    def test_complexity_error_detected_via_extensions_code(
+        self, sleeps: list[float]
+    ) -> None:
+        from dev_health_ops.providers.linear.client import LinearComplexityLimitError
+
+        client = self._make_client()
+        client._client.post = MagicMock(
+            return_value=self._response(
+                400,
+                json_data={
+                    "errors": [
+                        {
+                            "message": "Request rejected.",
+                            "extensions": {"code": "COMPLEXITY_TOO_HIGH"},
+                        }
+                    ]
+                },
+            )
+        )
+
+        with pytest.raises(LinearComplexityLimitError):
+            client._execute("query { everything }")
+
+        assert client._client.post.call_count == 1
+
+    def test_http_error_without_graphql_errors_raises(
+        self, sleeps: list[float]
+    ) -> None:
+        import httpx
+
+        client = self._make_client()
+        client._client.post = MagicMock(return_value=self._response(500))
+
+        with pytest.raises(httpx.HTTPStatusError):
+            client._execute("query { viewer { id } }")
+
+        assert client._client.post.call_count == 1
+
+
 class TestLinearClientInlineQuery:
     def test_issues_query_includes_inline_history(self) -> None:
         from dev_health_ops.providers.linear.client import ISSUES_QUERY

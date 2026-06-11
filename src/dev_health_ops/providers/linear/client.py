@@ -9,11 +9,39 @@ from typing import Any
 
 import httpx
 
+from dev_health_ops.connectors.utils.rate_limit_queue import (
+    RateLimitConfig,
+    RateLimitGate,
+)
+from dev_health_ops.providers._ratelimit import penalize_from_response
 from dev_health_ops.providers.utils import EnvSpec, read_env_spec
 
 logger = logging.getLogger(__name__)
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
+
+DEFAULT_MAX_ATTEMPTS = 5
+
+
+class LinearGraphQLError(RuntimeError):
+    """Linear returned GraphQL-level errors for a request.
+
+    Subclasses ``RuntimeError`` for backwards compatibility with callers
+    that previously caught the generic error raised here.
+    """
+
+
+class LinearComplexityLimitError(LinearGraphQLError):
+    """Linear rejected the query for exceeding its GraphQL complexity limit.
+
+    Not retryable: the query itself must be restructured (e.g. smaller
+    nested page sizes). See Linear's 10,000-complexity budget.
+    """
+
+
+class LinearRateLimitError(RuntimeError):
+    """Linear kept returning HTTP 429 after exhausting all retry attempts."""
+
 
 ISSUES_QUERY = """
 query Issues($first: Int!, $after: String, $filter: IssueFilter) {
@@ -321,9 +349,13 @@ class LinearClient:
         *,
         auth: LinearAuth,
         per_page: int = 50,
+        gate: RateLimitGate | None = None,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     ) -> None:
         self.auth = auth
         self.per_page = max(1, min(100, int(per_page)))
+        self.gate = gate or RateLimitGate(RateLimitConfig(initial_backoff_seconds=1.0))
+        self.max_attempts = max(1, int(max_attempts))
         self._rate_limit: RateLimitInfo | None = None
         self._client = httpx.Client(
             headers={
@@ -348,30 +380,74 @@ class LinearClient:
         query: str,
         variables: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        self._wait_for_rate_limit()
-
         payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        response = self._client.post(LINEAR_API_URL, json=payload)
-        self._update_rate_limit(response)
+        last_delay = 0.0
+        for attempt in range(1, self.max_attempts + 1):
+            self.gate.wait_sync()
+            self._wait_for_rate_limit()
 
-        if response.status_code == 429:
-            retry_after = self._get_retry_after(response)
-            logger.warning("Linear rate limit hit, waiting %ds", retry_after)
-            time.sleep(retry_after)
-            return self._execute(query, variables)
+            response = self._client.post(LINEAR_API_URL, json=payload)
+            self._update_rate_limit(response)
 
-        response.raise_for_status()
-        data = response.json()
+            if response.status_code == 429:
+                # Respect Retry-After when present; otherwise the gate
+                # applies exponential backoff (1s * 2^n, capped at the
+                # gate's max_backoff_seconds).
+                last_delay = penalize_from_response(self.gate, response)
+                logger.warning(
+                    "Linear rate limit hit (attempt %d/%d), backing off %.1fs",
+                    attempt,
+                    self.max_attempts,
+                    last_delay,
+                )
+                continue
 
-        if "errors" in data:
-            errors = data["errors"]
-            error_msg = "; ".join(e.get("message", str(e)) for e in errors)
-            raise RuntimeError(f"Linear GraphQL error: {error_msg}")
+            body = self._parse_body(response)
 
-        return data.get("data", {})
+            # GraphQL-level errors (including complexity-limit rejections,
+            # which Linear returns as HTTP 400) are never retried.
+            errors = body.get("errors") if isinstance(body, dict) else None
+            if errors:
+                self._raise_graphql_errors(errors)
+
+            response.raise_for_status()
+            self.gate.reset()
+            data = body if isinstance(body, dict) else {}
+            return data.get("data") or {}
+
+        raise LinearRateLimitError(
+            f"Linear API rate limited: giving up after {self.max_attempts} "
+            f"attempts (last backoff {last_delay:.1f}s)"
+        )
+
+    @staticmethod
+    def _parse_body(response: httpx.Response) -> Any:
+        try:
+            return response.json()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _raise_graphql_errors(errors: list[dict[str, Any]]) -> None:
+        error_msg = "; ".join(e.get("message", str(e)) for e in errors)
+        if any(LinearClient._is_complexity_error(e) for e in errors):
+            raise LinearComplexityLimitError(
+                "Linear GraphQL complexity limit exceeded "
+                f"(query must be restructured, not retried): {error_msg}"
+            )
+        raise LinearGraphQLError(f"Linear GraphQL error: {error_msg}")
+
+    @staticmethod
+    def _is_complexity_error(error: dict[str, Any]) -> bool:
+        message = str(error.get("message", "")).lower()
+        if "complexity" in message or "too complex" in message:
+            return True
+        extensions = error.get("extensions") or {}
+        code = str(extensions.get("code", "")).upper()
+        return "COMPLEXITY" in code
 
     def _wait_for_rate_limit(self) -> None:
         if self._rate_limit is None:
@@ -400,15 +476,6 @@ class LinearClient:
                 "Headers: %s",
                 dict(headers),
             )
-
-    def _get_retry_after(self, response: httpx.Response) -> int:
-        try:
-            reset_ms = int(response.headers.get("X-RateLimit-Requests-Reset", 0))
-            now_ms = int(time.time() * 1000)
-            wait_s = max(1, (reset_ms - now_ms) // 1000 + 1)
-            return min(wait_s, 3600)
-        except (ValueError, TypeError):
-            return 60
 
     def iter_issues(
         self,

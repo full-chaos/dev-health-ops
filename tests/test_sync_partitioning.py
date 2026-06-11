@@ -1769,3 +1769,248 @@ class TestRunSyncForRepoCredentials:
             task.pop_request()
 
         assert mock_run_job.call_args.kwargs["credentials"] is None
+
+
+class TestCredentialMapping:
+    """credential.config must be visible to the credential resolvers without
+    ever shadowing decrypted secrets (CHAOS-2282 review follow-up)."""
+
+    def test_config_only_values_are_exposed(self):
+        from dev_health_ops.workers.task_utils import _credential_mapping
+
+        credential = SimpleNamespace(
+            credentials_encrypted=None,
+            config={"url": "https://gitlab.example.com"},
+        )
+        assert _credential_mapping(credential) == {"url": "https://gitlab.example.com"}
+
+    def test_decrypted_wins_on_key_collision(self):
+        from dev_health_ops.workers.task_utils import _credential_mapping
+
+        credential = SimpleNamespace(
+            credentials_encrypted="ciphertext",
+            config={"url": "https://config.example.com", "group": "my-group"},
+        )
+        with patch(
+            "dev_health_ops.workers.task_utils._decrypt_credential_sync",
+            return_value={
+                "token": "glpat_secret",
+                "url": "https://decrypted.example.com",
+            },
+        ):
+            mapping = _credential_mapping(credential)
+
+        assert mapping == {
+            "token": "glpat_secret",
+            "url": "https://decrypted.example.com",
+            "group": "my-group",
+        }
+
+    def test_missing_or_invalid_config_returns_decrypted_only(self):
+        from typing import Any
+
+        from dev_health_ops.workers.task_utils import _credential_mapping
+
+        configs: tuple[Any, ...] = (None, {}, "not-a-dict")
+        for config in configs:
+            credential = SimpleNamespace(credentials_encrypted=None, config=config)
+            assert _credential_mapping(credential) == {}
+
+
+class TestDispatchBatchSyncCredentialConfig:
+    """A self-hosted GitLab url stored on credential.config (not in the
+    encrypted secrets) must reach discovery and the batch children."""
+
+    def _dispatch(self, db_session, *, decrypted: dict, config: dict):
+        import uuid as _uuid
+
+        from dev_health_ops.models.settings import IntegrationCredential
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        credential = IntegrationCredential(
+            org_id="default",
+            provider="gitlab",
+            name="default",
+            credentials_encrypted="ciphertext",
+            config=config,
+        )
+        db_session.add(credential)
+        db_session.flush()
+
+        sync_config = _make_config(
+            provider="gitlab",
+            sync_options={"search": "my-group/*"},
+            sync_targets=["git", "prs"],
+        )
+        sync_config.credential_id = credential.id
+        db_session.add(sync_config)
+        db_session.flush()
+
+        captured_kwargs: list[dict] = []
+
+        def _capture_signature(**kwargs):
+            captured_kwargs.append(kwargs)
+            return MagicMock()
+
+        with (
+            patch(
+                "dev_health_ops.workers.sync_batch._run_sync_for_repo"
+            ) as mock_run_for_repo,
+            patch("dev_health_ops.workers.sync_batch.chord", return_value=MagicMock()),
+            patch(
+                "dev_health_ops.discovery.repos.discover_repos_for_config"
+            ) as mock_discover,
+            patch(
+                "dev_health_ops.workers.task_utils._decrypt_credential_sync",
+                return_value=decrypted,
+            ),
+            patch(
+                "dev_health_ops.db.get_postgres_session_sync",
+                side_effect=lambda *a, **k: _fake_session_ctx(db_session),
+            ),
+        ):
+            mock_run_for_repo.s.side_effect = _capture_signature
+            mock_discover.return_value = [("100",)]
+
+            task = dispatch_batch_sync
+            task.push_request(id=f"gl-cred-config-{_uuid.uuid4()}")
+            try:
+                result = task(config_id=str(sync_config.id), org_id="default")
+            finally:
+                task.pop_request()
+
+        return result, mock_discover, captured_kwargs
+
+    def test_config_url_threads_to_discovery_and_children(self, db_session):
+        result, mock_discover, captured = self._dispatch(
+            db_session,
+            decrypted={"token": "glpat_secret"},
+            config={"url": "https://gitlab.example.com"},
+        )
+
+        assert result["status"] == "dispatched"
+        expected = {"url": "https://gitlab.example.com", "token": "glpat_secret"}
+        # Discovery sees the merged mapping (self-hosted instance honoured).
+        assert mock_discover.call_args.args[1] == expected
+        # Children inherit the merged mapping, so resolve_gitlab_url in the
+        # child resolves the self-hosted url too.
+        assert len(captured) == 1
+        assert captured[0]["credentials"] == expected
+
+    def test_decrypted_url_wins_over_config_url(self, db_session):
+        _, mock_discover, captured = self._dispatch(
+            db_session,
+            decrypted={"token": "glpat_secret", "url": "https://decrypted.example.com"},
+            config={"url": "https://config.example.com"},
+        )
+
+        expected = {"token": "glpat_secret", "url": "https://decrypted.example.com"}
+        assert mock_discover.call_args.args[1] == expected
+        assert captured[0]["credentials"] == expected
+
+
+class TestRunSyncConfigGitLabCredentialConfig:
+    """run_sync_config's gitlab branch must honour credential.config URLs:
+    sync_options.gitlab_url -> decrypted url -> credential.config url ->
+    https://gitlab.com (CHAOS-2282 review follow-up)."""
+
+    GITLAB_PROCESSOR = "dev_health_ops.processors.gitlab.process_gitlab_project"
+
+    def _run(
+        self,
+        db_session,
+        *,
+        decrypted: dict,
+        config: dict,
+        sync_options: dict | None = None,
+    ):
+        import uuid as _uuid
+
+        import dev_health_ops.connectors  # noqa: F401  (avoid circular-import on first load)
+        import dev_health_ops.processors.gitlab  # noqa: F401  (make patch target resolvable)
+        from dev_health_ops.models.settings import IntegrationCredential
+        from dev_health_ops.workers.sync_runtime import run_sync_config
+
+        credential = IntegrationCredential(
+            org_id="default",
+            provider="gitlab",
+            name="default",
+            credentials_encrypted="ciphertext",
+            config=config,
+        )
+        db_session.add(credential)
+        db_session.flush()
+
+        sync_config = _make_config(
+            provider="gitlab",
+            sync_options={"project_id": 100, **(sync_options or {})},
+            sync_targets=["git"],
+        )
+        sync_config.credential_id = credential.id
+        db_session.add(sync_config)
+        db_session.flush()
+
+        async def _fake_run_with_store(db_url, db_type, handler, org_id=None):
+            await handler(MagicMock())
+
+        processor_mock = AsyncMock()
+        with (
+            patch(
+                "dev_health_ops.workers.sync_runtime._get_db_url",
+                return_value="clickhouse://localhost/dev",
+            ),
+            patch("dev_health_ops.storage.resolve_db_type", return_value="clickhouse"),
+            patch("dev_health_ops.storage.run_with_store", new=_fake_run_with_store),
+            patch(self.GITLAB_PROCESSOR, processor_mock),
+            patch("dev_health_ops.workers.sync_runtime._dispatch_post_sync_tasks"),
+            patch(
+                "dev_health_ops.workers.task_utils._decrypt_credential_sync",
+                return_value=decrypted,
+            ),
+            patch(
+                "dev_health_ops.db.get_postgres_session_sync",
+                side_effect=lambda *a, **k: _fake_session_ctx(db_session),
+            ),
+        ):
+            task = run_sync_config
+            task.push_request(id=f"gl-runtime-cred-{_uuid.uuid4()}", retries=0)
+            try:
+                result = task(config_id=str(sync_config.id), org_id="default")
+            finally:
+                task.pop_request()
+        return result, processor_mock
+
+    def test_config_only_url_reaches_connector(self, db_session):
+        result, processor = self._run(
+            db_session,
+            decrypted={"token": "glpat_secret"},
+            config={"url": "https://gitlab.example.com"},
+        )
+
+        assert result["status"] == "success"
+        kwargs = processor.await_args.kwargs
+        assert kwargs["gitlab_url"] == "https://gitlab.example.com"
+        assert kwargs["token"] == "glpat_secret"
+
+    def test_decrypted_url_wins_over_config_url(self, db_session):
+        result, processor = self._run(
+            db_session,
+            decrypted={"token": "glpat_secret", "url": "https://decrypted.example.com"},
+            config={"url": "https://config.example.com"},
+        )
+
+        assert result["status"] == "success"
+        assert (
+            processor.await_args.kwargs["gitlab_url"] == "https://decrypted.example.com"
+        )
+
+    def test_sync_options_url_wins_over_everything(self, db_session):
+        result, processor = self._run(
+            db_session,
+            decrypted={"token": "glpat_secret", "url": "https://decrypted.example.com"},
+            config={"url": "https://config.example.com"},
+            sync_options={"gitlab_url": "https://opt.example.com"},
+        )
+
+        assert result["status"] == "success"
+        assert processor.await_args.kwargs["gitlab_url"] == "https://opt.example.com"

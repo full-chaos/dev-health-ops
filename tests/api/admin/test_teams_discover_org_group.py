@@ -18,7 +18,8 @@ import importlib
 import os
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -31,6 +32,7 @@ os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
 from dev_health_ops.api.admin.schemas import DiscoveredTeam
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.configuration import (
+    GitLabDiscoveryResult,
     IntegrationCredentialsService,
     SyncConfigurationService,
 )
@@ -301,7 +303,9 @@ async def test_github_400_when_token_missing(client, session_maker):
 async def test_gitlab_query_param_wins(client, session_maker):
     await _seed_credential(session_maker, "gitlab", config={"group": "config-group"})
 
-    with patch(_GITLAB_DISCOVER, new=AsyncMock(return_value=[])) as mock_discover:
+    with patch(
+        _GITLAB_DISCOVER, new=AsyncMock(return_value=GitLabDiscoveryResult(teams=[]))
+    ) as mock_discover:
         response = await client.get(
             "/api/v1/admin/teams/discover?provider=gitlab&group=param-group"
         )
@@ -310,6 +314,10 @@ async def test_gitlab_query_param_wins(client, session_maker):
     mock_discover.assert_awaited_once_with(
         token="test-token", group_path="param-group", url="https://gitlab.com"
     )
+    # Discovery completed without hitting pagination bounds.
+    data = response.json()
+    assert data["truncated"] is False
+    assert data["warnings"] == []
 
 
 @pytest.mark.asyncio
@@ -320,13 +328,70 @@ async def test_gitlab_derives_group_from_sync_options(client, session_maker):
         session_maker, "gitlab", "my-group/api", {"owner": "my-group"}
     )
 
-    with patch(_GITLAB_DISCOVER, new=AsyncMock(return_value=[])) as mock_discover:
+    with patch(
+        _GITLAB_DISCOVER, new=AsyncMock(return_value=GitLabDiscoveryResult(teams=[]))
+    ) as mock_discover:
         response = await client.get("/api/v1/admin/teams/discover?provider=gitlab")
 
     assert response.status_code == 200, response.text
     mock_discover.assert_awaited_once_with(
         token="test-token", group_path="my-group", url="https://gitlab.com"
     )
+
+
+@pytest.mark.asyncio
+async def test_gitlab_truncated_discovery_surfaces_in_response(client, session_maker):
+    """Partial GitLab walks must be visible to the caller, not silently
+    presented as complete (CHAOS-2281 review follow-up)."""
+    await _seed_credential(session_maker, "gitlab", config={"group": "big-group"})
+
+    warning = (
+        "GitLab team discovery truncated projects for 'big-group' at "
+        "500 results; the import may be incomplete."
+    )
+    result = GitLabDiscoveryResult(
+        teams=[_team("gitlab", "big-group/platform")],
+        truncated=True,
+        warnings=[warning],
+    )
+    with patch(_GITLAB_DISCOVER, new=AsyncMock(return_value=result)):
+        response = await client.get("/api/v1/admin/teams/discover?provider=gitlab")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 1
+    assert data["truncated"] is True
+    assert data["warnings"] == [warning]
+
+
+@pytest.mark.asyncio
+async def test_gitlab_truncation_aggregates_across_groups(client, session_maker):
+    """With multiple derived groups, one truncated walk flags the whole
+    response and all warnings are preserved."""
+    await _seed_credential(session_maker, "gitlab")
+    await _seed_sync_config(session_maker, "gitlab", "grp-a/api", {"owner": "grp-a"})
+    await _seed_sync_config(session_maker, "gitlab", "grp-b/web", {"owner": "grp-b"})
+
+    results = {
+        "grp-a": GitLabDiscoveryResult(teams=[_team("gitlab", "grp-a/x")]),
+        "grp-b": GitLabDiscoveryResult(
+            teams=[_team("gitlab", "grp-b/y")],
+            truncated=True,
+            warnings=["GitLab team discovery truncated subgroups for 'grp-b'"],
+        ),
+    }
+
+    async def _discover(token: str, group_path: str, url: str):
+        return results[group_path]
+
+    with patch(_GITLAB_DISCOVER, new=AsyncMock(side_effect=_discover)):
+        response = await client.get("/api/v1/admin/teams/discover?provider=gitlab")
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 2
+    assert data["truncated"] is True
+    assert data["warnings"] == ["GitLab team discovery truncated subgroups for 'grp-b'"]
 
 
 @pytest.mark.asyncio
@@ -360,3 +425,69 @@ async def test_derivation_ignores_other_orgs_sync_configs(client, session_maker)
     response = await client.get("/api/v1/admin/teams/discover?provider=github")
 
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GitLab discovery truncation (service level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discover_gitlab_flags_truncation_when_bound_hit(monkeypatch):
+    """When the project walk exceeds the discovery bound, the result is
+    truncated to the bound and explicitly flagged instead of silently
+    presented as complete."""
+    from dev_health_ops.api.services.configuration import team_discovery as td
+
+    monkeypatch.setattr(td, "MAX_GITLAB_DISCOVERY_PROJECTS", 2)
+
+    root_group = MagicMock()
+    root_group.full_path = "big-group"
+    root_group.name = "Big Group"
+    root_group.description = None
+    root_group.subgroups.list.return_value = iter([])
+    root_group.projects.list.return_value = iter(
+        SimpleNamespace(path_with_namespace=f"big-group/p{i}") for i in range(5)
+    )
+
+    fake_gl = MagicMock()
+    fake_gl.groups.get.return_value = root_group
+
+    with patch("gitlab.Gitlab", return_value=fake_gl):
+        svc = td.TeamDiscoveryService(None, ORG_ID)
+        result = await svc.discover_gitlab(token="t", group_path="big-group")
+
+    assert result.truncated is True
+    assert any("truncated projects" in w for w in result.warnings)
+    assert len(result.teams) == 1
+    assert result.teams[0].associations["repo_patterns"] == [
+        "big-group/p0",
+        "big-group/p1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_discover_gitlab_not_truncated_under_bound(monkeypatch):
+    from dev_health_ops.api.services.configuration import team_discovery as td
+
+    monkeypatch.setattr(td, "MAX_GITLAB_DISCOVERY_PROJECTS", 10)
+
+    root_group = MagicMock()
+    root_group.full_path = "small-group"
+    root_group.name = "Small Group"
+    root_group.description = None
+    root_group.subgroups.list.return_value = iter([])
+    root_group.projects.list.return_value = iter(
+        [SimpleNamespace(path_with_namespace="small-group/only")]
+    )
+
+    fake_gl = MagicMock()
+    fake_gl.groups.get.return_value = root_group
+
+    with patch("gitlab.Gitlab", return_value=fake_gl):
+        svc = td.TeamDiscoveryService(None, ORG_ID)
+        result = await svc.discover_gitlab(token="t", group_path="small-group")
+
+    assert result.truncated is False
+    assert result.warnings == []
+    assert len(result.teams) == 1

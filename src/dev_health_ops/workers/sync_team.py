@@ -103,9 +103,12 @@ async def _discover_and_sync_all(org_id: str | None) -> dict:
                     return {"provider": provider, "skipped": "missing_config"}
                 if not isinstance(url, str) or not url:
                     return {"provider": provider, "skipped": "missing_config"}
-                teams = await discovery_svc.discover_gitlab(
+                gitlab_result = await discovery_svc.discover_gitlab(
                     token=token, group_path=group_path, url=url
                 )
+                # Truncation is logged server-side by the discovery walk;
+                # drift sync only consumes the (possibly partial) teams.
+                teams = gitlab_result.teams
             else:
                 email = decrypted.get("email")
                 api_token = decrypted.get("api_token") or decrypted.get("token")

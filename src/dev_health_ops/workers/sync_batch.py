@@ -23,7 +23,7 @@ from dev_health_ops.workers.sync_runtime import (
     run_sync_config,
 )
 from dev_health_ops.workers.task_utils import (
-    _decrypt_credential_sync,
+    _credential_mapping,
     _extract_provider_token,
     _get_db_url,
     _inject_provider_token,
@@ -352,7 +352,9 @@ def dispatch_batch_sync(
                     raise _TerminalSyncError(
                         f"Credential not found: {config.credential_id}"
                     )
-                credentials = _decrypt_credential_sync(credential)
+                # Merge non-sensitive credential.config (e.g. self-hosted
+                # GitLab url) under the decrypted secrets (CHAOS-2282).
+                credentials = _credential_mapping(credential)
             else:
                 credentials = _resolve_env_credentials(provider)
 

@@ -179,6 +179,8 @@ async def discover_teams(
 
     config: dict[str, Any] = getattr(credential, "config") or {}
     discovery_svc = TeamDiscoveryService(session, org_id)
+    truncated = False
+    warnings: list[str] = []
 
     if provider == "github":
         token = decrypted.get("token")
@@ -240,13 +242,14 @@ async def discover_teams(
             )
         discovered_gitlab: list[Any] = []
         for group_path in group_paths:
-            discovered_gitlab.extend(
-                await discovery_svc.discover_gitlab(
-                    token=token,
-                    group_path=group_path,
-                    url=url,
-                )
+            gitlab_result = await discovery_svc.discover_gitlab(
+                token=token,
+                group_path=group_path,
+                url=url,
             )
+            discovered_gitlab.extend(gitlab_result.teams)
+            truncated = truncated or gitlab_result.truncated
+            warnings.extend(gitlab_result.warnings)
         teams = _dedupe_teams(discovered_gitlab)
     elif provider == "linear":
         api_key = decrypted.get("apiKey") or decrypted.get("api_key")
@@ -275,7 +278,13 @@ async def discover_teams(
             url=jira_url,
         )
 
-    return TeamDiscoverResponse(provider=provider, teams=teams, total=len(teams))
+    return TeamDiscoverResponse(
+        provider=provider,
+        teams=teams,
+        total=len(teams),
+        truncated=truncated,
+        warnings=warnings,
+    )
 
 
 @router.post("/teams/import", response_model=TeamImportResponse)

@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import (
     _as_str,
-    _decrypt_credential_sync,
+    _credential_mapping,
     _extract_provider_token,
     _get_db_url,
     _inject_provider_token,
@@ -68,7 +68,9 @@ def run_backfill(
                     raise ValueError(
                         f"Credential not found for sync configuration: {config.credential_id}"
                     )
-                credentials = _decrypt_credential_sync(credential)
+                # Merge non-sensitive credential.config (e.g. self-hosted
+                # GitLab url) under the decrypted secrets (CHAOS-2282).
+                credentials = _credential_mapping(credential)
             else:
                 credentials = _resolve_env_credentials(provider)
 

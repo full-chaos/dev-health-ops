@@ -23,6 +23,15 @@ task_track_started = True
 task_time_limit = 3600  # 1 hour max per task
 task_soft_time_limit = 3300  # Soft limit at 55 minutes
 
+# Worker settings
+# Long-running tasks (sync, stream consumers) make prefetching dangerous:
+# with the default multiplier (4) a 2-slot worker reserves up to 8 messages,
+# and once those reservations fill with slow-queue messages the QoS window
+# never opens — newer messages on other queues (e.g. Sync Now on `sync`)
+# are never fetched until a restart releases the unacked reservations.
+# One-at-a-time fetching keeps cross-queue round-robin fair (CHAOS-2277).
+worker_prefetch_multiplier = 1
+
 # Retry settings
 task_default_retry_delay = 60  # 1 minute between retries
 task_max_retries = 3

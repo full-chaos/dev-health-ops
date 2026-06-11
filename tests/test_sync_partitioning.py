@@ -419,9 +419,11 @@ class TestDispatchBatchSync:
         mock_discover,
         mock_run_sync,
         db_session,
+        monkeypatch,
     ):
         from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         config = _make_config(
             provider="github",
             sync_options={"search": "org/*"},
@@ -1536,29 +1538,74 @@ class TestTaskRegistration:
 
 
 class TestSyncQueueForProvider:
-    """Per-provider queue routing helper (CHAOS-2299). To be absorbed by
-    SyncDispatchPolicy (CHAOS-2284) when that lands."""
+    """Per-provider queue routing helper (CHAOS-2299), gated by the
+    PROVIDER_SYNC_QUEUES_ENABLED env flag (default OFF) so consumers with
+    expanded -Q lists deploy before producers start routing — a producer on
+    the new code with old-`-Q` workers would otherwise strand syncs on queues
+    nothing consumes. To be absorbed by SyncDispatchPolicy (CHAOS-2284)."""
 
     @pytest.mark.parametrize(
         "provider", ["github", "gitlab", "linear", "jira", "launchdarkly"]
     )
-    def test_known_providers_get_dedicated_queue(self, provider):
+    def test_known_providers_get_dedicated_queue_when_enabled(
+        self, provider, monkeypatch
+    ):
         from dev_health_ops.workers.queues import sync_queue_for_provider
 
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         assert sync_queue_for_provider(provider) == f"sync.{provider}"
 
-    @pytest.mark.parametrize("provider", ["", "local", "bitbucket", "unknown"])
-    def test_unknown_providers_fall_back_to_shared_queue(self, provider):
+    @pytest.mark.parametrize(
+        "provider", ["github", "gitlab", "linear", "jira", "launchdarkly", "unknown"]
+    )
+    def test_flag_unset_routes_everything_to_shared_queue(self, provider, monkeypatch):
+        """Default-off: mixed deploys (producers upgraded, consumers not yet)
+        must keep every sync on the legacy shared queue."""
         from dev_health_ops.workers.queues import sync_queue_for_provider
 
+        monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
         assert sync_queue_for_provider(provider) == "sync"
 
-    def test_normalizes_case_and_whitespace(self):
+    @pytest.mark.parametrize("value", ["false", "0", "no", "", "off", "bogus"])
+    def test_falsy_flag_values_route_to_shared_queue(self, value, monkeypatch):
         from dev_health_ops.workers.queues import sync_queue_for_provider
 
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", value)
+        assert sync_queue_for_provider("github") == "sync"
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "TRUE", " True "])
+    def test_truthy_flag_values_enable_provider_queues(self, value, monkeypatch):
+        from dev_health_ops.workers.queues import sync_queue_for_provider
+
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", value)
+        assert sync_queue_for_provider("github") == "sync.github"
+
+    def test_flag_is_read_at_call_time_not_import_time(self, monkeypatch):
+        """Ops must be able to flip the flag without import-order pain: the
+        same already-imported function changes behavior with the env."""
+        from dev_health_ops.workers.queues import sync_queue_for_provider
+
+        monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
+        assert sync_queue_for_provider("linear") == "sync"
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
+        assert sync_queue_for_provider("linear") == "sync.linear"
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "false")
+        assert sync_queue_for_provider("linear") == "sync"
+
+    @pytest.mark.parametrize("provider", ["", "local", "bitbucket", "unknown"])
+    def test_unknown_providers_fall_back_to_shared_queue(self, provider, monkeypatch):
+        from dev_health_ops.workers.queues import sync_queue_for_provider
+
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
+        assert sync_queue_for_provider(provider) == "sync"
+
+    def test_normalizes_case_and_whitespace(self, monkeypatch):
+        from dev_health_ops.workers.queues import sync_queue_for_provider
+
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         assert sync_queue_for_provider(" GitHub ") == "sync.github"
 
-    def test_every_routable_queue_is_declared_in_task_queues(self):
+    def test_every_routable_queue_is_declared_in_task_queues(self, monkeypatch):
         """Routing to an undeclared queue would strand messages: every queue
         the helper can return must exist in workers.config.task_queues (which
         the compose -Q coverage test then ties to a consumer)."""
@@ -1568,9 +1615,12 @@ class TestSyncQueueForProvider:
             sync_queue_for_provider,
         )
 
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         for provider in SYNC_QUEUE_PROVIDERS:
             assert sync_queue_for_provider(provider) in task_queues
         assert sync_queue_for_provider("unknown") in task_queues
+        monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED")
+        assert sync_queue_for_provider("github") in task_queues
 
 
 class TestBatchChildrenQueueRouting:
@@ -1587,9 +1637,11 @@ class TestBatchChildrenQueueRouting:
         mock_discover,
         mock_chord,
         db_session,
+        monkeypatch,
     ):
         from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         config = _make_config(
             provider="github",
             sync_options={"search": "org/*", "batch_size": 2},
@@ -1629,9 +1681,11 @@ class TestBatchChildrenQueueRouting:
         mock_discover,
         mock_chord,
         db_session,
+        monkeypatch,
     ):
         from dev_health_ops.workers.sync_batch import dispatch_batch_sync
 
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         config = _make_config(
             provider="gitlab",
             sync_options={"search": "my-group/*"},
@@ -1659,6 +1713,51 @@ class TestBatchChildrenQueueRouting:
             "sync.gitlab"
         ]
         assert callback.options.get("queue") == "sync.gitlab"
+
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_flag_off_children_stay_on_shared_queue(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        db_session,
+        monkeypatch,
+    ):
+        """With PROVIDER_SYNC_QUEUES_ENABLED unset (the default) the chord
+        children and callback stay on the legacy shared `sync` queue."""
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
+        config = _make_config(
+            provider="github",
+            sync_options={"search": "org/*"},
+            sync_targets=["git"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.return_value = [("org", "repo-1")]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-dispatch-flag-off")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        args, _ = mock_chord.call_args
+        header_group, callback = args[0], args[1]
+        for sig in header_group.tasks:
+            assert sig.options.get("queue") == "sync"
+        assert callback.options.get("queue") == "sync"
 
 
 class TestInjectProviderToken:

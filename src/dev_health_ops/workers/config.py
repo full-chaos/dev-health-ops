@@ -56,6 +56,11 @@ task_queues: dict[str, dict[str, Any]] = {
     "webhooks": {},
     "ingest": {},
     "reports": {},
+    # Dedicated telemetry queue: monitor_queue_depths must not share a queue
+    # with floodable work — if `default` backs up, queue-depth telemetry would
+    # die exactly when it is needed. Consumed by BOTH `worker` and
+    # `worker-heavy` in compose.yml for redundancy.
+    "monitoring": {},
 }
 
 # Beat schedule (periodic tasks)
@@ -116,7 +121,9 @@ beat_schedule = {
     "monitor-queue-depths": {
         "task": "dev_health_ops.workers.tasks.monitor_queue_depths",
         "schedule": 60.0,
-        "options": {"queue": "default"},
+        # Dedicated `monitoring` queue: telemetry must keep flowing even when
+        # `default` floods (that is precisely when it is needed).
+        "options": {"queue": "monitoring"},
     },
 }
 

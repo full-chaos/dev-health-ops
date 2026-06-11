@@ -115,6 +115,11 @@ services:
       PGBOUNCER_TRANSACTION_MODE: "true"
       CLICKHOUSE_URI: "clickhouse://ch:ch@clickhouse:8123/default"
       REDIS_URL: "redis://valkey:6379/1"
+      # CHAOS-2299: route sync dispatch to per-provider queues. Safe to enable
+      # here because the worker -Q lists below consume sync.<provider> in the
+      # SAME change. Bare-image deployments must follow the two-phase rollout
+      # in workers/queues.py: expand consumer -Q lists first, then flip this.
+      PROVIDER_SYNC_QUEUES_ENABLED: "true"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}
@@ -205,6 +210,8 @@ services:
   #                     (per-provider sync queues, CHAOS-2299)
   #   worker-ingest — blocking stream consumers, isolated at concurrency 1
   #   worker-heavy  — long batch jobs: metrics,backfill
+  # `monitoring` (queue-depth telemetry) is consumed by BOTH worker and
+  # worker-heavy so telemetry survives one pool flooding (CHAOS-2299).
   # ---------------------------------------------------------------------------
   worker: &worker-base
     build:
@@ -214,7 +221,7 @@ services:
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: worker
-    command: celery -A workers.celery_app worker --loglevel=info -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,webhooks,reports --concurrency=${WORKER_CONCURRENCY:-4}
+    command: celery -A workers.celery_app worker --loglevel=info -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,webhooks,reports,monitoring --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       <<: *env
       CELERY_BROKER_URL: redis://valkey:6379/0
@@ -242,7 +249,9 @@ services:
   worker-heavy:
     <<: *worker-base
     container_name: worker-heavy
-    command: celery -A workers.celery_app worker --loglevel=info -Q metrics,backfill --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
+    # `monitoring` is consumed here AND by `worker` above: queue telemetry
+    # survives either pool being saturated or down.
+    command: celery -A workers.celery_app worker --loglevel=info -Q metrics,backfill,monitoring --concurrency=${WORKER_HEAVY_CONCURRENCY:-2}
 
   # ---------------------------------------------------------------------------
   # Observability — SigNoz (distributed tracing + metrics)

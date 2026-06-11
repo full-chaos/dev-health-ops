@@ -218,5 +218,6 @@ class TestTaskRegistration:
         assert hasattr(exported, "delay")
         assert exported.name == "dev_health_ops.workers.tasks.monitor_queue_depths"
 
-    def test_monitor_task_runs_on_default_queue(self):
-        assert monitor_queue_depths.queue == "default"
+    def test_monitor_task_runs_on_monitoring_queue(self):
+        """Dedicated queue: a flooded `default` must not starve telemetry."""
+        assert monitor_queue_depths.queue == "monitoring"

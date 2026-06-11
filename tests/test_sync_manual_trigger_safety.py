@@ -58,6 +58,7 @@ def test_run_sync_config_unknown_config_is_terminal_without_retry(monkeypatch):
 )
 @pytest.mark.asyncio
 async def test_trigger_sync_config_dispatches_resolved_config_id_and_org(monkeypatch):
+    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
     request_id = uuid.uuid4()
     resolved_id = uuid.uuid4()
     calls = []

@@ -75,13 +75,46 @@ def test_celery_config_has_per_provider_sync_queues() -> None:
 
 
 def test_queue_monitor_beat_entry() -> None:
-    """CHAOS-2299: queue depth/age telemetry runs every minute on `default`."""
+    """CHAOS-2299: queue depth/age telemetry runs every minute on a dedicated
+    `monitoring` queue — not `default`, which can flood (telemetry would die
+    exactly when it is needed)."""
     from dev_health_ops.workers.config import beat_schedule
 
     entry = beat_schedule["monitor-queue-depths"]
     assert entry["task"] == "dev_health_ops.workers.tasks.monitor_queue_depths"
     assert entry["schedule"] == 60.0
-    assert entry["options"] == {"queue": "default"}
+    assert entry["options"] == {"queue": "monitoring"}
+
+
+def test_monitoring_queue_declared_and_consumed_redundantly() -> None:
+    """The `monitoring` queue must exist in task_queues and be consumed by at
+    least two compose worker services so queue telemetry survives one pool
+    being saturated or down."""
+    assert "monitoring" in task_queues
+
+    compose_path = Path(__file__).resolve().parents[1] / "compose.yml"
+    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+
+    consumers: list[str] = []
+    for name, service in compose_data["services"].items():
+        command = service.get("command")
+        if command is None:
+            continue
+        command_str = (
+            " ".join(str(part) for part in command)
+            if isinstance(command, list)
+            else str(command)
+        )
+        tokens = command_str.split()
+        if "celery" not in tokens or "worker" not in tokens:
+            continue
+        if "monitoring" in _parse_queues(command_str):
+            consumers.append(name)
+
+    assert len(consumers) >= 2, (
+        f"`monitoring` must be consumed by >=2 worker services for redundancy, "
+        f"found: {sorted(consumers)}"
+    )
 
 
 def test_celery_worker_prefetch_multiplier_is_one() -> None:

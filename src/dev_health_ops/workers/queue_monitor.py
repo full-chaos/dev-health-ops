@@ -83,7 +83,10 @@ def _oldest_age_seconds(channel: Any, queue: str, now: datetime) -> float | None
 
 @celery_app.task(
     bind=True,
-    queue="default",
+    # Dedicated telemetry queue (consumed by both `worker` and `worker-heavy`
+    # in compose.yml): if `default` floods, this monitor must keep running —
+    # that is exactly the moment its output matters.
+    queue="monitoring",
     name="dev_health_ops.workers.tasks.monitor_queue_depths",
 )
 def monitor_queue_depths(self) -> dict:

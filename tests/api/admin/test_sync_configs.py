@@ -622,8 +622,9 @@ async def test_delete_nonexistent_sync_config_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_returns_202_with_task_id(client):
+async def test_trigger_sync_config_returns_202_with_task_id(client, monkeypatch):
     ac, _ = client
+    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
 
     create_resp = await _create_sync_config(ac, name="trigger-test")
     assert create_resp.status_code == 201
@@ -646,8 +647,11 @@ async def test_trigger_sync_config_returns_202_with_task_id(client):
 
 
 @pytest.mark.asyncio
-async def test_trigger_sync_config_routes_batch_eligible_to_batch_task(client):
+async def test_trigger_sync_config_routes_batch_eligible_to_batch_task(
+    client, monkeypatch
+):
     ac, _ = client
+    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
 
     create_resp = await ac.post(
         "/api/v1/admin/sync-configs",
@@ -691,10 +695,13 @@ async def test_trigger_sync_config_routes_batch_eligible_to_batch_task(client):
         ("someday-provider", "sync"),
     ],
 )
-async def test_trigger_routes_to_per_provider_queue(client, provider, expected_queue):
-    """CHAOS-2299: manual triggers land on sync.<provider>; unknown providers
-    fall back to the shared sync queue."""
+async def test_trigger_routes_to_per_provider_queue(
+    client, provider, expected_queue, monkeypatch
+):
+    """CHAOS-2299: with PROVIDER_SYNC_QUEUES_ENABLED, manual triggers land on
+    sync.<provider>; unknown providers fall back to the shared sync queue."""
     ac, _ = client
+    monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
 
     create_resp = await _create_sync_config(
         ac, name=f"queue-route-{provider}", provider=provider
@@ -712,6 +719,30 @@ async def test_trigger_routes_to_per_provider_queue(client, provider, expected_q
     assert resp.status_code == 202
     mock_run.apply_async.assert_called_once()
     assert mock_run.apply_async.call_args.kwargs["queue"] == expected_queue
+
+
+@pytest.mark.asyncio
+async def test_trigger_routes_to_shared_queue_when_flag_off(client, monkeypatch):
+    """CHAOS-2299 rollout safety: with the flag unset (the default), even
+    known providers stay on the legacy shared `sync` queue so workers that
+    have not expanded their -Q lists still consume every dispatch."""
+    ac, _ = client
+    monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
+
+    create_resp = await _create_sync_config(ac, name="queue-route-flag-off")
+    assert create_resp.status_code == 201, create_resp.text
+    config_id = create_resp.json()["id"]
+
+    mock_task = MagicMock(id="queue-task-id")
+    mock_run = MagicMock()
+    mock_run.apply_async.return_value = mock_task
+
+    with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
+        resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
+
+    assert resp.status_code == 202
+    mock_run.apply_async.assert_called_once()
+    assert mock_run.apply_async.call_args.kwargs["queue"] == "sync"
 
 
 @pytest.mark.asyncio

@@ -436,6 +436,7 @@ class TestPerProviderQueueRouting:
     def test_run_sync_config_dispatched_to_provider_queue(
         self, monkeypatch, db_session, provider, expected_queue
     ):
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         now = datetime.now(timezone.utc)
         config = _make_config(last_sync_at=now - 2 * HOUR, provider=provider)
         job = _make_job(config)
@@ -450,6 +451,7 @@ class TestPerProviderQueueRouting:
         assert run_sync_mock.apply_async.call_args.kwargs["queue"] == expected_queue
 
     def test_batch_dispatch_routed_to_provider_queue(self, monkeypatch, db_session):
+        monkeypatch.setenv("PROVIDER_SYNC_QUEUES_ENABLED", "true")
         now = datetime.now(timezone.utc)
         config = _make_config(
             name="batch-queue-config",
@@ -467,6 +469,25 @@ class TestPerProviderQueueRouting:
         batch_sync_mock.apply_async.assert_called_once()
         assert batch_sync_mock.apply_async.call_args.kwargs["queue"] == "sync.github"
         run_sync_mock.apply_async.assert_not_called()
+
+    def test_flag_off_scheduled_dispatch_stays_on_shared_queue(
+        self, monkeypatch, db_session
+    ):
+        """PROVIDER_SYNC_QUEUES_ENABLED unset (default): scheduled dispatch
+        keeps using the legacy shared queue so old-`-Q` workers consume it."""
+        monkeypatch.delenv("PROVIDER_SYNC_QUEUES_ENABLED", raising=False)
+        now = datetime.now(timezone.utc)
+        config = _make_config(last_sync_at=now - 2 * HOUR, provider="github")
+        job = _make_job(config)
+        db_session.add_all([config, job])
+        db_session.flush()
+
+        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+
+        result = _call(task)
+        assert str(config.id) in result["dispatched"]
+        run_sync_mock.apply_async.assert_called_once()
+        assert run_sync_mock.apply_async.call_args.kwargs["queue"] == "sync"
 
 
 class TestManualOnlyConfigsNotDispatched:

@@ -59,6 +59,7 @@ async def get_context(request: Request) -> GraphQLContext:
         extract_token_from_header,
         get_auth_service,
         get_current_org_id,
+        get_impersonation_context,
     )
 
     db_url = os.getenv("CLICKHOUSE_URI") or DEFAULT_CLICKHOUSE_URI
@@ -77,9 +78,19 @@ async def get_context(request: Request) -> GraphQLContext:
     if _graphql_auth_required() and user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    # --- Resolve org_id (prefer JWT claim, fall back to context/param) -------
+    # --- Resolve org_id ------------------------------------------------------
+    # An active impersonation session takes precedence over the admin's JWT org.
+    # The JWT is never re-issued during impersonation (user.org_id stays the
+    # admin's org), so without this the GraphQL path would scope context, loader
+    # cache keys, and authorization to the admin org while query_dicts overrides
+    # only the raw SQL params to the target org -- inconsistent and a cross-org
+    # cache-poisoning hazard. Precedence: impersonation target > JWT org >
+    # OrgIdMiddleware contextvar > query param. (CHAOS-2303)
     org_id = ""
-    if user and user.org_id:
+    imp_ctx = get_impersonation_context()
+    if imp_ctx is not None and getattr(imp_ctx, "is_active", False):
+        org_id = imp_ctx.target_org_id or ""
+    if not org_id and user and user.org_id:
         org_id = user.org_id
     if not org_id:
         org_id = get_current_org_id() or request.query_params.get("org_id", "") or ""

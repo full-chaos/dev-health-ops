@@ -189,7 +189,7 @@ services:
       - worker
       - --loglevel=info
       - -Q
-      - default,metrics,sync
+      - default,metrics,sync,monitoring
       - --concurrency=4
     environment:
       DATABASE_URI: clickhouse://ch:ch@clickhouse:8123/default

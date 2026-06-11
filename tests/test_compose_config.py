@@ -302,3 +302,23 @@ def test_celery_worker_prefetch_multiplier_is_one() -> None:
     from dev_health_ops.workers.config import worker_prefetch_multiplier
 
     assert worker_prefetch_multiplier == 1
+
+
+def test_production_stacks_consume_monitoring_queue() -> None:
+    """The monitor-queue-depths beat entry enqueues to `monitoring`
+    unconditionally — every production stack's worker must consume it or
+    telemetry tasks accumulate unconsumed forever (1,440/day)."""
+    import re
+
+    stacks = [
+        _PROD_COMPOSE,
+        _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml",
+        _REPO_ROOT / "deploy" / "kubernetes" / "worker.yaml",
+        _REPO_ROOT / "deploy" / "helm" / "dev-health" / "values.yaml",
+    ]
+    for stack in stacks:
+        text = stack.read_text(encoding="utf-8")
+        queue_lists = re.findall(r"(?:- |queues: \")(default,[a-z.,]+)", text)
+        assert any("monitoring" in q for q in queue_lists), (
+            f"{stack.name}: no worker queue list includes 'monitoring'"
+        )

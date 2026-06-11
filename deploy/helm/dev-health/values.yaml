@@ -93,7 +93,7 @@ billingEdge:
 worker:
   enabled: true
   replicas: 2
-  queues: "default,metrics,sync,webhooks"
+  queues: "default,metrics,sync,webhooks,monitoring"
   concurrency: 4
   logLevel: info
   resources:

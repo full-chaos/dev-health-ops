@@ -201,7 +201,7 @@ services:
       - worker
       - --loglevel=info
       - -Q
-      - default,metrics,sync
+      - default,metrics,sync,monitoring
       - --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       DATABASE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}

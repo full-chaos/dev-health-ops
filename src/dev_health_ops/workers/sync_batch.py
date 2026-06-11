@@ -8,7 +8,11 @@ from typing import Any
 
 from celery import chord, group
 
-from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.credentials.resolver import (
+    github_credentials_from_mapping,
+    gitlab_credentials_from_mapping,
+    resolve_gitlab_url,
+)
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -509,10 +513,12 @@ def _run_sync_for_repo(
     This is the per-repo worker task dispatched by dispatch_batch_sync.
     It bypasses the DB config lookup and uses the provided options directly.
     """
+    from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
     from dev_health_ops.processors.github import process_github_repo
     from dev_health_ops.processors.gitlab import process_gitlab_project
     from dev_health_ops.storage import resolve_db_type, run_with_store
+    from dev_health_ops.sync.watermarks import get_watermark, set_watermark
 
     db_url = _get_db_url()
     db_type = resolve_db_type(db_url, None)
@@ -538,6 +544,35 @@ def _run_sync_for_repo(
             target for target in sync_targets if target != "work-items"
         ]
 
+        # Incremental sync (CHAOS-2281): mirror run_sync_config's watermark
+        # semantics. Read per-target watermarks and pass since=min(valid) only
+        # when EVERY sync target already has one; otherwise do a full pull.
+        since_dt: datetime | None = None
+        full_resync = bool(sync_options_override.get("full_resync"))
+        repo_id_for_watermark: str | None = None
+
+        if provider == "github" and code_sync_targets:
+            _owner = str(sync_options_override.get("owner", ""))
+            _repo = str(sync_options_override.get("repo", ""))
+            if _owner and _repo:
+                repo_id_for_watermark = f"{_owner}/{_repo}"
+        elif provider == "gitlab":
+            _pid = sync_options_override.get("project_id") or sync_options_override.get(
+                "repo"
+            )
+            if _pid is not None:
+                repo_id_for_watermark = str(_pid)
+
+        if repo_id_for_watermark and not full_resync:
+            with get_postgres_session_sync() as session:
+                watermarks = [
+                    get_watermark(session, org_id, repo_id_for_watermark, t)
+                    for t in sync_targets
+                ]
+                valid = [w for w in watermarks if w is not None]
+                if valid and len(valid) == len(sync_targets):
+                    since_dt = min(valid)
+
         if provider == "github" and code_sync_targets:
             owner = str(sync_options_override.get("owner", ""))
             repo_name = str(sync_options_override.get("repo", ""))
@@ -557,6 +592,7 @@ def _run_sync_for_repo(
                     owner=owner,
                     repo_name=repo_name,
                     token=github_credentials,
+                    since=since_dt,
                     blame_only=merged_flags.get("blame_only", False),
                     sync_git=merged_flags.get("sync_git", False),
                     sync_prs=merged_flags.get("sync_prs", False),
@@ -570,16 +606,16 @@ def _run_sync_for_repo(
 
         elif provider == "gitlab" and code_sync_targets:
             project_id = sync_options_override.get("project_id")
-            token = str(credentials.get("token") or "")
-            gitlab_url = str(
-                sync_options_override.get("gitlab_url", "https://gitlab.com")
-            )
+            gitlab_credentials = gitlab_credentials_from_mapping(credentials)
 
-            if project_id is None or not token:
+            if project_id is None or gitlab_credentials is None:
                 raise ValueError(
                     f"Missing GitLab project_id/token for batch sync: "
                     f"project_id={project_id}"
                 )
+
+            token = gitlab_credentials.token
+            gitlab_url = resolve_gitlab_url(sync_options_override, gitlab_credentials)
 
             gitlab_targets = [
                 target for target in code_sync_targets if target != "work-items"
@@ -592,6 +628,7 @@ def _run_sync_for_repo(
                     project_id=int(project_id),
                     token=token,
                     gitlab_url=gitlab_url,
+                    since=since_dt,
                     blame_only=merged_flags.get("blame_only", False),
                     sync_git=merged_flags.get("sync_git", False),
                     sync_prs=merged_flags.get("sync_prs", False),
@@ -658,6 +695,15 @@ def _run_sync_for_repo(
                 },
             )
             result_payload["work_items_synced"] = True
+
+        # Stamp watermarks on success the same way run_sync_config does:
+        # one row per sync target, anchored at the task's start time so work
+        # arriving mid-sync is re-fetched on the next run.
+        if repo_id_for_watermark:
+            with get_postgres_session_sync() as session:
+                for t in sync_targets:
+                    set_watermark(session, org_id, repo_id_for_watermark, t, started_at)
+                session.flush()
 
         duration = int((datetime.now(timezone.utc) - started_at).total_seconds())
         return {

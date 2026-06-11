@@ -7,6 +7,8 @@ projects) from external providers and imports them into ``TeamMapping``.
 from __future__ import annotations
 
 import asyncio
+import itertools
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +20,28 @@ from .team_mapping import TeamMappingService
 
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import DiscoveredTeam
+
+logger = logging.getLogger(__name__)
+
+# Upper bounds for GitLab discovery pagination. ``get_all=True`` walks every
+# page, which on very large self-hosted instances can mean thousands of API
+# calls; cap the walk and log when results are truncated.
+MAX_GITLAB_DISCOVERY_SUBGROUPS = 500
+MAX_GITLAB_DISCOVERY_PROJECTS = 500
+
+
+def _bounded_list(iterable: Any, limit: int, *, what: str, scope: str) -> list[Any]:
+    """Materialize at most ``limit`` items, logging when results are truncated."""
+    items = list(itertools.islice(iter(iterable), limit + 1))
+    if len(items) > limit:
+        logger.warning(
+            "GitLab team discovery truncated %s for %s at %d results",
+            what,
+            scope,
+            limit,
+        )
+        return items[:limit]
+    return items
 
 
 class TeamDiscoveryService:
@@ -109,12 +133,23 @@ class TeamDiscoveryService:
             gl = gl_lib.Gitlab(url=url, private_token=token)
             root_group = gl.groups.get(group_path)
             groups = [root_group]
-            for subgroup in root_group.subgroups.list(per_page=100, get_all=True):
+            subgroups = _bounded_list(
+                root_group.subgroups.list(per_page=100, iterator=True),
+                MAX_GITLAB_DISCOVERY_SUBGROUPS,
+                what="subgroups",
+                scope=group_path,
+            )
+            for subgroup in subgroups:
                 groups.append(gl.groups.get(subgroup.id))
 
             teams: list[Any] = []
             for group in groups:
-                projects = group.projects.list(per_page=100, get_all=True)
+                projects = _bounded_list(
+                    group.projects.list(per_page=100, iterator=True),
+                    MAX_GITLAB_DISCOVERY_PROJECTS,
+                    what="projects",
+                    scope=group.full_path,
+                )
                 repo_patterns = [p.path_with_namespace for p in projects]
                 teams.append(
                     DiscoveredTeam(

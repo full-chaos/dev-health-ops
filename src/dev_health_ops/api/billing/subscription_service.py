@@ -418,6 +418,23 @@ class SubscriptionService:
             if customer_id:
                 assign_attr(org_license, "customer_id", customer_id)
 
+        # Keep the denormalized Organization.tier column in lockstep so the
+        # tier-resolution fallback (resolve_org_tier) and any direct readers of
+        # Organization.tier never see a value that diverges from OrgLicense.
+        try:
+            from dev_health_ops.models.users import Organization
+
+            org_result = await self.db.execute(
+                select(Organization).where(Organization.id == org_id)
+            )
+            org = org_result.scalar_one_or_none()
+            if org is not None and str(org.tier) != tier_str:
+                assign_attr(org, "tier", tier_str)
+        except OperationalError as exc:
+            logger.warning(
+                "organizations table unavailable; skipping org tier sync (%s)", exc
+            )
+
         # Static literal labels keyed by tier string to break the taint chain
         # entirely (CodeQL py/clear-text-logging-sensitive-data).
         tier_label = {

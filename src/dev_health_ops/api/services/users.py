@@ -338,12 +338,41 @@ class OrganizationService:
             org.settings = settings
         if tier is not None:
             org.tier = tier
+            await self._sync_license_tier(uuid.UUID(org_id), tier)
         if is_active is not None:
             org.is_active = is_active
 
         org.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
         return org
+
+    async def _sync_license_tier(self, org_id: uuid.UUID, tier: str) -> None:
+        """Keep an existing OrgLicense row in lockstep with Organization.tier.
+
+        Tier resolution (``resolve_org_tier`` and the entitlements path) gives
+        OrgLicense precedence when a row exists, so an admin tier change must
+        update a pre-existing license row or the org would keep being enforced
+        at the old tier (CHAOS-2256 review). When no row exists, resolution
+        falls back to Organization.tier — nothing to sync.
+        """
+        from sqlalchemy.exc import OperationalError
+
+        from dev_health_ops.models.licensing import OrgLicense
+
+        try:
+            result = await self.session.execute(
+                select(OrgLicense).where(OrgLicense.org_id == org_id)
+            )
+            org_license = result.scalar_one_or_none()
+        except OperationalError:
+            logger.warning(
+                "org_licenses table unavailable; skipping license tier sync for org %s",
+                org_id,
+            )
+            return
+        if org_license is not None and str(org_license.tier) != tier:
+            org_license.tier = tier
+            org_license.updated_at = datetime.now(timezone.utc)
 
     async def delete(self, org_id: str) -> bool:
         org = await self.get_by_id(org_id)

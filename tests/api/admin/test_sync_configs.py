@@ -743,6 +743,25 @@ async def test_trigger_passes_pending_run_id_to_task(client):
     assert call_kwargs.get("pending_run_id") == run_id
 
 
+def test_sync_tasks_accept_pending_run_id_kwarg():
+    """The dispatched Celery tasks must accept every kwarg the trigger endpoint
+    passes. Celery validates kwargs against the task signature at .delay() time,
+    so a missing parameter fails the API request itself (regression: PR #846
+    clobbered the pending_run_id parameter that PR #844 added to run_sync_config).
+    """
+    import inspect
+
+    from dev_health_ops.workers.sync_tasks import (
+        dispatch_batch_sync,
+        run_sync_config,
+    )
+
+    for task in (run_sync_config, dispatch_batch_sync):
+        params = inspect.signature(task.run).parameters
+        for kwarg in ("config_id", "org_id", "triggered_by", "pending_run_id"):
+            assert kwarg in params, f"{task.name} is missing kwarg {kwarg!r}"
+
+
 @pytest.mark.asyncio
 async def test_trigger_batch_creates_pending_job_run(client, session_maker):
     """Batch-eligible trigger must also persist a PENDING JobRun."""

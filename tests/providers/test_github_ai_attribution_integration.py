@@ -165,7 +165,6 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
     repo_id = uuid.uuid4()
     sink = _FakeClickHouseSink("clickhouse://test")
 
-    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
     monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
     monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
     monkeypatch.setattr(
@@ -201,10 +200,10 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
     client.iter_issue_comments.return_value = []
     client.iter_pr_comments_batch.return_value = []
 
-    monkeypatch.setattr(
-        "dev_health_ops.providers.github.client.GitHubWorkClient.from_env",
-        lambda: client,
-    )
+    # Org-scoped runs resolve credentials org-first (ambient env no longer
+    # preempts the org's DB credential, CHAOS-2292); inject the fake client
+    # at the builder seam — client construction has its own dedicated tests.
+    monkeypatch.setattr(job, "_build_github_work_client", lambda **_kwargs: client)
 
     run_job: Any = job.run_work_items_sync_job
     run_job(

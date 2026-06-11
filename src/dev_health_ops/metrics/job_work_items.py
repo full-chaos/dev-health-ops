@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import uuid
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -61,11 +60,13 @@ def _build_github_work_client(
 ) -> Any:
     """Construct a GitHub work-items client from config-resolved credentials.
 
-    Threads the sync config's organization id into credential resolution so a
-    database-stored credential (PAT or GitHub App auth) is honored, instead of
-    relying on a ``GITHUB_TOKEN`` environment side-channel. Falls back to
-    environment-based resolution only when no organization scope is available
-    (e.g. a pure-CLI run without a configured organization).
+    Precedence: explicit ``credentials`` mapping → database credential scoped
+    to ``org_id`` → environment variables as a last resort. An org-scoped
+    caller must never silently pick up ambient ``GITHUB_TOKEN``/App env vars
+    over its org's database credential (tenant boundary, CHAOS-2292); env
+    resolution applies only when no organization scope is available (a
+    pure-CLI run) or when org-scoped resolution finds no database row
+    (DB-less dev setups, via ``CredentialResolver``'s env fallback).
     """
     from dev_health_ops.credentials.resolver import (
         github_credentials_from_mapping,
@@ -82,16 +83,7 @@ def _build_github_work_client(
             )
         return GitHubWorkClient(auth=GitHubAuth.from_credentials(github_credentials))
 
-    has_env_credentials = any(
-        os.getenv(name)
-        for name in (
-            "GITHUB_TOKEN",
-            "GITHUB_APP_ID",
-            "GITHUB_APP_PRIVATE_KEY_PATH",
-            "GITHUB_APP_INSTALLATION_ID",
-        )
-    )
-    if not org_id or has_env_credentials:
+    if not org_id:
         return GitHubWorkClient.from_env()
 
     resolved_credentials = resolve_credentials_sync(

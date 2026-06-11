@@ -613,6 +613,15 @@ class TestResolveCredentialsSync:
             with pytest.raises(CredentialResolutionError):
                 resolve_credentials_sync("github", allow_env_fallback=False)
 
+    # All GitHub env credentials _EnvOnlyResolver reads; ambient values on the
+    # test host (e.g. a developer's GITHUB_APP_ID) must not flip outcomes.
+    _GITHUB_ENV_VARS = (
+        "GITHUB_TOKEN",
+        "GITHUB_APP_ID",
+        "GITHUB_APP_PRIVATE_KEY_PATH",
+        "GITHUB_APP_INSTALLATION_ID",
+    )
+
     def test_env_fallback_when_db_url_set_but_no_org_id(self):
         """Env credentials must win when DATABASE_URI is set but no org scope.
 
@@ -627,6 +636,9 @@ class TestResolveCredentialsSync:
         }
 
         with patch.dict(os.environ, env_patch, clear=False):
+            for var in self._GITHUB_ENV_VARS[1:]:
+                os.environ.pop(var, None)
+
             result = resolve_credentials_sync("github")
 
             assert isinstance(result, GitHubCredentials)
@@ -637,11 +649,11 @@ class TestResolveCredentialsSync:
         """No org_id and no env credentials still raises with DATABASE_URI set."""
         env_patch = {
             "DATABASE_URI": "postgresql+asyncpg://u:p@db:5432/devhealth",
-            "GITHUB_TOKEN": "",
         }
 
         with patch.dict(os.environ, env_patch, clear=False):
-            os.environ.pop("GITHUB_TOKEN", None)
+            for var in self._GITHUB_ENV_VARS:
+                os.environ.pop(var, None)
 
             with pytest.raises(CredentialResolutionError) as exc_info:
                 resolve_credentials_sync("github")
@@ -656,6 +668,9 @@ class TestResolveCredentialsSync:
         }
 
         with patch.dict(os.environ, env_patch, clear=False):
+            for var in self._GITHUB_ENV_VARS[1:]:
+                os.environ.pop(var, None)
+
             with pytest.raises(CredentialResolutionError) as exc_info:
                 resolve_credentials_sync("github", allow_env_fallback=False)
 

@@ -325,12 +325,13 @@ def resolve_credentials_sync(
 
     try:
         asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
         raise RuntimeError(
             "resolve_credentials_sync cannot be called from async context. "
             "Use CredentialResolver.resolve() instead."
         )
-    except RuntimeError:
-        pass
 
     return asyncio.run(_resolve())
 

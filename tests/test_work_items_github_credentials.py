@@ -84,3 +84,33 @@ def test_build_github_work_client_without_org_falls_back_to_from_env() -> None:
 
     assert client is sentinel
     from_env.assert_called_once_with()
+
+
+def test_org_scoped_resolution_wins_over_ambient_env_token(monkeypatch) -> None:
+    """Ambient env credentials must not preempt an org's database credential.
+
+    Regression test for CHAOS-2292 (review finding): the builder used to
+    route to ``from_env`` whenever ANY GitHub env credential existed, even
+    with an org scope present — a tenant-boundary violation once the
+    resolver gained an org-less env fallback.
+    """
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-env-token")
+    monkeypatch.setenv("GITHUB_APP_ID", "999")
+    creds = GitHubCredentials(token="org-db-pat", source=CredentialSource.DATABASE)
+
+    with (
+        patch(
+            "dev_health_ops.credentials.resolver.resolve_credentials_sync",
+            return_value=creds,
+        ) as resolve,
+        patch(
+            "dev_health_ops.providers.github.client.GitHubWorkClient.from_env"
+        ) as from_env,
+        patch("github.Github"),
+        patch("dev_health_ops.providers.github.client.GitHubGraphQLClient"),
+    ):
+        client = _build_github_work_client(org_id=_ORG_ID)
+
+    from_env.assert_not_called()
+    resolve.assert_called_once_with("github", org_id=_ORG_ID, allow_env_fallback=True)
+    assert client.auth.token == "org-db-pat"

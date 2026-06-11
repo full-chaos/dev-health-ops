@@ -126,7 +126,8 @@ class _GitHubIssueBaseLike(Protocol):
 
 
 class _GitHubIssueLike(_GitHubIssueBaseLike, Protocol):
-    def get_events(self) -> Iterable[_GitHubEventLike]: ...
+    def get_events(self) -> Iterable[_GitHubEventLike]:
+        pass
 
 
 class _GitHubPullRequestLike(_GitHubIssueBaseLike, Protocol):
@@ -136,7 +137,8 @@ class _GitHubPullRequestLike(_GitHubIssueBaseLike, Protocol):
 
     # PyGithub's PullRequest exposes the issue-events endpoint as
     # get_issue_events(); only Issue has get_events().
-    def get_issue_events(self) -> Iterable[_GitHubEventLike]: ...
+    def get_issue_events(self) -> Iterable[_GitHubEventLike]:
+        raise NotImplementedError
 
     def get_review_comments(self) -> Iterable[_GitHubCommentLike]: ...
 

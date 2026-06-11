@@ -64,6 +64,26 @@ def test_celery_config_has_backfill_queue() -> None:
     assert "backfill" in task_queues
 
 
+def test_celery_config_has_per_provider_sync_queues() -> None:
+    """CHAOS-2299: each known sync provider has a dedicated queue so queue
+    depth answers "is <provider> stuck?", and the shared `sync` queue stays
+    declared as the fallback for unknown providers and messages already in
+    flight at deploy time."""
+    for provider in ("github", "gitlab", "linear", "jira", "launchdarkly"):
+        assert f"sync.{provider}" in task_queues
+    assert "sync" in task_queues
+
+
+def test_queue_monitor_beat_entry() -> None:
+    """CHAOS-2299: queue depth/age telemetry runs every minute on `default`."""
+    from dev_health_ops.workers.config import beat_schedule
+
+    entry = beat_schedule["monitor-queue-depths"]
+    assert entry["task"] == "dev_health_ops.workers.tasks.monitor_queue_depths"
+    assert entry["schedule"] == 60.0
+    assert entry["options"] == {"queue": "default"}
+
+
 def test_celery_worker_prefetch_multiplier_is_one() -> None:
     """CHAOS-2277: long-running tasks (sync, stream consumers) + default
     prefetch (4) let reserved slow-queue messages fill the QoS window and

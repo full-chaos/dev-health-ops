@@ -443,6 +443,8 @@ class TestDispatchBatchSync:
         assert result["status"] == "fallback_single"
         assert "API rate limited" in result["reason"]
         mock_run_sync.apply_async.assert_called_once()
+        # CHAOS-2299: the fallback dispatch stays on the provider's queue.
+        assert mock_run_sync.apply_async.call_args.kwargs["queue"] == "sync.github"
 
     @patch("dev_health_ops.workers.sync_batch.chord")
     @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
@@ -1531,6 +1533,132 @@ class TestTaskRegistration:
         from dev_health_ops.workers.sync_batch import _run_sync_for_repo
 
         assert _run_sync_for_repo.rate_limit == "30/m"
+
+
+class TestSyncQueueForProvider:
+    """Per-provider queue routing helper (CHAOS-2299). To be absorbed by
+    SyncDispatchPolicy (CHAOS-2284) when that lands."""
+
+    @pytest.mark.parametrize(
+        "provider", ["github", "gitlab", "linear", "jira", "launchdarkly"]
+    )
+    def test_known_providers_get_dedicated_queue(self, provider):
+        from dev_health_ops.workers.queues import sync_queue_for_provider
+
+        assert sync_queue_for_provider(provider) == f"sync.{provider}"
+
+    @pytest.mark.parametrize("provider", ["", "local", "bitbucket", "unknown"])
+    def test_unknown_providers_fall_back_to_shared_queue(self, provider):
+        from dev_health_ops.workers.queues import sync_queue_for_provider
+
+        assert sync_queue_for_provider(provider) == "sync"
+
+    def test_normalizes_case_and_whitespace(self):
+        from dev_health_ops.workers.queues import sync_queue_for_provider
+
+        assert sync_queue_for_provider(" GitHub ") == "sync.github"
+
+    def test_every_routable_queue_is_declared_in_task_queues(self):
+        """Routing to an undeclared queue would strand messages: every queue
+        the helper can return must exist in workers.config.task_queues (which
+        the compose -Q coverage test then ties to a consumer)."""
+        from dev_health_ops.workers.config import task_queues
+        from dev_health_ops.workers.queues import (
+            SYNC_QUEUE_PROVIDERS,
+            sync_queue_for_provider,
+        )
+
+        for provider in SYNC_QUEUE_PROVIDERS:
+            assert sync_queue_for_provider(provider) in task_queues
+        assert sync_queue_for_provider("unknown") in task_queues
+
+
+class TestBatchChildrenQueueRouting:
+    """Batch chord children and callback carry the provider queue (CHAOS-2299)."""
+
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_children_and_callback_signatures_carry_provider_queue(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(
+            provider="github",
+            sync_options={"search": "org/*", "batch_size": 2},
+            sync_targets=["git"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.return_value = [("org", f"repo-{i}") for i in range(3)]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-dispatch-queue")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        args, _ = mock_chord.call_args
+        header_group, callback = args[0], args[1]
+
+        for sig in header_group.tasks:
+            assert sig.options.get("queue") == "sync.github"
+        assert callback.options.get("queue") == "sync.github"
+
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_gitlab_children_carry_gitlab_queue(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        db_session,
+    ):
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(
+            provider="gitlab",
+            sync_options={"search": "my-group/*"},
+            sync_targets=["git"],
+        )
+        db_session.add(config)
+        db_session.flush()
+
+        mock_get_session.return_value = _fake_session_ctx(db_session)
+        mock_resolve_creds.return_value = {"token": "glpat_test"}
+        mock_discover.return_value = [("100",)]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="gl-batch-dispatch-queue")
+        try:
+            result = task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        args, _ = mock_chord.call_args
+        header_group, callback = args[0], args[1]
+        assert [sig.options.get("queue") for sig in header_group.tasks] == [
+            "sync.gitlab"
+        ]
+        assert callback.options.get("queue") == "sync.gitlab"
 
 
 class TestInjectProviderToken:

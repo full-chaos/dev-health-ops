@@ -77,8 +77,8 @@ async def test_trigger_sync_config_dispatches_resolved_config_id_and_org(monkeyp
             )
 
     class FakeTask:
-        def delay(self, **kwargs):
-            calls.append(kwargs)
+        def apply_async(self, kwargs=None, queue=None, **options):
+            calls.append({"kwargs": kwargs, "queue": queue})
             return SimpleNamespace(id="task-1")
 
     fake_batch_task = FakeTask()
@@ -90,18 +90,16 @@ async def test_trigger_sync_config_dispatches_resolved_config_id_and_org(monkeyp
         str(request_id), session=cast(Any, object()), org_id="org-a"
     )
 
-    assert result == {
-        "status": "triggered",
-        "config_id": str(resolved_id),
-        "task_id": "task-1",
-    }
-    assert calls == [
-        {
-            "config_id": str(resolved_id),
-            "org_id": "org-a",
-            "triggered_by": "manual",
-        }
-    ]
+    assert result["status"] == "triggered"
+    assert result["config_id"] == str(resolved_id)
+    assert result["task_id"] == "task-1"
+    assert len(calls) == 1
+    # CHAOS-2299: manual triggers route to the provider's dedicated queue.
+    assert calls[0]["queue"] == "sync.github"
+    dispatched_kwargs = calls[0]["kwargs"]
+    assert dispatched_kwargs["config_id"] == str(resolved_id)
+    assert dispatched_kwargs["org_id"] == "org-a"
+    assert dispatched_kwargs["triggered_by"] == "manual"
 
 
 @pytest.mark.skip(

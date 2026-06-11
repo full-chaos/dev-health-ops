@@ -67,10 +67,11 @@ def _make_config(
     last_sync_at: datetime | None = None,
     sync_options: dict | None = None,
     sync_targets: list | None = None,
+    provider: str = "github",
 ) -> SyncConfiguration:
     config = SyncConfiguration(
         name=name,
-        provider="github",
+        provider=provider,
         org_id="default",
         sync_targets=sync_targets or ["git", "prs"],
         # owner+repo set => not batch eligible; explicit schedule_cron so the
@@ -416,6 +417,56 @@ class TestBatchRoutingStillStampsMarker:
         second = _call(task)
         assert second["dispatched"] == []
         assert batch_sync_mock.apply_async.call_count == 1
+
+
+class TestPerProviderQueueRouting:
+    """Scheduled dispatch routes to per-provider sync queues (CHAOS-2299)."""
+
+    @pytest.mark.parametrize(
+        ("provider", "expected_queue"),
+        [
+            ("github", "sync.github"),
+            ("gitlab", "sync.gitlab"),
+            ("linear", "sync.linear"),
+            ("jira", "sync.jira"),
+            ("launchdarkly", "sync.launchdarkly"),
+            ("mystery-provider", "sync"),
+        ],
+    )
+    def test_run_sync_config_dispatched_to_provider_queue(
+        self, monkeypatch, db_session, provider, expected_queue
+    ):
+        now = datetime.now(timezone.utc)
+        config = _make_config(last_sync_at=now - 2 * HOUR, provider=provider)
+        job = _make_job(config)
+        db_session.add_all([config, job])
+        db_session.flush()
+
+        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+
+        result = _call(task)
+        assert str(config.id) in result["dispatched"]
+        run_sync_mock.apply_async.assert_called_once()
+        assert run_sync_mock.apply_async.call_args.kwargs["queue"] == expected_queue
+
+    def test_batch_dispatch_routed_to_provider_queue(self, monkeypatch, db_session):
+        now = datetime.now(timezone.utc)
+        config = _make_config(
+            name="batch-queue-config",
+            last_sync_at=now - 2 * HOUR,
+            sync_options={"search": "org/*", "schedule_cron": "0 * * * *"},
+        )
+        job = _make_job(config)
+        db_session.add_all([config, job])
+        db_session.flush()
+
+        task, run_sync_mock, batch_sync_mock = _run_dispatch(monkeypatch, db_session)
+
+        result = _call(task)
+        assert str(config.id) in result["dispatched"]
+        batch_sync_mock.apply_async.assert_called_once()
+        assert batch_sync_mock.apply_async.call_args.kwargs["queue"] == "sync.github"
+        run_sync_mock.apply_async.assert_not_called()
 
 
 class TestManualOnlyConfigsNotDispatched:

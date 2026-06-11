@@ -201,7 +201,8 @@ services:
   # One shared pool let ~250s blocking stream consumers (ingest) and
   # multi-minute syncs starve latency-sensitive work (Sync Now, webhooks)
   # for hours. Three pools isolate the workload classes:
-  #   worker        — latency-sensitive: default,sync,webhooks,reports
+  #   worker        — latency-sensitive: default,sync,sync.<provider>,webhooks,reports
+  #                     (per-provider sync queues, CHAOS-2299)
   #   worker-ingest — blocking stream consumers, isolated at concurrency 1
   #   worker-heavy  — long batch jobs: metrics,backfill
   # ---------------------------------------------------------------------------
@@ -213,7 +214,7 @@ services:
       args:
         SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
     container_name: worker
-    command: celery -A workers.celery_app worker --loglevel=info -Q default,sync,webhooks,reports --concurrency=${WORKER_CONCURRENCY:-4}
+    command: celery -A workers.celery_app worker --loglevel=info -Q default,sync,sync.github,sync.gitlab,sync.linear,sync.jira,sync.launchdarkly,webhooks,reports --concurrency=${WORKER_CONCURRENCY:-4}
     environment:
       <<: *env
       CELERY_BROKER_URL: redis://valkey:6379/0

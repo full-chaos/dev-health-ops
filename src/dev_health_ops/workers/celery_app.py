@@ -2,10 +2,11 @@
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from celery import Celery
-from celery.signals import task_postrun, task_prerun
+from celery.signals import before_task_publish, task_postrun, task_prerun
 
 from dev_health_ops.logging_config import configure_logging
 from dev_health_ops.sentry import init_sentry
@@ -19,6 +20,18 @@ instrument_celery()
 
 # Per-task start-time registry for duration tracking
 _task_start: dict[str, float] = {}
+
+
+@before_task_publish.connect
+def _stamp_enqueued_at(headers: Any = None, **kwargs: Any) -> None:
+    """Stamp publish time into the message headers (CHAOS-2299).
+
+    Celery's task protocol carries no enqueue timestamp, so the queue-depth
+    monitor (workers.queue_monitor) reads this header off the oldest queued
+    message to report per-queue backlog age.
+    """
+    if isinstance(headers, dict) and "enqueued_at" not in headers:
+        headers["enqueued_at"] = datetime.now(timezone.utc).isoformat()
 
 
 @task_prerun.connect

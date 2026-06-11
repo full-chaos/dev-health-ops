@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
+from dev_health_ops.workers.queues import sync_queue_for_provider
 from dev_health_ops.workers.sync_batch import _is_batch_eligible, dispatch_batch_sync
 from dev_health_ops.workers.sync_runtime import run_sync_config
 from dev_health_ops.workers.task_utils import (
@@ -127,6 +128,8 @@ def _maybe_dispatch_config(
     if not next_run <= now:
         return False
 
+    # Per-provider routing (CHAOS-2299): "is Linear stuck?" must be one LLEN.
+    sync_queue = sync_queue_for_provider(_as_str(config.provider))
     if _is_batch_eligible(config):
         dispatch_batch_sync.apply_async(
             kwargs={
@@ -134,7 +137,7 @@ def _maybe_dispatch_config(
                 "org_id": config.org_id,
                 "triggered_by": "schedule",
             },
-            queue="sync",
+            queue=sync_queue,
         )
     else:
         run_sync_config.apply_async(
@@ -143,7 +146,7 @@ def _maybe_dispatch_config(
                 "org_id": config.org_id,
                 "triggered_by": "schedule",
             },
-            queue="sync",
+            queue=sync_queue,
         )
 
     # Stamp the dispatch marker. Create the ScheduledJob row if missing

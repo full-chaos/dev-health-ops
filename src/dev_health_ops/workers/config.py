@@ -41,7 +41,17 @@ task_default_queue = "default"
 task_queues: dict[str, dict[str, Any]] = {
     "default": {},
     "metrics": {},
+    # Shared sync queue: fallback for unknown providers plus any messages
+    # already in flight at deploy time. Per-provider queues (CHAOS-2299)
+    # make queue depth answer "is <provider> stuck?" with one LLEN and let
+    # operators purge a single provider. Routing lives in
+    # workers.queues.sync_queue_for_provider.
     "sync": {},
+    "sync.github": {},
+    "sync.gitlab": {},
+    "sync.linear": {},
+    "sync.jira": {},
+    "sync.launchdarkly": {},
     "backfill": {},
     "webhooks": {},
     "ingest": {},
@@ -101,6 +111,11 @@ beat_schedule = {
     "dispatch-scheduled-reports": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_reports",
         "schedule": 300.0,
+        "options": {"queue": "default"},
+    },
+    "monitor-queue-depths": {
+        "task": "dev_health_ops.workers.tasks.monitor_queue_depths",
+        "schedule": 60.0,
         "options": {"queue": "default"},
     },
 }

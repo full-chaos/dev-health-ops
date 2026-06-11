@@ -249,14 +249,14 @@ async def test_full_journey_register_login_create_credential_create_sync_config(
 
     mock_task = MagicMock(id="fake-task-id")
     mock_run = MagicMock()
-    mock_run.delay.return_value = mock_task
+    mock_run.apply_async.return_value = mock_task
 
     with patch("dev_health_ops.workers.sync_tasks.run_sync_config", mock_run):
         trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
 
     assert trigger_resp.status_code == 202
     assert trigger_resp.json()["status"] == "triggered"
-    mock_run.delay.assert_called_once()
+    mock_run.apply_async.assert_called_once()
 
 
 @pytest.mark.asyncio

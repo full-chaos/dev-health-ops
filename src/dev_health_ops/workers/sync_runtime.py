@@ -5,7 +5,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.credentials.resolver import github_credentials_from_mapping
+from dev_health_ops.credentials.resolver import (
+    github_credentials_from_mapping,
+    gitlab_credentials_from_mapping,
+    resolve_gitlab_url,
+)
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
@@ -18,7 +22,7 @@ from dev_health_ops.workers.task_utils import (
     _as_str,
     _as_str_list,
     _as_uuid,
-    _decrypt_credential_sync,
+    _credential_mapping,
     _extract_owner_repo,
     _extract_provider_token,
     _get_db_url,
@@ -421,7 +425,9 @@ def run_sync_config(
                         f"Credential not found for sync configuration: {config.credential_id}"
                     )
 
-                credentials = _decrypt_credential_sync(credential)
+                # Merge non-sensitive credential.config (e.g. self-hosted
+                # GitLab url) under the decrypted secrets (CHAOS-2282).
+                credentials = _credential_mapping(credential)
             else:
                 credentials = _resolve_env_credentials(provider)
 
@@ -603,11 +609,12 @@ def run_sync_config(
                 if project_id is None:
                     raise ValueError("Missing GitLab project_id in sync options")
 
-                token = str(credentials.get("token") or "")
-                if not token:
+                gitlab_credentials = gitlab_credentials_from_mapping(credentials)
+                if gitlab_credentials is None:
                     raise ValueError("Missing GitLab token for sync configuration")
 
-                gitlab_url = str(sync_options.get("gitlab_url", "https://gitlab.com"))
+                token = gitlab_credentials.token
+                gitlab_url = resolve_gitlab_url(sync_options, gitlab_credentials)
                 merged_flags = _merge_sync_flags(gitlab_targets)
 
                 async def _gitlab_handler(store):

@@ -39,9 +39,15 @@ async def test_providers_discovered_concurrently(monkeypatch):
         return_value={"token": "t", "email": "e@x", "api_token": "a"}
     )
 
+    async def slow_discover_gitlab(*args, **kwargs):
+        from dev_health_ops.api.services.configuration import GitLabDiscoveryResult
+
+        teams = await slow_discover(*args, **kwargs)
+        return GitLabDiscoveryResult(teams=teams)
+
     fake_discovery = MagicMock()
     fake_discovery.discover_github = slow_discover
-    fake_discovery.discover_gitlab = slow_discover
+    fake_discovery.discover_gitlab = slow_discover_gitlab
     fake_discovery.discover_jira = slow_discover
 
     fake_drift = MagicMock()

@@ -78,6 +78,22 @@ def _decrypt_credential_sync(credential) -> dict[str, Any]:
     return {}
 
 
+def _credential_mapping(credential) -> dict[str, Any]:
+    """Build the full credentials mapping for an ``IntegrationCredential``.
+
+    Merges the credential's non-sensitive ``config`` column (base URLs and
+    other provider options, e.g. a self-hosted GitLab ``url``) underneath the
+    decrypted secret fields, so resolvers such as
+    ``gitlab_credentials_from_mapping`` see both. Decrypted values win on key
+    collisions: ``config`` must never shadow a stored secret.
+    """
+    decrypted = _decrypt_credential_sync(credential)
+    config = getattr(credential, "config", None)
+    if not isinstance(config, dict) or not config:
+        return decrypted
+    return {**config, **decrypted}
+
+
 def _inject_provider_token(provider: str, token: str) -> None:
     env_var = {
         "github": "GITHUB_TOKEN",

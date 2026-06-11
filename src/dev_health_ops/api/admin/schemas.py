@@ -272,6 +272,10 @@ class TeamDiscoverResponse(BaseModel):
     provider: str
     teams: list[DiscoveredTeam]
     total: int
+    # True when provider-side pagination bounds truncated discovery, i.e.
+    # ``teams`` is a partial view. Optional so existing clients are unaffected.
+    truncated: bool = False
+    warnings: list[str] = Field(default_factory=list)
 
 
 class TeamImportRequest(BaseModel):

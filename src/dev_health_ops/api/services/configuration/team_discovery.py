@@ -7,6 +7,9 @@ projects) from external providers and imports them into ``TeamMapping``.
 from __future__ import annotations
 
 import asyncio
+import itertools
+import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +21,55 @@ from .team_mapping import TeamMappingService
 
 if TYPE_CHECKING:
     from dev_health_ops.api.admin.schemas import DiscoveredTeam
+
+logger = logging.getLogger(__name__)
+
+# Upper bounds for GitLab discovery pagination. ``get_all=True`` walks every
+# page, which on very large self-hosted instances can mean thousands of API
+# calls; cap the walk and log when results are truncated.
+MAX_GITLAB_DISCOVERY_SUBGROUPS = 500
+MAX_GITLAB_DISCOVERY_PROJECTS = 500
+
+
+def _bounded_list(
+    iterable: Any,
+    limit: int,
+    *,
+    what: str,
+    scope: str,
+    warnings: list[str] | None = None,
+) -> list[Any]:
+    """Materialize at most ``limit`` items, logging when results are truncated.
+
+    When ``warnings`` is provided, a human-readable truncation message is
+    appended to it so callers can surface partial results instead of silently
+    presenting them as complete.
+    """
+    items = list(itertools.islice(iter(iterable), limit + 1))
+    if len(items) > limit:
+        message = (
+            f"GitLab team discovery truncated {what} for '{scope}' at "
+            f"{limit} results; the import may be incomplete."
+        )
+        logger.warning(message)
+        if warnings is not None:
+            warnings.append(message)
+        return items[:limit]
+    return items
+
+
+@dataclass
+class GitLabDiscoveryResult:
+    """Outcome of a GitLab team discovery walk.
+
+    ``truncated`` is True when any subgroup/project listing hit the discovery
+    pagination bound, meaning ``teams`` (or their ``repo_patterns``) are a
+    partial view; ``warnings`` carries the human-readable details.
+    """
+
+    teams: list[DiscoveredTeam]
+    truncated: bool = False
+    warnings: list[str] = field(default_factory=list)
 
 
 class TeamDiscoveryService:
@@ -99,22 +151,41 @@ class TeamDiscoveryService:
         token: str,
         group_path: str,
         url: str = "https://gitlab.com",
-    ) -> list[DiscoveredTeam]:
-        """Discover groups/subgroups from GitLab."""
+    ) -> GitLabDiscoveryResult:
+        """Discover groups/subgroups from GitLab.
 
-        def _discover() -> list[DiscoveredTeam]:
+        Returns a :class:`GitLabDiscoveryResult`; ``truncated`` is set when
+        the subgroup/project walk hit the discovery pagination bounds, so
+        callers can tell a partial import apart from a complete one.
+        """
+
+        def _discover() -> GitLabDiscoveryResult:
             import gitlab as gl_lib
 
             DiscoveredTeam = _get_discovered_team_cls()
+            warnings: list[str] = []
             gl = gl_lib.Gitlab(url=url, private_token=token)
             root_group = gl.groups.get(group_path)
             groups = [root_group]
-            for subgroup in root_group.subgroups.list(per_page=100, get_all=True):
+            subgroups = _bounded_list(
+                root_group.subgroups.list(per_page=100, iterator=True),
+                MAX_GITLAB_DISCOVERY_SUBGROUPS,
+                what="subgroups",
+                scope=group_path,
+                warnings=warnings,
+            )
+            for subgroup in subgroups:
                 groups.append(gl.groups.get(subgroup.id))
 
             teams: list[Any] = []
             for group in groups:
-                projects = group.projects.list(per_page=100, get_all=True)
+                projects = _bounded_list(
+                    group.projects.list(per_page=100, iterator=True),
+                    MAX_GITLAB_DISCOVERY_PROJECTS,
+                    what="projects",
+                    scope=group.full_path,
+                    warnings=warnings,
+                )
                 repo_patterns = [p.path_with_namespace for p in projects]
                 teams.append(
                     DiscoveredTeam(
@@ -129,7 +200,11 @@ class TeamDiscoveryService:
                     )
                 )
 
-            return teams
+            return GitLabDiscoveryResult(
+                teams=teams,
+                truncated=bool(warnings),
+                warnings=warnings,
+            )
 
         return await asyncio.to_thread(_discover)
 

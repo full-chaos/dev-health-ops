@@ -37,7 +37,7 @@ from .integration_credentials import (
 )
 from .jira_activity_inference import JiraActivityInferenceService
 from .sync_configuration import SyncConfigurationService
-from .team_discovery import TeamDiscoveryService
+from .team_discovery import GitLabDiscoveryResult, TeamDiscoveryService
 from .team_drift_sync import TeamDriftSyncService
 from .team_mapping import TeamMappingService
 from .team_membership import TeamMembershipService
@@ -49,6 +49,7 @@ __all__ = [
     "JiraActivityInferenceService",
     "SettingsService",
     "SyncConfigurationService",
+    "GitLabDiscoveryResult",
     "TeamDiscoveryService",
     "TeamDriftSyncService",
     "TeamMappingService",

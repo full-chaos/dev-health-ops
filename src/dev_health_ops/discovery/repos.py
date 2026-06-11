@@ -16,8 +16,15 @@ def discover_repos_for_config(
         # public-only). Authenticated configs pass their token through.
         return discover_github_repos(sync_options, token)
     if provider == "gitlab":
-        token = str(credentials.get("token") or "")
-        return discover_gitlab_repos(sync_options, token)
+        from dev_health_ops.credentials.resolver import (
+            gitlab_credentials_from_mapping,
+            resolve_gitlab_url,
+        )
+
+        gl_credentials = gitlab_credentials_from_mapping(credentials)
+        token = gl_credentials.token if gl_credentials is not None else ""
+        gitlab_url = resolve_gitlab_url(sync_options, gl_credentials)
+        return discover_gitlab_repos(sync_options, token, gitlab_url=gitlab_url)
     return []
 
 
@@ -80,11 +87,14 @@ def discover_github_repos(
 
 
 def discover_gitlab_repos(
-    sync_options: dict[str, Any], token: str
+    sync_options: dict[str, Any],
+    token: str,
+    gitlab_url: str | None = None,
 ) -> list[tuple[str, ...]]:
     import gitlab as gitlab_lib
 
-    gitlab_url = str(sync_options.get("gitlab_url", "https://gitlab.com"))
+    if not gitlab_url:
+        gitlab_url = str(sync_options.get("gitlab_url") or "https://gitlab.com")
     search = sync_options.get("search", "")
     group_path = sync_options.get("group", "")
 

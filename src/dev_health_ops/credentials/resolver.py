@@ -265,6 +265,69 @@ def github_credentials_from_mapping(
         return None
 
 
+def gitlab_credentials_from_mapping(
+    cred_dict: dict[str, Any],
+    *,
+    source: CredentialSource = CredentialSource.DATABASE,
+    credential_name: str = "default",
+) -> GitLabCredentials | None:
+    """Build :class:`GitLabCredentials` from a credentials mapping.
+
+    Accepts a decrypted credentials dict (as persisted in
+    ``integration_credentials`` or assembled from environment variables) and
+    returns a typed credential carrying both the token and the GitLab base
+    URL, so self-hosted instances are honoured everywhere the mapping is
+    consumed. The base URL is resolved from the mapping's ``gitlab_url``,
+    ``url``, or ``base_url`` key (in that order), defaulting to
+    ``https://gitlab.com``.
+
+    Returns ``None`` when the mapping does not contain a ``token``, so
+    callers can surface a clear configuration error.
+    """
+    cred_dict = {k: v for k, v in cred_dict.items() if v is not None}
+    token = str(cred_dict.get("token") or "")
+    if not token:
+        logger.debug("GitLab credentials mapping was incomplete or invalid")
+        return None
+
+    base_url = str(
+        cred_dict.get("gitlab_url")
+        or cred_dict.get("url")
+        or cred_dict.get("base_url")
+        or "https://gitlab.com"
+    )
+
+    try:
+        return GitLabCredentials(
+            token=token,
+            base_url=base_url,
+            source=source,
+            credential_name=credential_name,
+        )
+    except (ValueError, TypeError):
+        # Do not log the exception: it derives from credential construction and
+        # could surface field values. Callers raise a clear config error instead.
+        logger.debug("GitLab credentials mapping was incomplete or invalid")
+        return None
+
+
+def resolve_gitlab_url(
+    sync_options: dict[str, Any],
+    gitlab_credentials: GitLabCredentials | None,
+) -> str:
+    """Resolve the GitLab base URL for a sync/discovery operation.
+
+    Resolution order: ``sync_options['gitlab_url']`` -> credential mapping's
+    URL (``gitlab_url``/``url``/``base_url``) -> ``https://gitlab.com``.
+    """
+    option_url = sync_options.get("gitlab_url")
+    if isinstance(option_url, str) and option_url:
+        return option_url
+    if gitlab_credentials is not None and gitlab_credentials.base_url:
+        return gitlab_credentials.base_url
+    return "https://gitlab.com"
+
+
 def resolve_credentials_sync(
     provider: str,
     org_id: str | None = None,

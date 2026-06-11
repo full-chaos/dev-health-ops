@@ -342,6 +342,44 @@ class TestConsumerClearsRunningMarker:
         assert job.is_running is False
         assert job.last_run_status == JobRunStatus.FAILED.value
 
+    def test_pickup_reconciles_job_status_with_config(self, monkeypatch, db_session):
+        """A job parked PAUSED (manual-only) must be reactivated when the
+        config gained an explicit schedule out-of-band (CHAOS-2297)."""
+        from dev_health_ops.workers.sync_runtime import run_sync_config
+
+        config = _make_config(
+            name="reactivate-me",
+            # Explicit cron, but no owner/repo => terminal ValueError AFTER
+            # the job row is resolved and reconciled.
+            sync_options={"schedule_cron": "0 * * * *"},
+            sync_targets=["git"],
+        )
+        db_session.add(config)
+        db_session.flush()
+        job = _make_job(config)
+        job.status = JobStatus.PAUSED.value
+        db_session.add(job)
+        db_session.flush()
+
+        monkeypatch.setattr(
+            "dev_health_ops.db.get_postgres_session_sync",
+            lambda: _fake_session_ctx(db_session),
+        )
+        monkeypatch.setattr(
+            "dev_health_ops.workers.sync_runtime._get_db_url",
+            lambda: "sqlite:///:memory:",
+        )
+
+        task: Any = run_sync_config
+        task.push_request(id=str(uuid.uuid4()), retries=0)
+        try:
+            with pytest.raises(ValueError, match="owner/repo"):
+                task(config_id=str(config.id), org_id="default")
+        finally:
+            task.pop_request()
+
+        assert job.status == JobStatus.ACTIVE.value
+
 
 class TestBatchRoutingStillStampsMarker:
     @patch("dev_health_ops.workers.sync_scheduler.dispatch_batch_sync")

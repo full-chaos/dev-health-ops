@@ -460,10 +460,17 @@ def run_sync_config(
                 session.add(job)
                 session.flush()
             else:
+                # Reconcile cron AND status with the config (the source of
+                # truth) so out-of-band config changes can't leave the job
+                # parked PAUSED or stale ACTIVE (CHAOS-2297).
+                explicit_cron = sync_options.get("schedule_cron")
+                setattr(job, "schedule_cron", str(explicit_cron or "0 * * * *"))
                 setattr(
                     job,
-                    "schedule_cron",
-                    str(sync_options.get("schedule_cron") or "0 * * * *"),
+                    "status",
+                    JobStatus.ACTIVE.value
+                    if bool(config.is_active) and explicit_cron
+                    else JobStatus.PAUSED.value,
                 )
 
             job_id = _as_uuid(job.id)

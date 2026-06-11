@@ -22,6 +22,7 @@ from dev_health_ops.models.licensing import (
     OrgLicense,
     TierLimit,
 )
+from dev_health_ops.models.users import Organization
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -52,6 +53,44 @@ def _coerce_bool_map(value: object) -> dict[str, bool]:
     if not isinstance(value, dict):
         return {}
     return {str(key): bool(enabled) for key, enabled in value.items()}
+
+
+def resolve_org_tier(
+    session: Session,
+    org_id: uuid.UUID,
+    org_license: OrgLicense | None,
+) -> LicenseTier:
+    """Resolve an organization's license tier from an already-fetched OrgLicense.
+
+    Mirrors ``licensing.gating.get_org_entitlements_from_db`` so tier limits and
+    entitlements always agree (CHAOS-2256): ``OrgLicense.tier`` wins when a row
+    exists; otherwise fall back to the ``Organization.tier`` column (set at org
+    creation / by billing webhooks); default to COMMUNITY.
+    """
+    if org_license is not None:
+        try:
+            return LicenseTier(org_license.tier)
+        except ValueError:
+            logger.warning(
+                "Invalid OrgLicense tier=%s for org_id=%s; defaulting to community",
+                org_license.tier,
+                org_id,
+            )
+            return LicenseTier.COMMUNITY
+
+    org_tier = (
+        session.query(Organization.tier).filter(Organization.id == org_id).scalar()
+    )
+    if org_tier is not None:
+        try:
+            return LicenseTier(org_tier)
+        except ValueError:
+            logger.warning(
+                "Invalid Organization tier=%s for org_id=%s; defaulting to community",
+                org_tier,
+                org_id,
+            )
+    return LicenseTier.COMMUNITY
 
 
 def _get_license_public_key() -> str | None:
@@ -300,9 +339,7 @@ class FeatureService:
                     )
 
         org_license = self._get_org_license(org_id)
-        org_tier = (
-            LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
-        )
+        org_tier = resolve_org_tier(self.session, org_id, org_license)
 
         if org_license and org_license.features_override:
             features_override = _coerce_bool_map(org_license.features_override)
@@ -383,9 +420,7 @@ class TierLimitService:
     def get_limit(self, org_id: uuid.UUID, limit_key: str) -> int | float | None:
         """Get a specific limit for an organization."""
         org_license = self._get_org_license(org_id)
-        org_tier = (
-            LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
-        )
+        org_tier = resolve_org_tier(self.session, org_id, org_license)
 
         # 1. Per-org override (highest priority)
         if org_license and org_license.limits_override:
@@ -400,9 +435,7 @@ class TierLimitService:
     def get_all_limits(self, org_id: uuid.UUID) -> dict[str, int | float | None]:
         """Get all limits for an organization."""
         org_license = self._get_org_license(org_id)
-        org_tier = (
-            LicenseTier(org_license.tier) if org_license else LicenseTier.COMMUNITY
-        )
+        org_tier = resolve_org_tier(self.session, org_id, org_license)
 
         limits = self._resolve_tier_limits(org_tier)
 

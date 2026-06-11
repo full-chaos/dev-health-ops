@@ -1160,6 +1160,15 @@ async def test_subscription_creates_org_license(bridge_db):
         assert features.get("audit_log") is True
         assert features.get("ip_allowlist") is True
 
+        # CHAOS-2256 review: Organization.tier must be kept in lockstep so the
+        # resolve_org_tier fallback never sees a stale value.
+        from dev_health_ops.models.users import Organization
+
+        org_row = (
+            await session.execute(select(Organization).where(Organization.id == org_id))
+        ).scalar_one()
+        assert org_row.tier == "enterprise"
+
 
 @pytest.mark.asyncio
 async def test_subscription_update_does_not_duplicate_license(bridge_db):

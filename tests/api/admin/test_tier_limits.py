@@ -22,6 +22,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
@@ -33,6 +34,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.models.subscriptions import Subscription
 from dev_health_ops.models.users import Organization, User
 from tests._helpers import tables_of
 
@@ -48,6 +50,7 @@ _TABLES = tables_of(
     SyncConfiguration,
     ScheduledJob,
     JobRun,
+    Subscription,
 )
 
 
@@ -73,18 +76,33 @@ async def session_maker(tmp_path: Path):
         await engine.dispose()
 
 
-async def _seed_org(session_maker, tier: str) -> dict[str, str]:
-    """Create an org + user + OrgLicense for a given tier."""
+async def _seed_org(
+    session_maker,
+    tier: str,
+    *,
+    with_license: bool = True,
+    license_tier: str | None = None,
+) -> dict[str, str]:
+    """Create an org + user (+ optionally an OrgLicense) for a given tier.
+
+    ``with_license=False`` models the common SaaS state where the org's tier
+    lives only on ``Organization.tier`` (set at creation or by an admin) and
+    no OrgLicense row exists yet — e.g. a trial before a Stripe plan resolves
+    (CHAOS-2256). ``license_tier`` seeds an OrgLicense row whose tier diverges
+    from ``Organization.tier`` (legacy stale-row state).
+    """
     org_id = uuid.uuid4()
     user_id = uuid.uuid4()
     org = Organization(
         id=org_id, slug=f"{tier}-org", name=f"{tier.title()} Org", tier=tier
     )
     user = User(id=user_id, email=f"{tier}@example.com", is_active=True)
-    license_row = OrgLicense(org_id=org_id, tier=tier)
+    rows: list[object] = [org, user]
+    if with_license:
+        rows.append(OrgLicense(org_id=org_id, tier=license_tier or tier))
 
     async with session_maker() as session:
-        session.add_all([org, user, license_row])
+        session.add_all(rows)
         await session.commit()
 
     return {"org_id": str(org_id), "user_id": str(user_id)}
@@ -310,6 +328,139 @@ async def test_community_initial_sync_depth_blocked_at_90(session_maker):
             "backfill" in resp.json()["detail"].lower()
             or "limit" in resp.json()["detail"].lower()
         )
+
+
+# ---------------------------------------------------------------------------
+# Enterprise tier resolution (CHAOS-2256)
+# ---------------------------------------------------------------------------
+
+
+async def _get_min_sync_interval(session_maker, org_id: str):
+    from dev_health_ops.api.services.licensing import TierLimitService
+
+    async with session_maker() as session:
+
+        def _get(sync_session):
+            tier_svc = TierLimitService(sync_session)
+            return tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
+
+        return await session.run_sync(_get)
+
+
+@pytest.mark.asyncio
+async def test_enterprise_min_sync_interval_is_quarter_hour(session_maker):
+    """Enterprise org (with OrgLicense): min_sync_interval_hours == 0.25."""
+    state = await _seed_org(session_maker, "enterprise")
+    assert await _get_min_sync_interval(session_maker, state["org_id"]) == 0.25
+
+
+@pytest.mark.asyncio
+async def test_enterprise_tier_resolves_via_organization_fallback(session_maker):
+    """CHAOS-2256: enterprise org WITHOUT an OrgLicense row must resolve via
+    Organization.tier, not silently fall back to community's 24h floor."""
+    state = await _seed_org(session_maker, "enterprise", with_license=False)
+    assert await _get_min_sync_interval(session_maker, state["org_id"]) == 0.25
+
+
+@pytest.mark.asyncio
+async def test_enterprise_can_set_hourly_schedule(session_maker):
+    """Enterprise tier: hourly schedule (1h) accepted (min=0.25h)."""
+    state = await _seed_org(session_maker, "enterprise")
+
+    app = _make_client(session_maker, state)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await _create_config(
+            ac,
+            "hourly-sync",
+            sync_options={"schedule_cron": "0 * * * *"},
+        )
+        assert resp.status_code == 201, f"Expected 201: {resp.json()}"
+
+
+@pytest.mark.asyncio
+async def test_enterprise_without_license_can_set_hourly_schedule(session_maker):
+    """CHAOS-2256 regression: enterprise org with only Organization.tier set
+    (no OrgLicense row) can create a 1h schedule instead of being rejected
+    with the community 24h minimum."""
+    state = await _seed_org(session_maker, "enterprise", with_license=False)
+
+    app = _make_client(session_maker, state)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await _create_config(
+            ac,
+            "hourly-sync",
+            sync_options={"schedule_cron": "0 * * * *"},
+        )
+        assert resp.status_code == 201, f"Expected 201: {resp.json()}"
+
+
+@pytest.mark.asyncio
+async def test_stale_org_license_takes_precedence_and_paths_agree(session_maker):
+    """Documented precedence for a stale/diverged OrgLicense row: the license
+    row wins over Organization.tier, and the limits path and entitlements path
+    agree on it (CHAOS-2256 acceptance: limits resolution == entitlements).
+
+    Divergence is prevented at the write paths (OrganizationService.update and
+    SubscriptionService._sync_org_license keep both in lockstep); this pins the
+    read behavior for pre-existing legacy rows.
+    """
+    from dev_health_ops.licensing.gating import get_org_entitlements_from_db
+
+    state = await _seed_org(session_maker, "enterprise", license_tier="community")
+
+    # Limits path: community license row wins → 24h floor.
+    assert await _get_min_sync_interval(session_maker, state["org_id"]) == 24
+
+    # Entitlements path agrees: tier resolves to community.
+    async with session_maker() as session:
+        entitlements = await get_org_entitlements_from_db(
+            uuid.UUID(state["org_id"]), session
+        )
+    assert entitlements["tier"] == "community"
+
+
+@pytest.mark.asyncio
+async def test_admin_tier_update_heals_stale_org_license(session_maker):
+    """CHAOS-2256 review regression: an admin tier change must update a
+    pre-existing OrgLicense row, otherwise the org keeps being enforced at the
+    stale license tier."""
+    from dev_health_ops.api.services.users import OrganizationService
+
+    state = await _seed_org(session_maker, "community")
+
+    async with session_maker() as session:
+        svc = OrganizationService(session)
+        org = await svc.update(org_id=state["org_id"], tier="enterprise")
+        assert org is not None
+        await session.commit()
+
+    async with session_maker() as session:
+        result = await session.execute(
+            select(OrgLicense).filter_by(org_id=uuid.UUID(state["org_id"]))
+        )
+        license_row = result.scalar_one()
+        assert license_row.tier == "enterprise"
+
+    assert await _get_min_sync_interval(session_maker, state["org_id"]) == 0.25
+
+
+@pytest.mark.asyncio
+async def test_enterprise_below_floor_still_rejected(session_maker):
+    """Enterprise tier floor still applies: a 10-minute cron (< 0.25h) is 403."""
+    state = await _seed_org(session_maker, "enterprise", with_license=False)
+
+    app = _make_client(session_maker, state)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await _create_config(
+            ac,
+            "ten-minute-sync",
+            sync_options={"schedule_cron": "*/10 * * * *"},
+        )
+        assert resp.status_code == 403
+        assert "interval" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

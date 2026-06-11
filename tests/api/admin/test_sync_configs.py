@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -811,3 +811,374 @@ async def test_trigger_batch_creates_pending_job_run(client, session_maker):
     call_kwargs = mock_batch.delay.call_args.kwargs
     assert call_kwargs.get("pending_run_id") == run_id
     mock_run.delay.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Batch create — provider-shaped child sync_options (CHAOS-2283)
+# ---------------------------------------------------------------------------
+
+
+def _gitlab_project(project_id: int, name: str, full_name: str):
+    from dev_health_ops.connectors.models import Repository
+
+    return Repository(
+        id=project_id,
+        name=name,
+        full_name=full_name,
+        default_branch="main",
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_create_github_children_keep_owner_repo_options(client):
+    """Regression: GitHub child options remain owner/repo-shaped, unchanged."""
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "gh-batch",
+            "provider": "github",
+            "sync_targets": ["git", "prs"],
+            "sync_options": {"owner": "acme"},
+            "repos": ["alpha", "beta"],
+            "schedule_cron": "0 3 * * *",
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["total_created"] == 2
+    assert [c["name"] for c in data["children"]] == ["acme/alpha", "acme/beta"]
+    for child, repo in zip(data["children"], ["alpha", "beta"]):
+        assert child["sync_options"] == {
+            "owner": "acme",
+            "schedule_cron": "0 3 * * *",
+            "repo": repo,
+        }
+
+
+@pytest.mark.asyncio
+async def test_batch_create_gitlab_children_get_project_id_and_group(client):
+    """GitLab children carry int project_id + group (+ gitlab_url), not repo."""
+    ac, _ = client
+    credential_id = str(uuid.uuid4())
+
+    mock_creds_svc = MagicMock()
+    mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
+        return_value=({"token": "glpat-test"}, MagicMock(config={}))
+    )
+    mock_connector = MagicMock()
+    mock_connector.list_repositories.return_value = [
+        _gitlab_project(101, "alpha", "acme-group/alpha"),
+        _gitlab_project(202, "beta", "acme-group/sub/beta"),
+    ]
+    mock_connector_cls = MagicMock(return_value=mock_connector)
+
+    with (
+        patch.object(
+            sync_router_module,
+            "IntegrationCredentialsService",
+            return_value=mock_creds_svc,
+        ),
+        patch(
+            "dev_health_ops.connectors.gitlab.GitLabConnector",
+            mock_connector_cls,
+        ),
+    ):
+        resp = await ac.post(
+            "/api/v1/admin/sync-configs/batch",
+            json={
+                "name": "gl-batch",
+                "provider": "gitlab",
+                "credential_id": credential_id,
+                "sync_targets": ["git", "prs"],
+                "sync_options": {
+                    "owner": "acme-group",
+                    "gitlab_url": "https://gitlab.example.com",
+                },
+                "repos": ["alpha", "beta"],
+                "schedule_cron": "0 3 * * *",
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["total_created"] == 2
+
+    mock_connector_cls.assert_called_once_with(
+        url="https://gitlab.example.com", private_token="glpat-test"
+    )
+    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+
+    # Child names use path_with_namespace.
+    assert [c["name"] for c in data["children"]] == [
+        "acme-group/alpha",
+        "acme-group/sub/beta",
+    ]
+    for child, project_id in zip(data["children"], [101, 202]):
+        assert child["sync_options"] == {
+            "gitlab_url": "https://gitlab.example.com",
+            "schedule_cron": "0 3 * * *",
+            "project_id": project_id,
+            "group": "acme-group",
+        }
+        assert isinstance(child["sync_options"]["project_id"], int)
+        assert "repo" not in child["sync_options"]
+        assert "owner" not in child["sync_options"]
+
+
+@pytest.mark.asyncio
+async def test_batch_create_gitlab_numeric_ids_skip_resolution(client):
+    """Numeric repos entries are used as project ids without a credential."""
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "gl-batch-ids",
+            "provider": "gitlab",
+            "sync_targets": ["git"],
+            "sync_options": {"group": "acme-group"},
+            "repos": ["123", "456"],
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["total_created"] == 2
+    assert [c["name"] for c in data["children"]] == [
+        "acme-group/123",
+        "acme-group/456",
+    ]
+    for child, project_id in zip(data["children"], [123, 456]):
+        assert child["sync_options"] == {
+            "group": "acme-group",
+            "project_id": project_id,
+        }
+
+
+@pytest.mark.asyncio
+async def test_batch_create_gitlab_unknown_project_name_returns_400(client):
+    ac, _ = client
+
+    mock_creds_svc = MagicMock()
+    mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
+        return_value=({"token": "glpat-test"}, MagicMock(config={}))
+    )
+    mock_connector = MagicMock()
+    mock_connector.list_repositories.return_value = [
+        _gitlab_project(101, "alpha", "acme-group/alpha"),
+    ]
+
+    with (
+        patch.object(
+            sync_router_module,
+            "IntegrationCredentialsService",
+            return_value=mock_creds_svc,
+        ),
+        patch(
+            "dev_health_ops.connectors.gitlab.GitLabConnector",
+            MagicMock(return_value=mock_connector),
+        ),
+    ):
+        resp = await ac.post(
+            "/api/v1/admin/sync-configs/batch",
+            json={
+                "name": "gl-batch-missing",
+                "provider": "gitlab",
+                "credential_id": str(uuid.uuid4()),
+                "sync_targets": ["git"],
+                "sync_options": {"owner": "acme-group"},
+                "repos": ["ghost"],
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "ghost" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_batch_create_gitlab_names_without_credential_returns_400(client):
+    ac, _ = client
+
+    resp = await ac.post(
+        "/api/v1/admin/sync-configs/batch",
+        json={
+            "name": "gl-batch-nocred",
+            "provider": "gitlab",
+            "sync_targets": ["git"],
+            "sync_options": {"owner": "acme-group"},
+            "repos": ["alpha"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "credential_id" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_batch_create_gitlab_credential_url_persisted_into_children(client):
+    """Self-hosted URL from the credential lands in parent + child options.
+
+    Regression: name resolution used the credential's self-hosted URL but
+    children only inherited a gitlab_url already present in parent options,
+    so they later synced against the gitlab.com runtime default.
+    """
+    ac, _ = client
+    credential_id = str(uuid.uuid4())
+
+    mock_creds_svc = MagicMock()
+    mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
+        return_value=(
+            {"token": "glpat-test", "url": "https://gitlab.internal.example.com"},
+            MagicMock(config={}),
+        )
+    )
+    mock_connector = MagicMock()
+    mock_connector.list_repositories.return_value = [
+        _gitlab_project(101, "alpha", "acme-group/alpha"),
+    ]
+    mock_connector_cls = MagicMock(return_value=mock_connector)
+
+    with (
+        patch.object(
+            sync_router_module,
+            "IntegrationCredentialsService",
+            return_value=mock_creds_svc,
+        ),
+        patch(
+            "dev_health_ops.connectors.gitlab.GitLabConnector",
+            mock_connector_cls,
+        ),
+    ):
+        resp = await ac.post(
+            "/api/v1/admin/sync-configs/batch",
+            json={
+                "name": "gl-batch-selfhosted",
+                "provider": "gitlab",
+                "credential_id": credential_id,
+                "sync_targets": ["git"],
+                "sync_options": {"owner": "acme-group"},
+                "repos": ["alpha"],
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+
+    # Resolution used the credential's self-hosted URL...
+    mock_connector_cls.assert_called_once_with(
+        url="https://gitlab.internal.example.com", private_token="glpat-test"
+    )
+    # ...and that URL is persisted into both parent and child options.
+    assert (
+        data["parent"]["sync_options"]["gitlab_url"]
+        == "https://gitlab.internal.example.com"
+    )
+    child = data["children"][0]
+    assert child["sync_options"] == {
+        "gitlab_url": "https://gitlab.internal.example.com",
+        "project_id": 101,
+        "group": "acme-group",
+    }
+
+
+@pytest.mark.asyncio
+async def test_batch_create_gitlab_numeric_entry_matching_name_resolves_as_name(
+    client,
+):
+    """A numeric entry that matches a listed project NAME is a name, not an id."""
+    ac, _ = client
+    credential_id = str(uuid.uuid4())
+
+    mock_creds_svc = MagicMock()
+    mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
+        return_value=({"token": "glpat-test"}, MagicMock(config={}))
+    )
+    mock_connector = MagicMock()
+    mock_connector.list_repositories.return_value = [
+        _gitlab_project(7007, "007", "acme-group/007"),
+        _gitlab_project(101, "alpha", "acme-group/alpha"),
+    ]
+
+    with (
+        patch.object(
+            sync_router_module,
+            "IntegrationCredentialsService",
+            return_value=mock_creds_svc,
+        ),
+        patch(
+            "dev_health_ops.connectors.gitlab.GitLabConnector",
+            MagicMock(return_value=mock_connector),
+        ),
+    ):
+        resp = await ac.post(
+            "/api/v1/admin/sync-configs/batch",
+            json={
+                "name": "gl-batch-numeric-name",
+                "provider": "gitlab",
+                "credential_id": credential_id,
+                "sync_targets": ["git"],
+                "sync_options": {"owner": "acme-group"},
+                "repos": ["007"],
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+
+    child = data["children"][0]
+    # Resolved via the listing as the project named "007" — NOT project id 7.
+    assert child["name"] == "acme-group/007"
+    assert child["sync_options"]["project_id"] == 7007
+
+
+@pytest.mark.asyncio
+async def test_batch_create_gitlab_numeric_entry_not_in_listing_used_as_id(client):
+    """A numeric entry matching no listed name keeps project-id semantics."""
+    ac, _ = client
+    credential_id = str(uuid.uuid4())
+
+    mock_creds_svc = MagicMock()
+    mock_creds_svc.get_decrypted_credentials_by_id = AsyncMock(
+        return_value=({"token": "glpat-test"}, MagicMock(config={}))
+    )
+    mock_connector = MagicMock()
+    mock_connector.list_repositories.return_value = [
+        _gitlab_project(101, "alpha", "acme-group/alpha"),
+    ]
+
+    with (
+        patch.object(
+            sync_router_module,
+            "IntegrationCredentialsService",
+            return_value=mock_creds_svc,
+        ),
+        patch(
+            "dev_health_ops.connectors.gitlab.GitLabConnector",
+            MagicMock(return_value=mock_connector),
+        ),
+    ):
+        resp = await ac.post(
+            "/api/v1/admin/sync-configs/batch",
+            json={
+                "name": "gl-batch-numeric-id",
+                "provider": "gitlab",
+                "credential_id": credential_id,
+                "sync_targets": ["git"],
+                "sync_options": {"owner": "acme-group"},
+                "repos": ["12345"],
+            },
+        )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    # The listing WAS consulted (credential + group present)...
+    mock_connector.list_repositories.assert_called_once_with(org_name="acme-group")
+
+    child = data["children"][0]
+    # ...but "12345" matched no listed name, so it stays an id.
+    assert child["sync_options"]["project_id"] == 12345
+    assert child["name"] == "acme-group/12345"

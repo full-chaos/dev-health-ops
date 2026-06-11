@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Protocol, cast
 
@@ -19,7 +20,10 @@ from dev_health_ops.api.admin.schemas import (
     SyncConfigResponse,
     SyncConfigUpdate,
 )
-from dev_health_ops.api.services.configuration import SyncConfigurationService
+from dev_health_ops.api.services.configuration import (
+    IntegrationCredentialsService,
+    SyncConfigurationService,
+)
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.models.settings import (
     JobRun,
@@ -31,6 +35,8 @@ from dev_health_ops.models.settings import (
 from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
 from .common import get_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -134,6 +140,7 @@ PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
 
 NON_REPO_SYNC_PROVIDERS = {"jira", "linear"}
 DEFAULT_SYNC_CRON = "0 * * * *"
+DEFAULT_GITLAB_URL = "https://gitlab.com"
 
 
 def _sync_options_with_top_level_fields(
@@ -248,6 +255,156 @@ async def list_sync_configs(
     return results
 
 
+def _gitlab_group_from_options(sync_options: dict[str, Any]) -> str:
+    """Extract the GitLab group/namespace from batch sync options.
+
+    The web form submits the namespace under ``owner`` (shared field with
+    GitHub); API callers may use ``group`` directly.
+    """
+    group = sync_options.get("group") or sync_options.get("owner") or ""
+    # Strip CR/LF so the user-provided group can't forge log lines when it is
+    # interpolated into warnings (CodeQL: log injection).
+    return str(group).replace("\r", "").replace("\n", "").strip()
+
+
+async def _resolve_gitlab_batch_projects(
+    session: AsyncSession,
+    org_id: str,
+    payload: SyncConfigBatchCreate,
+) -> tuple[dict[str, tuple[int, str]], str]:
+    """Resolve batch ``repos`` entries to GitLab ``(project_id, child_name)``.
+
+    Returns the resolved mapping plus the effective ``gitlab_url``, resolved
+    with the same precedence the credential resolver uses:
+    ``sync_options.gitlab_url`` → decrypted credential ``url`` → credential
+    ``config.url`` → ``https://gitlab.com``. The caller persists that URL into
+    parent/child options so children sync against the same instance used for
+    name resolution.
+
+    Name entries are resolved by listing the group's projects through the
+    stored credential; unknown or ambiguous names raise a 400. When a listing
+    is available, numeric entries that match a listed project *name* are
+    treated as names (a project literally named ``007`` must not be coerced
+    to project id 7); numeric entries matching no listed name keep project-id
+    semantics.
+    """
+    entries = list(dict.fromkeys(payload.repos))
+    named = [r for r in entries if not r.strip().isdigit()]
+    numeric = [r for r in entries if r.strip().isdigit()]
+    group = _gitlab_group_from_options(payload.sync_options)
+
+    resolved: dict[str, tuple[int, str]] = {}
+    by_id: dict[int, str] = {}
+    by_key: dict[str, list[tuple[int, str]]] = {}
+
+    if named:
+        if not payload.credential_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "GitLab batch create requires credential_id to resolve "
+                    "project names to project ids"
+                ),
+            )
+        if not group:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "GitLab batch create requires a group (sync_options.group "
+                    "or sync_options.owner) to resolve project names"
+                ),
+            )
+
+    # Resolve the effective GitLab instance URL up front (even for all-numeric
+    # batches) so self-hosted URLs stored on the credential are not lost.
+    option_url = str(payload.sync_options.get("gitlab_url") or "").strip()
+    gitlab_url = option_url or DEFAULT_GITLAB_URL
+    token: str | None = None
+    if payload.credential_id:
+        creds_svc = IntegrationCredentialsService(session, org_id)
+        decrypted, credential = await creds_svc.get_decrypted_credentials_by_id(
+            payload.credential_id
+        )
+        if credential is None or decrypted is None:
+            raise HTTPException(status_code=400, detail="Credential not found")
+        token = decrypted.get("token")
+        cred_config: dict[str, Any] = getattr(credential, "config") or {}
+        gitlab_url = str(
+            option_url
+            or decrypted.get("url")
+            or cred_config.get("url")
+            or DEFAULT_GITLAB_URL
+        )
+
+    if named and not token:
+        raise HTTPException(status_code=400, detail="GitLab credential missing token")
+
+    # List the group's projects when name entries require it, and also
+    # opportunistically when numeric entries could shadow project names.
+    should_list = bool(named) or (bool(numeric) and bool(token) and bool(group))
+    if should_list:
+        from dev_health_ops.connectors.gitlab import GitLabConnector
+
+        connector = GitLabConnector(url=gitlab_url, private_token=str(token))
+        try:
+            projects = connector.list_repositories(org_name=group)
+        except Exception as exc:
+            if named:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to list GitLab projects for group '{group}': {exc}",
+                )
+            # All-numeric batch: keep historical id semantics when the listing
+            # is unavailable, but log so shadowed names are diagnosable.
+            logger.warning(
+                "GitLab batch create: failed to list projects for group %r to "
+                "cross-check numeric entries; treating them as project ids: %s",
+                group,
+                exc,
+            )
+            projects = []
+
+        for project in projects:
+            entry = (int(project.id), project.full_name or project.name)
+            by_id[entry[0]] = entry[1]
+            for key in {project.name, project.full_name}:
+                if key:
+                    by_key.setdefault(key, []).append(entry)
+
+        # Numeric entries matching a listed project name are names, not ids.
+        named_like = named + [r for r in numeric if r in by_key]
+
+        missing = [r for r in named if r not in by_key]
+        ambiguous = [r for r in named_like if len(by_key.get(r, [])) > 1]
+        if missing or ambiguous:
+            parts = []
+            if missing:
+                parts.append(f"not found in group '{group}': {', '.join(missing)}")
+            if ambiguous:
+                parts.append(
+                    "ambiguous (multiple projects share this name, use the "
+                    f"full path): {', '.join(ambiguous)}"
+                )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not resolve GitLab projects — {'; '.join(parts)}",
+            )
+
+        for repo in named_like:
+            resolved[repo] = by_key[repo][0]
+
+    for repo in entries:
+        if repo in resolved:
+            continue
+        project_id = int(repo.strip())
+        child_name = by_id.get(
+            project_id, f"{group}/{project_id}" if group else str(project_id)
+        )
+        resolved[repo] = (project_id, child_name)
+
+    return resolved, gitlab_url
+
+
 @router.post(
     "/sync-configs/batch", response_model=SyncConfigBatchResponse, status_code=201
 )
@@ -256,7 +413,32 @@ async def batch_create_sync_configs(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigBatchResponse:
-    """Create a parent sync config + one child per repo."""
+    """Create a parent sync config + one child per repo.
+
+    Child ``sync_options`` are provider-shaped:
+
+    - **github**: each child carries ``repo`` (plus ``owner`` inherited from
+      the parent options); child name is ``{owner}/{repo}``.
+    - **gitlab**: each child carries an integer ``project_id`` plus ``group``
+      (and ``gitlab_url`` when present in the parent options), matching what
+      the sync runtime expects (``workers/sync_runtime.py`` requires
+      ``project_id``). ``payload.repos`` entries may be either numeric GitLab
+      project ids or project names, which are resolved to ids by listing the
+      group's projects via the stored credential. Name entries therefore
+      require ``credential_id`` and a ``group``/``owner`` in ``sync_options``;
+      unknown or ambiguous names are rejected with a 400. When a credential
+      and group are available the listing also cross-checks numeric entries:
+      a numeric entry matching a listed project *name* is resolved as a name
+      (so a project literally named ``007`` is not coerced to project id 7),
+      and only entries matching no listed name keep id semantics. Without a
+      credential, an all-numeric ``repos`` list is the escape hatch: entries
+      are used as project ids as-is, with no listing call. The effective
+      ``gitlab_url`` (``sync_options.gitlab_url`` → credential ``url`` →
+      ``https://gitlab.com``) is persisted into parent and child options when
+      it is not the public default, so self-hosted children sync against the
+      same instance used for resolution. Child name is the project's
+      ``path_with_namespace`` when known.
+    """
     svc = SyncConfigurationService(session, org_id)
 
     # Enforce repo limit (existing + new repos)
@@ -286,6 +468,19 @@ async def batch_create_sync_configs(
         parent_options["timezone"] = payload.timezone
     if payload.initial_sync_depth is not None:
         parent_options["initial_sync_depth"] = payload.initial_sync_depth
+
+    # Resolve GitLab repos (and the effective instance URL) before creating
+    # the parent so a self-hosted gitlab_url derived from the credential is
+    # persisted into both parent and child options — otherwise children with
+    # a valid project_id would later sync against the gitlab.com default.
+    gitlab_projects: dict[str, tuple[int, str]] = {}
+    if provider == "gitlab" and payload.repos:
+        gitlab_projects, effective_gitlab_url = await _resolve_gitlab_batch_projects(
+            session, org_id, payload
+        )
+        if effective_gitlab_url != DEFAULT_GITLAB_URL:
+            parent_options["gitlab_url"] = effective_gitlab_url
+
     parent = SyncConfiguration(
         name=payload.name,
         provider=payload.provider,
@@ -304,7 +499,28 @@ async def batch_create_sync_configs(
     children = []
     for repo_name in payload.repos:
         child_options = dict(parent_options)
-        child_options["repo"] = repo_name
+        if provider == "gitlab":
+            project_id, child_name = gitlab_projects[repo_name]
+            # GitLab children are keyed by integer project_id (what the sync
+            # runtime dispatches on), not by GitHub-shaped owner/repo keys.
+            child_options.pop("owner", None)
+            child_options.pop("repo", None)
+            child_options.pop("search", None)
+            child_options["project_id"] = project_id
+            group = _gitlab_group_from_options(payload.sync_options)
+            if group:
+                child_options["group"] = group
+            # gitlab_url passes through via the dict(parent_options) copy
+            # above — including the credential-derived URL persisted into
+            # parent_options before parent creation.
+        else:
+            child_options["repo"] = repo_name
+            owner = (
+                payload.sync_options.get("owner")
+                or payload.sync_options.get("group")
+                or payload.name
+            )
+            child_name = f"{owner}/{repo_name}"
         if payload.initial_sync_depth is not None:
             child_options["initial_sync_depth"] = payload.initial_sync_depth
         if payload.schedule_cron is not None:
@@ -312,13 +528,8 @@ async def batch_create_sync_configs(
         if payload.timezone is not None:
             child_options["timezone"] = payload.timezone
 
-        owner = (
-            payload.sync_options.get("owner")
-            or payload.sync_options.get("group")
-            or payload.name
-        )
         child = SyncConfiguration(
-            name=f"{owner}/{repo_name}",
+            name=child_name,
             provider=payload.provider,
             org_id=org_id,
             credential_id=uuid.UUID(payload.credential_id)

@@ -1,0 +1,102 @@
+{{- if .Values.migrations.hook.enabled }}
+{{- /*
+Database migration hook (CHAOS-2304).
+
+Runs PostgreSQL (Alembic) + ClickHouse migrations as a pre-install/pre-upgrade
+hook so schema changes complete before any workload from the release is
+(re)deployed. App pods run with AUTO_RUN_MIGRATIONS=false (see configmap.yaml)
+and never ambient-migrate — shadow-table rebuild migrations are not safe to
+run concurrently from workers.
+
+The hook ships its own ConfigMap/Secret copies: pre-install hooks run before
+the chart's regular resources exist, so the Job cannot reference them on a
+fresh install. When secrets.create is false the external secret is referenced
+directly (it exists independently of the release).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dev-health.fullname" . }}-migrate-config
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  {{- include "dev-health.configData" . | trim | nindent 2 }}
+{{- if .Values.secrets.create }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "dev-health.fullname" . }}-migrate-secrets
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  {{- include "dev-health.secretData" . | trim | nindent 2 }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-migrate
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "migrate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.hook.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "migrate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: migrate
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          # POSTGRES_URI / DATABASE_URI must point DIRECTLY at Postgres (5432),
+          # never at a transaction-mode pooler (PgBouncer/RDS Proxy) —
+          # migrations run raw DDL. See docs/ops/database-connection-pooling.md.
+          # The Alembic step is skipped when no Postgres URI is configured.
+          command:
+            - sh
+            - -c
+            - >-
+              if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ];
+              then dev-hops migrate postgres; fi
+              && dev-hops migrate clickhouse
+          envFrom:
+            - configMapRef:
+                name: {{ include "dev-health.fullname" . }}-migrate-config
+            - secretRef:
+                {{- if .Values.secrets.create }}
+                name: {{ include "dev-health.fullname" . }}-migrate-secrets
+                {{- else }}
+                name: {{ include "dev-health.secretName" . }}
+                {{- end }}
+          {{- with .Values.migrations.hook.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- end }}

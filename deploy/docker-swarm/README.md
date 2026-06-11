@@ -24,6 +24,32 @@ EOF
 docker stack deploy -c stack.yml dev-health
 ```
 
+## Database Migrations (CHAOS-2304)
+
+Schema migrations run as a one-shot `migrate` service
+(`deploy.restart_policy.condition: none`). App services run with
+`AUTO_RUN_MIGRATIONS=false` and never apply migrations themselves.
+
+Swarm has **no** `depends_on` ordering: on first deploy (and after every image
+update) you MUST verify the migrate service completed successfully before
+relying on the stack — api/worker will not create the schema for you:
+
+```bash
+# Wait for the one-shot task to finish, then check it exited 0
+docker service logs dev-health_migrate
+docker service ps dev-health_migrate   # DesiredState=Shutdown, no error
+
+# Re-run migrations manually (e.g. after a failed run)
+docker service update --force dev-health_migrate
+```
+
+Notes:
+
+- `POSTGRES_URI` must point **directly** at Postgres (port 5432), never at a
+  transaction-mode pooler (PgBouncer/RDS Proxy) — migrations run raw DDL. See
+  `docs/ops/database-connection-pooling.md`. The Alembic step is skipped when
+  `POSTGRES_URI` is unset (ClickHouse-only stacks).
+
 ## Scaling Services
 
 ```bash

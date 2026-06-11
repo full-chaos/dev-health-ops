@@ -10,6 +10,9 @@ resources:
   - secrets.yaml
   - clickhouse.yaml
   - redis.yaml
+  # NOTE (CHAOS-2304): Jobs do not gate Deployments. The migrate Job must
+  # complete before api/worker roll out — see migrate-job.yaml and README.md.
+  - migrate-job.yaml
   - api.yaml
   - worker.yaml
   - cronjobs.yaml

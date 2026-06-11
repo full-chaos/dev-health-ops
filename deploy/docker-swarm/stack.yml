@@ -76,6 +76,51 @@ services:
     networks:
       - dev-health-internal
 
+  # ===========================================================================
+  # Database migrations (one-shot — CHAOS-2304)
+  # ===========================================================================
+  # Swarm has no depends_on/completion conditions: this service runs once
+  # (restart_policy.condition: none) and operators MUST verify it completed
+  # successfully before relying on the stack — see README.md:
+  #   docker service logs dev-health_migrate
+  # App services run with AUTO_RUN_MIGRATIONS=false and never ambient-migrate.
+  #
+  # POSTGRES_URI must point DIRECTLY at Postgres (port 5432), never at a
+  # transaction-mode pooler (PgBouncer/RDS Proxy): migrations run raw DDL.
+  # The Alembic step is skipped when POSTGRES_URI is unset (ClickHouse-only
+  # stacks).
+  migrate:
+    image: ghcr.io/your-org/dev-health-ops:latest
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        if [ -n "$$POSTGRES_URI" ]; then dev-hops migrate postgres; fi
+        && dev-hops migrate clickhouse
+    environment:
+      POSTGRES_URI: ${POSTGRES_URI:-}
+      CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      LOG_LEVEL: INFO
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: none
+      resources:
+        limits:
+          memory: 1G
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.1"
+    networks:
+      - dev-health-internal
+
   api:
     image: ghcr.io/your-org/dev-health-ops:latest
     command:
@@ -90,6 +135,9 @@ services:
       CELERY_RESULT_BACKEND: redis://valkey:6379/0
       GRAPHQL_QUERY_TIMEOUT: "30"
       LOG_LEVEL: INFO
+      # Schema is applied by the one-shot `migrate` service — the API must
+      # never run migrations itself (CHAOS-2304).
+      AUTO_RUN_MIGRATIONS: "false"
     secrets:
       - github_token
       - gitlab_token
@@ -148,6 +196,9 @@ services:
       CELERY_BROKER_URL: redis://valkey:6379/0
       CELERY_RESULT_BACKEND: redis://valkey:6379/0
       LOG_LEVEL: INFO
+      # Schema is applied by the one-shot `migrate` service — workers must
+      # never run migrations themselves (CHAOS-2304).
+      AUTO_RUN_MIGRATIONS: "false"
     secrets:
       - github_token
       - gitlab_token

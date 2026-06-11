@@ -35,3 +35,7 @@ data:
   
   # Logging
   LOG_LEVEL: "INFO"
+
+  # Migrations (CHAOS-2304): schema is applied by the one-shot migrate Job
+  # (migrate-job.yaml) — api/worker pods must never run migrations themselves.
+  AUTO_RUN_MIGRATIONS: "false"

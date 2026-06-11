@@ -3,7 +3,7 @@
 If available locally:
 
 **Canonical Reference:** See [`/AGENTS.md`](../AGENTS.md) for the unified Dev Health platform agent briefing.
-**Deep Dives:** See [`/docs/agent-instructions/`](../docs/agent-instructions/) for detailed topic documentation.
+**Deep Dives:** See the MkDocs site under [`docs/`](docs/index.md) — e.g. the [Investment Categorization Pipeline](docs/architecture/investment-categorization-pipeline.md), [Investment Data Model](docs/architecture/investment-data-model.md), and [LLM Categorization Contract](docs/llm/categorization-contract.md).
 
 
 # AGENTS — Briefing and pointers (dev-health-ops)

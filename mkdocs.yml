@@ -37,6 +37,8 @@ nav:
   - Architecture:
       - Overview: architecture.md
       - Data Pipeline: architecture/data-pipeline.md
+      - Investment Categorization Pipeline: architecture/investment-categorization-pipeline.md
+      - Investment Data Model: architecture/investment-data-model.md
       - Repo Layout: architecture/repo-layout.md
       - Frontend Architecture: architecture/frontend-architecture.md
       - Middleware Impersonation: architecture/middleware-impersonation.md
@@ -56,6 +58,7 @@ nav:
       - Workers: ops/workers.md
       - SLOs: slos.md
       - Customer Offboarding: ops/customer-offboarding.md
+      - Investment Materialization: ops/investment-materialization.md
   - CLI:
       - Overview: cli.md
       - Reference: ops/cli-reference.md
@@ -93,6 +96,7 @@ nav:
       - Product Telemetry Dashboard Assessment: product/product-telemetry-dashboard-assessment.md
   - API:
       - GraphQL Overview: api/graphql-overview.md
+      - Investment API: api/investment-api.md
       - AI Workflow Analytics: api/graphql-ai.md
       - GraphQL Security: api/graphql-security.md
       - Persisted Queries: api/persisted-queries.md

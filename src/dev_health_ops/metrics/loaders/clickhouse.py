@@ -101,6 +101,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         FROM git_commits AS c
         LEFT JOIN git_commit_stats AS s
           ON (s.repo_id = c.repo_id) AND (s.commit_hash = c.hash)
+         AND (s.org_id = c.org_id)
         WHERE c.committer_when >= {{start:DateTime}} AND c.committer_when < {{end:DateTime}}
         {repo_filter}
         {org_filter_c}
@@ -509,6 +510,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
         FROM coverage_snapshots AS c
         INNER JOIN ci_pipeline_runs AS p
           ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id)
+         AND (p.org_id = c.org_id)
         WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
         {repo_filter}
         {self._org_filter(alias="p")}

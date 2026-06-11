@@ -262,7 +262,9 @@ def _gitlab_group_from_options(sync_options: dict[str, Any]) -> str:
     GitHub); API callers may use ``group`` directly.
     """
     group = sync_options.get("group") or sync_options.get("owner") or ""
-    return str(group).strip()
+    # Strip CR/LF so the user-provided group can't forge log lines when it is
+    # interpolated into warnings (CodeQL: log injection).
+    return str(group).replace("\r", "").replace("\n", "").strip()
 
 
 async def _resolve_gitlab_batch_projects(

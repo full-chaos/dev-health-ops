@@ -32,6 +32,7 @@ from dev_health_ops.models.settings import (
     ScheduledJob,
     SyncConfiguration,
 )
+from dev_health_ops.workers.queues import sync_queue_for_provider
 from dev_health_ops.workers.sync_batch import _is_batch_eligible
 
 from .common import get_session
@@ -952,11 +953,16 @@ async def trigger_sync_config(
 
         is_batch = _is_batch_eligible(config)
         task = dispatch_batch_sync if is_batch else run_sync_config
-        result = getattr(task, "delay")(
-            config_id=str(config.id),
-            org_id=str(config.org_id),
-            triggered_by="manual",
-            pending_run_id=pending_run_id,
+        # Per-provider queue routing (CHAOS-2299): an explicit apply_async
+        # queue overrides the task decorator's queue="sync" default.
+        result = getattr(task, "apply_async")(
+            kwargs={
+                "config_id": str(config.id),
+                "org_id": str(config.org_id),
+                "triggered_by": "manual",
+                "pending_run_id": pending_run_id,
+            },
+            queue=sync_queue_for_provider(str(config.provider or "")),
         )
         return {
             "status": "triggered",

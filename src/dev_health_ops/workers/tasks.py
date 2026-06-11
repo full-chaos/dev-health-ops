@@ -11,6 +11,7 @@ from dev_health_ops.workers.product_tasks import (
     run_capacity_forecast_job,
     sync_teams_to_analytics,
 )
+from dev_health_ops.workers.queue_monitor import monitor_queue_depths
 from dev_health_ops.workers.report_scheduler import dispatch_scheduled_reports
 from dev_health_ops.workers.report_task import execute_saved_report
 from dev_health_ops.workers.sync_batch import (
@@ -67,6 +68,7 @@ __all__ = [
     "dispatch_scheduled_syncs",
     "execute_saved_report",
     "health_check",
+    "monitor_queue_depths",
     "phone_home_heartbeat",
     "process_webhook_event",
     "reconcile_team_members",

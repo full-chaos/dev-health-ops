@@ -17,6 +17,7 @@ from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
+from dev_health_ops.workers.queues import sync_queue_for_provider
 from dev_health_ops.workers.sync_runtime import (
     _dispatch_post_sync_tasks,
     _TerminalSyncError,
@@ -380,7 +381,7 @@ def dispatch_batch_sync(
                     "triggered_by": triggered_by,
                     "pending_run_id": pending_run_id,
                 },
-                queue="sync",
+                queue=sync_queue_for_provider(provider),
             )
             return {
                 "status": "fallback_single",
@@ -403,6 +404,9 @@ def dispatch_batch_sync(
             return {"status": "no_repos", "total_repos": 0, "batch_count": 0}
 
         batch_size = _get_batch_size(sync_options)
+        # Children inherit the provider's queue (CHAOS-2299): apply_async/
+        # signature options override the task decorator's queue="sync" default.
+        child_queue = sync_queue_for_provider(provider)
         child_tasks = []
 
         for repo_tuple in repos:
@@ -424,18 +428,18 @@ def dispatch_batch_sync(
                 per_repo_options.pop("search", None)
                 per_repo_options.pop("group", None)
 
-            child_tasks.append(
-                getattr(_run_sync_for_repo, "s")(
-                    config_id=config_id,
-                    org_id=org_id,
-                    triggered_by=triggered_by,
-                    provider=provider,
-                    sync_targets=sync_targets,
-                    sync_options_override=per_repo_options,
-                    credentials=credentials,
-                    config_name=config_name,
-                )
+            child_signature = getattr(_run_sync_for_repo, "s")(
+                config_id=config_id,
+                org_id=org_id,
+                triggered_by=triggered_by,
+                provider=provider,
+                sync_targets=sync_targets,
+                sync_options_override=per_repo_options,
+                credentials=credentials,
+                config_name=config_name,
             )
+            child_signature.set(queue=child_queue)
+            child_tasks.append(child_signature)
 
         batches = [
             child_tasks[i : i + batch_size]
@@ -454,16 +458,15 @@ def dispatch_batch_sync(
                 child.set(countdown=batch_index * BATCH_STAGGER_SECONDS)
 
         all_tasks = [task for batch in batches for task in batch]
-        chord(
-            group(all_tasks),
-            getattr(_batch_sync_callback, "s")(
-                provider=provider,
-                sync_targets=sync_targets,
-                org_id=org_id,
-                run_id=pending_run_id,
-                config_id=config_id,
-            ),
-        )()
+        callback_signature = getattr(_batch_sync_callback, "s")(
+            provider=provider,
+            sync_targets=sync_targets,
+            org_id=org_id,
+            run_id=pending_run_id,
+            config_id=config_id,
+        )
+        callback_signature.set(queue=child_queue)
+        chord(group(all_tasks), callback_signature)()
 
         logger.info(
             "dispatch_batch_sync: dispatched %d tasks in %d batches for config %s",

@@ -41,11 +41,26 @@ task_default_queue = "default"
 task_queues: dict[str, dict[str, Any]] = {
     "default": {},
     "metrics": {},
+    # Shared sync queue: fallback for unknown providers plus any messages
+    # already in flight at deploy time. Per-provider queues (CHAOS-2299)
+    # make queue depth answer "is <provider> stuck?" with one LLEN and let
+    # operators purge a single provider. Routing lives in
+    # workers.queues.sync_queue_for_provider.
     "sync": {},
+    "sync.github": {},
+    "sync.gitlab": {},
+    "sync.linear": {},
+    "sync.jira": {},
+    "sync.launchdarkly": {},
     "backfill": {},
     "webhooks": {},
     "ingest": {},
     "reports": {},
+    # Dedicated telemetry queue: monitor_queue_depths must not share a queue
+    # with floodable work — if `default` backs up, queue-depth telemetry would
+    # die exactly when it is needed. Consumed by BOTH `worker` and
+    # `worker-heavy` in compose.yml for redundancy.
+    "monitoring": {},
 }
 
 # Beat schedule (periodic tasks)
@@ -102,6 +117,13 @@ beat_schedule = {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_reports",
         "schedule": 300.0,
         "options": {"queue": "default"},
+    },
+    "monitor-queue-depths": {
+        "task": "dev_health_ops.workers.tasks.monitor_queue_depths",
+        "schedule": 60.0,
+        # Dedicated `monitoring` queue: telemetry must keep flowing even when
+        # `default` floods (that is precisely when it is needed).
+        "options": {"queue": "monitoring"},
     },
 }
 

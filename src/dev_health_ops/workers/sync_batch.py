@@ -31,8 +31,52 @@ from dev_health_ops.workers.task_utils import (
 logger = logging.getLogger(__name__)
 
 
-def _mark_batch_run_complete(run_id: str, results: list) -> None:
-    """Update the parent JobRun to SUCCESS after all batch children complete."""
+def _set_run_duration(run_record, completed_at: datetime) -> None:
+    """Compute duration_seconds from started_at when available."""
+    started = getattr(run_record, "started_at", None)
+    if started is None:
+        return
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    setattr(
+        run_record,
+        "duration_seconds",
+        max(0, int((completed_at - started).total_seconds())),
+    )
+
+
+def _update_config_sync_status(
+    session,
+    config_id: str,
+    org_id: str,
+    *,
+    completed_at: datetime,
+    success: bool,
+    error: str | None = None,
+    stats: dict[str, Any] | None = None,
+) -> None:
+    """Record the terminal sync outcome on the SyncConfiguration."""
+    from dev_health_ops.models.settings import SyncConfiguration
+
+    config_record = (
+        session.query(SyncConfiguration)
+        .filter(
+            SyncConfiguration.id == uuid.UUID(config_id),
+            SyncConfiguration.org_id == org_id,
+        )
+        .one_or_none()
+    )
+    if config_record is None:
+        return
+    setattr(config_record, "last_sync_at", completed_at)
+    setattr(config_record, "last_sync_success", success)
+    setattr(config_record, "last_sync_error", error)
+    if stats is not None:
+        setattr(config_record, "last_sync_stats", stats)
+
+
+def _mark_batch_run_running(run_id: str) -> None:
+    """Transition the pending JobRun to RUNNING when batch dispatch starts."""
     from dev_health_ops.db import get_postgres_session_sync
     from dev_health_ops.models.settings import JobRun, JobRunStatus
 
@@ -44,17 +88,95 @@ def _mark_batch_run_complete(run_id: str, results: list) -> None:
                 .one_or_none()
             )
             if run_record is not None:
-                completed_at = datetime.now(timezone.utc)
-                setattr(run_record, "status", JobRunStatus.SUCCESS.value)
-                setattr(run_record, "completed_at", completed_at)
-                setattr(
-                    run_record,
-                    "result",
-                    {"child_results": len(results) if results else 0},
-                )
+                setattr(run_record, "status", JobRunStatus.RUNNING.value)
+                setattr(run_record, "started_at", datetime.now(timezone.utc))
                 session.flush()
     except Exception as exc:
+        logger.error("Failed to mark batch run %s running: %s", run_id, exc)
+
+
+def _mark_batch_run_complete(
+    run_id: str | None,
+    results: list,
+    *,
+    config_id: str | None = None,
+    org_id: str | None = None,
+) -> None:
+    """Update the parent JobRun to SUCCESS after all batch children complete.
+
+    Also stamps last_sync_* on the SyncConfiguration when config_id is given,
+    so the config no longer shows "Never Synced" after a batch run.
+    """
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+    try:
+        with get_postgres_session_sync() as session:
+            completed_at = datetime.now(timezone.utc)
+            stats = {"child_results": len(results) if results else 0}
+            if run_id is not None:
+                run_record = (
+                    session.query(JobRun)
+                    .filter(JobRun.id == uuid.UUID(run_id))
+                    .one_or_none()
+                )
+                if run_record is not None:
+                    setattr(run_record, "status", JobRunStatus.SUCCESS.value)
+                    setattr(run_record, "completed_at", completed_at)
+                    setattr(run_record, "result", stats)
+                    setattr(run_record, "error", None)
+                    _set_run_duration(run_record, completed_at)
+            if config_id is not None and org_id is not None:
+                _update_config_sync_status(
+                    session,
+                    config_id,
+                    org_id,
+                    completed_at=completed_at,
+                    success=True,
+                    stats=stats,
+                )
+            session.flush()
+    except Exception as exc:
         logger.error("Failed to mark batch run %s complete: %s", run_id, exc)
+
+
+def _mark_batch_run_failed(
+    run_id: str | None,
+    error: str,
+    *,
+    config_id: str | None = None,
+    org_id: str | None = None,
+) -> None:
+    """Update the parent JobRun to FAILED so it never sticks in PENDING/RUNNING."""
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.settings import JobRun, JobRunStatus
+
+    try:
+        with get_postgres_session_sync() as session:
+            completed_at = datetime.now(timezone.utc)
+            if run_id is not None:
+                run_record = (
+                    session.query(JobRun)
+                    .filter(JobRun.id == uuid.UUID(run_id))
+                    .one_or_none()
+                )
+                if run_record is not None:
+                    setattr(run_record, "status", JobRunStatus.FAILED.value)
+                    setattr(run_record, "completed_at", completed_at)
+                    setattr(run_record, "error", error)
+                    _set_run_duration(run_record, completed_at)
+            if config_id is not None and org_id is not None:
+                _update_config_sync_status(
+                    session,
+                    config_id,
+                    org_id,
+                    completed_at=completed_at,
+                    success=False,
+                    error=error,
+                )
+            session.flush()
+    except Exception as exc:
+        logger.error("Failed to mark batch run %s failed: %s", run_id, exc)
 
 
 def _is_batch_eligible(config) -> bool:
@@ -119,6 +241,7 @@ def _batch_sync_callback(
     sync_targets: list[str],
     org_id: str,
     run_id: str | None = None,
+    config_id: str | None = None,
 ) -> dict:
     """Chord callback: dispatch post-sync tasks after all batch children complete."""
     logger.info(
@@ -130,8 +253,8 @@ def _batch_sync_callback(
         sync_targets=sync_targets,
         org_id=org_id,
     )
-    if run_id is not None:
-        _mark_batch_run_complete(run_id, results)
+    if run_id is not None or config_id is not None:
+        _mark_batch_run_complete(run_id, results, config_id=config_id, org_id=org_id)
     return {
         "status": "post_sync_dispatched",
         "child_results": len(results) if results else 0,
@@ -224,6 +347,11 @@ def dispatch_batch_sync(
             else:
                 credentials = _resolve_env_credentials(provider)
 
+        # The pending JobRun was persisted at trigger time (CHAOS-2255); mark it
+        # RUNNING so the UI does not report the sync as "Idle" (CHAOS-2267).
+        if pending_run_id is not None:
+            _mark_batch_run_running(pending_run_id)
+
         from dev_health_ops.discovery.repos import discover_repos_for_config
 
         try:
@@ -254,6 +382,12 @@ def dispatch_batch_sync(
             logger.info(
                 "dispatch_batch_sync: no repos discovered for config %s",
                 config_id,
+            )
+            # Terminal: the chord (and its callback) is never dispatched, so
+            # resolve the run here. Discovery succeeded with zero matches, which
+            # mirrors run_sync_config's semantics of SUCCESS on an empty sync.
+            _mark_batch_run_complete(
+                pending_run_id, [], config_id=config_id, org_id=org_id
             )
             return {"status": "no_repos", "total_repos": 0, "batch_count": 0}
 
@@ -306,6 +440,7 @@ def dispatch_batch_sync(
                 sync_targets=sync_targets,
                 org_id=org_id,
                 run_id=pending_run_id,
+                config_id=config_id,
             ),
         )()
 
@@ -327,6 +462,11 @@ def dispatch_batch_sync(
             "dispatch_batch_sync failed: config_id=%s error=%s",
             config_id,
             exc,
+        )
+        # Terminal: nothing downstream will resolve the run, so fail it here
+        # instead of leaving it stuck PENDING/RUNNING (CHAOS-2267).
+        _mark_batch_run_failed(
+            pending_run_id, str(exc), config_id=config_id, org_id=org_id
         )
         return {"status": "error", "error": str(exc)}
 

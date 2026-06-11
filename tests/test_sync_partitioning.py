@@ -602,6 +602,245 @@ class TestBatchSyncCallback:
         )
 
 
+class TestBatchRunStateManagement:
+    """dispatch_batch_sync must manage the pending JobRun state (CHAOS-2267).
+
+    A PENDING JobRun is persisted at Sync Now trigger time (CHAOS-2255) and
+    passed via pending_run_id. Every path through dispatch_batch_sync must
+    leave that run in a sensible state instead of stuck PENDING forever.
+    """
+
+    @staticmethod
+    def _make_pending_run(db_session):
+        import uuid as _uuid
+
+        from dev_health_ops.models.settings import JobRun
+
+        run = JobRun(job_id=_uuid.uuid4(), triggered_by="manual")
+        db_session.add(run)
+        db_session.flush()
+        return run
+
+    @staticmethod
+    def _sessions(mock_get_session, db_session):
+        """Each call to get_postgres_session_sync gets a fresh context."""
+        mock_get_session.side_effect = lambda *a, **k: _fake_session_ctx(db_session)
+
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_marks_pending_run_running_on_dispatch(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        db_session,
+    ):
+        from dev_health_ops.models.settings import JobRunStatus
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(provider="github", sync_options={"search": "org/*"})
+        db_session.add(config)
+        run = self._make_pending_run(db_session)
+        self._sessions(mock_get_session, db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.return_value = [("org", "repo-1")]
+        mock_chord.return_value = MagicMock()
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-run-state-1")
+        try:
+            result = task(
+                config_id=str(config.id),
+                org_id="default",
+                pending_run_id=str(run.id),
+            )
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "dispatched"
+        db_session.refresh(run)
+        assert run.status == JobRunStatus.RUNNING.value
+        assert run.started_at is not None
+
+        # The chord callback must receive both run_id and config_id so it can
+        # resolve the run and stamp the config on success.
+        callback = mock_chord.call_args[0][1]
+        assert callback.kwargs["run_id"] == str(run.id)
+        assert callback.kwargs["config_id"] == str(config.id)
+
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_no_repos_resolves_run_success_and_stamps_config(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        db_session,
+    ):
+        from dev_health_ops.models.settings import JobRunStatus
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(
+            provider="github", sync_options={"search": "org/nonexistent-*"}
+        )
+        db_session.add(config)
+        run = self._make_pending_run(db_session)
+        self._sessions(mock_get_session, db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.return_value = []
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-run-state-2")
+        try:
+            result = task(
+                config_id=str(config.id),
+                org_id="default",
+                pending_run_id=str(run.id),
+            )
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "no_repos"
+        mock_chord.assert_not_called()
+        db_session.refresh(run)
+        assert run.status == JobRunStatus.SUCCESS.value
+        assert run.completed_at is not None
+        assert run.result == {"child_results": 0}
+        db_session.refresh(config)
+        assert config.last_sync_at is not None
+        assert config.last_sync_success is True
+        assert config.last_sync_error is None
+
+    @patch("dev_health_ops.workers.sync_batch.chord")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_exception_marks_run_failed_and_stamps_config(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_chord,
+        db_session,
+    ):
+        from dev_health_ops.models.settings import JobRunStatus
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(provider="github", sync_options={"search": "org/*"})
+        db_session.add(config)
+        run = self._make_pending_run(db_session)
+        self._sessions(mock_get_session, db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.return_value = [("org", "repo-1")]
+        mock_chord.side_effect = RuntimeError("broker unavailable")
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-run-state-3")
+        try:
+            result = task(
+                config_id=str(config.id),
+                org_id="default",
+                pending_run_id=str(run.id),
+            )
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "error"
+        db_session.refresh(run)
+        assert run.status == JobRunStatus.FAILED.value
+        assert run.completed_at is not None
+        assert "broker unavailable" in (run.error or "")
+        db_session.refresh(config)
+        assert config.last_sync_at is not None
+        assert config.last_sync_success is False
+        assert "broker unavailable" in (config.last_sync_error or "")
+
+    @patch("dev_health_ops.workers.sync_batch.run_sync_config")
+    @patch("dev_health_ops.discovery.repos.discover_repos_for_config")
+    @patch("dev_health_ops.workers.sync_batch._resolve_env_credentials")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_fallback_forwards_pending_run_id_without_resolving(
+        self,
+        mock_get_session,
+        mock_resolve_creds,
+        mock_discover,
+        mock_run_sync,
+        db_session,
+    ):
+        from dev_health_ops.models.settings import JobRunStatus
+        from dev_health_ops.workers.sync_batch import dispatch_batch_sync
+
+        config = _make_config(provider="github", sync_options={"search": "org/*"})
+        db_session.add(config)
+        run = self._make_pending_run(db_session)
+        self._sessions(mock_get_session, db_session)
+        mock_resolve_creds.return_value = {"token": "ghp_test"}
+        mock_discover.side_effect = RuntimeError("API rate limited")
+
+        task = dispatch_batch_sync
+        task.push_request(id="batch-run-state-4")
+        try:
+            result = task(
+                config_id=str(config.id),
+                org_id="default",
+                pending_run_id=str(run.id),
+            )
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "fallback_single"
+        call_kwargs = mock_run_sync.apply_async.call_args.kwargs["kwargs"]
+        assert call_kwargs["pending_run_id"] == str(run.id)
+        # The run must NOT be resolved here: run_sync_config owns it from now
+        # on (it tolerates an already-RUNNING run and re-marks it RUNNING).
+        db_session.refresh(run)
+        assert run.status == JobRunStatus.RUNNING.value
+        assert run.completed_at is None
+
+    @patch("dev_health_ops.workers.sync_batch._dispatch_post_sync_tasks")
+    @patch("dev_health_ops.db.get_postgres_session_sync")
+    def test_callback_marks_run_success_and_stamps_config(
+        self, mock_get_session, mock_post_sync, db_session
+    ):
+        from dev_health_ops.models.settings import JobRunStatus
+        from dev_health_ops.workers.sync_batch import _batch_sync_callback
+
+        config = _make_config(provider="github", sync_options={"search": "org/*"})
+        db_session.add(config)
+        run = self._make_pending_run(db_session)
+        self._sessions(mock_get_session, db_session)
+
+        task = _batch_sync_callback
+        task.push_request(id="batch-run-state-5")
+        try:
+            result = task(
+                [{"status": "success"}, {"status": "success"}],
+                provider="github",
+                sync_targets=["git"],
+                org_id="default",
+                run_id=str(run.id),
+                config_id=str(config.id),
+            )
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "post_sync_dispatched"
+        db_session.refresh(run)
+        assert run.status == JobRunStatus.SUCCESS.value
+        assert run.completed_at is not None
+        assert run.result == {"child_results": 2}
+        db_session.refresh(config)
+        assert config.last_sync_at is not None
+        assert config.last_sync_success is True
+        assert config.last_sync_stats == {"child_results": 2}
+
+
 def _setup_croniter_mock():
     mock_cron_instance = MagicMock()
     mock_cron_instance.get_next.return_value = datetime(2000, 1, 1, tzinfo=timezone.utc)

@@ -932,7 +932,7 @@ class TestDispatchScheduledSyncsRouting:
 
         config = _make_config(
             provider="github",
-            sync_options={"search": "org/*"},
+            sync_options={"search": "org/*", "schedule_cron": "0 * * * *"},
             name="batch-config",
         )
         config.last_sync_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -964,7 +964,11 @@ class TestDispatchScheduledSyncsRouting:
 
         config = _make_config(
             provider="github",
-            sync_options={"owner": "org", "repo": "specific-repo"},
+            sync_options={
+                "owner": "org",
+                "repo": "specific-repo",
+                "schedule_cron": "0 * * * *",
+            },
             name="normal-config",
         )
         config.last_sync_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -996,14 +1000,18 @@ class TestDispatchScheduledSyncsRouting:
 
         batch_config = _make_config(
             provider="github",
-            sync_options={"search": "org/*"},
+            sync_options={"search": "org/*", "schedule_cron": "0 * * * *"},
             name="batch",
         )
         batch_config.last_sync_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
         normal_config = _make_config(
             provider="github",
-            sync_options={"owner": "org", "repo": "repo"},
+            sync_options={
+                "owner": "org",
+                "repo": "repo",
+                "schedule_cron": "0 * * * *",
+            },
             name="normal",
         )
         normal_config.last_sync_at = datetime(2020, 1, 1, tzinfo=timezone.utc)

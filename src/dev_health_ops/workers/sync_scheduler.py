@@ -71,9 +71,17 @@ def _maybe_dispatch_config(
     """
     from croniter import croniter
 
-    from dev_health_ops.models.settings import ScheduledJob
+    from dev_health_ops.models.settings import JobStatus, ScheduledJob
 
     if not organization_exists_sync(session, config.org_id):
+        return False
+
+    # Manual-only configs (no explicit schedule_cron in sync_options) are
+    # never auto-dispatched (CHAOS-2297). The config is the source of truth:
+    # stored ScheduledJob rows carry DEFAULT_SYNC_CRON as a non-null
+    # placeholder, and legacy rows may still be marked ACTIVE.
+    config_cron = str(_as_dict(config.sync_options).get("schedule_cron") or "")
+    if not config_cron:
         return False
 
     job = (
@@ -85,6 +93,10 @@ def _maybe_dispatch_config(
         )
         .one_or_none()
     )
+
+    # PAUSED/DISABLED jobs (manual-only, org teardown) are never dispatched.
+    if job is not None and int(job.status) != JobStatus.ACTIVE.value:
+        return False
 
     if job is not None and bool(job.is_running):
         if not _running_marker_is_stale(job, now):
@@ -104,13 +116,7 @@ def _maybe_dispatch_config(
         if next_allowed is not None and next_allowed > now:
             return False
 
-    cron_expr = (
-        _as_str(job.schedule_cron)
-        if job is not None
-        else str(
-            _as_dict(config.sync_options).get("schedule_cron") or DEFAULT_SYNC_CRON
-        )
-    )
+    cron_expr = _as_str(job.schedule_cron) if job is not None else config_cron
     last_sync = (
         config.last_sync_at
         if isinstance(config.last_sync_at, datetime)

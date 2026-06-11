@@ -18,6 +18,7 @@ from dev_health_ops.models.licensing import OrgLicense
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
+    JobStatus,
     ScheduledJob,
     SyncConfiguration,
 )
@@ -391,6 +392,8 @@ async def test_update_sync_config_merges_top_level_schedule_fields(
     assert job.schedule_cron == "45 3 * * *"
     assert job.provider == "linear"
     assert job.timezone == "Europe/London"
+    # An explicit schedule on an active config keeps the job ACTIVE.
+    assert job.status == JobStatus.ACTIVE.value
 
 
 @pytest.mark.asyncio
@@ -441,8 +444,18 @@ async def test_update_sync_config_explicit_null_clears_schedule(client, session_
                 )
             )
         ).scalar_one()
+        job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
     assert "schedule_cron" not in config.sync_options
     assert config.sync_options["owner"] == "full-chaos"
+    # Clearing the schedule parks the ScheduledJob so the scheduler never
+    # auto-dispatches a manual-only config (CHAOS-2297).
+    assert job.status == JobStatus.PAUSED.value
 
 
 @pytest.mark.asyncio
@@ -486,6 +499,30 @@ async def test_update_sync_config_omitted_schedule_fields_left_unchanged(
     assert config.is_active is False
     assert config.sync_options["schedule_cron"] == "30 2 * * *"
     assert config.sync_options["timezone"] == "Europe/Berlin"
+
+
+@pytest.mark.asyncio
+async def test_create_sync_config_without_schedule_creates_paused_job(
+    client, session_maker
+):
+    ac, _ = client
+
+    create_resp = await _create_sync_config(ac, name="manual-only")
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+
+    async with session_maker() as session:
+        job = (
+            await session.execute(
+                select(ScheduledJob).where(
+                    ScheduledJob.sync_config_id == uuid.UUID(config_id)
+                )
+            )
+        ).scalar_one()
+
+    # Manual-only configs (no schedule_cron) keep a job row for manual-trigger
+    # JobRun anchoring but must stay PAUSED (CHAOS-2297).
+    assert job.status == JobStatus.PAUSED.value
 
 
 @pytest.mark.asyncio

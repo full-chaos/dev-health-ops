@@ -435,10 +435,11 @@ def run_sync_config(
                 .one_or_none()
             )
             if job is None:
+                explicit_cron = sync_options.get("schedule_cron")
                 job = ScheduledJob(
                     name=f"sync-config-{_as_uuid(config.id)}",
                     job_type="sync",
-                    schedule_cron=str(sync_options.get("schedule_cron") or "0 * * * *"),
+                    schedule_cron=str(explicit_cron or "0 * * * *"),
                     org_id=org_id,
                     provider=provider,
                     job_config={
@@ -447,7 +448,14 @@ def run_sync_config(
                     },
                     sync_config_id=_as_uuid(config.id),
                     tz=str(sync_options.get("timezone") or "UTC"),
-                    status=JobStatus.ACTIVE.value,
+                    # Manual-only configs keep the job row for JobRun anchoring
+                    # but must stay PAUSED so the scheduler never picks them up
+                    # (CHAOS-2297).
+                    status=(
+                        JobStatus.ACTIVE.value
+                        if bool(config.is_active) and explicit_cron
+                        else JobStatus.PAUSED.value
+                    ),
                 )
                 session.add(job)
                 session.flush()

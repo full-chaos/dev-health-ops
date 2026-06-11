@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from dev_health_ops.models.git import Base
 from dev_health_ops.models.settings import (
     JobRunStatus,
+    JobStatus,
     ScheduledJob,
     SyncConfiguration,
 )
@@ -72,10 +73,11 @@ def _make_config(
         provider="github",
         org_id="default",
         sync_targets=sync_targets or ["git", "prs"],
-        # owner+repo set => not batch eligible
+        # owner+repo set => not batch eligible; explicit schedule_cron so the
+        # manual-only gate (CHAOS-2297) doesn't skip dispatch in these tests.
         sync_options=sync_options
         if sync_options is not None
-        else {"owner": "org", "repo": "repo"},
+        else {"owner": "org", "repo": "repo", "schedule_cron": "0 * * * *"},
         is_active=True,
     )
     if last_sync_at is not None:
@@ -353,7 +355,7 @@ class TestBatchRoutingStillStampsMarker:
         config = _make_config(
             name="batch-config",
             last_sync_at=now - 2 * HOUR,
-            sync_options={"search": "org/*"},
+            sync_options={"search": "org/*", "schedule_cron": "0 * * * *"},
         )
         job = _make_job(config)
         db_session.add_all([config, job])
@@ -376,3 +378,42 @@ class TestBatchRoutingStillStampsMarker:
         second = _call(task)
         assert second["dispatched"] == []
         assert batch_sync_mock.apply_async.call_count == 1
+
+
+class TestManualOnlyConfigsNotDispatched:
+    """Manual-only configs (no schedule_cron) must never auto-sync (CHAOS-2297)."""
+
+    def test_config_without_schedule_cron_is_skipped(self, monkeypatch, db_session):
+        now = datetime.now(timezone.utc)
+        config = _make_config(
+            last_sync_at=now - 2 * HOUR,
+            sync_options={"owner": "org", "repo": "repo"},
+        )
+        # Legacy rows: ACTIVE job carrying the default hourly placeholder cron.
+        job = _make_job(config)
+        db_session.add_all([config, job])
+        db_session.flush()
+
+        task, run_sync_mock, batch_sync_mock = _run_dispatch(monkeypatch, db_session)
+
+        result = _call(task)
+        assert result["dispatched"] == []
+        assert result["errors"] == 0
+        run_sync_mock.apply_async.assert_not_called()
+        batch_sync_mock.apply_async.assert_not_called()
+        assert job.next_run_at is None
+
+    def test_paused_job_is_skipped(self, monkeypatch, db_session):
+        now = datetime.now(timezone.utc)
+        config = _make_config(last_sync_at=now - 2 * HOUR)
+        job = _make_job(config)
+        job.status = JobStatus.PAUSED.value
+        db_session.add_all([config, job])
+        db_session.flush()
+
+        task, run_sync_mock, _ = _run_dispatch(monkeypatch, db_session)
+
+        result = _call(task)
+        assert result["dispatched"] == []
+        run_sync_mock.apply_async.assert_not_called()
+        assert job.next_run_at is None

@@ -153,6 +153,12 @@ def _sync_options_with_top_level_fields(
     return merged
 
 
+def _config_has_explicit_schedule(config: object) -> bool:
+    """True when the config carries a user-set schedule_cron (not manual-only)."""
+    sync_options = dict(getattr(config, "sync_options") or {})
+    return bool(sync_options.get("schedule_cron"))
+
+
 def _schedule_cron_for_config(config: object) -> str:
     sync_options = dict(getattr(config, "sync_options") or {})
     return str(sync_options.get("schedule_cron") or DEFAULT_SYNC_CRON)
@@ -176,9 +182,12 @@ async def _upsert_scheduled_job(
         "provider": provider,
         "sync_config_id": str(sync_config_id),
     }
+    # Manual-only configs (no explicit schedule_cron) must not auto-sync
+    # (CHAOS-2297). Keep the job row (manual triggers anchor JobRuns to it)
+    # but park it PAUSED; the stored cron is only a non-null placeholder.
     status = (
         JobStatus.ACTIVE.value
-        if getattr(config, "is_active")
+        if getattr(config, "is_active") and _config_has_explicit_schedule(config)
         else JobStatus.PAUSED.value
     )
     if job is None:
@@ -696,12 +705,11 @@ async def trigger_sync_config(
             if job is None:
                 _sync_options = dict(config.sync_options or {})
                 _provider = str(config.provider or "")
+                _explicit_cron = _sync_options.get("schedule_cron")
                 job = ScheduledJob(
                     name=f"sync-config-{config_uuid}",
                     job_type="sync",
-                    schedule_cron=str(
-                        _sync_options.get("schedule_cron") or "0 * * * *"
-                    ),
+                    schedule_cron=str(_explicit_cron or "0 * * * *"),
                     org_id=org_id,
                     provider=_provider,
                     job_config={
@@ -710,7 +718,13 @@ async def trigger_sync_config(
                     },
                     sync_config_id=config_uuid,
                     tz=str(_sync_options.get("timezone") or "UTC"),
-                    status=JobStatus.ACTIVE.value,
+                    # Manual-only configs keep the job row for JobRun anchoring
+                    # but must not be picked up by the scheduler (CHAOS-2297).
+                    status=(
+                        JobStatus.ACTIVE.value
+                        if bool(config.is_active) and _explicit_cron
+                        else JobStatus.PAUSED.value
+                    ),
                 )
                 sync_session.add(job)
                 sync_session.flush()

@@ -34,7 +34,7 @@ One row per WorkUnit per materialization run. Created in
 | `structural_evidence_json` | `String` | Serialized structural signals |
 | `evidence_quality` | `Float64` | `0.0–1.0` |
 | `evidence_quality_band` | `String` | **Runtime values: `high` / `moderate` / `low` / `very_low`** |
-| `categorization_status` | `String` | **Runtime values: `ok`, `repaired`, `invalid_llm_output`, `insufficient_evidence`, `no_text_sources`** |
+| `categorization_status` | `String` | **Runtime values: `ok`, `repaired`, `invalid_llm_output`, `insufficient_evidence`, `no_text_sources`, `llm_task_failed`** |
 | `categorization_errors_json` | `String` | Serialized validation errors (if any) |
 | `categorization_model_version` | `String` | Model id (or provider name) |
 | `categorization_input_hash` | `String` | SHA-256 of the serialized evidence bundle |
@@ -82,6 +82,7 @@ alter persisted distributions (see the
 | `explanation_json` | `String` | Serialized explanation |
 | `llm_provider` / `llm_model` | `String` / `Nullable(String)` | Provider used |
 | `computed_at` | `DateTime64(3,'UTC')` | ReplacingMergeTree version |
+| `org_id` | `String` | Tenant (added in 024) |
 
 ### Legacy daily tables (not the canonical path)
 
@@ -94,7 +95,7 @@ for all new work.
 
 ## Read semantics — important
 
-All four tables use `ENGINE = ReplacingMergeTree(computed_at)`. ClickHouse replaces rows
+The three canonical investment tables (`work_unit_investments`, `work_unit_investment_quotes`, `investment_explanations`) use `ENGINE = ReplacingMergeTree(computed_at)`. ClickHouse replaces rows
 with the same sort key **eventually**, during background merges — not immediately.
 
 - `work_unit_investments` is `ORDER BY (work_unit_id)`, so re-materializing a WorkUnit

@@ -56,7 +56,7 @@ though it still has a valid distribution.
 | `fetch_investment_breakdown` | subcategory + theme → value | `subcategory_prob * effort_value` |
 | `fetch_investment_edges` | theme → repo/scope → value | `theme_prob * effort_value` |
 | `fetch_investment_subcategory_edges` | subcategory → repo/scope → value | `subcategory_prob * effort_value` |
-| `fetch_investment_team_edges` | theme → team → value | `theme_prob * effort_value` |
+| `fetch_investment_team_edges` | subcategory → team → value | `subcategory_prob * effort_value` |
 
 All of them `ARRAY JOIN` the stored `Map` distribution into rows, filter by the time
 window (`from_ts < end_ts AND to_ts >= start_ts`) and `org_id`, then group.
@@ -69,16 +69,21 @@ compute time — the API never re-categorizes.
 
 ## `unassigned` means missing scope, not a category
 
-In edge queries the target is computed as, e.g.:
+Some edge queries surface an `unassigned` **scope label** for WorkUnits with no resolved
+repo or team. The exact expression varies by query, e.g.:
 
 ```sql
+-- fetch_investment_subcategory_edges: missing repo
 ifNull(r.repo, if(repo_id IS NULL, 'unassigned', toString(repo_id))) AS target
+-- fetch_investment_team_edges: missing team
+ifNull(nullIf(unit_team.team, ''), 'unassigned') AS target
 ```
 
-Here `unassigned` is a **scope/grouping label** for a WorkUnit with no resolved
-repo/team — it is **not** an investment category and never appears in a theme or
-subcategory distribution. The categorization itself never returns "unknown"
-(see the [pipeline guarantees](../architecture/investment-categorization-pipeline.md#guarantees)).
+(`fetch_investment_edges` and the sunburst query instead use `ifNull(r.repo, toString(repo_id))`,
+which can fall back to the raw `repo_id`.) In every case `unassigned` is a **scope/grouping
+label** for a WorkUnit with no resolved repo/team — it is **not** an investment category and
+never appears in a theme or subcategory distribution. The categorization itself never returns
+"unknown" (see the [pipeline guarantees](../architecture/investment-categorization-pipeline.md#guarantees)).
 
 > Do not confuse this with the legacy rule-based classifier in
 > `analytics/investment.py`, which uses `unassigned` as a *category* fallback. That path

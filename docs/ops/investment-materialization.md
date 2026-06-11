@@ -72,10 +72,10 @@ dev-hops investment materialize \
 | `--force` | off | Force re-materialization |
 
 > **`--persist-evidence-snippets` is off by default.** Without it, no rows land in
-> `work_unit_investment_quotes`, so evidence drill-downs will be empty even though the
-> LLM produced (and validated) quotes. Enable it for any run whose evidence you want to
-> surface in the UI. (Whether this default should change is tracked as an engineering
-> issue.)
+> `work_unit_investment_quotes`, so evidence drill-downs are empty: validated LLM quotes
+> are not persisted, and fallback WorkUnits have no quotes to begin with. Enable it for any
+> run whose evidence you want to surface in the UI. (Whether this default should change is
+> tracked as an engineering issue.)
 
 ### Time window behavior
 

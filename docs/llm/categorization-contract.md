@@ -61,7 +61,7 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
 
 > The prompt requests a value for **all 15** subcategories. Validation requires every
 > provided key to be canonical and the values to sum to within `[0.98, 1.02]`; the
-> materializer then fills any missing keys with `0` and renormalizes via
+> validation step then fills any missing keys with `0` and renormalizes via
 > `ensure_full_subcategory_vector`. Keys must match `investment_taxonomy.py` exactly —
 > obsolete keys like `operational.external` or `feature_delivery.platform` are rejected
 > as `unknown_subcategory`.
@@ -105,6 +105,7 @@ Every run records a `categorization_status`:
 | `invalid_llm_output` | Still invalid after repair → deterministic fallback applied |
 | `insufficient_evidence` | Too little text to call the LLM → fallback |
 | `no_text_sources` | No usable source text → fallback |
+| `llm_task_failed` | The async LLM task raised before an outcome was recorded → fallback |
 
 > The fallback is a **neutral prior** (`FALLBACK_PRIOR`), not "unknown". It preserves the
 > never-unknown guarantee but means *"insufficient validated evidence"* — pair it with a
@@ -136,7 +137,7 @@ The system supports multiple LLM backends. Set `LLM_PROVIDER` or let auto-detect
 
 ### Provider Configuration
 
-| Provider | Env Var for Selection | Required Env Vars | Default Model |
+| Provider | Env Var for Selection | Key Env Vars (selection / override) | Default Model |
 |----------|----------------------|-------------------|---------------|
 | **OpenAI** | `LLM_PROVIDER=openai` | `OPENAI_API_KEY` | `gpt-5-mini` |
 | **Anthropic** | `LLM_PROVIDER=anthropic` | `ANTHROPIC_API_KEY` | `claude-3-haiku-20240307` |

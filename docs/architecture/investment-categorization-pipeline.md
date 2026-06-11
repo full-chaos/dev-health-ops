@@ -120,7 +120,8 @@ status `invalid_llm_output`.
 > signals in any UX.
 
 Possible `categorization_status` values: `ok`, `repaired`, `invalid_llm_output`,
-`insufficient_evidence`, `no_text_sources`.
+`insufficient_evidence`, `no_text_sources`, and `llm_task_failed` (the async LLM task
+raised before an outcome was recorded).
 
 ## Step 6 — Deterministic theme roll-up
 

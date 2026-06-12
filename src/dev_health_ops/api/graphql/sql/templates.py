@@ -18,18 +18,21 @@ def timeseries_template(
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
+    with_clause: str = "",
     use_investment: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for timeseries query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
     measure_expr = Measure.db_expression(measure, use_investment=use_investment)
+    source_alias = source_table.split(" AS ")[-1]
     trunc_unit = BucketInterval.date_trunc_unit(interval)
 
     # Extract date column from filter for truncating
     date_col = date_filter.split(" ")[0]
 
     return f"""
+{with_clause}
 SELECT
     date_trunc('{trunc_unit}', {date_col}) AS bucket,
     {dim_col} AS dimension_value,
@@ -37,7 +40,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND {source_table}.org_id = %(org_id)s
+  AND {source_alias}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY bucket, dimension_value
 ORDER BY bucket ASC, value DESC
@@ -51,21 +54,24 @@ def breakdown_template(
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
+    with_clause: str = "",
     use_investment: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for breakdown (top-N aggregation) query."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
     measure_expr = Measure.db_expression(measure, use_investment=use_investment)
+    source_alias = source_table.split(" AS ")[-1]
 
     return f"""
+{with_clause}
 SELECT
     {dim_col} AS dimension_value,
     {measure_expr} AS value
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND {source_table}.org_id = %(org_id)s
+  AND {source_alias}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY dimension_value
 ORDER BY value DESC
@@ -80,11 +86,13 @@ def sankey_nodes_template(
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
+    with_clause: str = "",
     use_investment: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
     """Generate SQL template for Sankey nodes query."""
     measure_expr = Measure.db_expression(measure, use_investment=use_investment)
+    source_alias = source_table.split(" AS ")[-1]
 
     union_parts = []
     for dim in dimensions:
@@ -97,7 +105,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND {source_table}.org_id = %(org_id)s
+  AND {source_alias}.org_id = %(org_id)s
 {filter_clause}
 GROUP BY node_id
 ORDER BY value DESC
@@ -107,6 +115,7 @@ LIMIT %(limit_per_dim)s
 
     template = " UNION ALL ".join(union_parts)
     return f"""
+{with_clause}
 {template}
 SETTINGS max_execution_time = %(timeout)s
 """
@@ -119,6 +128,7 @@ def sankey_edges_template(
     source_table: str = "investment_metrics_daily",
     date_filter: str = "day >= %(start_date)s AND day <= %(end_date)s",
     extra_clauses: str = "",
+    with_clause: str = "",
     use_investment: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
 ) -> str:
@@ -126,8 +136,10 @@ def sankey_edges_template(
     source_col = Dimension.db_column(source_dim, use_investment=use_investment)
     target_col = Dimension.db_column(target_dim, use_investment=use_investment)
     measure_expr = Measure.db_expression(measure, use_investment=use_investment)
+    source_alias = source_table.split(" AS ")[-1]
 
     return f"""
+{with_clause}
 SELECT
     '{source_dim.value.upper()}' AS source_dimension,
     '{target_dim.value.upper()}' AS target_dimension,
@@ -137,7 +149,7 @@ SELECT
 FROM {source_table}
 {extra_clauses}
 WHERE {date_filter}
-  AND {source_table}.org_id = %(org_id)s
+  AND {source_alias}.org_id = %(org_id)s
 {filter_clause}
   AND {source_col} IS NOT NULL
   AND {target_col} IS NOT NULL
@@ -372,21 +384,24 @@ def catalog_values_template(
     dimension: Dimension,
     source_table: str = "investment_metrics_daily",
     extra_clauses: str = "",
+    with_clause: str = "",
     use_investment: bool = False,
     filter_clause: str = "",  # NEW: scope/category filters
     **kwargs: Any,
 ) -> str:
     """Generate SQL template for fetching distinct dimension values."""
     dim_col = Dimension.db_column(dimension, use_investment=use_investment)
+    source_alias = source_table.split(" AS ")[-1]
 
     return f"""
+{with_clause}
 SELECT
     toString({dim_col}) AS value,
     COUNT(*) AS count
 FROM {source_table}
 {extra_clauses}
 WHERE {dim_col} IS NOT NULL
-  AND {source_table}.org_id = %(org_id)s
+  AND {source_alias}.org_id = %(org_id)s
   AND toString({dim_col}) != ''
 {filter_clause}
 GROUP BY value

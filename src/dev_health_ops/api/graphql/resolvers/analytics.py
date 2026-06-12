@@ -8,7 +8,10 @@ from collections.abc import Coroutine
 from datetime import date, datetime, time, timezone
 from typing import Any, cast
 
-from dev_health_ops.api.queries.investment import fetch_investment_quality_stats
+from dev_health_ops.api.queries.investment import (
+    LATEST_WORK_UNIT_INVESTMENTS_CTE,
+    fetch_investment_quality_stats,
+)
 
 from ..authz import require_org_id
 from ..context import GraphQLContext
@@ -504,7 +507,7 @@ async def resolve_analytics(
                 )
 
                 table = (
-                    "work_unit_investments"
+                    "latest_work_unit_investments AS work_unit_investments"
                     if request.use_investment
                     else "investment_metrics_daily"
                 )
@@ -527,7 +530,7 @@ async def resolve_analytics(
                                     work_unit_investments.work_unit_id AS work_unit_id,
                                     ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team,
                                     countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                                FROM work_unit_investments
+                                FROM latest_work_unit_investments AS work_unit_investments
                                 ARRAY JOIN arrayDistinct(arrayConcat(
                                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                                     [work_unit_investments.work_unit_id]
@@ -553,7 +556,17 @@ async def resolve_analytics(
                 if request.use_investment:
                     assigned_repo_expr = f"lower({repo_col}) != 'unassigned'"
 
+                with_clause = (
+                    f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}"
+                    if request.use_investment
+                    else ""
+                )
+                source_alias = (
+                    "work_unit_investments" if request.use_investment else table
+                )
+
                 coverage_sql = f"""
+                    {with_clause}
                     SELECT
                         count() as total,
                         countIf({assigned_team_expr}) as assigned_team,
@@ -561,7 +574,7 @@ async def resolve_analytics(
                     FROM {base_table}
                     {joins}
                     WHERE {date_filter}
-                      AND org_id = %(org_id)s
+                      AND {source_alias}.org_id = %(org_id)s
                 """
 
                 cov_params = {

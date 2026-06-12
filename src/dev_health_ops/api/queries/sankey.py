@@ -6,6 +6,7 @@ from typing import Any
 from dev_health_ops.metrics.sinks.base import BaseMetricsSink
 
 from .client import query_dicts
+from .investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
 
 
 async def fetch_investment_flow_items(
@@ -19,11 +20,12 @@ async def fetch_investment_flow_items(
     org_id: str = "",
 ) -> list[dict[str, Any]]:
     query = f"""
+        WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}
         SELECT
             theme_kv.1 AS source,
             ifNull(r.repo, toString(repo_id)) AS target,
             sum(theme_kv.2 * effort_value) AS value
-        FROM work_unit_investments
+        FROM latest_work_unit_investments AS work_unit_investments
         LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)
         ARRAY JOIN CAST(theme_distribution_json AS Array(Tuple(String, Float32))) AS theme_kv
         WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s

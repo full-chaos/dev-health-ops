@@ -21,6 +21,7 @@ from dev_health_ops.api.services.impersonation_cache import (  # noqa: E402
     CachedImpersonationSession,
     get_active_session,
     invalidate,
+    set_active_session,
 )
 
 
@@ -169,6 +170,71 @@ async def test_unconfigured_valkey_goes_straight_to_db(monkeypatch):
     assert await get_active_session(session.admin_user_id) == session
     assert await get_active_session(session.admin_user_id) == session
     assert loader.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_write_through_serves_new_state_without_db(valkey_client, monkeypatch):
+    """set_active_session() makes the new state readable with zero DB loads."""
+    loader = AsyncMock(return_value=None)
+    monkeypatch.setattr(cache, "_load_from_db", loader)
+    session = _make_cached()
+
+    await set_active_session(session.admin_user_id, session)
+    assert await get_active_session(session.admin_user_id) == session
+
+    await set_active_session(session.admin_user_id, None)
+    assert await get_active_session(session.admin_user_id) is None
+
+    loader.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_db_errors_are_never_cached(valkey_client, monkeypatch):
+    """A transient Postgres failure must not be cached as 'no session'.
+
+    Codex finding: caching the failure as the negative sentinel would
+    disable an actually active impersonation on every replica for a TTL.
+    """
+    session = _make_cached()
+    loader = AsyncMock(side_effect=[cache._DB_ERROR, session])
+    monkeypatch.setattr(cache, "_load_from_db", loader)
+
+    # Failed load → fail-open None, but NOT cached
+    assert await get_active_session(session.admin_user_id) is None
+    # Next lookup retries the DB and succeeds
+    assert await get_active_session(session.admin_user_id) == session
+    assert loader.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_and_write_through_ignore_open_circuit(
+    shared_server, valkey_client, monkeypatch
+):
+    """Cache writes that keep replicas correct must not be skipped by the
+    read-path circuit breaker.
+
+    Codex finding: skipping the DEL/SET because an earlier READ failed lets a
+    stale entry resurface once the circuit closes.
+    """
+    session = _make_cached()
+    loader = AsyncMock(return_value=session)
+    monkeypatch.setattr(cache, "_load_from_db", loader)
+
+    # Fill the cache, then trip the circuit as a read error would
+    await get_active_session(session.admin_user_id)
+    monkeypatch.setattr(
+        cache, "_circuit_open_until", __import__("time").monotonic() + 60
+    )
+
+    # The stop's write-through must still reach the shared store
+    await set_active_session(session.admin_user_id, None)
+
+    # A fresh process (closed circuit) must see the new state, not the stale one
+    other = fakeredis.FakeAsyncValkey(server=shared_server)
+    monkeypatch.setattr(cache, "_client", other)
+    monkeypatch.setattr(cache, "_circuit_open_until", 0.0)
+    assert await get_active_session(session.admin_user_id) is None
+    loader.assert_awaited_once()  # only the initial fill
 
 
 def test_serialization_round_trip_preserves_fields():

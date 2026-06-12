@@ -126,16 +126,17 @@ async def test_client(monkeypatch):
     async def _fake_current_user():
         return admin_state["user"]
 
-    # invalidate() is async since the Valkey-backed cache (CHAOS-2328)
-    mock_invalidate = AsyncMock()
-    monkeypatch.setattr(_imp_mod, "invalidate", mock_invalidate)
+    # Endpoints write the authoritative state through to the shared Valkey
+    # cache after COMMIT (CHAOS-2328)
+    mock_set_active = AsyncMock()
+    monkeypatch.setattr(_imp_mod, "set_active_session", mock_set_active)
 
     app.dependency_overrides[get_db_session] = _fake_db
     app.dependency_overrides[get_current_user] = _fake_current_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, db_session, admin_state, mock_invalidate
+        yield client, db_session, admin_state, mock_set_active
 
     app.dependency_overrides.clear()
 
@@ -268,9 +269,9 @@ async def test_start_target_no_membership_returns_404(test_client):
 
 
 @pytest.mark.asyncio
-async def test_start_invalidates_cache(test_client):
-    """Cache invalidate() is called with the admin's user_id on success."""
-    client, session, admin_state, mock_invalidate = test_client
+async def test_start_writes_authoritative_state_through_cache(test_client):
+    """set_active_session() receives the new snapshot for this admin on success."""
+    client, session, admin_state, mock_set_active = test_client
     admin_org = uuid.UUID(admin_state["user"].org_id)
     target_id = uuid.uuid4()
 
@@ -286,7 +287,11 @@ async def test_start_invalidates_cache(test_client):
     )
 
     assert resp.status_code == 200
-    mock_invalidate.assert_called_once_with(admin_state["user"].user_id)
+    mock_set_active.assert_called_once()
+    args = mock_set_active.call_args.args
+    assert args[0] == admin_state["user"].user_id
+    assert args[1] is not None
+    assert args[1].target_user_id == str(target_id)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +302,7 @@ async def test_start_invalidates_cache(test_client):
 @pytest.mark.asyncio
 async def test_stop_happy_path_returns_stopped_status(test_client):
     """Returns {"status": "stopped"} when an active session exists."""
-    client, session, admin_state, mock_invalidate = test_client
+    client, session, admin_state, mock_set_active = test_client
     admin_id = uuid.UUID(admin_state["user"].user_id)
     target_id = uuid.uuid4()
     target_org = uuid.uuid4()
@@ -312,30 +317,29 @@ async def test_stop_happy_path_returns_stopped_status(test_client):
     assert body["status"] == "stopped"
     # No JWT token emitted
     assert "access_token" not in body
-    mock_invalidate.assert_called_once_with(admin_state["user"].user_id)
+    mock_set_active.assert_called_once_with(admin_state["user"].user_id, None)
 
 
 @pytest.mark.asyncio
-async def test_stop_commits_before_invalidating_cache(test_client):
-    """COMMIT must land before the shared-cache DEL (CHAOS-2328).
+async def test_stop_commits_before_cache_write_through(test_client):
+    """COMMIT must land before the shared-cache write-through (CHAOS-2328).
 
-    If the DEL ran first, a racing reader could re-fill the Valkey cache from
-    the still-uncommitted DB state (session active) and re-poison every
-    replica for up to the cache TTL.
+    Writing pre-commit state (or deleting before commit) would let stale
+    impersonation state reach every replica for up to the cache TTL.
     """
-    client, session, admin_state, mock_invalidate = test_client
+    client, session, admin_state, mock_set_active = test_client
     admin_id = uuid.UUID(admin_state["user"].user_id)
     active = _make_session_row(admin_id, uuid.uuid4(), uuid.uuid4())
     session.execute.side_effect = [_FakeResult(one=active)]
 
     order: list[str] = []
     session.commit.side_effect = lambda: order.append("commit")
-    mock_invalidate.side_effect = lambda *_: order.append("invalidate")
+    mock_set_active.side_effect = lambda *_: order.append("write_through")
 
     resp = await client.post("/api/v1/admin/impersonate/stop")
 
     assert resp.status_code == 200
-    assert order[:2] == ["commit", "invalidate"]
+    assert order[:2] == ["commit", "write_through"]
 
 
 @pytest.mark.asyncio

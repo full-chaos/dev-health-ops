@@ -21,8 +21,9 @@ from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.audit import AuditService
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.api.services.impersonation_cache import (
+    CachedImpersonationSession,
     get_active_session,
-    invalidate,
+    set_active_session,
 )
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
@@ -152,11 +153,22 @@ async def start_impersonation(
         user=current_user,
     )
 
-    # COMMIT before invalidating the shared cache: a racing reader between
-    # DEL and commit would re-fill the cache from pre-commit DB state and
-    # poison every replica for up to the cache TTL (CHAOS-2328).
+    # COMMIT, then write the authoritative state through to the shared cache
+    # (CHAOS-2328). Ordering matters: a write-through of pre-commit state
+    # would poison every replica for up to the cache TTL.
     await session.commit()
-    await invalidate(current_user.user_id)
+    await set_active_session(
+        current_user.user_id,
+        CachedImpersonationSession(
+            id=str(new_session.id),
+            admin_user_id=str(admin_user_uuid),
+            target_user_id=str(target_user.id),
+            target_org_id=str(target_membership.org_id),
+            target_role=str(target_membership.role),
+            target_email=str(target_user.email),
+            expires_at=expires_at,
+        ),
+    )
 
     return StartImpersonationResponse(
         status="active",
@@ -211,9 +223,9 @@ async def stop_impersonation(
         user=current_user,
     )
 
-    # COMMIT before invalidating the shared cache — see start_impersonation.
+    # COMMIT, then write-through "no active session" — see start_impersonation.
     await session.commit()
-    await invalidate(current_user.user_id)
+    await set_active_session(current_user.user_id, None)
 
     return StopImpersonationResponse(status="stopped")
 

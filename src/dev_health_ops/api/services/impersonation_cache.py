@@ -164,6 +164,12 @@ async def _cache_set(
         _trip_circuit(exc)
 
 
+# Sentinel for "Postgres lookup failed" — must NOT be cached: a transient DB
+# error cached as the negative sentinel would disable an actually active
+# impersonation on every replica for a full TTL.
+_DB_ERROR: Any = object()
+
+
 async def get_active_session(
     admin_user_id: str,
 ) -> CachedImpersonationSession | None:
@@ -171,19 +177,26 @@ async def get_active_session(
 
     Checks the shared Valkey cache first; falls back to Postgres on miss or
     Valkey outage. Returns None when no session is active or both stores are
-    unavailable (fail-open: impersonation does not activate).
+    unavailable (fail-open: impersonation does not activate). Only confirmed
+    DB results are written back to the cache — DB errors are never cached.
     """
     cached = await _cache_get(admin_user_id)
     if cached is not _MISS:
         return cached
 
     session = await _load_from_db(admin_user_id)
+    if session is _DB_ERROR:
+        return None
     await _cache_set(admin_user_id, session)
     return session
 
 
-async def _load_from_db(admin_user_id: str) -> CachedImpersonationSession | None:
-    """Query Postgres for an active impersonation session. Fail-open on error."""
+async def _load_from_db(admin_user_id: str) -> Any:
+    """Query Postgres for an active impersonation session.
+
+    Returns a CachedImpersonationSession, None (confirmed no active session),
+    or _DB_ERROR when the lookup itself failed.
+    """
     try:
         from datetime import timezone
 
@@ -218,19 +231,55 @@ async def _load_from_db(admin_user_id: str) -> CachedImpersonationSession | None
                 expires_at=record.expires_at,
             )
     except Exception:
-        # Fail-open: if DB is unavailable, impersonation doesn't activate
-        return None
+        # Fail-open at the call site, but never cache the failure.
+        logger.warning(
+            "Postgres lookup for impersonation session failed", exc_info=True
+        )
+        return _DB_ERROR
+
+
+async def set_active_session(
+    admin_user_id: str, session: CachedImpersonationSession | None
+) -> None:
+    """Write-through the authoritative state after a committed start/stop.
+
+    Callers must COMMIT first — a write-through of pre-commit state would
+    poison every replica for up to the TTL. Writing the new state (instead of
+    just DEL) also closes most of the load-after-DEL window where a reader
+    that fetched pre-commit DB state re-fills the cache after the DEL; a
+    reader would now have to stay suspended across the entire endpoint
+    transaction AND this write to clobber it, and even then the TTL bounds
+    the damage to ≤ _TTL_SECONDS.
+
+    Deliberately ignores the circuit breaker: this is the one write that
+    keeps replicas correct, so it always attempts Valkey (bounded by the
+    0.5s socket timeouts) even right after a read error.
+    """
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        await client.set(_key(admin_user_id), _serialize(session), ex=_TTL_SECONDS)
+    except Exception as exc:
+        _trip_circuit(exc)
+        logger.error(
+            "Failed to write-through impersonation state for %s — replicas "
+            "may serve stale impersonation context for up to %ss",
+            admin_user_id,
+            _TTL_SECONDS,
+        )
 
 
 async def invalidate(admin_user_id: str) -> None:
-    """Remove the shared cache entry for admin_user_id (call after start/stop).
+    """Remove the shared cache entry for admin_user_id.
 
-    Callers must COMMIT their transaction before invalidating — otherwise a
-    racing reader can re-fill the shared cache from the pre-commit DB state
-    and re-poison every replica for up to the TTL.
+    Prefer set_active_session() after a committed start/stop (write-through
+    leaves no cold-miss window). Like set_active_session, this deliberately
+    ignores the circuit breaker — skipping the DEL because an earlier READ
+    failed would let a stale entry resurface once the circuit closes.
     """
     client = _get_client()
-    if client is None or _circuit_is_open():
+    if client is None:
         return
     try:
         await client.delete(_key(admin_user_id))

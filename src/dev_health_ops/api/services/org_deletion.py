@@ -42,7 +42,6 @@ from dev_health_ops.models.settings import (
 )
 from dev_health_ops.models.sso import SSOProvider
 from dev_health_ops.models.subscriptions import Subscription, SubscriptionEvent
-from dev_health_ops.models.teams import Team
 from dev_health_ops.models.users import Membership, Organization
 
 logger = logging.getLogger(__name__)
@@ -267,9 +266,11 @@ def _postgres_targets() -> list[PostgresDeletionTarget]:
             ImpersonationSession,
             lambda org_uuid, _org_id: ImpersonationSession.target_org_id == org_uuid,
         ),
-        PostgresDeletionTarget(
-            "teams", Team, lambda _org_uuid, org_id: Team.org_id == org_id
-        ),
+        # NOTE: the `teams` entity is a ClickHouse analytics table (used in
+        # metrics), not a Postgres semantic table. It is org-scoped-purged via
+        # `_purge_clickhouse` (migration 024 adds its org_id column). Do NOT add
+        # a `teams` PostgresDeletionTarget here — it lives in a different layer.
+        # The Postgres semantic team config is `team_mappings`, handled below.
         PostgresDeletionTarget(
             "team_mappings",
             TeamMapping,

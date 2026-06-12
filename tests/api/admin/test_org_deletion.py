@@ -13,7 +13,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.api.services.org_deletion import OrganizationDeletionService
+from dev_health_ops.api.services.org_deletion import (
+    OrganizationDeletionService,
+    _clickhouse_tables_from_migrations,
+    _postgres_targets,
+)
 from dev_health_ops.models.audit import AuditLog
 from dev_health_ops.models.backfill import BackfillJob
 from dev_health_ops.models.billing import BillingPlan, BillingPrice
@@ -41,7 +45,6 @@ from dev_health_ops.models.settings import (
 )
 from dev_health_ops.models.sso import SSOProvider
 from dev_health_ops.models.subscriptions import Subscription, SubscriptionEvent
-from dev_health_ops.models.teams import Team
 from dev_health_ops.models.users import Membership, Organization, User
 from tests._helpers import tables_of
 
@@ -71,7 +74,6 @@ _TABLES = tables_of(
     RefreshToken,
     MetricCheckpoint,
     ImpersonationSession,
-    Team,
     Subscription,
     SubscriptionEvent,
     Invoice,
@@ -202,8 +204,6 @@ async def _seed_org_pair(session: AsyncSession) -> tuple[str, str]:
                 protocol="saml",
                 encrypted_secrets={"certificate": "encrypted-cert"},
             ),
-            Team(id="team-one", org_id=str(org1_id), name="Team One"),
-            Team(id="team-two", org_id=str(org2_id), name="Team Two"),
             job1,
             job2,
             JobRun(job_id=job1.id),
@@ -327,7 +327,6 @@ async def test_org_deletion_deletes_only_target_org_and_sanitizes_logs(
         assert (
             await _row_count(session, ScheduledJob, ScheduledJob.org_id == org1_id) == 0
         )
-        assert await _row_count(session, Team, Team.org_id == org1_id) == 0
 
         assert (
             await _row_count(
@@ -345,7 +344,6 @@ async def test_org_deletion_deletes_only_target_org_and_sanitizes_logs(
         assert (
             await _row_count(session, ScheduledJob, ScheduledJob.org_id == org2_id) == 2
         )
-        assert await _row_count(session, Team, Team.org_id == org2_id) == 1
 
     log_output = caplog.text
     assert org1_id in log_output
@@ -518,3 +516,56 @@ async def test_org_deletion_result_counts(session_maker):
 
         assert result.postgres.total >= 0
         assert "organizations" in result.postgres.tables
+
+
+def test_postgres_targets_do_not_overlap_clickhouse_tables():
+    """Guard against cross-layer drift.
+
+    A ClickHouse analytics table must never be registered as a Postgres
+    deletion target. This is exactly the invariant the `teams` regression
+    violated: `teams` is a ClickHouse-only table, so counting it on the
+    Postgres semantic session raised `UndefinedTableError: relation "teams"
+    does not exist`. ClickHouse tables are purged via `_purge_clickhouse`.
+    """
+    pg_tables = {target.table for target in _postgres_targets()}
+    ch_tables = set(_clickhouse_tables_from_migrations())
+    # Sanity-check the catalog itself so a broken migration scan (empty result)
+    # cannot silently turn this guard into a no-op false pass.
+    assert ch_tables, "ClickHouse migration table catalog must not be empty"
+    assert "teams" in ch_tables, "`teams` must be in the ClickHouse purge catalog"
+    overlap = pg_tables & ch_tables
+    assert not overlap, (
+        "Postgres deletion targets must not reference ClickHouse tables "
+        f"(cross-layer drift): {sorted(overlap)}"
+    )
+
+
+def test_org_deletion_does_not_target_teams_in_postgres():
+    """`teams` is a ClickHouse entity (used in metrics) and is purged via the
+    ClickHouse path; it must not be a Postgres deletion target. The Postgres
+    semantic team representation is `team_mappings`, which remains a target.
+    """
+    pg_tables = {target.table for target in _postgres_targets()}
+    assert "teams" not in pg_tables
+    assert "team_mappings" in pg_tables
+
+
+@pytest.mark.asyncio
+async def test_org_deletion_succeeds_without_postgres_teams_table(session_maker):
+    """Regression: production Postgres (Alembic schema) has no `teams` table.
+
+    The `session_maker` fixture mirrors production by omitting `teams` from the
+    created tables, so this reproduces the original failure scenario. Deletion
+    must complete without ever querying `teams` on the Postgres session.
+    """
+    async with session_maker() as session:
+        org1_id, _org2_id = await _seed_org_pair(session)
+
+        service = OrganizationDeletionService(session)
+        # Must not raise UndefinedTableError for the missing `teams` relation.
+        result = await service.delete(org1_id, dry_run=False)
+
+        # `teams` is never counted/deleted on the Postgres session ...
+        assert "teams" not in result.postgres.tables
+        # ... while the Postgres semantic team config still is.
+        assert "team_mappings" in result.postgres.tables

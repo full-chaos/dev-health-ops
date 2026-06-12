@@ -11,9 +11,8 @@ redefining terms.
   label, and never "unknown". See the
   [Investment Categorization Pipeline](../architecture/investment-categorization-pipeline.md).
 
-> The key list below must match `investment_taxonomy.py` exactly. A CI drift check that
-> enforces this is planned (Anti-Drift milestone); until then, treat the Python registry
-> as authoritative if the two ever disagree.
+> The key list below is generated from `investment_taxonomy.py`; run
+> `make docs:generate-taxonomy` after changing the registry.
 
 ---
 
@@ -81,10 +80,9 @@ dot.
 
 ## Canonical key list
 
-The exact keys, as they appear in `investment_taxonomy.py`. (This block is intended to
-be **generated** from the registry by the Anti-Drift tooling; for now it is maintained by
-hand and must match the code.)
+The exact keys, as they appear in `investment_taxonomy.py`.
 
+<!-- BEGIN GENERATED TAXONOMY -->
 ```text
 # THEMES
 feature_delivery
@@ -109,7 +107,25 @@ quality.reliability
 risk.security
 risk.compliance
 risk.vulnerability
+
+# SUBCATEGORY_TO_THEME
+feature_delivery.customer -> feature_delivery
+feature_delivery.roadmap -> feature_delivery
+feature_delivery.enablement -> feature_delivery
+operational.incident_response -> operational
+operational.on_call -> operational
+operational.support -> operational
+maintenance.refactor -> maintenance
+maintenance.upgrade -> maintenance
+maintenance.debt -> maintenance
+quality.testing -> quality
+quality.bugfix -> quality
+quality.reliability -> quality
+risk.security -> risk
+risk.compliance -> risk
+risk.vulnerability -> risk
 ```
+<!-- END GENERATED TAXONOMY -->
 
 ---
 

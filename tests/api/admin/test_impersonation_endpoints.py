@@ -24,6 +24,7 @@ from dev_health_ops.api.admin import impersonation as _imp_mod
 from dev_health_ops.api.admin.impersonation import get_db_session, router
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.impersonation_cache import CachedImpersonationSession
 
 # ---------------------------------------------------------------------------
 # Helpers — fake DB row factories
@@ -125,7 +126,8 @@ async def test_client(monkeypatch):
     async def _fake_current_user():
         return admin_state["user"]
 
-    mock_invalidate = MagicMock()
+    # invalidate() is async since the Valkey-backed cache (CHAOS-2328)
+    mock_invalidate = AsyncMock()
     monkeypatch.setattr(_imp_mod, "invalidate", mock_invalidate)
 
     app.dependency_overrides[get_db_session] = _fake_db
@@ -314,6 +316,29 @@ async def test_stop_happy_path_returns_stopped_status(test_client):
 
 
 @pytest.mark.asyncio
+async def test_stop_commits_before_invalidating_cache(test_client):
+    """COMMIT must land before the shared-cache DEL (CHAOS-2328).
+
+    If the DEL ran first, a racing reader could re-fill the Valkey cache from
+    the still-uncommitted DB state (session active) and re-poison every
+    replica for up to the cache TTL.
+    """
+    client, session, admin_state, mock_invalidate = test_client
+    admin_id = uuid.UUID(admin_state["user"].user_id)
+    active = _make_session_row(admin_id, uuid.uuid4(), uuid.uuid4())
+    session.execute.side_effect = [_FakeResult(one=active)]
+
+    order: list[str] = []
+    session.commit.side_effect = lambda: order.append("commit")
+    mock_invalidate.side_effect = lambda *_: order.append("invalidate")
+
+    resp = await client.post("/api/v1/admin/impersonate/stop")
+
+    assert resp.status_code == 200
+    assert order[:2] == ["commit", "invalidate"]
+
+
+@pytest.mark.asyncio
 async def test_stop_no_active_session_returns_400(test_client):
     """Returns 400 when there is no active session to stop."""
     client, session, _, _ = test_client
@@ -346,21 +371,36 @@ async def test_stop_marks_session_ended_at(test_client):
 # ---------------------------------------------------------------------------
 
 
+def _make_cached(
+    admin_id: uuid.UUID,
+    target_id: uuid.UUID,
+    target_org: uuid.UUID,
+    role: str = "member",
+    *,
+    target_email: str | None = "target@example.com",
+    expires_in: timedelta = timedelta(hours=1),
+) -> CachedImpersonationSession:
+    return CachedImpersonationSession(
+        id=str(uuid.uuid4()),
+        admin_user_id=str(admin_id),
+        target_user_id=str(target_id),
+        target_org_id=str(target_org),
+        target_role=role,
+        target_email=target_email,
+        expires_at=datetime.now(timezone.utc) + expires_in,
+    )
+
+
 @pytest.mark.asyncio
-async def test_status_when_impersonating_returns_true(test_client):
-    """Returns is_impersonating=true with target details when session is active."""
+async def test_status_when_impersonating_returns_true(test_client, monkeypatch):
+    """Returns is_impersonating=true with target details from the shared cache."""
     client, session, admin_state, _ = test_client
     admin_id = uuid.UUID(admin_state["user"].user_id)
     target_id = uuid.uuid4()
     target_org = uuid.uuid4()
 
-    active = _make_session_row(admin_id, target_id, target_org, "viewer")
-    target_user = _make_user(target_id, "target@example.com")
-
-    session.execute.side_effect = [
-        _FakeResult(one=active),
-        _FakeResult(one=target_user),
-    ]
+    cached = _make_cached(admin_id, target_id, target_org, "viewer")
+    monkeypatch.setattr(_imp_mod, "get_active_session", AsyncMock(return_value=cached))
 
     resp = await client.get("/api/v1/admin/impersonate/status")
 
@@ -371,13 +411,15 @@ async def test_status_when_impersonating_returns_true(test_client):
     assert body["target_org_id"] == str(target_org)
     assert body["target_email"] == "target@example.com"
     assert body["expires_at"] is not None
+    # The hot path must not touch Postgres (CHAOS-2328)
+    session.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_status_when_not_impersonating_returns_false(test_client):
+async def test_status_when_not_impersonating_returns_false(test_client, monkeypatch):
     """Returns is_impersonating=false when no active session exists."""
     client, session, _, _ = test_client
-    session.execute.side_effect = [_FakeResult(one=None)]
+    monkeypatch.setattr(_imp_mod, "get_active_session", AsyncMock(return_value=None))
 
     resp = await client.get("/api/v1/admin/impersonate/status")
 
@@ -385,6 +427,23 @@ async def test_status_when_not_impersonating_returns_false(test_client):
     body = resp.json()
     assert body["is_impersonating"] is False
     assert body.get("target_user_id") is None
+
+
+@pytest.mark.asyncio
+async def test_status_expired_cached_session_returns_false(test_client, monkeypatch):
+    """A cached session past its expires_at reads as not impersonating."""
+    client, _, admin_state, _ = test_client
+    admin_id = uuid.UUID(admin_state["user"].user_id)
+
+    expired = _make_cached(
+        admin_id, uuid.uuid4(), uuid.uuid4(), expires_in=timedelta(seconds=-5)
+    )
+    monkeypatch.setattr(_imp_mod, "get_active_session", AsyncMock(return_value=expired))
+
+    resp = await client.get("/api/v1/admin/impersonate/status")
+
+    assert resp.status_code == 200
+    assert resp.json()["is_impersonating"] is False
 
 
 @pytest.mark.asyncio

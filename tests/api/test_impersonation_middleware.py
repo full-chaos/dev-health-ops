@@ -7,7 +7,6 @@ tests operate directly on contextvars and the in-memory cache module.
 from __future__ import annotations
 
 import contextvars
-import time
 import types
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -25,7 +24,9 @@ from dev_health_ops.api.services.auth import (
     is_impersonating,
     set_impersonation_context,
 )
-from dev_health_ops.api.services.impersonation_cache import _cache, invalidate
+
+# Cache behaviour (shared Valkey store) is covered in
+# tests/api/test_impersonation_cache.py.
 
 # ---------------------------------------------------------------------------
 # Contextvar: is_impersonating
@@ -154,32 +155,6 @@ def test_impersonation_contextvar_isolation_between_contexts():
         assert ctx_after.target_user_id == "user-main"
     finally:
         _impersonation_ctx.set(None)
-
-
-# ---------------------------------------------------------------------------
-# Cache: invalidate
-# ---------------------------------------------------------------------------
-
-
-def test_invalidate_removes_existing_cache_entry():
-    """invalidate() removes a cached entry for the given admin_user_id."""
-    admin_id = "test-admin-cache-entry"
-    try:
-        _cache[admin_id] = (None, time.monotonic() + 30.0)
-        assert admin_id in _cache
-        invalidate(admin_id)
-        assert admin_id not in _cache
-    finally:
-        _cache.pop(admin_id, None)
-
-
-def test_invalidate_nonexistent_key_is_silent_noop():
-    """invalidate() does not raise when key is absent from cache."""
-    admin_id = "ghost-admin-id"
-    assert admin_id not in _cache
-    # Must not raise
-    invalidate(admin_id)
-    assert admin_id not in _cache
 
 
 def test_is_impersonating_false_after_context_reset():

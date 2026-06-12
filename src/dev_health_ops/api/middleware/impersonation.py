@@ -173,15 +173,24 @@ def _extract_user(scope: Scope) -> Any | None:
 
 
 async def _expire_session(session: Any, admin_user_id: str) -> None:
-    """Mark a session as ended due to TTL expiry."""
+    """Mark a session as ended due to TTL expiry.
+
+    The cache hands back a plain snapshot (no ORM identity), so end the row
+    via an UPDATE keyed on the session id rather than mutating an instance.
+    """
     try:
+        from sqlalchemy import update as sa_update
+
         from dev_health_ops.db import get_postgres_session
+        from dev_health_ops.models.impersonation import ImpersonationSession
 
         async with get_postgres_session() as db:
-            session.ended_at = datetime.now(timezone.utc)
-            db.add(session)
-            await db.commit()
-        invalidate(admin_user_id)
+            await db.execute(
+                sa_update(ImpersonationSession)
+                .where(ImpersonationSession.id == session.id)
+                .values(ended_at=datetime.now(timezone.utc))
+            )
+        await invalidate(admin_user_id)
     except Exception as exc:
         logger.warning("Failed to expire impersonation session: %s", exc)
 

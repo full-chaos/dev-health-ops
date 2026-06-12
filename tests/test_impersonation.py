@@ -14,6 +14,7 @@ from dev_health_ops.api.admin import impersonation as _imp_mod
 from dev_health_ops.api.admin.impersonation import get_db_session, router
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.api.services.impersonation_cache import CachedImpersonationSession
 
 
 def _user(
@@ -103,7 +104,8 @@ async def test_client(monkeypatch):
     async def _override_current_user():
         return current["user"]
 
-    mock_invalidate = MagicMock()
+    # invalidate() is async since the Valkey-backed cache (CHAOS-2328)
+    mock_invalidate = AsyncMock()
     monkeypatch.setattr(_imp_mod, "invalidate", mock_invalidate)
 
     app.dependency_overrides[get_db_session] = _override_db_session
@@ -406,19 +408,23 @@ async def test_status_superuser_with_no_active_session(test_client):
 
 
 @pytest.mark.asyncio
-async def test_status_superuser_with_active_session(test_client):
+async def test_status_superuser_with_active_session(test_client, monkeypatch):
     client, session, current, _ = test_client
     admin_id = uuid.UUID(current["user"].user_id)
     target_id = uuid.uuid4()
     target_org_id = uuid.uuid4()
 
-    active = _impersonation_session(admin_id, target_id, target_org_id, "viewer")
-    target = _user(target_id, "target@example.com")
-
-    session.execute.side_effect = [
-        _FakeResult(one=active),
-        _FakeResult(one=target),
-    ]
+    # Status reads through the shared Valkey cache (CHAOS-2328), not the DB.
+    cached = CachedImpersonationSession(
+        id=str(uuid.uuid4()),
+        admin_user_id=str(admin_id),
+        target_user_id=str(target_id),
+        target_org_id=str(target_org_id),
+        target_role="viewer",
+        target_email="target@example.com",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    monkeypatch.setattr(_imp_mod, "get_active_session", AsyncMock(return_value=cached))
 
     resp = await client.get("/api/v1/admin/impersonate/status")
 

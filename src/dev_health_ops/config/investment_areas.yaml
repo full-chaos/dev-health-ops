@@ -1,3 +1,9 @@
+# Deprecated legacy rule set for src/dev_health_ops/analytics/investment.py.
+# This config feeds only the pre-WorkUnit daily investment_* metric tables.
+# The canonical Investment View uses work_graph/investment materialization and
+# the fixed subcategory/theme taxonomy; do not use this file for canonical
+# WorkUnit categorization.
+
 rules:
   # --- Synthetic Data Mappings (Specific Labels -> Project Streams) ---
 

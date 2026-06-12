@@ -25,8 +25,9 @@ def _bundle() -> TextBundle:
         "commit": {},
     }
     return TextBundle(
-        source_block="[issue] jira:ABC-1\nFix login outage for auth service",
+        source_block="[issue] E1\nFix login outage for auth service",
         source_texts=source_texts,
+        handle_map={"E1": ("issue", "jira:ABC-1")},
         input_hash="hash",
         text_source_count=1,
         text_char_count=40,
@@ -54,7 +55,7 @@ def test_repaired_status(monkeypatch):
                 "feature_delivery.roadmap": 1.0
               },
               "evidence_quotes": [
-                { "quote": "Fix login outage", "source": "issue", "id": "jira:ABC-1" }
+                { "quote": "Fix login outage", "source": "issue", "id": "E1" }
               ],
               "uncertainty": "Some uncertainty remains."
             }""",

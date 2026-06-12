@@ -27,6 +27,7 @@ Rules:
 - Provide a probability distribution across all subcategories (values 0-1, sum to 1).
 - Provide evidence_quotes as 1-10 items with exact substrings from the source text.
 - evidence_quotes items must have: quote, source (issue|pr|commit), id.
+- evidence_quotes id MUST be the bracketed handle shown before an evidence block (for example "E1"), copied exactly.
 - Provide uncertainty as a short string (1-280 chars).
 - No extra keys.
 
@@ -50,7 +51,7 @@ Output schema:
     "risk.vulnerability": 0.0
   }},
   "evidence_quotes": [
-    {{ "quote": "...", "source": "issue", "id": "..." }}
+    {{ "quote": "...", "source": "issue", "id": "E1" }}
   ],
   "uncertainty": "..."
 }}
@@ -144,7 +145,9 @@ async def categorize_text_bundle(
             uncertainty="",
         )
     else:
-        validation = validate_llm_payload(payload or {}, bundle.source_texts)
+        validation = validate_llm_payload(
+            payload or {}, bundle.source_texts, bundle.handle_map
+        )
 
     if validation.ok:
         return CategorizationOutcome(
@@ -169,7 +172,9 @@ async def categorize_text_bundle(
             uncertainty="",
         )
     else:
-        validation = validate_llm_payload(payload or {}, bundle.source_texts)
+        validation = validate_llm_payload(
+            payload or {}, bundle.source_texts, bundle.handle_map
+        )
 
     if validation.ok:
         return CategorizationOutcome(

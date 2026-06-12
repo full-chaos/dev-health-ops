@@ -230,11 +230,16 @@ def build_text_bundle(
             )
 
     source_block_lines: list[str] = []
+    handle_map: dict[str, tuple[str, str]] = {}
+    next_handle = 1
     for source_type in ("issue", "pr", "commit"):
         for source_id, text in source_texts[source_type].items():
             if not text:
                 continue
-            source_block_lines.append(f"[{source_type}] {source_id}")
+            handle = f"E{next_handle}"
+            next_handle += 1
+            handle_map[handle] = (source_type, source_id)
+            source_block_lines.append(f"[{source_type}] {handle}")
             source_block_lines.append(text)
             source_block_lines.append("")
 
@@ -256,6 +261,7 @@ def build_text_bundle(
     return TextBundle(
         source_block=source_block,
         source_texts=source_texts,
+        handle_map=handle_map,
         input_hash=input_hash,
         text_source_count=text_source_count,
         text_char_count=text_char_count,

@@ -80,9 +80,14 @@ def test_build_text_bundle_and_quality_score():
         work_unit_id="WU-1",
     )
 
-    assert "[issue] ISS-1" in bundle.source_block
-    assert "[pr] PR-1" in bundle.source_block
-    assert "[commit] abc123" in bundle.source_block
+    assert "[issue] E1" in bundle.source_block
+    assert "[pr] E2" in bundle.source_block
+    assert "[commit] E3" in bundle.source_block
+    assert bundle.handle_map == {
+        "E1": ("issue", "ISS-1"),
+        "E2": ("pr", "PR-1"),
+        "E3": ("commit", "abc123"),
+    }
     assert bundle.text_source_count == 3
     assert bundle.text_char_count > 0
 

@@ -23,7 +23,7 @@ def _literal_set_order(source: str, name: str) -> list[str]:
                 for target in node.targets
             )
             value = node.value
-        elif isinstance(node, ast.AnnAssign):
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
             target_matches = (
                 isinstance(node.target, ast.Name) and node.target.id == name
             )

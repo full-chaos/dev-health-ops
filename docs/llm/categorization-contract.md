@@ -35,10 +35,11 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
 
 | Requirement | Details |
 |-------------|---------|
-| `subcategories` | Probabilities over the canonical subcategory keys (see [Investment Taxonomy](../product/investment-taxonomy.md)); each value `0–1`; the values must sum to within `[0.98, 1.02]` |
+| `subcategories` | Probabilities over the canonical subcategory keys (see [Investment Taxonomy](../product/investment-taxonomy.md)); each value `0–1`. A sum in the clean band `[0.98, 1.02]` is accepted as-is; a sum in `[0.9, 1.1]` but outside the clean band is renormalized and flagged with `probability_sum_renormalized:{total}` in `categorization_errors_json`; a sum `≤ 0` or outside `[0.9, 1.1]` is rejected |
 | `evidence_quotes` | A **list** of 1–10 objects, each exactly `{ "quote", "source", "id" }` |
-| `quote` | An **exact substring** of the provided source text (≤ 280 chars) |
+| `quote` | An **extractive substring** of the provided source text (≤ 280 chars). Matching is whitespace-tolerant, but the **exact source span** is what gets persisted |
 | `source` | One of `issue`, `pr`, `commit` |
+| `id` | The **bracketed handle** shown before each evidence block in the prompt (for example `E1`), copied exactly; the validator resolves it back to the real source id |
 | `uncertainty` | Non-empty string, ≤ 280 chars |
 
 ### Example output
@@ -52,16 +53,18 @@ There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
     "maintenance.refactor": 0.10
   },
   "evidence_quotes": [
-    { "quote": "requested by customer", "source": "issue", "id": "PROJ-123" },
-    { "quote": "hotfix for production outage", "source": "pr", "id": "456" }
+    { "quote": "requested by customer", "source": "issue", "id": "E1" },
+    { "quote": "hotfix for production outage", "source": "pr", "id": "E2" }
   ],
   "uncertainty": "Mixed signals between customer feature work and incident response."
 }
 ```
 
 > The prompt requests a value for **all 15** subcategories. Validation requires every
-> provided key to be canonical and the values to sum to within `[0.98, 1.02]`; the
-> validation step then fills any missing keys with `0` and renormalizes via
+> provided key to be canonical and the values to sum within `[0.9, 1.1]` — a clean sum in
+> `[0.98, 1.02]` is accepted as-is, while a near-miss is renormalized and flagged with
+> `probability_sum_renormalized:{total}`. The validation step then fills any missing keys
+> with `0` and renormalizes via
 > `ensure_full_subcategory_vector`. Keys must match `investment_taxonomy.py` exactly —
 > obsolete keys like `operational.external` or `feature_delivery.platform` are rejected
 > as `unknown_subcategory`.
@@ -87,7 +90,7 @@ repair also fails, a deterministic fallback distribution is applied.
 - non-JSON or non-object payloads;
 - wrong / extra / missing top-level keys;
 - non-canonical subcategory keys (`unknown_subcategory`);
-- probabilities out of range, or a sum outside `[0.98, 1.02]`;
+- probabilities out of range, or a sum `≤ 0` or outside the accepted `[0.9, 1.1]` band (a sum inside `[0.9, 1.1]` but outside the clean `[0.98, 1.02]` band is **accepted** with a `probability_sum_renormalized` audit marker, not a failure);
 - quote count outside 1–10, wrong quote keys, or empty / too-long quotes;
 - a quote that is **not a literal substring** of the source text
   (`evidence_quote_not_substring`);

@@ -52,7 +52,8 @@ def test_repaired_status(monkeypatch):
             "not json",
             """{
               "subcategories": {
-                "feature_delivery.roadmap": 1.0
+                "feature_delivery.roadmap": 0.55,
+                "quality.bugfix": 0.40
               },
               "evidence_quotes": [
                 { "quote": "Fix login outage", "source": "issue", "id": "E1" }
@@ -69,3 +70,4 @@ def test_repaired_status(monkeypatch):
     assert provider.calls == 2
     assert "Output schema" in provider.prompts[1]
     assert outcome.status == "repaired"
+    assert outcome.warnings == ["probability_sum_renormalized:0.9500"]

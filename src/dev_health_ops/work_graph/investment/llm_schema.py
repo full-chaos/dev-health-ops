@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 from dev_health_ops.work_graph.investment.taxonomy import SUBCATEGORIES
 from dev_health_ops.work_graph.investment.utils import ensure_full_subcategory_vector
@@ -13,6 +14,8 @@ ALLOWED_TOP_LEVEL_KEYS = {"subcategories", "evidence_quotes", "uncertainty"}
 ALLOWED_QUOTE_KEYS = {"quote", "source", "id"}
 ALLOWED_SOURCES = {"issue", "pr", "commit"}
 
+MIN_STRICT_SUM = 0.98
+MAX_STRICT_SUM = 1.02
 MIN_ACCEPTABLE_SUM = 0.9
 MAX_ACCEPTABLE_SUM = 1.1
 MAX_UNCERTAINTY_LEN = 280
@@ -35,6 +38,18 @@ class LLMValidationResult:
     subcategories: dict[str, float]
     evidence_quotes: list[EvidenceQuote]
     uncertainty: str
+    warnings: list[str] = field(default_factory=list)
+
+
+def _recover_quote_span(quote: str, source_text: str) -> str | None:
+    tokens = quote.split()
+    if not tokens:
+        return None
+    pattern = r"\s+".join(re.escape(token) for token in tokens)
+    match = re.search(pattern, source_text)
+    if match is None:
+        return None
+    return match.group(0)
 
 
 def parse_llm_json(raw_text: str) -> tuple[dict[str, object] | None, list[str]]:
@@ -53,6 +68,7 @@ def validate_llm_payload(
     handle_map: dict[str, tuple[str, str]],
 ) -> LLMValidationResult:
     errors: list[str] = []
+    warnings: list[str] = []
 
     keys = set(payload.keys())
     if keys != ALLOWED_TOP_LEVEL_KEYS:
@@ -87,6 +103,8 @@ def validate_llm_payload(
     if total <= 0.0 or total < MIN_ACCEPTABLE_SUM or total > MAX_ACCEPTABLE_SUM:
         errors.append(f"probability_sum_out_of_range:{total:.4f}")
     else:
+        if total < MIN_STRICT_SUM or total > MAX_STRICT_SUM:
+            warnings.append(f"probability_sum_renormalized:{total:.4f}")
         cleaned = {key: value / total for key, value in cleaned.items()}
 
     evidence_quotes_raw = payload.get("evidence_quotes")
@@ -141,14 +159,13 @@ def validate_llm_payload(
             if not source_text:
                 errors.append(f"evidence_quote_unknown_source:{idx}")
                 continue
-            normalized_quote = " ".join(quote.split())
-            normalized_source_text = " ".join(source_text.split())
-            if normalized_quote not in normalized_source_text:
+            recovered_quote = _recover_quote_span(quote, source_text)
+            if recovered_quote is None:
                 errors.append(f"evidence_quote_not_substring:{idx}")
                 continue
             evidence_quotes.append(
                 EvidenceQuote(
-                    quote=quote,
+                    quote=recovered_quote,
                     source_type=real_source_type,
                     source_id=real_source_id,
                 )
@@ -168,6 +185,7 @@ def validate_llm_payload(
             subcategories={},
             evidence_quotes=[],
             uncertainty=uncertainty,
+            warnings=warnings,
         )
 
     normalized = ensure_full_subcategory_vector(cleaned)
@@ -177,4 +195,5 @@ def validate_llm_payload(
         subcategories=normalized,
         evidence_quotes=evidence_quotes,
         uncertainty=uncertainty,
+        warnings=warnings,
     )

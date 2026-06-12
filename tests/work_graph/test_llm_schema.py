@@ -57,6 +57,7 @@ def test_probabilities_normalize_to_one():
     }
     result = validate_llm_payload(payload, _source_texts(), _handle_map())
     assert result.ok
+    assert result.warnings == []
     total = sum(result.subcategories.values())
     assert abs(total - 1.0) < 1e-6
 
@@ -97,7 +98,7 @@ def test_evidence_handle_not_in_map_is_unknown_source():
     assert "evidence_quote_unknown_source:0" in result.errors
 
 
-def test_probabilities_within_loose_band_are_renormalized_and_accepted():
+def test_probabilities_within_loose_band_are_renormalized_with_warning():
     payload: dict[str, object] = {
         "subcategories": {
             "feature_delivery.roadmap": 0.55,
@@ -110,6 +111,7 @@ def test_probabilities_within_loose_band_are_renormalized_and_accepted():
     }
     result = validate_llm_payload(payload, _source_texts(), _handle_map())
     assert result.ok
+    assert result.warnings == ["probability_sum_renormalized:0.9500"]
     assert abs(sum(result.subcategories.values()) - 1.0) < 1e-6
     assert result.subcategories["feature_delivery.roadmap"] == 0.55 / 0.95
 
@@ -128,6 +130,7 @@ def test_degenerate_probability_sum_still_rejected():
 
 
 def test_evidence_quote_substring_check_normalizes_whitespace():
+    source_text = _source_texts()["commit"]["repo@abc"]
     payload: dict[str, object] = {
         "subcategories": {"quality.bugfix": 1.0},
         "evidence_quotes": [
@@ -137,6 +140,8 @@ def test_evidence_quote_substring_check_normalizes_whitespace():
     }
     result = validate_llm_payload(payload, _source_texts(), _handle_map())
     assert result.ok
+    assert result.evidence_quotes[0].quote == "Handle\n token   refresh"
+    assert result.evidence_quotes[0].quote in source_text
 
 
 def test_parse_llm_json_strict():

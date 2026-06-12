@@ -527,6 +527,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
             if outcome.status == "invalid_llm_output":
                 evidence_quality_value = min(float(evidence_quality_value), 0.3)
             evidence_band = evidence_quality_band(float(evidence_quality_value))
+            categorization_audit = [*outcome.errors, *outcome.warnings]
 
             effort_metric, effort_value = _effort_from_work_unit(
                 issue_ids=issue_node_ids,
@@ -582,7 +583,7 @@ async def materialize_investments(config: MaterializeConfig) -> dict[str, int]:
                     evidence_quality=evidence_quality_value,
                     evidence_quality_band=evidence_band,
                     categorization_status=outcome.status,
-                    categorization_errors_json=json.dumps(outcome.errors),
+                    categorization_errors_json=json.dumps(categorization_audit),
                     categorization_model_version=model_version,
                     categorization_input_hash=bundle.input_hash,
                     categorization_run_id=run_id,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dev_health_ops.llm import LLMProvider, get_provider
 from dev_health_ops.work_graph.investment.llm_schema import (
@@ -81,6 +81,7 @@ class CategorizationOutcome:
     uncertainty: str
     status: str
     errors: list[str]
+    warnings: list[str] = field(default_factory=list)
 
 
 def _fallback_distribution() -> dict[str, float]:
@@ -156,6 +157,7 @@ async def categorize_text_bundle(
             uncertainty=validation.uncertainty,
             status="ok",
             errors=[],
+            warnings=validation.warnings,
         )
 
     repair_prompt = _build_repair_prompt(validation.errors, bundle.source_block)
@@ -183,6 +185,7 @@ async def categorize_text_bundle(
             uncertainty=validation.uncertainty,
             status="repaired",
             errors=[],
+            warnings=validation.warnings,
         )
 
     logger.warning(
@@ -196,4 +199,5 @@ async def categorize_text_bundle(
         uncertainty="Insufficient validated evidence to assign a confident subcategory mix.",
         status="invalid_llm_output",
         errors=validation.errors,
+        warnings=validation.warnings,
     )

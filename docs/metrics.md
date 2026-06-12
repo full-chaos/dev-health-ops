@@ -353,9 +353,9 @@ Complexity metrics are computed by scanning local git clones at specific histori
   - `very_high_complexity_functions`: Count of functions with CC > 25.
 - **Backfilling**: Uses `git checkout` (via `GitPython`) to analyze historical state.
 
-## Investment Metrics (`investment_metrics_daily`)
+## Investment Metrics (`investment_metrics_daily`, legacy)
 
-Categorizes engineering effort into investment areas (e.g., "New Value", "Security", "Infrastructure") using a rule-based classifier.
+Legacy daily rollups categorize engineering effort into investment areas (e.g., "Product", "Security", "Infrastructure") using a rule-based classifier. This is not the canonical Investment View; new investment analytics should use the WorkUnit distribution tables documented in [Investment Data Model](architecture/investment-data-model.md).
 
 - **Artifacts Classified**:
   - **Work Items**: Based on labels, components, and title keywords.
@@ -365,7 +365,7 @@ Categorizes engineering effort into investment areas (e.g., "New Value", "Securi
   - `project_stream`: A secondary grouping (e.g., "Project Phoenix").
   - `delivery_units`: Story points or count of work items completed.
   - `churn_loc`: Sum of additions + deletions associated with the area.
-- **Configuration**: `config/investment_areas.yaml` defines the matching rules and priorities.
+- **Configuration**: `config/investment_areas.yaml` defines the legacy matching rules and priorities. Missing or unmatched rules fall back to the legacy `product/general` bucket, never `unassigned`.
 
 ## TestOps Metrics
 

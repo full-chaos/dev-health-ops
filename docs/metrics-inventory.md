@@ -40,7 +40,7 @@ Work item metrics assume provider data has been synced via `dev-hops sync work-i
 
 | Metric                | Status | Source/Implementation                                                                                        |
 | :-------------------- | :----: | :----------------------------------------------------------------------------------------------------------- |
-| Investment Allocation |  [x]   | Classified via `InvestmentClassifier` in `analytics/investment.py`. Rules in `config/investment_areas.yaml`. |
+| Investment Allocation |  [x]   | **Legacy daily rollup** classified via `InvestmentClassifier` in `analytics/investment.py`. Rules in `config/investment_areas.yaml`; not the canonical WorkUnit Investment View. |
 | Project Stream Churn  |  [x]   | LOC churn aggregated by project stream and investment area.                                                  |
 | Strategic vs KTLO %   |  [x]   | Derived from Investment Allocation daily rollups.                                                            |
 

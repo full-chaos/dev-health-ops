@@ -201,7 +201,12 @@ Computed via `radon` scanning historical git references.
 
 ---
 
-## Investment Metrics
+## Investment Metrics (legacy daily rollups)
+
+These `investment_*` daily tables predate the canonical WorkUnit Investment View.
+They are retained for compatibility only; new investment analytics should read the
+WorkUnit distribution tables documented in
+[Investment Data Model](../architecture/investment-data-model.md).
 
 ### Daily Investment (`investment_metrics_daily`)
 
@@ -218,7 +223,8 @@ Categorizes effort into investment areas via rule-based classifier.
 | `delivery_units` | Story points or item count |
 | `churn_loc` | LOC associated with area |
 
-**Configuration:** `config/investment_areas.yaml`
+**Configuration:** `config/investment_areas.yaml` (legacy only; unmatched items fall
+back to `product/general`, not `unassigned`).
 
 ---
 

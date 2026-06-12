@@ -180,7 +180,7 @@ def run_investment_materialization(ns: argparse.Namespace) -> int:
         to_ts=to_ts,
         repo_ids=repo_ids or None,
         llm_provider=getattr(ns, "llm_provider", "auto") or "auto",
-        persist_evidence_snippets=getattr(ns, "persist_evidence_snippets", False),
+        persist_evidence_snippets=getattr(ns, "persist_evidence_snippets", True),
         llm_model=getattr(ns, "model", None),
         team_ids=team_ids or None,
         force=getattr(ns, "force", False),
@@ -334,8 +334,16 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
     add_llm_arguments(investment_materialize)
     investment_materialize.add_argument(
         "--persist-evidence-snippets",
+        dest="persist_evidence_snippets",
         action="store_true",
+        default=True,
         help="Persist extractive evidence quotes for work units.",
+    )
+    investment_materialize.add_argument(
+        "--no-persist-evidence-snippets",
+        dest="persist_evidence_snippets",
+        action="store_false",
+        help="Skip persisting extractive evidence quotes for work units.",
     )
     investment_materialize.add_argument(
         "--force", action="store_true", help="Force re-materialization."

@@ -160,8 +160,9 @@ effort metric/value, and audit fields (`categorization_status`,
 `categorization_model_version`, `categorization_input_hash`, `categorization_run_id`,
 `computed_at`).
 
-Evidence quotes are written to `work_unit_investment_quotes` **only when**
-`--persist-evidence-snippets` is enabled (default off). See
+Evidence quotes are written to `work_unit_investment_quotes` by default for CLI and
+worker materialization runs. They can be skipped with
+`--no-persist-evidence-snippets` for storage-constrained backfills. See
 [Investment Data Model](investment-data-model.md) for table schemas and read semantics.
 
 ---

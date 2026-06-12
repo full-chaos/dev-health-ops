@@ -86,9 +86,10 @@ never appears in a theme or subcategory distribution. The categorization itself 
 "unknown" (see the [pipeline guarantees](../architecture/investment-categorization-pipeline.md#guarantees)).
 
 > Do not confuse this with the legacy rule-based classifier in
-> `analytics/investment.py`, which uses `unassigned` as a *category* fallback. That path
-> is legacy and is being deprecated/isolated; it is not part of the canonical Investment
-> View.
+> `analytics/investment.py`. That path is explicitly deprecated/isolated to the
+> pre-WorkUnit daily `investment_*` metric tables; it is not part of the canonical
+> Investment View and now falls back to the legacy `product/general` bucket rather
+> than an `unassigned` category.
 
 ---
 

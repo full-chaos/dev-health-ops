@@ -1,3 +1,12 @@
+"""Deprecated rule-based investment classifier.
+
+This module powers the legacy daily ``investment_*`` metrics path only. The
+canonical Investment View is WorkUnit-based and lives under
+``dev_health_ops.work_graph.investment``; it persists subcategory/theme
+distributions to ``work_unit_investments``. Do not import this module from the
+canonical WorkUnit materializer or API path.
+"""
+
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -6,6 +15,9 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+LEGACY_DEFAULT_INVESTMENT_AREA = "product"
+LEGACY_DEFAULT_PROJECT_STREAM = "general"
 
 
 @dataclass
@@ -17,6 +29,13 @@ class InvestmentClassification:
 
 
 class InvestmentClassifier:
+    """Legacy classifier for pre-WorkUnit daily investment rollups.
+
+    This intentionally does not participate in the canonical Investment View.
+    Its fallback is a legacy ``product/general`` bucket rather than
+    ``unassigned`` so this path cannot emit an unknown-like category.
+    """
+
     def __init__(self, config_path: Path):
         self.rules = self._load_rules(config_path)
 
@@ -44,17 +63,21 @@ class InvestmentClassifier:
 
             if self._matches(match, artifact):
                 return InvestmentClassification(
-                    investment_area=output.get("investment_area", "unassigned"),
-                    project_stream=output.get("project_stream"),
+                    investment_area=output.get(
+                        "investment_area", LEGACY_DEFAULT_INVESTMENT_AREA
+                    ),
+                    project_stream=output.get(
+                        "project_stream", LEGACY_DEFAULT_PROJECT_STREAM
+                    ),
                     confidence=1.0,
-                    rule_id=rule.get("id", "unassigned"),
+                    rule_id=rule.get("id", "legacy_rule"),
                 )
 
         return InvestmentClassification(
-            investment_area="unassigned",
-            project_stream=None,
+            investment_area=LEGACY_DEFAULT_INVESTMENT_AREA,
+            project_stream=LEGACY_DEFAULT_PROJECT_STREAM,
             confidence=0.0,
-            rule_id="unassigned",
+            rule_id="legacy_default",
         )
 
     def _matches(self, match_criteria: dict, artifact: dict) -> bool:

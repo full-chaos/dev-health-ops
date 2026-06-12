@@ -166,7 +166,7 @@ def run_investment_materialize(
             to_ts=parsed_to,
             repo_ids=repo_ids,
             llm_provider=llm_provider,
-            persist_evidence_snippets=False,
+            persist_evidence_snippets=True,
             llm_model=llm_model,
             team_ids=team_ids,
             force=force,

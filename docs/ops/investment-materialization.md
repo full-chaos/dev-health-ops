@@ -54,8 +54,7 @@ reads these edges.
 dev-hops investment materialize \
   --db "$CLICKHOUSE_URI" \
   --from 2026-05-01 \
-  --to 2026-06-01 \
-  --persist-evidence-snippets
+  --to 2026-06-01
 ```
 
 | Flag | Default | Purpose |
@@ -68,14 +67,15 @@ dev-hops investment materialize \
 | `--team-id` | all | Team identifier; repeatable |
 | `--llm-provider` | `auto` | LLM provider (`openai`, `anthropic`, `mock`, …) |
 | `--model` | provider default | Override the model |
-| `--persist-evidence-snippets` | **off** | Persist extractive evidence quotes to `work_unit_investment_quotes` |
+| `--persist-evidence-snippets` | **on** | Persist extractive evidence quotes to `work_unit_investment_quotes` |
+| `--no-persist-evidence-snippets` | off | Skip quote persistence for storage-constrained backfills |
 | `--force` | off | Force re-materialization |
 
-> **`--persist-evidence-snippets` is off by default.** Without it, no rows land in
-> `work_unit_investment_quotes`, so evidence drill-downs are empty: validated LLM quotes
-> are not persisted, and fallback WorkUnits have no quotes to begin with. Enable it for any
-> run whose evidence you want to surface in the UI. (Whether this default should change is
-> tracked as an engineering issue.)
+> **Evidence snippets are on by default.** Real materialization runs persist validated
+> extractive quotes to `work_unit_investment_quotes` so evidence drill-downs have the
+> audit trail required by the Investment contract. Use `--no-persist-evidence-snippets`
+> only for deliberate storage-constrained backfills; fallback WorkUnits may still have no
+> quotes because no validated LLM quote exists.
 
 ### Time window behavior
 
@@ -87,14 +87,14 @@ full edge set first, then filtered. See the
 ### Output
 
 On success the command logs `Components=… Records=… Quotes=…` and returns exit code `0`.
-`Records` is the number of `work_unit_investments` rows written; `Quotes` is `0` unless
-`--persist-evidence-snippets` was set.
+`Records` is the number of `work_unit_investments` rows written; `Quotes` is the number
+of persisted evidence quote rows (unless quote persistence was explicitly disabled).
 
 ---
 
 ## Fixtures (mock LLM)
 
-Synthetic/demo data uses the mock provider and forces evidence persistence on, via
+Synthetic/demo data uses the mock provider and keeps evidence persistence on, via
 `materialize_fixture_investments` in `runner.py`. Use the fixtures flow
 (`dev-hops fixtures …`) rather than calling this directly for demo environments.
 

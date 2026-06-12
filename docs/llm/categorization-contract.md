@@ -167,8 +167,33 @@ When `LLM_PROVIDER` is unset or `auto`, the system checks in order:
 | `LLM_PROVIDER` | Explicit provider selection (see table above) |
 | `LLM_MODEL` | Override the default model for any provider |
 | `OPENAI_BASE_URL` | Custom OpenAI-compatible endpoint |
+| `LOCAL_LLM_BASE_URL` | Generic local OpenAI-compatible endpoint, for example Ollama, vLLM, or LM Studio |
+| `LOCAL_LLM_MODEL` | Model name for `LLM_PROVIDER=local` |
+| `LOCAL_LLM_API_KEY` | API key for local endpoints that require one; defaults to `not-needed` |
+| `OLLAMA_BASE_URL` | Ollama OpenAI-compatible endpoint for `LLM_PROVIDER=ollama`, default `http://localhost:11434/v1` |
+| `OLLAMA_MODEL` | Model name for `LLM_PROVIDER=ollama`, default `llama3.2` |
+| `LMSTUDIO_BASE_URL` | LM Studio OpenAI-compatible endpoint for `LLM_PROVIDER=lmstudio`, default `http://localhost:1234/v1` |
 | `DASHSCOPE_BASE_URL` | Regional DashScope endpoint (default: China; Singapore/US available) |
 | `GEMINI_BASE_URL` | Custom Gemini endpoint |
+
+### Local Endpoint Examples
+
+Use `local` for any OpenAI-compatible server when you want to set the endpoint
+explicitly:
+
+```bash
+export LLM_PROVIDER=local
+export LOCAL_LLM_BASE_URL=http://localhost:8000/v1
+export LOCAL_LLM_MODEL=your-model
+```
+
+Use `ollama` when you want Ollama-specific defaults and environment names:
+
+```bash
+export LLM_PROVIDER=ollama
+export OLLAMA_BASE_URL=http://localhost:11434/v1
+export OLLAMA_MODEL=llama3.2
+```
 
 ### Provider-Specific Notes
 

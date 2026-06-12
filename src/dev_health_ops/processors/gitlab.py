@@ -4,6 +4,10 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
+from dev_health_ops.analytics.complexity import (
+    DEFAULT_COMPLEXITY_CONFIG_PATH,
+    ComplexityScanner,
+)
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
 from dev_health_ops.models import git as git_models
 from dev_health_ops.models.git import (
@@ -656,6 +660,61 @@ def _fetch_gitlab_blame_sync(gl_project, connector, project_id, repo_id, limit=5
     return blame_batch
 
 
+# Bounds for API-based file-content backfill (parity with the GitHub
+# processor): skip blobs the complexity scanner would reject, oversized
+# blobs (enforced via GraphQL rawSize), and runaway repos.
+CONTENT_FETCH_MAX_BYTES = 1_000_000
+CONTENT_FETCH_MAX_FILES = 2_000
+
+
+async def _fetch_scannable_contents(
+    connector: Any,
+    project_full_name: str,
+    ref: str,
+    file_paths: list[str],
+) -> dict[str, str]:
+    """Fetch text for scanner-eligible files via batched GraphQL blob queries.
+
+    Only paths matching the complexity scanner's include/exclude globs are
+    fetched, keeping API volume proportional to what the metrics jobs can
+    actually use. Errors degrade to a paths-only backfill (contents stay
+    NULL) rather than failing the sync.
+    """
+    scanner = ComplexityScanner(config_path=DEFAULT_COMPLEXITY_CONFIG_PATH)
+    scannable: list[str] = []
+    for path in file_paths:
+        if not scanner.should_process(path):
+            continue
+        scannable.append(path)
+        if len(scannable) >= CONTENT_FETCH_MAX_FILES:
+            logging.warning(
+                "Capping content fetch at %d files for %s",
+                CONTENT_FETCH_MAX_FILES,
+                project_full_name,
+            )
+            break
+
+    if not scannable:
+        return {}
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(
+            None,
+            lambda: connector.get_file_contents(
+                project_full_name,
+                scannable,
+                ref=ref,
+                max_bytes=CONTENT_FETCH_MAX_BYTES,
+            ),
+        )
+    except Exception as e:
+        logging.warning(
+            "Failed to fetch file contents for %s: %s", project_full_name, e
+        )
+        return {}
+
+
 async def _backfill_gitlab_missing_data(
     store: Any,
     ingestion_sink: IngestionSink,
@@ -665,9 +724,24 @@ async def _backfill_gitlab_missing_data(
     default_branch: str,
     max_commits: int | None,
     blame_only: bool = False,
+    include_blame: bool = True,
+    include_commit_stats: bool = True,
 ) -> None:
-    needs = await check_backfill_needs(store, db_repo.id, blame_only=blame_only)
-    if not needs.any:
+    # check_backfill_needs's blame_only flag doubles as "skip commit stats".
+    needs = await check_backfill_needs(
+        store, db_repo.id, blame_only=blame_only or not include_commit_stats
+    )
+
+    # Repos synced before content fetching existed have paths-only rows
+    # (contents NULL), which has_any_git_files treats as "done". Upgrade
+    # them by re-running the files backfill when no contents exist yet;
+    # ReplacingMergeTree(last_synced) supersedes the stale rows.
+    needs_files = needs.files
+    if not needs_files and hasattr(store, "has_any_git_file_contents"):
+        needs_files = not await store.has_any_git_file_contents(db_repo.id)
+
+    needs_blame = needs.blame and include_blame
+    if not (needs_files or needs_blame or needs.commit_stats):
         return
 
     try:
@@ -677,7 +751,7 @@ async def _backfill_gitlab_missing_data(
         return
 
     file_paths: list[str] = []
-    if needs.files or needs.blame:
+    if needs_files or needs_blame:
         try:
             items = _iter_gitlab_repo_tree(
                 project,
@@ -697,9 +771,19 @@ async def _backfill_gitlab_missing_data(
                 continue
             file_paths.append(path)
 
-        if needs.files and file_paths:
+        if needs_files and file_paths:
+            contents_by_path = await _fetch_scannable_contents(
+                connector,
+                project_full_name,
+                default_branch,
+                file_paths,
+            )
             await backfill_file_records(
-                ingestion_sink, db_repo.id, file_paths, project_full_name
+                ingestion_sink,
+                db_repo.id,
+                file_paths,
+                project_full_name,
+                contents_by_path=contents_by_path,
             )
 
     if needs.commit_stats:
@@ -745,7 +829,7 @@ async def _backfill_gitlab_missing_data(
                         f"Failed commit stat fetch for {project_full_name}@{sha}: {e}"
                     )
 
-    if needs.blame and file_paths:
+    if needs_blame and file_paths:
         async with AsyncBatchCollector(
             ingestion_sink.insert_blame_data
         ) as blame_collector:
@@ -798,6 +882,7 @@ async def process_gitlab_project(
     sync_deployments: bool = True,
     sync_incidents: bool = True,
     sync_security: bool = True,
+    backfill_missing: bool = True,
     since: datetime | None = None,
 ) -> None:
     """
@@ -997,6 +1082,29 @@ async def process_gitlab_project(
             if blame_batch:
                 await ingestion_sink.insert_blame_data(blame_batch)
                 logging.info(f"Stored {len(blame_batch)} blame records from GitLab")
+
+        # 6. Backfill file records + contents so DB-based metrics (e.g.
+        # complexity) can run without a local checkout. Gated on sync_git
+        # so non-git targets (prs, cicd, ...) stay lean. Blame is excluded
+        # here: it costs one REST call per file and has its own dedicated
+        # sync target.
+        if backfill_missing and sync_git:
+            try:
+                await _backfill_gitlab_missing_data(
+                    store=store,
+                    ingestion_sink=ingestion_sink,
+                    connector=connector,
+                    db_repo=db_repo,
+                    project_full_name=full_name,
+                    default_branch=db_repo.settings.get("default_branch", "main"),
+                    max_commits=max_commits,
+                    include_blame=False,
+                    include_commit_stats=False,
+                )
+            except Exception as e:
+                logging.warning(
+                    "Backfill failed for GitLab project %s: %s", full_name, e
+                )
 
         logging.info(f"Successfully processed GitLab project: {project_id}")
 
@@ -1270,7 +1378,7 @@ async def process_gitlab_projects_batch(
             )
             await ingestion_sink.insert_git_commit_stats([stat])
 
-        if backfill_missing:
+        if backfill_missing and sync_git:
             try:
                 await _backfill_gitlab_missing_data(
                     store=store,
@@ -1280,6 +1388,8 @@ async def process_gitlab_projects_batch(
                     project_full_name=project_info.full_name,
                     default_branch=project_info.default_branch,
                     max_commits=max_commits_per_project,
+                    include_blame=False,
+                    include_commit_stats=False,
                 )
             except Exception as e:
                 logging.debug(

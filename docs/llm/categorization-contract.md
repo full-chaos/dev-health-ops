@@ -2,6 +2,10 @@
 
 Rules and specifications for LLM usage in the Dev Health platform.
 
+> For the end-to-end compute flow this contract sits inside, see the
+> [Investment Categorization Pipeline](../architecture/investment-categorization-pipeline.md).
+> For the canonical keys, see the [Investment Taxonomy](../product/investment-taxonomy.md).
+
 ---
 
 ## Overview
@@ -21,91 +25,109 @@ LLMs are used in two contexts:
 
 Map messy human text to canonical investment categories with subcategory distributions.
 
-### Schema Compliance
+### Strict schema
 
-Output **MUST** be strict JSON matching:
-```
-work_graph/investment/llm_schema.py
-```
+Output **MUST** be strict JSON validated by `work_graph/investment/llm_schema.py`.
+There are exactly three top-level keys — `subcategories`, `evidence_quotes`,
+`uncertainty` — and no others.
 
-### Output Requirements
+### Output requirements
 
 | Requirement | Details |
 |-------------|---------|
-| Keys | From canonical subcategory registry only |
-| Probabilities | Valid (0–1), normalized |
-| Evidence | **Extractive substrings** from input text |
-| Theme roll-up | Computed deterministically from subcategories |
+| `subcategories` | Probabilities over the canonical subcategory keys (see [Investment Taxonomy](../product/investment-taxonomy.md)); each value `0–1`; the values must sum to within `[0.98, 1.02]` |
+| `evidence_quotes` | A **list** of 1–10 objects, each exactly `{ "quote", "source", "id" }` |
+| `quote` | An **exact substring** of the provided source text (≤ 280 chars) |
+| `source` | One of `issue`, `pr`, `commit` |
+| `uncertainty` | Non-empty string, ≤ 280 chars |
 
-### Example Output
+### Example output
 
 ```json
 {
   "subcategories": {
-    "operational.external": 0.45,
-    "operational.incident": 0.25,
-    "feature_delivery.customer": 0.20,
+    "feature_delivery.customer": 0.45,
+    "operational.incident_response": 0.25,
+    "quality.bugfix": 0.20,
     "maintenance.refactor": 0.10
   },
-  "evidence": {
-    "operational.external": ["customer-facing issue", "support ticket"],
-    "operational.incident": ["incident response", "outage window"],
-    "feature_delivery.customer": ["requested by customer"],
-    "maintenance.refactor": ["cleanup", "technical debt"]
-  },
-  "uncertainty": "moderate"
+  "evidence_quotes": [
+    { "quote": "requested by customer", "source": "issue", "id": "PROJ-123" },
+    { "quote": "hotfix for production outage", "source": "pr", "id": "456" }
+  ],
+  "uncertainty": "Mixed signals between customer feature work and incident response."
 }
 ```
 
-### Two-Stage Process
+> The prompt requests a value for **all 15** subcategories. Validation requires every
+> provided key to be canonical and the values to sum to within `[0.98, 1.02]`; the
+> validation step then fills any missing keys with `0` and renormalizes via
+> `ensure_full_subcategory_vector`. Keys must match `investment_taxonomy.py` exactly —
+> obsolete keys like `operational.external` or `feature_delivery.platform` are rejected
+> as `unknown_subcategory`.
 
-1. **LLM Stage:** Map text → subcategory distribution
-2. **Deterministic Stage:** Roll subcategories → themes (no LLM)
+### Two-stage process
 
-This separation prevents category drift.
+1. **LLM stage:** map text → subcategory distribution.
+2. **Deterministic stage:** roll subcategories → themes (no LLM).
+
+This separation prevents category drift. The full flow is documented in the
+[Investment Categorization Pipeline](../architecture/investment-categorization-pipeline.md).
 
 ---
 
-## Retry Policy
+## Validation, repair, and fallback
 
-### When to Retry
+Each response is validated by `validate_llm_payload`. On failure the categorizer makes
+**exactly one** repair attempt, re-prompting with the specific validation errors. If the
+repair also fails, a deterministic fallback distribution is applied.
 
-- Whitespace/empty response
-- Truncated response (`finish_reason=length`)
-- Invalid JSON structure
-- Missing required keys
+### Validation failures include
 
-### Retry Strategy
+- non-JSON or non-object payloads;
+- wrong / extra / missing top-level keys;
+- non-canonical subcategory keys (`unknown_subcategory`);
+- probabilities out of range, or a sum outside `[0.98, 1.02]`;
+- quote count outside 1–10, wrong quote keys, or empty / too-long quotes;
+- a quote that is **not a literal substring** of the source text
+  (`evidence_quote_not_substring`);
+- invalid `source` (not `issue` / `pr` / `commit`) or unknown source id;
+- missing / too-long `uncertainty`.
 
-1. **First attempt:** Standard prompt, standard tokens
-2. **Retry attempt:**
-   - Double `max_completion_tokens` (minimum 512)
-   - Simplify and harden JSON prompt
-   - Add explicit JSON instruction in system AND user message
+### Outcome status
 
-### Failure Handling
+Every run records a `categorization_status`:
 
-After one retry failure:
-1. Mark categorization as invalid
-2. Apply deterministic fallback
-3. Persist with `fallback_applied=true`
+| Status | Meaning |
+|--------|---------|
+| `ok` | Validated on the first attempt |
+| `repaired` | Validated after the single repair re-prompt |
+| `invalid_llm_output` | Still invalid after repair → deterministic fallback applied |
+| `insufficient_evidence` | Too little text to call the LLM → fallback |
+| `no_text_sources` | No usable source text → fallback |
+| `llm_task_failed` | The async LLM task raised before an outcome was recorded → fallback |
+
+> The fallback is a **neutral prior** (`FALLBACK_PRIOR`), not "unknown". It preserves the
+> never-unknown guarantee but means *"insufficient validated evidence"* — pair it with a
+> low `evidence_quality` reading in any UX.
 
 ---
 
 ## Audit Fields
 
-Every categorization run must persist:
+Every WorkUnit row in `work_unit_investments` persists:
 
 | Field | Description |
 |-------|-------------|
-| `categorized_at` | Timestamp |
-| `model_version` | LLM model identifier |
-| `prompt_hash` | Hash of prompt template |
-| `raw_response` | Original LLM output |
-| `fallback_applied` | Boolean |
-| `retry_count` | Number of retries |
-| `finish_reason` | OpenAI finish reason |
-| `token_usage` | Tokens consumed |
+| `categorization_status` | Outcome status (table above) |
+| `categorization_errors_json` | Serialized validation errors (if any) |
+| `categorization_model_version` | Model id, or provider name when no model is set |
+| `categorization_input_hash` | SHA-256 of the serialized evidence bundle |
+| `categorization_run_id` | Per-run UUID |
+| `computed_at` | Run timestamp (also the ReplacingMergeTree version) |
+
+See the [Investment Data Model](../architecture/investment-data-model.md) for the full
+schema and read semantics.
 
 ---
 
@@ -115,7 +137,7 @@ The system supports multiple LLM backends. Set `LLM_PROVIDER` or let auto-detect
 
 ### Provider Configuration
 
-| Provider | Env Var for Selection | Required Env Vars | Default Model |
+| Provider | Env Var for Selection | Key Env Vars (selection / override) | Default Model |
 |----------|----------------------|-------------------|---------------|
 | **OpenAI** | `LLM_PROVIDER=openai` | `OPENAI_API_KEY` | `gpt-5-mini` |
 | **Anthropic** | `LLM_PROVIDER=anthropic` | `ANTHROPIC_API_KEY` | `claude-3-haiku-20240307` |

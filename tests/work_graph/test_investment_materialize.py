@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -118,6 +119,7 @@ def _patch_queries(monkeypatch, edges, work_items, commits):
 @pytest.mark.asyncio
 async def test_materialize_invokes_sink(monkeypatch):
     repo_id, edges, work_items, commits = _sample_data()
+    work_items[0]["description"] = "Resolve authentication failures. " * 20
     sink = FakeSink()
 
     async def _fake_categorize(bundle, llm_provider, llm_model=None, provider=None):
@@ -127,6 +129,7 @@ async def test_materialize_invokes_sink(monkeypatch):
             uncertainty="Limited evidence.",
             status="ok",
             errors=[],
+            warnings=["probability_sum_renormalized:0.9500"],
         )
 
     monkeypatch.setattr(
@@ -155,6 +158,9 @@ async def test_materialize_invokes_sink(monkeypatch):
     record = sink.investment_rows[0]
     assert record.work_unit_type == "incident"
     assert record.work_unit_name == "Fix login outage"
+    assert json.loads(record.categorization_errors_json) == [
+        "probability_sum_renormalized:0.9500"
+    ]
 
 
 @pytest.mark.asyncio

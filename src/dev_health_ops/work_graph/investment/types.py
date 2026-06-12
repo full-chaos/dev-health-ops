@@ -9,6 +9,7 @@ from dataclasses import dataclass
 class TextBundle:
     source_block: str
     source_texts: dict[str, dict[str, str]]
+    handle_map: dict[str, tuple[str, str]]
     input_hash: str
     text_source_count: int
     text_char_count: int

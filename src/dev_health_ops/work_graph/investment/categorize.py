@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dev_health_ops.llm import LLMProvider, get_provider
 from dev_health_ops.work_graph.investment.llm_schema import (
@@ -27,6 +27,7 @@ Rules:
 - Provide a probability distribution across all subcategories (values 0-1, sum to 1).
 - Provide evidence_quotes as 1-10 items with exact substrings from the source text.
 - evidence_quotes items must have: quote, source (issue|pr|commit), id.
+- evidence_quotes id MUST be the bracketed handle shown before an evidence block (for example "E1"), copied exactly.
 - Provide uncertainty as a short string (1-280 chars).
 - No extra keys.
 
@@ -50,7 +51,7 @@ Output schema:
     "risk.vulnerability": 0.0
   }},
   "evidence_quotes": [
-    {{ "quote": "...", "source": "issue", "id": "..." }}
+    {{ "quote": "...", "source": "issue", "id": "E1" }}
   ],
   "uncertainty": "..."
 }}
@@ -80,6 +81,7 @@ class CategorizationOutcome:
     uncertainty: str
     status: str
     errors: list[str]
+    warnings: list[str] = field(default_factory=list)
 
 
 def _fallback_distribution() -> dict[str, float]:
@@ -144,7 +146,9 @@ async def categorize_text_bundle(
             uncertainty="",
         )
     else:
-        validation = validate_llm_payload(payload or {}, bundle.source_texts)
+        validation = validate_llm_payload(
+            payload or {}, bundle.source_texts, bundle.handle_map
+        )
 
     if validation.ok:
         return CategorizationOutcome(
@@ -153,6 +157,7 @@ async def categorize_text_bundle(
             uncertainty=validation.uncertainty,
             status="ok",
             errors=[],
+            warnings=validation.warnings,
         )
 
     repair_prompt = _build_repair_prompt(validation.errors, bundle.source_block)
@@ -169,7 +174,9 @@ async def categorize_text_bundle(
             uncertainty="",
         )
     else:
-        validation = validate_llm_payload(payload or {}, bundle.source_texts)
+        validation = validate_llm_payload(
+            payload or {}, bundle.source_texts, bundle.handle_map
+        )
 
     if validation.ok:
         return CategorizationOutcome(
@@ -178,6 +185,7 @@ async def categorize_text_bundle(
             uncertainty=validation.uncertainty,
             status="repaired",
             errors=[],
+            warnings=validation.warnings,
         )
 
     logger.warning(
@@ -191,4 +199,5 @@ async def categorize_text_bundle(
         uncertainty="Insufficient validated evidence to assign a confident subcategory mix.",
         status="invalid_llm_output",
         errors=validation.errors,
+        warnings=validation.warnings,
     )

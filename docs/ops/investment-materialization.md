@@ -71,6 +71,23 @@ dev-hops investment materialize \
 | `--no-persist-evidence-snippets` | off | Skip quote persistence for storage-constrained backfills |
 | `--force` | off | Force re-materialization |
 
+For local OpenAI-compatible servers, set the endpoint before running the command:
+
+```bash
+export LLM_PROVIDER=local
+export LOCAL_LLM_BASE_URL=http://localhost:8000/v1
+export LOCAL_LLM_MODEL=your-model
+
+dev-hops investment materialize \
+  --db "$CLICKHOUSE_URI" \
+  --from 2026-05-01 \
+  --to 2026-06-01
+```
+
+For Ollama-specific configuration, use `LLM_PROVIDER=ollama` with
+`OLLAMA_BASE_URL` and `OLLAMA_MODEL`; the default URL is
+`http://localhost:11434/v1`.
+
 > **Evidence snippets are on by default.** Real materialization runs persist validated
 > extractive quotes to `work_unit_investment_quotes` so evidence drill-downs have the
 > audit trail required by the Investment contract. Use `--no-persist-evidence-snippets`

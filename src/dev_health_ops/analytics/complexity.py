@@ -10,6 +10,10 @@ from radon.complexity import cc_visit
 logger = logging.getLogger(__name__)
 yaml = importlib.import_module("yaml")
 
+DEFAULT_COMPLEXITY_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
+)
+
 
 @dataclass
 class FileComplexity:

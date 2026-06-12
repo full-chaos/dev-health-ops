@@ -453,6 +453,20 @@ class ClickHouseStore:
     async def has_any_git_files(self, repo_id) -> bool:
         return await self._has_any("git_files", self._normalize_uuid(repo_id))
 
+    async def has_any_git_file_contents(self, repo_id) -> bool:
+        assert self.client is not None
+        query = (
+            "SELECT 1 FROM git_files WHERE repo_id = {repo_id:UUID} "
+            "AND contents IS NOT NULL AND contents != '' LIMIT 1"
+        )
+        async with self._lock:
+            result = await asyncio.to_thread(
+                self.client.query,
+                query,
+                parameters={"repo_id": str(self._normalize_uuid(repo_id))},
+            )
+        return bool(getattr(result, "result_rows", None))
+
     async def has_any_git_commit_stats(self, repo_id) -> bool:
         return await self._has_any("git_commit_stats", self._normalize_uuid(repo_id))
 

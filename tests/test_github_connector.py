@@ -253,3 +253,50 @@ def test_get_pull_request_reviews_uses_graphql_pagination() -> None:
     assert reviews[0].reviewer == "reviewer"
     assert reviews[1].reviewer == "Unknown"
     assert graphql.query.call_count == 2
+
+
+class TestGitHubConnectorFileContents:
+    """Tests for batched file-content fetching via GraphQL blobs."""
+
+    @pytest.fixture
+    def mock_github_client(self):
+        with patch("dev_health_ops.connectors.github.Github") as mock_github:
+            yield mock_github
+
+    @pytest.fixture
+    def mock_graphql_client(self):
+        with patch(
+            "dev_health_ops.connectors.github.GitHubGraphQLClient"
+        ) as mock_graphql:
+            yield mock_graphql
+
+    def test_get_file_contents_chunks_and_drops_none(
+        self, mock_github_client, mock_graphql_client, monkeypatch
+    ):
+        connector = GitHubConnector(token="test_token")
+        get_blob_texts = Mock(
+            side_effect=[
+                {"a.py": "print('a')\n", "logo.png": None},
+                {"b.py": "print('b')\n"},
+            ]
+        )
+        monkeypatch.setattr(connector.graphql, "get_blob_texts", get_blob_texts)
+
+        result = connector.get_file_contents(
+            "octo", "repo", ["a.py", "logo.png", "b.py"], ref="main", batch_size=2
+        )
+
+        assert result == {"a.py": "print('a')\n", "b.py": "print('b')\n"}
+        assert get_blob_texts.call_count == 2
+        first_call = get_blob_texts.call_args_list[0]
+        assert first_call.args == ("octo", "repo", "main", ["a.py", "logo.png"])
+
+    def test_get_file_contents_empty_paths(
+        self, mock_github_client, mock_graphql_client, monkeypatch
+    ):
+        connector = GitHubConnector(token="test_token")
+        get_blob_texts = Mock()
+        monkeypatch.setattr(connector.graphql, "get_blob_texts", get_blob_texts)
+
+        assert connector.get_file_contents("octo", "repo", []) == {}
+        get_blob_texts.assert_not_called()

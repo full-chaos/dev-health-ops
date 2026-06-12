@@ -1,6 +1,6 @@
 # ADR-002: Investment WorkUnit Component Scope for Period Views
 
-**Status**: RECOMMENDED - NEEDS PRODUCT SIGN-OFF  
+**Status**: ACCEPTED (2026-06-11) — keep current cross-period components; revisit when it becomes an issue  
 **Created**: 2026-06-11  
 **Parent Issues**: CHAOS-2326
 
@@ -44,9 +44,10 @@ evidence set can differ by reporting window.
 
 ## Decision
 
-> **PENDING PRODUCT SIGN-OFF** - Engineering recommends preserving current cross-period
-> component formation for now, with an explicit follow-up decision on whether period views
-> should trade stable WorkUnit identity for strict period locality.
+> **ACCEPTED — Option A (keep current cross-period components).** Product sign-off
+> (2026-06-11): preserve stable WorkUnit identity and complete provenance over strict
+> period locality for now. Revisit — preferring **Option C** (bounded lookback) over Option
+> B — if/when period locality becomes a real user problem. No materializer changes are made.
 
 ## Implementation Notes
 

@@ -196,8 +196,14 @@ def _fetch_github_commit_stats_sync(
     repo_id,
     max_stats,
     since: datetime | None = None,
+    gate=None,
 ):
-    """Sync helper to fetch detailed commit stats (files)."""
+    """Sync helper to fetch detailed commit stats (files).
+
+    Accessing ``commit.files`` lazy-loads commit detail — one REST call per
+    commit — so each iteration waits on the rate-limit gate.
+    """
+    gate = BaseGitProcessor.ensure_gate(gate)
     stats_objects = []
     for commit in raw_commits[:max_stats]:
         if since is not None:
@@ -220,6 +226,8 @@ def _fetch_github_commit_stats_sync(
                 continue
 
         try:
+            if gate is not None:
+                gate.wait_sync()
             files = commit.files
             if files is None:
                 continue
@@ -1072,6 +1080,7 @@ async def process_github_repo(
                     db_repo.id,
                     stats_limit,
                     since,
+                    BaseGitProcessor.make_default_gate(),
                 )
 
                 if stats_objects:

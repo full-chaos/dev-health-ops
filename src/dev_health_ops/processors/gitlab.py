@@ -165,12 +165,21 @@ def _fetch_gitlab_commits_sync(
     return commit_hashes, commit_objects
 
 
-def _fetch_gitlab_commit_stats_sync(gl_project, commit_hashes, repo_id, max_stats):
-    """Sync helper to fetch detailed commit stats from GitLab."""
+def _fetch_gitlab_commit_stats_sync(
+    gl_project, commit_hashes, repo_id, max_stats, gate=None
+):
+    """Sync helper to fetch detailed commit stats from GitLab.
+
+    Each commit detail is one REST call, so each iteration waits on the
+    rate-limit gate.
+    """
+    gate = BaseGitProcessor.ensure_gate(gate)
     stats_objects = []
 
     for commit_hash in commit_hashes[:max_stats]:
         try:
+            if gate is not None:
+                gate.wait_sync()
             detailed_commit = gl_project.commits.get(commit_hash)
             if hasattr(detailed_commit, "stats"):
                 stat = GitCommitStat(

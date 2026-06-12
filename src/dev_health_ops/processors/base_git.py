@@ -151,9 +151,12 @@ def resolve_commit_stats_limit(
     already bounded by the sync window, and truncating it starves the
     churn/hotspot/bus-factor daily metrics with partial days.
 
-    ``COMMIT_STATS_MAX_COMMITS`` (default 1000) is the absolute ceiling.
+    ``COMMIT_STATS_MAX_COMMITS`` (default 300) is the absolute ceiling:
+    each commit's stats cost one extra API call against the shared
+    provider rate budget (GitHub ~5000/hr), so the ceiling bounds how much
+    a single repo sync can consume.
     """
-    hard_cap = int(os.getenv("COMMIT_STATS_MAX_COMMITS", "1000"))
+    hard_cap = int(os.getenv("COMMIT_STATS_MAX_COMMITS", "300"))
     limit = raw_commit_count if since is not None else 50
     if max_commits is not None:
         limit = min(limit, max_commits)

@@ -36,5 +36,5 @@ def test_max_commits_caps_both_modes():
     assert resolve_commit_stats_limit(300, 10, None) == 10
 
 
-def test_hard_cap_default_is_1000():
-    assert resolve_commit_stats_limit(5000, None, SINCE) == 1000
+def test_hard_cap_default_is_300():
+    assert resolve_commit_stats_limit(5000, None, SINCE) == 300

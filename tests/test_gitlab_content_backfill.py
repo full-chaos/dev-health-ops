@@ -129,11 +129,59 @@ class TestGetFileContents:
             side_effect=responses,
         ) as post:
             result = connector.get_file_contents(
-                "group/proj", ["a.py", "b.py"], ref="main", batch_size=1
+                "group/proj",
+                ["a.py", "b.py"],
+                ref="main",
+                batch_size=1,
+                max_bytes=1_000_000,
             )
 
         assert result == {"a.py": "a", "b.py": "b"}
         assert post.call_count == 4
+
+    def test_size_pass_failure_degrades_to_unfiltered_text_fetch(
+        self, mock_gitlab_client, mock_rest_client
+    ):
+        connector = GitLabConnector(
+            url="https://gitlab.example.com", private_token="tok"
+        )
+        get_blobs = Mock(
+            side_effect=[
+                RuntimeError("size pass boom"),
+                [{"path": "a.py", "rawTextBlob": "a"}],
+            ]
+        )
+        with patch.object(connector, "_graphql_blobs", get_blobs):
+            result = connector.get_file_contents("group/proj", ["a.py"], ref="main")
+
+        assert result == {"a.py": "a"}
+        # Second call is the text pass over the un-filtered chunk.
+        assert get_blobs.call_args_list[1].args[3] == "path rawTextBlob"
+
+    def test_text_pass_chunk_failure_keeps_earlier_results(
+        self, mock_gitlab_client, mock_rest_client
+    ):
+        connector = GitLabConnector(
+            url="https://gitlab.example.com", private_token="tok"
+        )
+        get_blobs = Mock(
+            side_effect=[
+                [{"path": "a.py", "rawSize": 1}],
+                [{"path": "b.py", "rawSize": 1}],
+                [{"path": "a.py", "rawTextBlob": "a"}],
+                RuntimeError("late chunk rate limited"),
+            ]
+        )
+        with patch.object(connector, "_graphql_blobs", get_blobs):
+            result = connector.get_file_contents(
+                "group/proj",
+                ["a.py", "b.py"],
+                ref="main",
+                batch_size=1,
+                max_bytes=1_000_000,
+            )
+
+        assert result == {"a.py": "a"}
 
     def test_empty_paths_makes_no_request(self, mock_gitlab_client, mock_rest_client):
         connector = GitLabConnector(

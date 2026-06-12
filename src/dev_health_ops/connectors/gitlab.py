@@ -1137,9 +1137,23 @@ class GitLabConnector(GitConnector):
             eligible = []
             for start in range(0, len(paths), batch_size):
                 chunk = paths[start : start + batch_size]
-                for node in self._graphql_blobs(
-                    project_full_path, ref, chunk, "path rawSize"
-                ):
+                try:
+                    nodes = self._graphql_blobs(
+                        project_full_path, ref, chunk, "path rawSize"
+                    )
+                except Exception as exc:
+                    # Degrade to single-pass behavior for this chunk: the
+                    # size pass is an optimization, not a correctness gate.
+                    logger.warning(
+                        "Size pass failed for %d paths in %s (%s); "
+                        "fetching text without size filter",
+                        len(chunk),
+                        project_full_path,
+                        exc,
+                    )
+                    eligible.extend(chunk)
+                    continue
+                for node in nodes:
                     path = node.get("path")
                     raw_size = node.get("rawSize")
                     if not path:
@@ -1151,9 +1165,21 @@ class GitLabConnector(GitConnector):
         contents: dict[str, str] = {}
         for start in range(0, len(eligible), batch_size):
             chunk = eligible[start : start + batch_size]
-            for node in self._graphql_blobs(
-                project_full_path, ref, chunk, "path rawTextBlob"
-            ):
+            try:
+                nodes = self._graphql_blobs(
+                    project_full_path, ref, chunk, "path rawTextBlob"
+                )
+            except Exception as exc:
+                # Keep contents already fetched; a rate-limited late chunk
+                # should not discard earlier chunks' results.
+                logger.warning(
+                    "Content fetch failed for %d paths in %s: %s",
+                    len(chunk),
+                    project_full_path,
+                    exc,
+                )
+                continue
+            for node in nodes:
                 text = node.get("rawTextBlob")
                 path = node.get("path")
                 if path and text is not None:

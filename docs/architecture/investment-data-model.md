@@ -49,7 +49,7 @@ One row per WorkUnit per materialization run. Created in
 > The header comment also says work units are "(PR/Issue)" — in fact a WorkUnit can also
 > contain **commit** nodes.
 
-### `work_unit_investment_quotes` (optional evidence)
+### `work_unit_investment_quotes` (evidence quotes)
 
 Extractive evidence quotes, one row per quote. Created in
 `017_investment_materialize_tables.sql`.
@@ -64,10 +64,11 @@ Extractive evidence quotes, one row per quote. Created in
 | `categorization_run_id` | `String` | Run UUID |
 | `org_id` | `String` | Tenant (added in 024) |
 
-> **Quotes are written only when explicitly enabled.** The materializer writes quote
-> rows **only** when `--persist-evidence-snippets` is passed (default off; fixtures force
-> it on). UX and docs must treat evidence quotes as *may be available*, not *always
-> present*. See [Investment Materialization](../ops/investment-materialization.md).
+> **Quotes are written by default for materialization runs.** The CLI and worker
+> materializer default to persisting validated extractive quotes; `--no-persist-evidence-snippets`
+> can deliberately skip them for storage-constrained backfills. UX should still tolerate
+> missing quotes because fallback WorkUnits and historical runs may have none. See
+> [Investment Materialization](../ops/investment-materialization.md).
 
 ### `investment_explanations` (UX-time cache)
 

@@ -39,7 +39,7 @@ async def test_investment_breakdown_aggregates_only_latest_work_unit_row(
         "effort_value": 20.0,
         "computed_at": datetime(2026, 1, 13, tzinfo=timezone.utc),
     }
-    physical_rows = [older, latest]
+    physical_rows: list[dict[str, Any]] = [older, latest]
 
     async def fake_query_dicts(
         _sink: BaseMetricsSink, sql: str, _params: dict[str, Any]

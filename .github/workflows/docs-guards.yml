@@ -1,0 +1,84 @@
+name: Docs Guards
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          filters: |
+            docs:
+              - 'docs/**'
+              - 'scripts/check_docs_links.py'
+              - 'scripts/check_investment_docs_drift.py'
+              - 'scripts/gen_taxonomy_docs.py'
+              - 'src/dev_health_ops/investment_taxonomy.py'
+              - 'src/dev_health_ops/work_graph/investment/llm_schema.py'
+              - 'Makefile'
+
+  docs-guards-job:
+    needs: [changes]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Check generated taxonomy is up to date
+        run: |
+          make docs:generate-taxonomy
+          git diff --exit-code -- docs/product/investment-taxonomy.md
+
+      - name: Run docs guards
+        run: make docs:check
+
+  docs-guards:
+    name: docs-guards
+    if: always()
+    needs: [docs-guards-job]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate docs guards result
+        env:
+          DOCS_GUARDS_RESULT: ${{ needs.docs-guards-job.result }}
+        run: |
+          echo "docs-guards-job result: ${DOCS_GUARDS_RESULT}"
+          case "${DOCS_GUARDS_RESULT}" in
+            success|skipped)
+              echo "docs guards passed"
+              ;;
+            failure|cancelled|*)
+              echo "docs guards failed"
+              exit 1
+              ;;
+          esac

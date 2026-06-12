@@ -219,7 +219,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
                 "sync_incidents": flags["sync_incidents"],
                 "sync_security": flags["sync_security"],
                 "blame_only": flags["blame_only"],
-                "backfill_missing": False,
+                "backfill_missing": True,
                 "since": since,
             }
             if max_commits is not None:

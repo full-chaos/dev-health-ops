@@ -22,6 +22,19 @@ class GitDataMixin(SQLAlchemyStoreMixinProtocol):
         )
         return (result.scalar() or 0) > 0
 
+    async def has_any_git_file_contents(self, repo_id) -> bool:
+        assert self.session is not None
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(GitFile)
+            .where(
+                GitFile.repo_id == repo_id,
+                GitFile.contents.is_not(None),
+                GitFile.contents != "",
+            )
+        )
+        return (result.scalar() or 0) > 0
+
     async def has_any_git_commit_stats(self, repo_id) -> bool:
         assert self.session is not None
         result = await self.session.execute(

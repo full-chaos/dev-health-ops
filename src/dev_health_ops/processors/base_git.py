@@ -346,6 +346,7 @@ async def backfill_file_records(
     repo_id: Any,
     file_paths: list[str],
     repo_full_name: str,
+    contents_by_path: dict[str, str] | None = None,
 ) -> None:
     """Persist file path records from a pre-fetched list.
 
@@ -357,10 +358,14 @@ async def backfill_file_records(
         repo_id: The repository identifier.
         file_paths: List of repository-relative file paths.
         repo_full_name: Human-readable name used in log messages.
+        contents_by_path: Optional file text fetched upstream (e.g. via the
+            provider API); paths absent from the mapping persist with NULL
+            contents.
     """
     if not file_paths:
         return
 
+    contents_by_path = contents_by_path or {}
     async with AsyncBatchCollector(ingestion_sink.insert_git_file_data) as collector:
         for path in file_paths:
             collector.add(
@@ -368,12 +373,17 @@ async def backfill_file_records(
                     repo_id=repo_id,
                     path=path,
                     executable=False,
-                    contents=None,
+                    contents=contents_by_path.get(path),
                 )
             )
             await collector.maybe_flush()
 
-    logger.info("Backfilled %d file records for %s", len(file_paths), repo_full_name)
+    logger.info(
+        "Backfilled %d file records (%d with contents) for %s",
+        len(file_paths),
+        len(contents_by_path),
+        repo_full_name,
+    )
 
 
 async def backfill_commit_stat_records(

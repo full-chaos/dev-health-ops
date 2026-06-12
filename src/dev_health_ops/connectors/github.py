@@ -708,6 +708,52 @@ class GitHubConnector(GitConnector):
             self._handle_github_exception(e)
             raise
 
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(RateLimitException, APIException),
+    )
+    def get_file_contents(
+        self,
+        owner: str,
+        repo: str,
+        paths: list[str],
+        ref: str = "HEAD",
+        batch_size: int = 50,
+    ) -> dict[str, str]:
+        """
+        Fetch text contents for many files via batched GraphQL blob queries.
+
+        Binary, truncated, or missing blobs are omitted from the result so
+        callers can treat absence as "no usable text".
+
+        :param owner: Repository owner.
+        :param repo: Repository name.
+        :param paths: Repository-relative file paths.
+        :param ref: Git reference the paths are resolved against.
+        :param batch_size: Number of blobs to resolve per GraphQL request.
+        :return: Mapping of path -> file text for blobs with usable text.
+        """
+        contents: dict[str, str] = {}
+        try:
+            for start in range(0, len(paths), batch_size):
+                chunk = paths[start : start + batch_size]
+                batch = self.graphql.get_blob_texts(owner, repo, ref, chunk)
+                contents.update(
+                    {path: text for path, text in batch.items() if text is not None}
+                )
+            logger.info(
+                "Retrieved contents for %d/%d files in %s/%s",
+                len(contents),
+                len(paths),
+                owner,
+                repo,
+            )
+            return contents
+        except Exception as e:
+            self._handle_github_exception(e)
+            raise
+
     def _rest_base_url(self) -> str:
         requester = getattr(self.github, "_Github__requester", None)
         base_url = getattr(requester, "_Requester__base_url", None)

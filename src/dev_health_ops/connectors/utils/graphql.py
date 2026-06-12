@@ -5,6 +5,7 @@ This module provides utilities for querying GitHub's GraphQL API,
 particularly for operations not well-supported by PyGithub such as blame.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -197,6 +198,56 @@ class GitHubGraphQLClient:
         result = self.query(query, variables)
 
         return result
+
+    def get_blob_texts(
+        self,
+        owner: str,
+        repo: str,
+        ref: str,
+        paths: list[str],
+    ) -> dict[str, str | None]:
+        """
+        Fetch text contents for multiple blobs in a single GraphQL query.
+
+        Uses field aliases so one request resolves up to ``len(paths)`` blobs.
+        Binary and truncated blobs resolve to None.
+
+        :param owner: Repository owner.
+        :param repo: Repository name.
+        :param ref: Branch, tag, or commit SHA the paths are resolved against.
+        :param paths: Repository-relative file paths.
+        :return: Mapping of path -> text (None when binary/truncated/missing).
+        """
+        if not paths:
+            return {}
+
+        fields = []
+        for i, path in enumerate(paths):
+            expression = json.dumps(f"{ref}:{path}")
+            fields.append(
+                f"f{i}: object(expression: {expression}) "
+                "{ ... on Blob { text isBinary isTruncated } }"
+            )
+
+        query = (
+            "query($owner: String!, $repo: String!) {\n"
+            "  repository(owner: $owner, name: $repo) {\n"
+            + "\n".join(fields)
+            + "\n  }\n}"
+        )
+
+        result = self.query(query, {"owner": owner, "repo": repo})
+        repo_data = result.get("repository") or {}
+
+        contents: dict[str, str | None] = {}
+        for i, path in enumerate(paths):
+            blob = repo_data.get(f"f{i}") or {}
+            text = blob.get("text")
+            if blob.get("isBinary") or blob.get("isTruncated") or text is None:
+                contents[path] = None
+            else:
+                contents[path] = text
+        return contents
 
     def get_rate_limit(self) -> dict[str, Any]:
         """

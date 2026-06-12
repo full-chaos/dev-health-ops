@@ -140,3 +140,50 @@ def test_get_blame_passes_expected_variables(monkeypatch):
         "path": "src/main.py",
         "ref": "main",
     }
+
+
+def test_get_blob_texts_empty_paths_returns_empty():
+    client = GitHubGraphQLClient("token")
+    assert client.get_blob_texts("octo", "repo", "main", []) == {}
+
+
+def test_get_blob_texts_batches_aliases_and_filters(monkeypatch):
+    client = GitHubGraphQLClient("token")
+    query = MagicMock(
+        return_value={
+            "repository": {
+                "f0": {"text": "print('a')\n", "isBinary": False, "isTruncated": False},
+                "f1": {"text": None, "isBinary": True, "isTruncated": False},
+                "f2": {"text": "huge", "isBinary": False, "isTruncated": True},
+                "f3": None,
+            }
+        }
+    )
+    monkeypatch.setattr(client, "query", query)
+
+    paths = ["src/a.py", "img/logo.png", "big.py", "gone.py"]
+    result = client.get_blob_texts("octo", "repo", "main", paths)
+
+    assert result == {
+        "src/a.py": "print('a')\n",
+        "img/logo.png": None,
+        "big.py": None,
+        "gone.py": None,
+    }
+    query.assert_called_once()
+    query_text = query.call_args.args[0]
+    # One alias per path, resolved against the requested ref.
+    assert 'f0: object(expression: "main:src/a.py")' in query_text
+    assert 'f3: object(expression: "main:gone.py")' in query_text
+    assert query.call_args.args[1] == {"owner": "octo", "repo": "repo"}
+
+
+def test_get_blob_texts_escapes_quotes_in_paths(monkeypatch):
+    client = GitHubGraphQLClient("token")
+    query = MagicMock(return_value={"repository": {}})
+    monkeypatch.setattr(client, "query", query)
+
+    client.get_blob_texts("octo", "repo", "main", ['we"ird.py'])
+
+    query_text = query.call_args.args[0]
+    assert '"main:we\\"ird.py"' in query_text

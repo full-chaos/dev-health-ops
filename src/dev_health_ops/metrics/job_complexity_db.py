@@ -7,10 +7,13 @@ import os
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
-from dev_health_ops.analytics.complexity import ComplexityScanner, FileComplexity
+from dev_health_ops.analytics.complexity import (
+    DEFAULT_COMPLEXITY_CONFIG_PATH,
+    ComplexityScanner,
+    FileComplexity,
+)
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -23,10 +26,6 @@ from dev_health_ops.utils.cli import (
 )
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_COMPLEXITY_CONFIG_PATH = (
-    Path(__file__).resolve().parents[1] / "config" / "complexity.yaml"
-)
 
 
 def _date_range(end_day: date, backfill_days: int) -> list[date]:
@@ -245,6 +244,7 @@ def run_complexity_db_job(
             )
 
         days = _date_range(date, max(1, int(backfill_days)))
+        repos_with_data = 0
         for repo_uuid, repo_name in repos:
             repo_label = repo_name or str(repo_uuid)
             total_files, non_empty = _git_file_counts(sink.client, repo_uuid)
@@ -299,6 +299,8 @@ def run_complexity_db_job(
                 logger.warning("No complexity data found for repo %s.", repo_label)
                 continue
 
+            repos_with_data += 1
+
             for d in days:
                 computed_at = datetime.now(timezone.utc)
                 snapshots, repo_daily = _build_snapshots(
@@ -315,7 +317,21 @@ def run_complexity_db_job(
     finally:
         sink.close()
 
-    logger.info("Complexity DB job done.")
+    if repos_with_data == 0:
+        logger.error(
+            "Complexity DB job wrote no data: none of the %d repos for org_id=%s "
+            "have scannable contents in git_files/git_blame. Run a GitHub/GitLab "
+            "sync with file-content backfill (or a local sync) first.",
+            len(repos),
+            org_id,
+        )
+        return 1
+
+    logger.info(
+        "Complexity DB job done (%d/%d repos produced data).",
+        repos_with_data,
+        len(repos),
+    )
     return 0
 
 

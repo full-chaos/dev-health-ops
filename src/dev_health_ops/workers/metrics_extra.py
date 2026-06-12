@@ -75,7 +75,7 @@ def run_complexity_job(
             org_id=org_id or "",
         )
         return {
-            "status": "success",
+            "status": "success" if result == 0 else "no_data",
             "day": target_day.isoformat(),
             "backfill_days": backfill_days,
             "exit_code": result,

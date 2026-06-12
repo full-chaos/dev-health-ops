@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
+from dev_health_ops.api.queries.investment import LATEST_WORK_UNIT_INVESTMENTS_CTE
+
 from ..authz import enforce_org_scope
 from .filter_translation import translate_filters
 from .templates import (
@@ -137,7 +139,7 @@ def _get_context_params(
                         t.team_id AS team_id,
                         ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) AS team_label,
                         countIf(ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, '')) IS NOT NULL) AS cnt
-                    FROM work_unit_investments
+                    FROM latest_work_unit_investments AS work_unit_investments
                     ARRAY JOIN arrayDistinct(arrayConcat(
                         JSONExtract(structural_evidence_json, 'issues', 'Array(String)'),
                         [work_unit_investments.work_unit_id]
@@ -163,9 +165,10 @@ def _get_context_params(
             joins.append("LEFT JOIN repos AS r ON toString(r.id) = toString(repo_id)")
 
         return {
-            "source_table": "work_unit_investments",
+            "source_table": "latest_work_unit_investments AS work_unit_investments",
             "date_filter": "work_unit_investments.from_ts < %(end_date)s AND work_unit_investments.to_ts >= %(start_date)s",
             "extra_clauses": "\n".join(joins),
+            "with_clause": f"WITH {LATEST_WORK_UNIT_INVESTMENTS_CTE}",
             "use_investment": True,
         }
 
@@ -173,6 +176,7 @@ def _get_context_params(
         "source_table": "investment_metrics_daily",
         "date_filter": "day >= %(start_date)s AND day <= %(end_date)s",
         "extra_clauses": "",
+        "with_clause": "",
         "use_investment": False,
     }
 

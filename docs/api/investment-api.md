@@ -22,7 +22,7 @@ SELECT
     subcategory_kv.1 AS subcategory,
     splitByChar('.', subcategory_kv.1)[1] AS theme,
     sum(subcategory_kv.2 * effort_value) AS value
-FROM work_unit_investments
+FROM latest_work_unit_investments AS work_unit_investments
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE from_ts < %(end_ts)s AND to_ts >= %(start_ts)s AND org_id = %(org_id)s
 GROUP BY subcategory, theme
@@ -93,12 +93,13 @@ never appears in a theme or subcategory distribution. The categorization itself 
 
 ---
 
-## Read-semantics caveat (latest row)
+## Read semantics (latest row)
 
-`work_unit_investments` is `ReplacingMergeTree(computed_at)`, but these queries `sum(...)`
-directly without `FINAL` or `argMax(..., computed_at)`. After a re-materialization,
-duplicate rows for the same `work_unit_id` may be double-counted until ClickHouse merges.
-This is a tracked engineering issue; see the
+`work_unit_investments` is `ReplacingMergeTree(computed_at)`, so duplicate physical rows
+for the same `work_unit_id` can exist until ClickHouse merges them. Investment API reads
+use an explicit latest-row subquery (`argMax(..., computed_at)` grouped by
+`work_unit_id`) before any effort-weighted `sum(...)`. This gives API totals
+latest-row-by-`computed_at` semantics without requiring `FINAL`; see the
 [data model read-semantics note](../architecture/investment-data-model.md#read-semantics-important).
 
 ---

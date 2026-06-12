@@ -101,15 +101,13 @@ with the same sort key **eventually**, during background merges — not immediat
 
 - `work_unit_investments` is `ORDER BY (work_unit_id)`, so re-materializing a WorkUnit
   produces a new row that *eventually* replaces the old one.
-- The investment API queries currently `sum(...)` directly **without** `FINAL` or
-  `argMax(..., computed_at)`. Between a re-materialization and the next merge, duplicate
-  rows for the same `work_unit_id` can therefore be double-counted in user-visible
-  totals.
+- The investment API does not rely on background merge timing. Read queries first select
+  the latest physical row per `work_unit_id` with an explicit `argMax(..., computed_at)`
+  latest-row subquery, then apply the normal `org_id`, time-window, scope, and category
+  filters before effort-weighted aggregation.
 
-> This is a known correctness caveat, tracked as an engineering issue (review API
-> latest-row semantics). Until resolved, prefer querying with explicit latest-row logic
-> (`argMax`/`FINAL`/a latest subquery) when exact totals matter. See
-> [Investment API](../api/investment-api.md).
+This means user-visible investment totals use latest-row-by-`computed_at` semantics even
+before ClickHouse has compacted older ReplacingMergeTree versions.
 
 ---
 

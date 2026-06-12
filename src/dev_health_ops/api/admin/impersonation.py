@@ -20,7 +20,11 @@ from dev_health_ops.api.admin.schemas import (
 from dev_health_ops.api.auth.router import get_current_user
 from dev_health_ops.api.services.audit import AuditService
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.api.services.impersonation_cache import invalidate
+from dev_health_ops.api.services.impersonation_cache import (
+    CachedImpersonationSession,
+    get_active_session,
+    set_active_session,
+)
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.audit import AuditAction, AuditResourceType
 from dev_health_ops.models.impersonation import ImpersonationSession
@@ -137,10 +141,7 @@ async def start_impersonation(
     session.add(new_session)
     await session.flush()
 
-    # Invalidate cache for this admin
-    invalidate(current_user.user_id)
-
-    # Audit log
+    # Audit log — same transaction as the session row, so the two stay atomic
     target_org_uuid = uuid.UUID(str(target_membership.org_id))
     audit_service = AuditService(session)
     await audit_service.log(
@@ -150,6 +151,23 @@ async def start_impersonation(
         user_id=admin_user_uuid,
         resource_id=str(target_user.id),
         user=current_user,
+    )
+
+    # COMMIT, then write the authoritative state through to the shared cache
+    # (CHAOS-2328). Ordering matters: a write-through of pre-commit state
+    # would poison every replica for up to the cache TTL.
+    await session.commit()
+    await set_active_session(
+        current_user.user_id,
+        CachedImpersonationSession(
+            id=str(new_session.id),
+            admin_user_id=str(admin_user_uuid),
+            target_user_id=str(target_user.id),
+            target_org_id=str(target_membership.org_id),
+            target_role=str(target_membership.role),
+            target_email=str(target_user.email),
+            expires_at=expires_at,
+        ),
     )
 
     return StartImpersonationResponse(
@@ -193,10 +211,7 @@ async def stop_impersonation(
     active_session.ended_at = now
     await session.flush()
 
-    # Invalidate cache
-    invalidate(current_user.user_id)
-
-    # Audit log
+    # Audit log — same transaction as the session update, so the two stay atomic
     target_org_uuid = uuid.UUID(str(active_session.target_org_id))
     audit_service = AuditService(session)
     await audit_service.log(
@@ -208,45 +223,48 @@ async def stop_impersonation(
         user=current_user,
     )
 
+    # COMMIT, then write-through "no active session" — see start_impersonation.
+    await session.commit()
+    await set_active_session(current_user.user_id, None)
+
     return StopImpersonationResponse(status="stopped")
 
 
 @router.get("/impersonate/status", response_model=ImpersonationStatusResponse)
 async def impersonation_status(
     current_user: AuthenticatedUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db_session),
 ) -> ImpersonationStatusResponse:
+    """Server-verified impersonation state for the calling admin.
+
+    Reads through the shared Valkey cache (CHAOS-2328): the web frontend
+    polls this per request for superusers, so the hot path must not need a
+    Postgres query. Explicit DEL on start/stop keeps it instantly correct
+    across replicas.
+    """
     if not current_user.is_superuser:
         return ImpersonationStatusResponse(is_impersonating=False)
 
-    admin_user_uuid = _parse_uuid(current_user.user_id, "user_id")
+    # Validates the id format (raises 400 on garbage) — cache keys are keyed
+    # by the canonical string form.
+    _parse_uuid(current_user.user_id, "user_id")
+
+    active = await get_active_session(current_user.user_id)
     now = datetime.now(timezone.utc)
-
-    active_result = await session.execute(
-        select(ImpersonationSession)
-        .where(
-            ImpersonationSession.admin_user_id == admin_user_uuid,
-            ImpersonationSession.ended_at.is_(None),
-            ImpersonationSession.expires_at > now,
-        )
-        .limit(1)
-    )
-    active_session = active_result.scalar_one_or_none()
-
-    if not active_session:
+    if active is None:
         return ImpersonationStatusResponse(is_impersonating=False)
 
-    # Fetch target email for the response
-    target_result = await session.execute(
-        select(User).where(User.id == active_session.target_user_id)
+    expires_at = (
+        active.expires_at.replace(tzinfo=timezone.utc)
+        if active.expires_at.tzinfo is None
+        else active.expires_at
     )
-    target_user = target_result.scalar_one_or_none()
-    target_email = str(target_user.email) if target_user else None
+    if expires_at <= now:
+        return ImpersonationStatusResponse(is_impersonating=False)
 
     return ImpersonationStatusResponse(
         is_impersonating=True,
-        target_user_id=str(active_session.target_user_id),
-        target_email=target_email,
-        target_org_id=str(active_session.target_org_id),
-        expires_at=active_session.expires_at,
+        target_user_id=active.target_user_id,
+        target_email=active.target_email,
+        target_org_id=active.target_org_id,
+        expires_at=active.expires_at,
     )

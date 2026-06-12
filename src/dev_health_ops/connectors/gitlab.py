@@ -1040,6 +1040,69 @@ class GitLabConnector(GitConnector):
         initial_delay=1.0,
         exceptions=(RateLimitException, APIException),
     )
+    def _graphql_blobs(
+        self,
+        project_full_path: str,
+        ref: str,
+        paths: list[str],
+        fields: str,
+    ) -> list[dict[str, Any]]:
+        """Resolve one chunk of blobs via GitLab GraphQL.
+
+        Retry/backoff lives here (per request) so a rate-limited late chunk
+        does not force earlier successful chunks to be re-fetched.
+        """
+        query = (
+            "query($fullPath: ID!, $ref: String!, $paths: [String!]!) {\n"
+            "  project(fullPath: $fullPath) {\n"
+            "    repository {\n"
+            "      blobs(ref: $ref, paths: $paths) {\n"
+            f"        nodes {{ {fields} }}\n"
+            "      }\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+        headers = {"Content-Type": "application/json"}
+        if self.private_token:
+            headers["PRIVATE-TOKEN"] = self.private_token
+        payload: dict[str, Any] = {
+            "query": query,
+            "variables": {
+                "fullPath": project_full_path,
+                "ref": ref,
+                "paths": paths,
+            },
+        }
+        try:
+            response = requests.post(
+                f"{self.url}/api/graphql",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise APIException(f"GitLab GraphQL request failed: {exc}") from exc
+        if response.status_code == 401:
+            raise AuthenticationException("GitLab authentication failed")
+        if response.status_code == 429:
+            raise RateLimitException(
+                "GitLab API rate limit exceeded",
+                retry_after_seconds=_parse_retry_after_seconds(dict(response.headers)),
+            )
+        if response.status_code != 200:
+            raise APIException(
+                f"GitLab GraphQL error: {response.status_code} - {response.text}"
+            )
+        data = response.json()
+        if data.get("errors"):
+            messages = "; ".join(e.get("message", str(e)) for e in data["errors"])
+            raise APIException(f"GitLab GraphQL errors: {messages}")
+
+        project_data = (data.get("data") or {}).get("project") or {}
+        repository = project_data.get("repository") or {}
+        return (repository.get("blobs") or {}).get("nodes") or []
+
     def get_file_contents(
         self,
         project_full_path: str,
@@ -1056,97 +1119,53 @@ class GitLabConnector(GitConnector):
         binary blobs, so those (and missing paths) are omitted from the
         result and callers can treat absence as "no usable text".
 
+        When ``max_bytes`` is set, a cheap ``rawSize``-only pass filters
+        oversized blobs first so their text never crosses the wire.
+
         :param project_full_path: Project full path (``group/project``).
         :param paths: Repository-relative file paths.
         :param ref: Git reference the paths are resolved against.
         :param batch_size: Number of blobs to resolve per GraphQL request.
+        :param max_bytes: Skip blobs larger than this (None disables).
         :return: Mapping of path -> file text for blobs with usable text.
         """
-        query = """
-        query($fullPath: ID!, $ref: String!, $paths: [String!]!) {
-          project(fullPath: $fullPath) {
-            repository {
-              blobs(ref: $ref, paths: $paths) {
-                nodes {
-                  path
-                  rawTextBlob
-                  rawSize
-                }
-              }
-            }
-          }
-        }
-        """
+        if not paths:
+            return {}
 
-        headers = {"Content-Type": "application/json"}
-        if self.private_token:
-            headers["PRIVATE-TOKEN"] = self.private_token
-
-        contents: dict[str, str] = {}
-        try:
+        eligible = paths
+        if max_bytes is not None:
+            eligible = []
             for start in range(0, len(paths), batch_size):
                 chunk = paths[start : start + batch_size]
-                payload: dict[str, Any] = {
-                    "query": query,
-                    "variables": {
-                        "fullPath": project_full_path,
-                        "ref": ref,
-                        "paths": chunk,
-                    },
-                }
-                response = requests.post(
-                    f"{self.url}/api/graphql",
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-                if response.status_code == 401:
-                    raise AuthenticationException("GitLab authentication failed")
-                if response.status_code == 429:
-                    raise RateLimitException(
-                        "GitLab API rate limit exceeded",
-                        retry_after_seconds=_parse_retry_after_seconds(
-                            dict(response.headers)
-                        ),
-                    )
-                if response.status_code != 200:
-                    raise APIException(
-                        f"GitLab GraphQL error: {response.status_code} - "
-                        f"{response.text}"
-                    )
-                data = response.json()
-                if data.get("errors"):
-                    messages = "; ".join(
-                        e.get("message", str(e)) for e in data["errors"]
-                    )
-                    raise APIException(f"GitLab GraphQL errors: {messages}")
-
-                project_data = (data.get("data") or {}).get("project") or {}
-                repository = project_data.get("repository") or {}
-                nodes = (repository.get("blobs") or {}).get("nodes") or []
-                for node in nodes:
-                    text = node.get("rawTextBlob")
+                for node in self._graphql_blobs(
+                    project_full_path, ref, chunk, "path rawSize"
+                ):
                     path = node.get("path")
-                    if not path or text is None:
-                        continue
                     raw_size = node.get("rawSize")
-                    if (
-                        max_bytes is not None
-                        and raw_size is not None
-                        and int(raw_size) > max_bytes
-                    ):
+                    if not path:
                         continue
+                    if raw_size is not None and int(raw_size) > max_bytes:
+                        continue
+                    eligible.append(path)
+
+        contents: dict[str, str] = {}
+        for start in range(0, len(eligible), batch_size):
+            chunk = eligible[start : start + batch_size]
+            for node in self._graphql_blobs(
+                project_full_path, ref, chunk, "path rawTextBlob"
+            ):
+                text = node.get("rawTextBlob")
+                path = node.get("path")
+                if path and text is not None:
                     contents[path] = text
 
-            logger.info(
-                "Retrieved contents for %d/%d files in %s",
-                len(contents),
-                len(paths),
-                project_full_path,
-            )
-            return contents
-        except requests.exceptions.RequestException as exc:
-            raise APIException(f"GitLab GraphQL request failed: {exc}") from exc
+        logger.info(
+            "Retrieved contents for %d/%d files in %s",
+            len(contents),
+            len(paths),
+            project_full_path,
+        )
+        return contents
 
     def get_dora_metrics(
         self,

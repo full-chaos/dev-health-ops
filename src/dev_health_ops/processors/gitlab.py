@@ -28,6 +28,7 @@ from dev_health_ops.processors.base_git import (
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
+    resolve_commit_stats_limit,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -970,7 +971,9 @@ async def process_gitlab_project(
 
             # 3. Fetch Stats
             logging.info("Fetching commit stats from GitLab...")
-            stats_limit = 50 if max_commits is None else min(max_commits, 50)
+            stats_limit = resolve_commit_stats_limit(
+                len(commit_hashes), max_commits, since
+            )
             stats_objects = await loop.run_in_executor(
                 None,
                 _fetch_gitlab_commit_stats_sync,

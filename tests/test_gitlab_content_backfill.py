@@ -46,22 +46,33 @@ class TestGetFileContents:
         with patch("dev_health_ops.connectors.gitlab.GitLabRESTClient") as mock_rest:
             yield mock_rest
 
-    def test_batches_paths_and_filters_binary_and_oversized(
+    def test_size_pass_filters_oversized_before_text_fetch(
         self, mock_gitlab_client, mock_rest_client
     ):
+        """Pass 1 fetches only rawSize; oversized blobs never get a text fetch."""
         connector = GitLabConnector(
             url="https://gitlab.example.com", private_token="tok"
         )
-        response = _FakeGraphQLResponse(
-            [
-                {"path": "src/a.py", "rawTextBlob": "x = 1\n", "rawSize": 7},
-                {"path": "img/logo.png", "rawTextBlob": None, "rawSize": 5000},
-                {"path": "big.py", "rawTextBlob": "huge", "rawSize": 2_000_000},
-            ]
-        )
+        responses = [
+            # Pass 1: sizes
+            _FakeGraphQLResponse(
+                [
+                    {"path": "src/a.py", "rawSize": 7},
+                    {"path": "img/logo.png", "rawSize": 5000},
+                    {"path": "big.py", "rawSize": 2_000_000},
+                ]
+            ),
+            # Pass 2: text for survivors only
+            _FakeGraphQLResponse(
+                [
+                    {"path": "src/a.py", "rawTextBlob": "x = 1\n"},
+                    {"path": "img/logo.png", "rawTextBlob": None},
+                ]
+            ),
+        ]
         with patch(
             "dev_health_ops.connectors.gitlab.requests.post",
-            return_value=response,
+            side_effect=responses,
         ) as post:
             result = connector.get_file_contents(
                 "group/proj",
@@ -70,23 +81,48 @@ class TestGetFileContents:
             )
 
         assert result == {"src/a.py": "x = 1\n"}
+        assert post.call_count == 2
+        size_query = post.call_args_list[0].kwargs["json"]["query"]
+        assert "rawSize" in size_query and "rawTextBlob" not in size_query
+        text_call = post.call_args_list[1].kwargs["json"]
+        assert "rawTextBlob" in text_call["query"]
+        # big.py was filtered by the size pass
+        assert text_call["variables"]["paths"] == ["src/a.py", "img/logo.png"]
+        assert post.call_args_list[0].kwargs["headers"]["PRIVATE-TOKEN"] == "tok"
+        assert (
+            post.call_args_list[0].args[0] == "https://gitlab.example.com/api/graphql"
+        )
+
+    def test_no_size_pass_when_max_bytes_disabled(
+        self, mock_gitlab_client, mock_rest_client
+    ):
+        connector = GitLabConnector(
+            url="https://gitlab.example.com", private_token="tok"
+        )
+        response = _FakeGraphQLResponse([{"path": "a.py", "rawTextBlob": "a"}])
+        with patch(
+            "dev_health_ops.connectors.gitlab.requests.post",
+            return_value=response,
+        ) as post:
+            result = connector.get_file_contents(
+                "group/proj", ["a.py"], ref="main", max_bytes=None
+            )
+
+        assert result == {"a.py": "a"}
         post.assert_called_once()
-        _, kwargs = post.call_args
-        assert post.call_args.args[0] == "https://gitlab.example.com/api/graphql"
-        assert kwargs["json"]["variables"] == {
-            "fullPath": "group/proj",
-            "ref": "main",
-            "paths": ["src/a.py", "img/logo.png", "big.py"],
-        }
-        assert kwargs["headers"]["PRIVATE-TOKEN"] == "tok"
+        assert "rawTextBlob" in post.call_args.kwargs["json"]["query"]
 
     def test_chunks_by_batch_size(self, mock_gitlab_client, mock_rest_client):
         connector = GitLabConnector(
             url="https://gitlab.example.com", private_token="tok"
         )
         responses = [
-            _FakeGraphQLResponse([{"path": "a.py", "rawTextBlob": "a", "rawSize": 1}]),
-            _FakeGraphQLResponse([{"path": "b.py", "rawTextBlob": "b", "rawSize": 1}]),
+            # size pass, two chunks
+            _FakeGraphQLResponse([{"path": "a.py", "rawSize": 1}]),
+            _FakeGraphQLResponse([{"path": "b.py", "rawSize": 1}]),
+            # text pass, two chunks
+            _FakeGraphQLResponse([{"path": "a.py", "rawTextBlob": "a"}]),
+            _FakeGraphQLResponse([{"path": "b.py", "rawTextBlob": "b"}]),
         ]
         with patch(
             "dev_health_ops.connectors.gitlab.requests.post",
@@ -97,7 +133,7 @@ class TestGetFileContents:
             )
 
         assert result == {"a.py": "a", "b.py": "b"}
-        assert post.call_count == 2
+        assert post.call_count == 4
 
     def test_empty_paths_makes_no_request(self, mock_gitlab_client, mock_rest_client):
         connector = GitLabConnector(

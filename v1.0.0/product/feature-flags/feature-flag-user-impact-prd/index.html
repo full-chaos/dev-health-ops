@@ -1,0 +1,4044 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Feature Flag and User Impact Mapping PRD - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#feature-flag-and-user-impact-mapping-prd" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Feature Flag and User Impact Mapping PRD
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../feature-flag-user-impact-prd.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../feature-flag-prd-review.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_15_9" id="__nav_15_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_15_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_22" >
+        
+          
+          <label class="md-nav__link" for="__nav_22" id="__nav_22_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_22_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_22">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#one-sentence" class="md-nav__link">
+    <span class="md-ellipsis">
+      One sentence
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      Purpose
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-this-is-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      What This Is Not
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#guardrails-non-negotiable" class="md-nav__link">
+    <span class="md-ellipsis">
+      Guardrails (Non-negotiable)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#problem-statement" class="md-nav__link">
+    <span class="md-ellipsis">
+      Problem Statement
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#users-and-user-stories" class="md-nav__link">
+    <span class="md-ellipsis">
+      Users and User Stories
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scope
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-scope-mvp" class="md-nav__link">
+    <span class="md-ellipsis">
+      In scope (MVP)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-scope-mvp" class="md-nav__link">
+    <span class="md-ellipsis">
+      Out of scope (MVP)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-platform-anchors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current Platform Anchors
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-canonical-entities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Proposed Canonical Entities
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposed Canonical Entities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#new-event-entities" class="md-nav__link">
+    <span class="md-ellipsis">
+      New event entities
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#new-derived-entity" class="md-nav__link">
+    <span class="md-ellipsis">
+      New derived entity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Storage contracts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sink-interface-extensions-phase-0-deliverable" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sink interface extensions (Phase 0 deliverable)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measurement-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measurement Contract
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Measurement Contract">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#event-taxonomy-mvp" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event taxonomy (MVP)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required fields
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#identity-and-privacy-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity and privacy strategy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#missingness-and-instrumentation-drift" class="md-nav__link">
+    <span class="md-ellipsis">
+      Missingness and instrumentation drift
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#release-ref-canonical-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      Release ref canonical format
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#late-data-and-recomputation-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Late data and recomputation contract
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-work-graph-extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Proposed Work Graph Extensions
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposed Work Graph Extensions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#node-types-proposed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Node types (proposed)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edge-types-proposed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Edge types (proposed)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provenance-and-confidence-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provenance and confidence model
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#builder-and-api-extensions-phase-2-deliverable" class="md-nav__link">
+    <span class="md-ellipsis">
+      Builder and API extensions (Phase 2 deliverable)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#join-strategy-canonical" class="md-nav__link">
+    <span class="md-ellipsis">
+      Join Strategy (Canonical)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metric-catalog-candidate" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metric Catalog (Candidate)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metric Catalog (Candidate)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#release-impact-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Release impact metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flag-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Flag metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-quality-linkage-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Data quality / linkage metrics
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prototype-metrics-use-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prototype Metrics Use-Cases
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prototype Metrics Use-Cases">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#use-case-a-release-regression-detector" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use-case A: Release regression detector
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-case-b-flag-rollout-safety-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use-case B: Flag rollout safety monitor
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-case-c-work-to-user-impact-traceability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use-case C: Work-to-user impact traceability
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-to-noise-validation-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Signal-to-Noise Validation Plan
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Signal-to-Noise Validation Plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hypotheses" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hypotheses
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation-dataset-and-windows" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation dataset and windows
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prototype-evaluation-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prototype evaluation metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#acceptance-thresholds-prototype-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance thresholds (prototype gate)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#confidence-and-coverage-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Confidence and Coverage Gates
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Confidence and Coverage Gates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#showwarnsuppress-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Show/warn/suppress rules
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overlap-and-contamination-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overlap and contamination rules
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#confounders-and-bias-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      Confounders and Bias Controls
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interpretation-and-claims-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interpretation and Claims Policy
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-privacy-and-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      Data Privacy and Security
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#operational-constraints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Operational Constraints
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Operational Constraints">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#volume-estimates-per-repoenvironmentday" class="md-nav__link">
+    <span class="md-ellipsis">
+      Volume estimates (per repo/environment/day)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#default-bucket-granularity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Default bucket granularity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sampling-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sampling policy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retention-ttl" class="md-nav__link">
+    <span class="md-ellipsis">
+      Retention / TTL
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delivery-phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      Delivery Phases
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Delivery Phases">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-schema-and-contract-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 0: Schema and contract design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-ingestion-and-normalization-mvp" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1: Ingestion and normalization MVP
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-derived-metrics-and-graph-edges" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2: Derived metrics and graph edges
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-prototype-dashboards-and-interpretation-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3: Prototype dashboards and interpretation guidance
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-productization-decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4: Productization decision
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#engineering-test-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Engineering Test Requirements
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Engineering Test Requirements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unit tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Integration tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#smoke-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Smoke tests
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#success-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Success Criteria
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risks-and-mitigations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risks and Mitigations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-gates" class="md-nav__link">
+    <span class="md-ellipsis">
+      Decision Gates
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-questions-for-iteration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open Questions for Iteration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="feature-flag-and-user-impact-mapping-prd">Feature Flag and User Impact Mapping PRD<a class="headerlink" href="#feature-flag-and-user-impact-mapping-prd" title="Permanent link">&para;</a></h1>
+<p><em>Last updated: 2026-02-27</em></p>
+<blockquote>
+<p><strong>Document Status</strong>: Reviewed — corrections applied from gap analysis (see <code>feature-flag-prd-review.md</code>)</p>
+</blockquote>
+<h2 id="one-sentence">One sentence<a class="headerlink" href="#one-sentence" title="Permanent link">&para;</a></h2>
+<p>Add a privacy-safe analytics layer that links releases, feature-flag rollouts, and aggregated user-friction signals to existing Dev Health work metrics and work graph evidence.</p>
+<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
+<p>Dev Health already maps engineering activity to effort and flow. This PRD adds a new lens: how shipped changes and rollout decisions appear to affect user experience at team/release scope.</p>
+<p>This document scopes:
+- data model additions for flags, releases, and telemetry signal buckets
+- candidate metrics to evaluate release and rollout impact
+- prototype experiments to measure signal-to-noise before broad productization</p>
+<h2 id="what-this-is-not">What This Is Not<a class="headerlink" href="#what-this-is-not" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Individual performance scoring</li>
+<li>Session replay analytics product</li>
+<li>Causal proof engine</li>
+<li>Taxonomy replacement for Investment View</li>
+</ul>
+<h2 id="guardrails-non-negotiable">Guardrails (Non-negotiable)<a class="headerlink" href="#guardrails-non-negotiable" title="Permanent link">&para;</a></h2>
+<ul>
+<li>No person-to-person comparisons; team/repo/release scopes only</li>
+<li>WorkUnits remain evidence containers, not categories</li>
+<li>Existing canonical investment taxonomy stays fixed</li>
+<li>LLM remains compute-time categorization only; no UX-time recategorization</li>
+<li>Persistence only through sinks and analytics tables; no ad hoc file outputs</li>
+<li>User telemetry stored as aggregated signals only by default (no raw replay payloads)</li>
+<li>Every computed metric must be traceable to source events and window definitions</li>
+</ul>
+<h2 id="problem-statement">Problem Statement<a class="headerlink" href="#problem-statement" title="Permanent link">&para;</a></h2>
+<p>Teams can currently answer "what work happened" and "where effort went," but cannot reliably answer:
+- Which releases or rollout changes coincided with user friction shifts?
+- Which flags were active when a specific issue spike appeared?
+- Whether a release likely improved or worsened user-facing outcomes, with confidence bounds.</p>
+<h2 id="users-and-user-stories">Users and User Stories<a class="headerlink" href="#users-and-user-stories" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Engineering manager: "Show me which recent releases had elevated friction and whether the rollout path used flags."</li>
+<li>Tech lead: "From an incident or spike in issues, trace back to deployment, related PRs/issues, and active flags."</li>
+<li>Product manager: "Compare impact between partial rollout and full rollout for similar features."</li>
+<li>Platform/data team: "Assess whether the signal is reliable enough for dashboard exposure."</li>
+</ul>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<h3 id="in-scope-mvp">In scope (MVP)<a class="headerlink" href="#in-scope-mvp" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Ingest and normalize feature-flag lifecycle events (create/update/toggle/rule/rollout)</li>
+<li>Ingest and normalize aggregated user telemetry signals (errors, friction, adoption counters)</li>
+<li>Link releases/deployments to PRs/issues using existing join keys</li>
+<li>Compute release and flag impact metrics at team/repo/release level</li>
+<li>Add inspectable confidence and coverage fields to impact outputs</li>
+</ul>
+<h3 id="out-of-scope-mvp">Out of scope (MVP)<a class="headerlink" href="#out-of-scope-mvp" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Raw session replay storage and playback</li>
+<li>Individual-level telemetry attribution</li>
+<li>Automated causal claims in UI</li>
+<li>Experiment platform replacement</li>
+</ul>
+<h2 id="current-platform-anchors">Current Platform Anchors<a class="headerlink" href="#current-platform-anchors" title="Permanent link">&para;</a></h2>
+<p>Existing assets this plan builds on:
+- Daily metrics schema and record contracts (<code>repo_metrics_daily</code>, <code>work_item_metrics_daily</code>, <code>deploy_metrics_daily</code>, <code>incident_metrics_daily</code>)
+- Work graph edges with <code>provenance</code> and <code>confidence</code>
+- Deployment linkage via <code>pull_request_number</code> and merge/deploy timestamps
+- Ingest API pattern for batched async stream-backed payloads</p>
+<h2 id="proposed-canonical-entities">Proposed Canonical Entities<a class="headerlink" href="#proposed-canonical-entities" title="Permanent link">&para;</a></h2>
+<h3 id="new-event-entities">New event entities<a class="headerlink" href="#new-event-entities" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>feature_flag</code> (raw dimension — provider-synced flag registry)</li>
+<li>
+<p><code>org_id</code>, <code>provider</code>, <code>flag_key</code>, <code>project_key</code>, <code>repo_id</code>, <code>environment</code>, <code>flag_type</code>, <code>created_at</code>, <code>archived_at</code>, <code>last_synced</code></p>
+</li>
+<li>
+<p><code>feature_flag_event</code> (raw event — flag lifecycle changes)</p>
+</li>
+<li>
+<p><code>org_id</code>, <code>event_type</code>, <code>flag_key</code>, <code>environment</code>, <code>repo_id</code>, <code>actor_type</code>, <code>prev_state</code>, <code>next_state</code>, <code>event_ts</code>, <code>ingested_at</code>, <code>source_event_id</code>, <code>dedupe_key</code></p>
+</li>
+<li>
+<p><code>feature_flag_link</code> (raw linkage — flag-to-entity relationships)</p>
+</li>
+<li>
+<p><code>org_id</code>, <code>flag_key</code>, <code>target_type</code> (<code>issue</code>/<code>pr</code>/<code>release</code>), <code>target_id</code>, <code>provider</code>, <code>link_source</code>, <code>link_type</code> (<code>code_reference</code>/<code>configuration</code>/<code>issue_tag</code>/<code>rollout_issue</code>), <code>evidence_type</code>, <code>confidence</code>, <code>valid_from</code>, <code>valid_to</code>, <code>last_synced</code></p>
+</li>
+<li>
+<p><code>telemetry_signal_bucket</code> (raw event — aggregated user impact counters)</p>
+</li>
+<li><code>org_id</code>, <code>signal_type</code>, <code>signal_count</code>, <code>session_count</code>, <code>unique_pseudonymous_count</code> (nullable, k-anonymity gated), <code>endpoint_group</code>, <code>environment</code>, <code>repo_id</code>, <code>release_ref</code>, <code>bucket_start</code>, <code>bucket_end</code>, <code>ingested_at</code>, <code>is_sampled</code>, <code>schema_version</code>, <code>dedupe_key</code></li>
+</ul>
+<h3 id="new-derived-entity">New derived entity<a class="headerlink" href="#new-derived-entity" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>release_impact_daily</code> (derived metric — computed from raw events)</li>
+<li><code>org_id</code>, <code>release_ref</code>, <code>environment</code>, <code>repo_id</code>, release and flag impact rollups with confidence, coverage, <code>data_completeness</code>, and <code>concurrent_deploy_count</code> (append-only with <code>computed_at</code>)</li>
+</ul>
+<h3 id="storage-contracts">Storage contracts<a class="headerlink" href="#storage-contracts" title="Permanent link">&para;</a></h3>
+<p>All tables use ClickHouse as the analytics backend. <code>org_id</code> is the <strong>first</strong> element in every <code>ORDER BY</code> clause per migration 027.</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Classification</th>
+<th>Engine</th>
+<th>PARTITION BY</th>
+<th>ORDER BY</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_flag</code></td>
+<td>Raw dimension</td>
+<td><code>ReplacingMergeTree(last_synced)</code></td>
+<td>—</td>
+<td><code>(org_id, provider, flag_key)</code></td>
+</tr>
+<tr>
+<td><code>feature_flag_event</code></td>
+<td>Raw event</td>
+<td><code>MergeTree()</code></td>
+<td><code>toYYYYMM(event_ts)</code></td>
+<td><code>(org_id, flag_key, environment, event_ts)</code></td>
+</tr>
+<tr>
+<td><code>feature_flag_link</code></td>
+<td>Raw linkage</td>
+<td><code>ReplacingMergeTree(last_synced)</code></td>
+<td>—</td>
+<td><code>(org_id, flag_key, target_type, target_id)</code></td>
+</tr>
+<tr>
+<td><code>telemetry_signal_bucket</code></td>
+<td>Raw event</td>
+<td><code>MergeTree()</code></td>
+<td><code>toYYYYMM(bucket_start)</code></td>
+<td><code>(org_id, environment, repo_id, release_ref, bucket_start)</code></td>
+</tr>
+<tr>
+<td><code>release_impact_daily</code></td>
+<td>Derived metric</td>
+<td><code>MergeTree()</code></td>
+<td><code>toYYYYMM(day)</code></td>
+<td><code>(org_id, release_ref, environment, day)</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Deduplication strategy:</strong>
+- <code>ReplacingMergeTree</code> tables: last-write-wins via <code>last_synced</code> version column; <code>FINAL</code> or <code>argMax</code> at query time.
+- <code>MergeTree</code> event tables: dedup via <code>dedupe_key</code> at application level (insert-skip or idempotent upsert). For <code>release_impact_daily</code>, use <code>argMax(..., computed_at)</code> pattern for latest values.</p>
+<p><strong>Postgres semantic layer:</strong> Only <code>feature_flag</code> registry metadata (for UX navigation and access control) requires an Alembic migration in Postgres. All event streams and computed metrics are ClickHouse-only.</p>
+<p><strong>Migration approach:</strong> New tables use explicit DDL migrations in <code>migrations/clickhouse/</code>, consistent with existing patterns (e.g., <code>000_raw_tables.sql</code>, <code>014_work_graph.sql</code>). Not auto-created.</p>
+<h3 id="sink-interface-extensions-phase-0-deliverable">Sink interface extensions (Phase 0 deliverable)<a class="headerlink" href="#sink-interface-extensions-phase-0-deliverable" title="Permanent link">&para;</a></h3>
+<p>The following methods must be added to <code>BaseMetricsSink</code> and implemented in <code>ClickHouseMetricsSink</code>:</p>
+<ul>
+<li><code>write_feature_flags(records: list[FeatureFlagRecord])</code> — upsert flag registry</li>
+<li><code>write_feature_flag_events(records: list[FeatureFlagEventRecord])</code> — append flag lifecycle events</li>
+<li><code>write_feature_flag_links(records: list[FeatureFlagLinkRecord])</code> — upsert flag-entity links</li>
+<li><code>write_telemetry_signal_buckets(records: list[TelemetrySignalBucketRecord])</code> — append telemetry buckets</li>
+<li><code>write_release_impact_daily(records: list[ReleaseImpactDailyRecord])</code> — append derived impact rollups</li>
+</ul>
+<p>Corresponding record dataclasses must be added to <code>src/dev_health_ops/metrics/schemas.py</code>.</p>
+<h2 id="measurement-contract">Measurement Contract<a class="headerlink" href="#measurement-contract" title="Permanent link">&para;</a></h2>
+<h3 id="event-taxonomy-mvp">Event taxonomy (MVP)<a class="headerlink" href="#event-taxonomy-mvp" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>feature_flag.change</code> (management-plane: create/update/toggle/rule/rollout)</li>
+<li><code>feature_flag.exposure</code> (data-plane: bucketed exposure counts)</li>
+<li><code>telemetry.signal</code> (bucketed user-impact counters: friction/error/adoption)</li>
+<li><code>release.deployment</code> (deployment and release markers)</li>
+</ul>
+<h3 id="required-fields">Required fields<a class="headerlink" href="#required-fields" title="Permanent link">&para;</a></h3>
+<ul>
+<li>temporal: <code>event_ts</code> (UTC), <code>ingested_at</code>, <code>bucket_start</code>, <code>bucket_end</code></li>
+<li>join keys: <code>org_id</code>, <code>provider</code>, <code>environment</code>, <code>repo_id</code> or <code>work_scope_id</code>, <code>release_ref</code>, <code>flag_key</code></li>
+<li>quality: <code>source_event_id</code>, <code>schema_version</code>, <code>dedupe_key</code>, <code>is_sampled</code></li>
+</ul>
+<h3 id="identity-and-privacy-strategy">Identity and privacy strategy<a class="headerlink" href="#identity-and-privacy-strategy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>keep developer identities and end-user telemetry identities disjoint</li>
+<li>telemetry dimensions default to aggregate-only keys; no raw personal identifiers in analytics tables</li>
+<li>if deduplication requires identity, use irreversible pseudonymous IDs only</li>
+<li>k-anonymity threshold: default <code>k=5</code>, enforced at query layer before any segmentable view is returned; configurable per org</li>
+</ul>
+<h3 id="missingness-and-instrumentation-drift">Missingness and instrumentation drift<a class="headerlink" href="#missingness-and-instrumentation-drift" title="Permanent link">&para;</a></h3>
+<ul>
+<li>store <code>coverage_ratio</code> and <code>missing_required_fields_count</code> per computed output</li>
+<li>include <code>instrumentation_change_flag</code> when schema version/volume shifts exceed threshold</li>
+<li>suppress derived metrics when required fields drop below threshold</li>
+</ul>
+<h3 id="release-ref-canonical-format">Release ref canonical format<a class="headerlink" href="#release-ref-canonical-format" title="Permanent link">&para;</a></h3>
+<p><code>release_ref</code> is the canonical release identifier used to join deployments to telemetry. Format varies by provider:</p>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th><code>release_ref</code> format</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GitHub</td>
+<td>Git tag (e.g., <code>v1.2.3</code>) or <code>deployment_id</code> fallback</td>
+<td>Releases API / Deployments API</td>
+</tr>
+<tr>
+<td>GitLab</td>
+<td>Git tag or environment-scoped <code>deployment_iid</code></td>
+<td>Releases API / Deployments API</td>
+</tr>
+<tr>
+<td>Generic</td>
+<td><code>deployment_id</code> (opaque string)</td>
+<td>Ingest API payload</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Enrichment strategy:</strong> A new processor step maps <code>deployment_id</code> + provider metadata to <code>release_ref</code> during ingestion. When no tag/version is available, <code>deployment_id</code> is used as fallback with confidence downgrade (heuristic provenance, confidence 0.3).</p>
+<p><strong>When <code>release_ref</code> is unavailable:</strong> Impact metrics are suppressed for that deployment (coverage ratio reflects the gap). The deployment still appears in work graph edges but with no telemetry linkage.</p>
+<h3 id="late-data-and-recomputation-contract">Late data and recomputation contract<a class="headerlink" href="#late-data-and-recomputation-contract" title="Permanent link">&para;</a></h3>
+<p>Telemetry and flag events may arrive late (mobile clients, batch exports, retries).</p>
+<ul>
+<li><strong>Recomputation window:</strong> <code>release_impact_daily</code> is recomputed for the last 7 days on every metrics run. Older rows are considered stable unless an explicit backfill is triggered.</li>
+<li><strong>Stability SLA:</strong> Data older than 14 days is treated as stable for dashboard display. A <code>data_completeness</code> field (0.0–1.0) is stored per day/release to indicate ingestion completeness.</li>
+<li><strong>Dual timestamps:</strong> All raw events store both <code>event_ts</code> (when it happened) and <code>ingested_at</code> (when we received it). Metric queries use <code>event_ts</code> for windowing; <code>ingested_at</code> is used to detect late arrivals.</li>
+<li><strong>UI contract:</strong> When <code>data_completeness &lt; 0.80</code> for a displayed period, UI must show a "data still arriving" indicator.</li>
+</ul>
+<h2 id="proposed-work-graph-extensions">Proposed Work Graph Extensions<a class="headerlink" href="#proposed-work-graph-extensions" title="Permanent link">&para;</a></h2>
+<h3 id="node-types-proposed">Node types (proposed)<a class="headerlink" href="#node-types-proposed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>release</code></li>
+<li><code>feature_flag</code></li>
+</ul>
+<h3 id="edge-types-proposed">Edge types (proposed)<a class="headerlink" href="#edge-types-proposed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>introduced_by</code> (release &lt;- PR): evidence = provider release/deployment API linking PR to release</li>
+<li><code>config_changed_by</code> (feature_flag &lt;- flag_event): evidence = provider audit log event ID; only created when explicit provider evidence links a flag change to a release or PR (e.g., GitLab <code>introduced_by_url</code>). <strong>Not created from time-window heuristics alone.</strong></li>
+<li><code>guards</code> (feature_flag -&gt; issue/epic/scope): evidence = provider <code>rollout_issue_url</code> or explicit tag/label</li>
+<li><code>impacts</code> (release/feature_flag -&gt; telemetry_signal_bucket): evidence = <code>release_ref</code> + environment match; note: <code>telemetry_signal_bucket</code> is joined at query-time, not stored as a first-class work graph node</li>
+</ul>
+<blockquote>
+<p><strong>Design decision:</strong> The originally proposed <code>rolls_out</code> edge (release -&gt; feature_flag) is removed. Flag rollouts are config changes that happen independently of code releases. The <code>config_changed_by</code> edge captures the narrower, evidence-backed relationship. Reuse existing <code>REFERENCES</code> edge type for "PR/commit mentions flag key" relationships detected via code search.</p>
+</blockquote>
+<h3 id="provenance-and-confidence-model">Provenance and confidence model<a class="headerlink" href="#provenance-and-confidence-model" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Keep current provenance model (<code>native</code>, <code>explicit_text</code>, <code>heuristic</code>)</li>
+<li>Extend evidence to include provider event IDs and normalized source references; evidence remains a JSON-encoded string within the existing <code>WorkGraphEdge.evidence: str</code> field (no schema change)</li>
+<li>Confidence scoring bands:</li>
+<li><code>1.0</code>: direct ID/key linkage from provider-native payload</li>
+<li><code>0.8-0.9</code>: deterministic text/key mapping (documented pattern)</li>
+<li><code>0.3</code>: time-window heuristic only (aligned with existing platform heuristic confidence)</li>
+<li>Store <code>coverage_ratio</code> for each derived metric (matched_events / eligible_events)</li>
+</ul>
+<h3 id="builder-and-api-extensions-phase-2-deliverable">Builder and API extensions (Phase 2 deliverable)<a class="headerlink" href="#builder-and-api-extensions-phase-2-deliverable" title="Permanent link">&para;</a></h3>
+<p>The following changes are required to support new graph nodes/edges:</p>
+<p><strong><code>src/dev_health_ops/work_graph/models.py</code>:</strong>
+- Add <code>RELEASE</code>, <code>FEATURE_FLAG</code> to <code>NodeType</code> enum
+- Add <code>INTRODUCED_BY</code>, <code>CONFIG_CHANGED_BY</code>, <code>GUARDS</code>, <code>IMPACTS</code> to <code>EdgeType</code> enum</p>
+<p><strong><code>src/dev_health_ops/work_graph/ids.py</code>:</strong>
+- Add <code>generate_release_id(org_id, provider, release_ref)</code> function
+- Add <code>generate_feature_flag_id(org_id, provider, flag_key)</code> function</p>
+<p><strong><code>src/dev_health_ops/work_graph/builder.py</code>:</strong>
+- Add <code>_build_release_edges()</code> method (source: deployment/release data)
+- Add <code>_build_feature_flag_edges()</code> method (source: flag events + links)
+- Update <code>build()</code> orchestrator to include new discovery steps</p>
+<p><strong><code>src/dev_health_ops/api/graphql/models/inputs.py</code> and <code>outputs.py</code>:</strong>
+- Add new values to <code>WorkGraphNodeTypeInput</code>, <code>WorkGraphEdgeTypeInput</code>, <code>WorkGraphNodeType</code>, <code>WorkGraphEdgeType</code> strawberry enums</p>
+<h2 id="join-strategy-canonical">Join Strategy (Canonical)<a class="headerlink" href="#join-strategy-canonical" title="Permanent link">&para;</a></h2>
+<p>Primary spine:
+1. Issue -&gt; PR via work graph issue/PR links
+2. PR -&gt; Deployment via <code>pull_request_number</code>
+3. Deployment -&gt; Release ref via provider-specific mapping (see "Release ref canonical format" above)
+4. Release/Flag -&gt; telemetry signal buckets via <code>release_ref</code> + <code>environment</code> + time window</p>
+<p>Secondary joins (lower confidence):
+- Time-window-only attribution when explicit linkage is missing (confidence = 0.3)
+- Branch/tag fallback mapping where release ID absent</p>
+<p><strong>Coverage metrics (shipped alongside impact):</strong>
+- <code>%PRs linked to deployments</code> — join completeness step 1→2
+- <code>%deployments with release_ref</code> — join completeness step 2→3
+- <code>%releases with telemetry coverage</code> — join completeness step 3→4</p>
+<h2 id="metric-catalog-candidate">Metric Catalog (Candidate)<a class="headerlink" href="#metric-catalog-candidate" title="Permanent link">&para;</a></h2>
+<p>All metrics are team/repo/release scoped unless explicitly stated.</p>
+<h3 id="release-impact-metrics">Release impact metrics<a class="headerlink" href="#release-impact-metrics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric Key</th>
+<th>Unit</th>
+<th>Formula</th>
+<th>Window</th>
+<th>Min Sample</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>release_user_friction_delta</code></td>
+<td>ratio</td>
+<td><code>(mean(friction_signals / session_count, post_window) - mean(friction_signals / session_count, baseline_window)) / mean(friction_signals / session_count, baseline_window)</code></td>
+<td>baseline: 7d pre-deploy; post: 24-72h post-deploy</td>
+<td>300 sessions in both windows</td>
+<td>Numerator: <code>signal_type IN ('friction.*')</code>. Denominator: <code>session_count</code>. Environment-filtered. Do not label causal. Companion absolute: <code>release_post_friction_rate</code>.</td>
+</tr>
+<tr>
+<td><code>release_error_rate_delta</code></td>
+<td>ratio</td>
+<td><code>(mean(error_signals / session_count, post_window) - mean(error_signals / session_count, baseline_window)) / mean(error_signals / session_count, baseline_window)</code></td>
+<td>baseline: 7d pre-deploy; post: 24-72h post-deploy</td>
+<td>1000 events across both windows</td>
+<td>Numerator: <code>signal_type IN ('error.*')</code>. Denominator: <code>session_count</code>. Environment-segmented. Companion absolute: <code>release_post_error_rate</code>.</td>
+</tr>
+<tr>
+<td><code>time_to_first_user_issue_after_release</code></td>
+<td>hours</td>
+<td><code>min(issue.created_at) - deployment.completed_at</code> where issue is linked via work graph to same release</td>
+<td>post: 72h</td>
+<td>1 linked issue</td>
+<td>P50/P90 at repo aggregate. "User issue" = work item with <code>signal_type = 'user_reported'</code> tag or label-based heuristic.</td>
+</tr>
+<tr>
+<td><code>release_impact_confidence_score</code></td>
+<td>0..1</td>
+<td><code>w1 * linkage_quality + w2 * coverage_ratio + w3 * sample_sufficiency</code> (weights TBD in Phase 2)</td>
+<td>per release</td>
+<td>n/a</td>
+<td>Not a business KPI. Weights calibrated during prototype.</td>
+</tr>
+<tr>
+<td><code>release_impact_coverage_ratio</code></td>
+<td>0..1</td>
+<td><code>count(telemetry_buckets matched to release) / count(telemetry_buckets in environment window)</code></td>
+<td>per release</td>
+<td>n/a</td>
+<td>Display with every impact metric.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="flag-metrics">Flag metrics<a class="headerlink" href="#flag-metrics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric Key</th>
+<th>Unit</th>
+<th>Formula</th>
+<th>Window</th>
+<th>Min Sample</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>flag_exposure_rate</code></td>
+<td>ratio</td>
+<td><code>exposed_sessions / eligible_sessions</code></td>
+<td>session window to 24h</td>
+<td>200 eligible sessions</td>
+<td>MVP uses session-based denominator (not users). <code>eligible_sessions</code> = sessions in environment where flag is evaluated. If <code>unique_pseudonymous_count</code> is available and meets k&gt;=5, user-based variant can be computed as Phase 2+ metric.</td>
+</tr>
+<tr>
+<td><code>flag_activation_rate</code></td>
+<td>ratio</td>
+<td><code>activated_sessions / exposed_sessions</code></td>
+<td>session window to 24h</td>
+<td>100 exposed sessions</td>
+<td>"Activated" = session with at least one defined success action after flag exposure. Action contract defined per flag in <code>feature_flag_link</code> config. MVP uses session-based denominator.</td>
+</tr>
+<tr>
+<td><code>flag_reliability_guardrail</code></td>
+<td>ratio</td>
+<td><code>error_free_sessions / total_sessions</code> for exposed cohort proxy</td>
+<td>session to 24h</td>
+<td>300 sessions</td>
+<td>Guardrail metric, not success KPI. Numerator: sessions with zero <code>signal_type IN ('error.*', 'crash.*')</code>.</td>
+</tr>
+<tr>
+<td><code>flag_friction_delta</code></td>
+<td>ratio</td>
+<td>Same formula as <code>release_user_friction_delta</code> but scoped to flag exposure window</td>
+<td>baseline: 7d pre first rollout event; post: 24-72h</td>
+<td>200 sessions</td>
+<td>Requires session-level flag evaluation signal. Exclude contaminated sessions (multiple concurrent flags).</td>
+</tr>
+<tr>
+<td><code>flag_rollout_half_life</code></td>
+<td>hours</td>
+<td><code>event_ts(50% exposure marker) - event_ts(first rollout event)</code></td>
+<td>rollout period</td>
+<td>2 rollout events</td>
+<td>Provider-specific: LaunchDarkly percentage rollout events; GitLab incremental strategy steps.</td>
+</tr>
+<tr>
+<td><code>flag_churn_rate</code></td>
+<td>count/week</td>
+<td><code>count(flag_events WHERE event_type IN ('toggle', 'rule_change')) / weeks_in_window</code></td>
+<td>rolling 28d</td>
+<td>n/a</td>
+<td>Operational volatility indicator.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="data-quality-linkage-metrics">Data quality / linkage metrics<a class="headerlink" href="#data-quality-linkage-metrics" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Metric Key</th>
+<th>Unit</th>
+<th>Formula</th>
+<th>Window</th>
+<th>Min Sample</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>issue_to_release_impact_link_rate</code></td>
+<td>0..1</td>
+<td><code>count(completed_work_items with release_impact_coverage &gt;= 0.5) / count(completed_work_items)</code></td>
+<td>rolling 30d</td>
+<td>50 work items</td>
+<td>"Completed" per existing work-item completion semantics (<code>completed_at IS NOT NULL</code>). Data quality signal.</td>
+</tr>
+<tr>
+<td><code>rollback_or_disable_after_impact_spike</code></td>
+<td>count</td>
+<td><code>count(flag_events WHERE event_type IN ('toggle_off', 'rollback', 'disable') AND event_ts BETWEEN release_deploy_ts AND release_deploy_ts + 72h)</code></td>
+<td>post 72h from deploy</td>
+<td>n/a</td>
+<td>Stability response marker. No dependency on undefined alert mechanism.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="prototype-metrics-use-cases">Prototype Metrics Use-Cases<a class="headerlink" href="#prototype-metrics-use-cases" title="Permanent link">&para;</a></h2>
+<h3 id="use-case-a-release-regression-detector">Use-case A: Release regression detector<a class="headerlink" href="#use-case-a-release-regression-detector" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Input: deployment events + telemetry friction/error buckets</li>
+<li>Output: ranked release windows by normalized impact delta and confidence</li>
+<li>Success: high-confidence windows align with known incidents/issue spikes in retrospective review</li>
+</ul>
+<h3 id="use-case-b-flag-rollout-safety-monitor">Use-case B: Flag rollout safety monitor<a class="headerlink" href="#use-case-b-flag-rollout-safety-monitor" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Input: flag events + rollout progression + telemetry buckets</li>
+<li>Output: rollout stages with friction deltas, disable/rollback correlation</li>
+<li>Success: can distinguish stable rollout from rollback-prone rollout with low false alarms</li>
+</ul>
+<h3 id="use-case-c-work-to-user-impact-traceability">Use-case C: Work-to-user impact traceability<a class="headerlink" href="#use-case-c-work-to-user-impact-traceability" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Input: issue-&gt;PR-&gt;deployment edges + release impact rollups</li>
+<li>Output: % of completed work with measurable post-release signal signature</li>
+<li>Success: usable coverage without introducing person-level attribution</li>
+</ul>
+<h2 id="signal-to-noise-validation-plan">Signal-to-Noise Validation Plan<a class="headerlink" href="#signal-to-noise-validation-plan" title="Permanent link">&para;</a></h2>
+<h3 id="hypotheses">Hypotheses<a class="headerlink" href="#hypotheses" title="Permanent link">&para;</a></h3>
+<ul>
+<li>H1: high-confidence release mappings produce materially lower false-positive impact alerts than heuristic-only mappings.</li>
+<li>H2: adding flag events improves explanatory power for post-release anomalies.</li>
+<li>H3: coverage and confidence thresholds reduce over-interpretation risk.</li>
+</ul>
+<h3 id="validation-dataset-and-windows">Validation dataset and windows<a class="headerlink" href="#validation-dataset-and-windows" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Backfill 90 days for 3-5 active repos/environments</li>
+<li>Compare baseline windows (7d pre) against post windows (24h, 48h, 72h)</li>
+<li>Include incident and issue timelines as retrospective labels</li>
+</ul>
+<h3 id="prototype-evaluation-metrics">Prototype evaluation metrics<a class="headerlink" href="#prototype-evaluation-metrics" title="Permanent link">&para;</a></h3>
+<ul>
+<li>precision/recall of impact alerts against incident windows</li>
+<li>false-positive rate by confidence band</li>
+<li>lift in explanatory coverage when flag events are included</li>
+<li>percentage of releases meeting minimum sample thresholds</li>
+</ul>
+<h3 id="acceptance-thresholds-prototype-gate">Acceptance thresholds (prototype gate)<a class="headerlink" href="#acceptance-thresholds-prototype-gate" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<blockquote>
+<p>= 0.65 precision for high-confidence alerts on retrospective incident windows</p>
+</blockquote>
+</li>
+<li>&lt;= 0.20 false-positive rate in high-confidence band</li>
+<li>
+<blockquote>
+<p>= 0.60 release coverage for target repos</p>
+</blockquote>
+</li>
+<li>No violations of privacy guardrails in sampled payload audits</li>
+</ul>
+<h2 id="confidence-and-coverage-gates">Confidence and Coverage Gates<a class="headerlink" href="#confidence-and-coverage-gates" title="Permanent link">&para;</a></h2>
+<h3 id="showwarnsuppress-rules">Show/warn/suppress rules<a class="headerlink" href="#showwarnsuppress-rules" title="Permanent link">&para;</a></h3>
+<ul>
+<li>show: coverage &gt;= 0.70 and minimum sample threshold met</li>
+<li>warn: coverage 0.50-0.69 or instrumentation drift flag present</li>
+<li>suppress: coverage &lt; 0.50 or denominator below minimum sample</li>
+</ul>
+<h3 id="overlap-and-contamination-rules">Overlap and contamination rules<a class="headerlink" href="#overlap-and-contamination-rules" title="Permanent link">&para;</a></h3>
+<ul>
+<li>when users/sessions can belong to multiple concurrent rollouts, mark contaminated cohorts</li>
+<li>exclude contaminated cohorts from MVP impact deltas unless explicit precedence rule is configured</li>
+<li>always publish contaminated-cohort percentage with impact outputs</li>
+</ul>
+<h2 id="confounders-and-bias-controls">Confounders and Bias Controls<a class="headerlink" href="#confounders-and-bias-controls" title="Permanent link">&para;</a></h2>
+<ul>
+<li>concurrent releases in same environment</li>
+<li>seasonality/day-of-week traffic changes</li>
+<li>incident remediation activity independent of release</li>
+<li>telemetry collector outages and sampling changes</li>
+<li>survivorship bias: only instrumented surfaces generate telemetry; publish observability scope fields and missingness by scope</li>
+</ul>
+<p>Mitigations:
+- store concurrent-deploy count and confounder flags with each impact result
+- require minimum denominator/sample thresholds before metric publication
+- expose confidence and coverage alongside all deltas
+- default UI language to "appears/suggests" and ban deterministic causal wording
+- compute per-segment first, then aggregate with explicit weights (avoid Simpson's paradox in rollups); require stratified outputs by repo and environment for any headline metric</p>
+<h2 id="interpretation-and-claims-policy">Interpretation and Claims Policy<a class="headerlink" href="#interpretation-and-claims-policy" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Allowed language: "appears", "suggests", "leans", "is consistent with"</li>
+<li>Forbidden language (MVP): "caused", "proved", "determined"</li>
+<li>All release/flag impact views must display: attribution window, confidence, coverage, and confounder context</li>
+<li>No metric may be presented as an individual accountability signal</li>
+<li>Frame all impact as observational and conditioned on coverage; require "unattributed due to missing linkage" bucket when join chain is incomplete (distinct from "unknown" categorization, which remains forbidden)</li>
+</ul>
+<h2 id="data-privacy-and-security">Data Privacy and Security<a class="headerlink" href="#data-privacy-and-security" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Aggregated telemetry by default, no raw session payload persistence in analytics tables</li>
+<li>Pseudonymous identifiers only if needed for deduplication</li>
+<li>allowlist-only telemetry fields; drop free-form text by default</li>
+<li>k-anonymity threshold: default <code>k=5</code>, enforced at query layer; configurable per org with minimum floor of <code>k=3</code></li>
+<li>retention policy: raw ingest buffers 30 days, derived aggregates 365 days (configurable per org)</li>
+</ul>
+<h2 id="operational-constraints">Operational Constraints<a class="headerlink" href="#operational-constraints" title="Permanent link">&para;</a></h2>
+<h3 id="volume-estimates-per-repoenvironmentday">Volume estimates (per repo/environment/day)<a class="headerlink" href="#volume-estimates-per-repoenvironmentday" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Feature flag events: ~10-500 events (management-plane changes are infrequent)</li>
+<li>Telemetry signal buckets: ~100-10,000 buckets (depends on bucket granularity and endpoint count)</li>
+<li>Release impact daily: ~1-50 rows (one per release per environment per day)</li>
+</ul>
+<h3 id="default-bucket-granularity">Default bucket granularity<a class="headerlink" href="#default-bucket-granularity" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Telemetry buckets: 1-hour windows (configurable down to 15 minutes for high-traffic environments)</li>
+<li>Exposure buckets: 1-hour windows</li>
+</ul>
+<h3 id="sampling-policy">Sampling policy<a class="headerlink" href="#sampling-policy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>When <code>is_sampled = true</code>, store <code>sample_rate</code> field; all rate metrics must adjust by <code>1 / sample_rate</code></li>
+<li>Default: no sampling (ingest all). Sampling opt-in per org when volume exceeds threshold.</li>
+</ul>
+<h3 id="retention-ttl">Retention / TTL<a class="headerlink" href="#retention-ttl" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Raw event tables (<code>feature_flag_event</code>, <code>telemetry_signal_bucket</code>): 90 days default</li>
+<li>Dimension tables (<code>feature_flag</code>, <code>feature_flag_link</code>): no TTL (retain until archived)</li>
+<li>Derived tables (<code>release_impact_daily</code>): 365 days default</li>
+<li>All TTLs configurable per org via <code>org_settings</code></li>
+</ul>
+<h2 id="delivery-phases">Delivery Phases<a class="headerlink" href="#delivery-phases" title="Permanent link">&para;</a></h2>
+<h3 id="phase-0-schema-and-contract-design">Phase 0: Schema and contract design<a class="headerlink" href="#phase-0-schema-and-contract-design" title="Permanent link">&para;</a></h3>
+<ul>
+<li>finalize canonical entities, join keys, windows, confidence/coverage fields</li>
+<li>define ClickHouse migration DDL for all 5 tables (explicit migrations in <code>migrations/clickhouse/</code>)</li>
+<li>define Alembic migration for <code>feature_flag</code> registry in Postgres semantic layer</li>
+<li>implement sink interface extensions (5 new <code>write_*</code> methods in <code>BaseMetricsSink</code> + <code>ClickHouseMetricsSink</code>)</li>
+<li>add record dataclasses to <code>src/dev_health_ops/metrics/schemas.py</code></li>
+</ul>
+<h3 id="phase-1-ingestion-and-normalization-mvp">Phase 1: Ingestion and normalization MVP<a class="headerlink" href="#phase-1-ingestion-and-normalization-mvp" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>MVP providers:</strong> GitHub (releases/deployments — already integrated), LaunchDarkly (feature flags — richest audit log + data export API), generic ingest API (telemetry signals — provider-agnostic)</li>
+<li>add provider connectors/processors for flag events and telemetry buckets</li>
+<li>persist canonical events to ClickHouse through sinks</li>
+<li>implement <code>release_ref</code> enrichment processor (deployment → release ref mapping)</li>
+</ul>
+<h3 id="phase-2-derived-metrics-and-graph-edges">Phase 2: Derived metrics and graph edges<a class="headerlink" href="#phase-2-derived-metrics-and-graph-edges" title="Permanent link">&para;</a></h3>
+<ul>
+<li>compute <code>release_impact_daily</code> and related rollups with recomputation window</li>
+<li>add proposed graph nodes/edges with provenance/confidence</li>
+<li>implement builder extensions (<code>_build_release_edges</code>, <code>_build_feature_flag_edges</code>)</li>
+<li>update GraphQL enums and ID generation functions</li>
+<li>calibrate <code>release_impact_confidence_score</code> weights</li>
+</ul>
+<h3 id="phase-3-prototype-dashboards-and-interpretation-guidance">Phase 3: Prototype dashboards and interpretation guidance<a class="headerlink" href="#phase-3-prototype-dashboards-and-interpretation-guidance" title="Permanent link">&para;</a></h3>
+<ul>
+<li>add internal-only views for release/flag impact validation</li>
+<li>iterate thresholds and copy based on prototype results</li>
+</ul>
+<h3 id="phase-4-productization-decision">Phase 4: Productization decision<a class="headerlink" href="#phase-4-productization-decision" title="Permanent link">&para;</a></h3>
+<ul>
+<li>promote selected metrics to stable registry only if acceptance thresholds hold</li>
+<li>document rejected metrics and reasons (low signal/high misuse risk)</li>
+</ul>
+<h2 id="engineering-test-requirements">Engineering Test Requirements<a class="headerlink" href="#engineering-test-requirements" title="Permanent link">&para;</a></h2>
+<h3 id="unit-tests">Unit tests<a class="headerlink" href="#unit-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Join logic: Issue→PR→Deployment→Release ref mapping for each provider</li>
+<li>Dedup-key enforcement: verify <code>dedupe_key</code> prevents duplicate inserts for all raw event types</li>
+<li>Metric formulas: verify numerator/denominator computation for each candidate metric with known inputs</li>
+<li>Confidence scoring: verify band assignment for native, explicit_text, and heuristic provenance</li>
+</ul>
+<h3 id="integration-tests">Integration tests<a class="headerlink" href="#integration-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Drift gate behavior: verify <code>instrumentation_change_flag</code> triggers when schema version or volume shifts</li>
+<li>Coverage suppression: verify metrics are suppressed when coverage &lt; 0.50</li>
+<li>Late data: verify recomputation window correctly updates <code>release_impact_daily</code> for last 7 days</li>
+<li>Sink round-trip: write records via sink, read back via query, verify field integrity</li>
+</ul>
+<h3 id="smoke-tests">Smoke tests<a class="headerlink" href="#smoke-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Backfill job writes append-only with <code>computed_at</code> (no overwrites)</li>
+<li><code>org_id</code> isolation: verify cross-org queries return no results</li>
+<li>Environment normalization: verify environment strings match between deployments and telemetry</li>
+</ul>
+<h2 id="success-criteria">Success Criteria<a class="headerlink" href="#success-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>New release/flag impact metrics are inspectable and reproducible from persisted events</li>
+<li>Coverage and confidence are included for all impact outputs</li>
+<li>Prototype evaluation meets acceptance thresholds for signal quality</li>
+<li>No person-level ranking surfaces are created</li>
+<li>Work graph can trace issue -&gt; release/flag -&gt; user impact buckets for supported providers</li>
+<li>All 5 new tables have explicit ClickHouse migrations with <code>org_id</code> first in ORDER BY</li>
+</ul>
+<h2 id="risks-and-mitigations">Risks and Mitigations<a class="headerlink" href="#risks-and-mitigations" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Impact</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Identity conflation (developer vs end-user)</td>
+<td>High</td>
+<td>hard schema separation; no developer dimension in telemetry impact tables</td>
+</tr>
+<tr>
+<td>Causal over-claim in UI</td>
+<td>High</td>
+<td>enforced wording guidelines; confidence + confounder display</td>
+</tr>
+<tr>
+<td>Low coverage from missing release refs</td>
+<td>Medium</td>
+<td>dual linkage methods; explicit coverage metric; confidence downgrade for fallback</td>
+</tr>
+<tr>
+<td>Telemetry volume/cost explosion</td>
+<td>Medium</td>
+<td>bucketed ingestion (1h default), sampling opt-in, retention TTLs (90d raw / 365d derived)</td>
+</tr>
+<tr>
+<td>Provider API variability</td>
+<td>Medium</td>
+<td>provider-specific mappers behind canonical event contract</td>
+</tr>
+<tr>
+<td>Out-of-order / late telemetry</td>
+<td>Medium</td>
+<td>7-day recomputation window; dual timestamps; <code>data_completeness</code> field in UI</td>
+</tr>
+<tr>
+<td>Survivorship bias (instrumented surfaces only)</td>
+<td>Medium</td>
+<td>observability scope fields; missingness/coverage published per scope</td>
+</tr>
+</tbody>
+</table>
+<h2 id="decision-gates">Decision Gates<a class="headerlink" href="#decision-gates" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Gate A (end Phase 0): approve schema, storage contracts, sink interfaces, and privacy contract</li>
+<li>Gate B (end Phase 2): approve prototype metric set for internal validation; confirm builder/API extensions</li>
+<li>Gate C (end Phase 4): promote only metrics that pass signal thresholds</li>
+</ul>
+<h2 id="open-questions-for-iteration">Open Questions for Iteration<a class="headerlink" href="#open-questions-for-iteration" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Which telemetry signal families are required for MVP: friction, error, adoption, or all three?</li>
+<li>What should be the default post-release attribution window by environment type?</li>
+<li>Should rollout half-life rely on provider exposure events or a deterministic proxy?</li>
+<li>Which teams/repos are best pilot candidates for representative signal validation?</li>
+<li>What is the right <code>release_impact_confidence_score</code> weight distribution (w1/w2/w3)?</li>
+</ul>
+<h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>docs/product/prd.md</code></li>
+<li><code>docs/product/concepts.md</code></li>
+<li><code>docs/product/feature-flag-prd-review.md</code> (gap analysis)</li>
+<li><code>docs/metrics.md</code></li>
+<li><code>docs/user-guide/work-graph.md</code></li>
+<li><code>src/dev_health_ops/work_graph/models.py</code></li>
+<li><code>src/dev_health_ops/metrics/schemas.py</code></li>
+<li><code>src/dev_health_ops/metrics/sinks/base.py</code></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

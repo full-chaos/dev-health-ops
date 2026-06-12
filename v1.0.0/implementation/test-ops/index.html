@@ -1,0 +1,3272 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Developer health and operations analytics platform">
+      
+      
+      
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.39">
+    
+    
+      
+        <title>Milestone: TestOps + AI Generative Reports - dev-health-ops</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.8c3ca2c6.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#milestone-testops-ai-generative-reports" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="dev-health-ops" class="md-header__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dev-health-ops
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Milestone: TestOps + AI Generative Reports
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="dev-health-ops" class="md-nav__button md-logo" aria-label="dev-health-ops" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dev-health-ops
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/chrisgeo/dev-health-ops" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    dev-health-ops
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Product
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Product
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flag-user-impact-prd.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag and User Impact PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/feature-flag-prd-review.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Feature Flag PRD Review
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-brief/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Brief
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/concepts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/investment-taxonomy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Taxonomy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/monetization-strategy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Monetization Strategy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/test-ops-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TestOps PRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../self-hosted-quickstart/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Self-Hosted Quickstart
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team-configuration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Configuration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../email-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Email Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sso-setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SSO Setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../webhooks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Webhooks
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../alerting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Alerting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/data-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-categorization-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Categorization Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/investment-data-model/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Data Model
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/repo-layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Repo Layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/frontend-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Frontend Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/middleware-impersonation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Middleware Impersonation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/auth-journey/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Auth User Journeys
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/database-architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Database Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/normalization-helpers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Normalization Helpers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/enterprise-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/licensing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Licensing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/adr/001-enterprise-edition/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ADR-001 Enterprise Edition
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/observability-tooling/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Observability Tooling
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/deployment-guide/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment Guide
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/connector-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Connector Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/stripe-billing-runbook/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Stripe Billing Runbook
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/testing-governance/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Testing Governance
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/enterprise-test-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Enterprise Test Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/workers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../slos/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SLOs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/customer-offboarding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Customer Offboarding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/investment-materialization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Materialization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            CLI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ops/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Connectors
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Connectors
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/usage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Usage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../connectors/private-repo-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Private Repos
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/github-app-auth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Auth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            Metrics
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics-inventory/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inventory
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../canonical-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (API Mapping)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/canonical-metrics-prd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Canonical Metrics (PRD)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/ai-opportunity-detector/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Opportunity Detector
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/metric-calculations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metric Calculations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../computations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Computations Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Views Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_15_9" id="__nav_15_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Views
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_15_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15_9">
+            <span class="md-nav__icon md-icon"></span>
+            Views
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/investment-view/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-mix/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Mix
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-flows/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Flows
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/investment-expense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment Expense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/code-hotspots/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Hotspots
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/pr-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PR Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/quadrants/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quadrants
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/flame-diagrams/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Flame Diagrams
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/capacity-planning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Capacity Planning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph View
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-impact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Impact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-review-load/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Review Load
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-risk/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Risk
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/views/ai-attribution/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Attribution
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/work-graph/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Work Graph
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/reports/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Reports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/product-telemetry/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../product/product-telemetry-dashboard-assessment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Product Telemetry Dashboard Assessment
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/investment-api/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Investment API
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-ai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    AI Workflow Analytics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/graphql-security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GraphQL Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/persisted-queries/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Persisted Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/view-mapping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    View Mapping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-client/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web GraphQL Client
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/web-graphql-investment/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Web Investment Queries
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/team-catalog-source-of-truth/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Team Catalog Source of Truth
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/operating-review/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Operating Review Aggregation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../visualizations/patterns/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Visualizations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../llm/categorization-contract/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    LLM
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../task_trackers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Task Trackers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Roadmap
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Project Plan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_22" >
+        
+          
+          <label class="md-nav__link" for="__nav_22" id="__nav_22_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Plans
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_22_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_22">
+            <span class="md-nav__icon md-icon"></span>
+            Plans
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/dead-code-cleanup-plan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dead Code Cleanup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/atlassian-client-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Atlassian Client Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plans/github-app-marketplace/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GitHub App Marketplace + Install
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_23" >
+        
+          
+          <label class="md-nav__link" for="__nav_23" id="__nav_23_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Appendix
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_23_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_23">
+            <span class="md-nav__icon md-icon"></span>
+            Appendix
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Legacy
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../appendix/legacy/export-schema-usage-audit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Export Schema Usage Audit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#milestone-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Milestone Goal
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#milestone-success-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Milestone Success Criteria
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Execution Strategy
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dependency Model
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Dependency Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#must-happen-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      Must happen first
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#can-run-in-parallel-after-foundations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Can run in parallel after foundations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#depends-on-ingestion-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Depends on ingestion + metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#depends-on-planner-persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Depends on planner + persistence
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+<h1 id="milestone-testops-ai-generative-reports">Milestone: TestOps + AI Generative Reports<a class="headerlink" href="#milestone-testops-ai-generative-reports" title="Permanent link">&para;</a></h1>
+<h2 id="milestone-goal">Milestone Goal<a class="headerlink" href="#milestone-goal" title="Permanent link">&para;</a></h2>
+<p>Extend Dev Health Metrics with:
+1. <strong>TestOps</strong> for CI/CD, test execution, coverage, release confidence, and quality drag
+2. <strong>AI Generative Reports</strong> for natural-language report generation, live charts, saved templates, and scheduled delivery</p>
+<h2 id="milestone-success-criteria">Milestone Success Criteria<a class="headerlink" href="#milestone-success-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>CI/CD pipelines, test results, and coverage are ingested and normalized</li>
+<li>Core TestOps metrics are queryable by team, repo, service, PR, and time range</li>
+<li>Release confidence and quality-drag signals are computed and exposed</li>
+<li>Natural-language prompts can compile into grounded report plans</li>
+<li>Generated reports can render markdown + live charts from validated metrics</li>
+<li>Saved templates and scheduled reports work for supported report types</li>
+<li>All narrative output is provenance-backed and scope-bound</li>
+</ul>
+<h2 id="execution-strategy">Execution Strategy<a class="headerlink" href="#execution-strategy" title="Permanent link">&para;</a></h2>
+<p>Split work into parallel streams with narrow interfaces so agent teams can work asynchronously:</p>
+<ul>
+<li><strong>Track A: Data Contracts and Platform Foundations</strong></li>
+<li><strong>Track B: TestOps Ingestion</strong></li>
+<li><strong>Track C: TestOps Metrics and Risk Models</strong></li>
+<li><strong>Track D: TestOps UX and Reporting Surfaces</strong></li>
+<li><strong>Track E: AI Report Planning and Grounded Generation</strong></li>
+<li><strong>Track F: Saved Reports, Scheduling, and Delivery</strong></li>
+<li><strong>Track G: Guardrails, Provenance, and Evaluation</strong></li>
+</ul>
+<h2 id="dependency-model">Dependency Model<a class="headerlink" href="#dependency-model" title="Permanent link">&para;</a></h2>
+<h3 id="must-happen-first">Must happen first<a class="headerlink" href="#must-happen-first" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Canonical event/data contracts</li>
+<li>Metric registry additions</li>
+<li>Entity mapping for repo/service/team/PR linkage</li>
+</ul>
+<h3 id="can-run-in-parallel-after-foundations">Can run in parallel after foundations<a class="headerlink" href="#can-run-in-parallel-after-foundations" title="Permanent link">&para;</a></h3>
+<ul>
+<li>CI ingestion</li>
+<li>Test result ingestion</li>
+<li>Coverage ingestion</li>
+<li>Report planner</li>
+<li>Chart rendering primitives</li>
+<li>Provenance model</li>
+</ul>
+<h3 id="depends-on-ingestion-metrics">Depends on ingestion + metrics<a class="headerlink" href="#depends-on-ingestion-metrics" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Release confidence</li>
+<li>Quality drag</li>
+<li>TestOps dashboards</li>
+<li>AI narrative grounded on metric payloads</li>
+</ul>
+<h3 id="depends-on-planner-persistence">Depends on planner + persistence<a class="headerlink" href="#depends-on-planner-persistence" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Saved reports</li>
+<li>Scheduled reports</li>
+<li>Report delivery channels</li>
+</ul>
+<hr />
+<h1 id="linear-structure">Linear Structure<a class="headerlink" href="#linear-structure" title="Permanent link">&para;</a></h1>
+<h2 id="parent-milestone-container-issue">Parent Milestone / Container Issue<a class="headerlink" href="#parent-milestone-container-issue" title="Permanent link">&para;</a></h2>
+<h3 id="title">Title<a class="headerlink" href="#title" title="Permanent link">&para;</a></h3>
+<p><strong>Milestone: TestOps + AI Generative Reports</strong></p>
+<h3 id="description">Description<a class="headerlink" href="#description" title="Permanent link">&para;</a></h3>
+<p>Deliver the next major product milestone for Dev Health Metrics:
+- TestOps ingestion and analytics
+- AI-generated, grounded reports with live charts
+- Saved and scheduled reporting workflows</p>
+<p>This milestone is explicitly structured for asynchronous implementation by multiple agent teams. Child issues are intentionally split by contracts, ingestion, metrics, UX, report planning, scheduling, and trust/guardrails.</p>
+<h3 id="acceptance-criteria">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Canonical schemas and interfaces defined for TestOps and Reports</li>
+<li>[ ] CI/test/coverage ingestion implemented for priority systems</li>
+<li>[ ] TestOps metrics available through API/query layer</li>
+<li>[ ] Report planner compiles prompts into structured report plans</li>
+<li>[ ] Markdown reports and live chart definitions render from validated data</li>
+<li>[ ] Saved templates and scheduling supported</li>
+<li>[ ] Provenance and anti-hallucination guardrails enforced</li>
+<li>[ ] Documentation and rollout plan complete</li>
+</ul>
+<hr />
+<h1 id="epic-1">Epic 1<a class="headerlink" href="#epic-1" title="Permanent link">&para;</a></h1>
+<h2 id="title_1">Title<a class="headerlink" href="#title_1" title="Permanent link">&para;</a></h2>
+<p><strong>Phase 0: TestOps + Reports Foundations</strong></p>
+<h3 id="objective">Objective<a class="headerlink" href="#objective" title="Permanent link">&para;</a></h3>
+<p>Define the contracts, schemas, interfaces, and dependency boundaries that let all downstream teams implement independently.</p>
+<h3 id="why-this-exists">Why this exists<a class="headerlink" href="#why-this-exists" title="Permanent link">&para;</a></h3>
+<p>Without this, teams will collide on payload shape, entity identity, metric names, and report-plan contracts.</p>
+<h3 id="acceptance-criteria_1">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Canonical schema for <code>pipeline_run</code>, <code>job_run</code>, <code>test_case_result</code>, <code>test_suite_result</code>, <code>coverage_snapshot</code></li>
+<li>[ ] Canonical schema for <code>report_plan</code>, <code>chart_spec</code>, <code>insight_block</code>, <code>provenance_record</code></li>
+<li>[ ] Repo/service/team/PR/entity mapping documented</li>
+<li>[ ] Metric registry updated with TestOps metrics and report-visible metric names</li>
+<li>[ ] Data freshness and backfill rules documented</li>
+<li>[ ] Interfaces frozen for v1 implementation</li>
+</ul>
+<h3 id="implementation-notes">Implementation Notes<a class="headerlink" href="#implementation-notes" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Existing infrastructure to extend (not replace):</strong>
+- <code>metrics/schemas.py</code> already defines <code>PipelineRunRow</code>, <code>DeploymentRow</code>, <code>IncidentRow</code>, <code>DORAMetricsRecord</code>
+- <code>migrations/clickhouse/000_raw_tables.sql</code> defines <code>ci_pipeline_runs</code>, <code>deployments</code>, <code>incidents</code>
+- <code>migrations/clickhouse/023b_dora_metrics.sql</code> defines <code>dora_metrics_daily</code></p>
+<p>New TestOps schemas (test_case_result, test_suite_result, coverage_snapshot) must coexist with and reference these existing structures. Report schemas (report_plan, chart_spec, insight_block, provenance_record) are net-new.</p>
+</blockquote>
+<h3 id="child-issues">Child Issues<a class="headerlink" href="#child-issues" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Define canonical TestOps event model</strong></li>
+<li><strong>Define AI report DSL and rendered artifact contract</strong></li>
+<li><strong>Define entity resolution and ownership mapping for repo/service/team/PR</strong></li>
+<li><strong>Add TestOps metrics to canonical metric registry</strong></li>
+<li><strong>Document dependency boundaries and interface contracts for agent teams</strong></li>
+</ol>
+<hr />
+<h1 id="epic-2">Epic 2<a class="headerlink" href="#epic-2" title="Permanent link">&para;</a></h1>
+<h2 id="title_2">Title<a class="headerlink" href="#title_2" title="Permanent link">&para;</a></h2>
+<p><strong>TestOps Ingestion: CI/CD Pipeline Events</strong></p>
+<h3 id="objective_1">Objective<a class="headerlink" href="#objective_1" title="Permanent link">&para;</a></h3>
+<p>Ingest normalized pipeline and job execution data from target CI/CD systems.</p>
+<h3 id="acceptance-criteria_2">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Pipeline run ingestion supports status, queue time, runtime, retries, cancel reason, trigger source</li>
+<li>[ ] Job/stage ingestion supported</li>
+<li>[ ] Commit, branch, PR, repo, service, and team linkage works</li>
+<li>[ ] Backfill + incremental sync supported</li>
+<li>[ ] Failed and partial runs handled explicitly</li>
+<li>[ ] Ingestion observability added</li>
+</ul>
+<h3 id="implementation-notes_1">Implementation Notes<a class="headerlink" href="#implementation-notes_1" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Existing infrastructure to extend:</strong>
+- <code>connectors/github.py</code> and <code>connectors/gitlab.py</code> already fetch CI pipeline data
+- <code>storage/mixins/cicd.py</code> already upserts pipeline runs, deployments, and incidents
+- ClickHouse table <code>ci_pipeline_runs</code> already exists in <code>000_raw_tables.sql</code></p>
+<p>v1 scope: GitHub Actions, GitLab CI, Jenkins/Buildkite. CircleCI and Azure DevOps deferred to v2.</p>
+</blockquote>
+<h3 id="child-issues_1">Child Issues<a class="headerlink" href="#child-issues_1" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Implement CI provider adapter: GitHub Actions</strong></li>
+<li><strong>Implement CI provider adapter: GitLab CI</strong></li>
+<li><strong>Implement CI provider adapter: Jenkins / Buildkite abstraction layer</strong></li>
+<li><strong>Build normalized pipeline ingestion pipeline</strong></li>
+<li><strong>Add pipeline backfill and incremental sync jobs</strong></li>
+<li><strong>Add ingestion observability, retries, and dead-letter handling</strong></li>
+</ol>
+<hr />
+<h1 id="epic-3">Epic 3<a class="headerlink" href="#epic-3" title="Permanent link">&para;</a></h1>
+<h2 id="title_3">Title<a class="headerlink" href="#title_3" title="Permanent link">&para;</a></h2>
+<p><strong>TestOps Ingestion: Test Execution and Coverage</strong></p>
+<h3 id="objective_2">Objective<a class="headerlink" href="#objective_2" title="Permanent link">&para;</a></h3>
+<p>Ingest test results and coverage artifacts in a normalized way.</p>
+<h3 id="acceptance-criteria_3">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Test suite and test case results ingested</li>
+<li>[ ] Retries, skips, quarantines, and durations preserved</li>
+<li>[ ] Coverage artifacts ingested for supported formats</li>
+<li>[ ] Changed-file / changed-code coverage contract defined and implemented where possible</li>
+<li>[ ] Ownership mapping from tests/suites to repo/service/team exists</li>
+</ul>
+<h3 id="child-issues_2">Child Issues<a class="headerlink" href="#child-issues_2" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Implement normalized test-result ingestion pipeline</strong></li>
+<li><strong>Add support for JUnit/xUnit-style test artifacts</strong></li>
+<li><strong>Add support for JS and Python ecosystem coverage artifacts</strong></li>
+<li><strong>Implement changed-code coverage computation</strong></li>
+<li><strong>Implement test ownership and suite-to-service attribution</strong></li>
+<li><strong>Persist raw artifacts and normalized rollups for drill-down</strong></li>
+</ol>
+<hr />
+<h1 id="epic-4">Epic 4<a class="headerlink" href="#epic-4" title="Permanent link">&para;</a></h1>
+<h2 id="title_4">Title<a class="headerlink" href="#title_4" title="Permanent link">&para;</a></h2>
+<p><strong>TestOps Metrics Engine</strong></p>
+<h3 id="objective_3">Objective<a class="headerlink" href="#objective_3" title="Permanent link">&para;</a></h3>
+<p>Compute the core TestOps metrics and expose them through the analytics/query layer.</p>
+<h3 id="acceptance-criteria_4">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Pipeline metrics available</li>
+<li>[ ] Test reliability metrics available</li>
+<li>[ ] Coverage metrics available</li>
+<li>[ ] Metrics slice by org/team/repo/service/PR/time range</li>
+<li>[ ] API/query layer supports dashboard and report consumers</li>
+<li>[ ] Metric definitions are documented and test-covered</li>
+</ul>
+<h3 id="implementation-notes_2">Implementation Notes<a class="headerlink" href="#implementation-notes_2" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Existing infrastructure to extend:</strong>
+- <code>metrics/compute_cicd.py</code> already computes <code>pipelines_count</code>, <code>success_rate</code>, <code>avg_duration_minutes</code>, <code>p90_duration_minutes</code>, <code>avg_queue_minutes</code>
+- <code>metrics/job_dora.py</code> already computes deployment frequency, lead time, MTTR, change failure rate
+- <code>metrics/schemas.py</code> defines <code>CICDMetricsDailyRecord</code> and <code>DORAMetricsRecord</code></p>
+<p>New TestOps metrics should follow the existing <code>compute_*.py</code> pattern. Pipeline health metrics extend (not replace) existing CICD metrics with finer-grained breakdowns (rerun rate, cancel rate, p95). Test reliability and coverage metrics are entirely new.</p>
+</blockquote>
+<h3 id="child-issues_3">Child Issues<a class="headerlink" href="#child-issues_3" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Implement pipeline health metrics</strong></li>
+<li>success rate</li>
+<li>failure rate</li>
+<li>median duration</li>
+<li>p95 duration</li>
+<li>queue time</li>
+<li>rerun rate</li>
+<li>cancel rate</li>
+<li><strong>Implement test reliability metrics</strong></li>
+<li>pass rate</li>
+<li>failure rate</li>
+<li>flake rate</li>
+<li>retry dependency rate</li>
+<li>quarantine count</li>
+<li>failure recurrence</li>
+<li><strong>Implement coverage metrics</strong></li>
+<li>global coverage</li>
+<li>changed-code coverage</li>
+<li>coverage regression</li>
+<li>uncovered change count</li>
+<li><strong>Expose TestOps metrics through API/query layer</strong></li>
+<li><strong>Add metric tests, fixtures, and regression coverage</strong></li>
+</ol>
+<hr />
+<h1 id="epic-5">Epic 5<a class="headerlink" href="#epic-5" title="Permanent link">&para;</a></h1>
+<h2 id="title_5">Title<a class="headerlink" href="#title_5" title="Permanent link">&para;</a></h2>
+<p><strong>TestOps Risk Models: Release Confidence and Quality Drag</strong></p>
+<h3 id="objective_4">Objective<a class="headerlink" href="#objective_4" title="Permanent link">&para;</a></h3>
+<p>Turn raw TestOps data into decision-useful risk signals.</p>
+<h3 id="acceptance-criteria_5">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Release confidence score computed from explicit inputs</li>
+<li>[ ] Pipeline stability index computed</li>
+<li>[ ] Test reliability index computed</li>
+<li>[ ] Quality drag hours computed</li>
+<li>[ ] Escaped defect risk placeholder or correlation model defined</li>
+<li>[ ] Scoring methodology documented and explainable</li>
+</ul>
+<h3 id="child-issues_4">Child Issues<a class="headerlink" href="#child-issues_4" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Define deterministic scoring model for release confidence</strong></li>
+<li><strong>Implement quality drag computation from failures, reruns, and queueing</strong></li>
+<li><strong>Implement pipeline stability index</strong></li>
+<li><strong>Implement test reliability index</strong></li>
+<li><strong>Add explainability payloads for every derived risk score</strong></li>
+<li><strong>Validate risk models against historical data samples</strong></li>
+</ol>
+<hr />
+<h1 id="epic-6">Epic 6<a class="headerlink" href="#epic-6" title="Permanent link">&para;</a></h1>
+<h2 id="title_6">Title<a class="headerlink" href="#title_6" title="Permanent link">&para;</a></h2>
+<p><strong>TestOps UX: Dashboards, Drill-down, and PR Surfaces</strong></p>
+<h3 id="objective_5">Objective<a class="headerlink" href="#objective_5" title="Permanent link">&para;</a></h3>
+<p>Expose TestOps in product surfaces that users can actually act on.</p>
+<h3 id="acceptance-criteria_6">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_6" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] TestOps dashboard ships with Pipelines, Tests, Coverage, Release Risk views</li>
+<li>[ ] Drill-down works from team to repo to suite/test</li>
+<li>[ ] Heatmaps and time-series views render</li>
+<li>[ ] PR-level widget shows changed-code coverage, likely failing suites, release confidence</li>
+<li>[ ] Correlation panels supported</li>
+</ul>
+<h3 id="child-issues_5">Child Issues<a class="headerlink" href="#child-issues_5" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Build TestOps dashboard shell and route structure</strong></li>
+<li><strong>Build pipeline health views and trend panels</strong></li>
+<li><strong>Build test reliability and flaky-test heatmaps</strong></li>
+<li><strong>Build coverage and changed-code coverage views</strong></li>
+<li><strong>Build release-risk and quality-drag panels</strong></li>
+<li><strong>Add PR-level TestOps summary widget</strong></li>
+</ol>
+<hr />
+<h1 id="epic-7">Epic 7<a class="headerlink" href="#epic-7" title="Permanent link">&para;</a></h1>
+<h2 id="title_7">Title<a class="headerlink" href="#title_7" title="Permanent link">&para;</a></h2>
+<p><strong>AI Generative Reports: Prompt Parsing and Report Planning</strong></p>
+<h3 id="objective_6">Objective<a class="headerlink" href="#objective_6" title="Permanent link">&para;</a></h3>
+<p>Convert natural-language prompts into validated report plans.</p>
+<h3 id="acceptance-criteria_7">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_7" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Prompt parser extracts scope, metrics, time range, grouping, and comparisons</li>
+<li>[ ] Unsupported asks are rejected cleanly</li>
+<li>[ ] Planner outputs canonical <code>report_plan</code></li>
+<li>[ ] Planner supports report templates for weekly, monthly, quality, and risk reports</li>
+<li>[ ] Planner confidence / validation errors surfaced clearly</li>
+</ul>
+<h3 id="child-issues_6">Child Issues<a class="headerlink" href="#child-issues_6" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Implement natural-language prompt parser</strong></li>
+<li><strong>Implement metric/entity/time-range resolver</strong></li>
+<li><strong>Implement structured report planner</strong></li>
+<li><strong>Add support for recommended report templates</strong></li>
+<li><strong>Add planner validation and unsupported-request handling</strong></li>
+<li><strong>Create planner test corpus from representative prompts</strong></li>
+</ol>
+<hr />
+<h1 id="epic-8">Epic 8<a class="headerlink" href="#epic-8" title="Permanent link">&para;</a></h1>
+<h2 id="title_8">Title<a class="headerlink" href="#title_8" title="Permanent link">&para;</a></h2>
+<p><strong>AI Generative Reports: Grounded Report Rendering</strong></p>
+<h3 id="objective_7">Objective<a class="headerlink" href="#objective_7" title="Permanent link">&para;</a></h3>
+<p>Generate markdown reports, charts, and insight blocks from validated metric payloads only.</p>
+<h3 id="acceptance-criteria_8">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_8" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Reports render from structured plans, not direct freeform prompts</li>
+<li>[ ] Chart specs are generated from validated metric queries</li>
+<li>[ ] Narrative only uses available metric outputs</li>
+<li>[ ] Every insight carries provenance metadata</li>
+<li>[ ] Report output supports markdown export</li>
+</ul>
+<h3 id="child-issues_7">Child Issues<a class="headerlink" href="#child-issues_7" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Implement report execution engine from <code>report_plan</code></strong></li>
+<li><strong>Implement chart-spec generation and live chart rendering</strong></li>
+<li><strong>Implement grounded narrative generation pipeline</strong></li>
+<li><strong>Implement insight blocks with confidence labels</strong></li>
+<li><strong>Implement markdown renderer</strong></li>
+<li><strong>Add provenance panel and report metadata surfaces</strong></li>
+</ol>
+<hr />
+<h1 id="epic-9">Epic 9<a class="headerlink" href="#epic-9" title="Permanent link">&para;</a></h1>
+<h2 id="title_9">Title<a class="headerlink" href="#title_9" title="Permanent link">&para;</a></h2>
+<p><strong>Saved Reports and Scheduling</strong></p>
+<h3 id="objective_8">Objective<a class="headerlink" href="#objective_8" title="Permanent link">&para;</a></h3>
+<p>Let users save, rerun, templatize, and schedule generated reports.</p>
+<h3 id="acceptance-criteria_9">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_9" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Users can save report definitions</li>
+<li>[ ] Users can clone and edit saved templates</li>
+<li>[ ] Scheduled execution supported for weekly/monthly/end-of-sprint</li>
+<li>[ ] Parameterized reports supported by team/repo/date range</li>
+<li>[ ] Delivery state and execution logs visible</li>
+</ul>
+<h3 id="child-issues_8">Child Issues<a class="headerlink" href="#child-issues_8" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Persist saved report definitions</strong></li>
+<li><strong>Implement template cloning and parameterization</strong></li>
+<li><strong>Implement scheduled report execution</strong></li>
+<li><strong>Implement report run history and status tracking</strong></li>
+<li><strong>Implement v1 delivery target: in-app report center</strong></li>
+<li><strong>Add export pipeline for markdown artifacts</strong></li>
+</ol>
+<hr />
+<h1 id="epic-10">Epic 10<a class="headerlink" href="#epic-10" title="Permanent link">&para;</a></h1>
+<h2 id="title_10">Title<a class="headerlink" href="#title_10" title="Permanent link">&para;</a></h2>
+<p><strong>Trust, Guardrails, and Evaluation</strong></p>
+<h3 id="objective_9">Objective<a class="headerlink" href="#objective_9" title="Permanent link">&para;</a></h3>
+<p>Prevent the AI layer from becoming a hallucination engine and ensure TestOps metrics remain credible.</p>
+<h3 id="acceptance-criteria_10">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_10" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Narrative claims require supporting metric payloads</li>
+<li>[ ] Every report shows time range, scope, and filters</li>
+<li>[ ] Unsupported metrics omitted or explicitly flagged</li>
+<li>[ ] Confidence states supported: direct fact / inferred / hypothesis</li>
+<li>[ ] Evaluation suite exists for parser, planner, and generated reports</li>
+<li>[ ] Audit logging added for generated outputs</li>
+</ul>
+<h3 id="child-issues_9">Child Issues<a class="headerlink" href="#child-issues_9" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Implement provenance enforcement for generated narrative</strong></li>
+<li><strong>Implement confidence labeling for insights</strong></li>
+<li><strong>Implement unsupported-metric handling and graceful failures</strong></li>
+<li><strong>Build report evaluation suite and golden examples</strong></li>
+<li><strong>Add audit logs for report generation and execution</strong></li>
+<li><strong>Document trust model and operator controls</strong></li>
+</ol>
+<hr />
+<h1 id="epic-11">Epic 11<a class="headerlink" href="#epic-11" title="Permanent link">&para;</a></h1>
+<h2 id="title_11">Title<a class="headerlink" href="#title_11" title="Permanent link">&para;</a></h2>
+<p><strong>Documentation, Rollout, and Operational Readiness</strong></p>
+<h3 id="objective_10">Objective<a class="headerlink" href="#objective_10" title="Permanent link">&para;</a></h3>
+<p>Make the milestone operable, testable, and shippable.</p>
+<h3 id="acceptance-criteria_11">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_11" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Architecture docs updated</li>
+<li>[ ] Runbooks written for ingestion and report execution failures</li>
+<li>[ ] Metrics definitions documented</li>
+<li>[ ] Launch checklist and staged rollout defined</li>
+<li>[ ] Internal demo scripts and seed prompts created</li>
+</ul>
+<h3 id="child-issues_10">Child Issues<a class="headerlink" href="#child-issues_10" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Document TestOps architecture and metric definitions</strong></li>
+<li><strong>Document AI report architecture, DSL, and grounding model</strong></li>
+<li><strong>Create runbooks for ingestion failures and bad artifacts</strong></li>
+<li><strong>Create runbooks for report-generation failures and mis-scoped prompts</strong></li>
+<li><strong>Create staged rollout plan and feature flags</strong></li>
+<li><strong>Prepare internal demo pack and canned prompts</strong></li>
+</ol>
+<hr />
+<h1 id="epic-12">Epic 12<a class="headerlink" href="#epic-12" title="Permanent link">&para;</a></h1>
+<h2 id="title_12">Title<a class="headerlink" href="#title_12" title="Permanent link">&para;</a></h2>
+<p><strong>Scoring Model Integration: TestOps Signals into Platform Dimensions</strong></p>
+<h3 id="objective_11">Objective<a class="headerlink" href="#objective_11" title="Permanent link">&para;</a></h3>
+<p>Connect TestOps metrics to the existing Delivery, Durability, Well-being, and Dynamics computation and visualization layers so TestOps data influences the platform's aggregate health signals.</p>
+<h3 id="acceptance-criteria_12">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_12" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Delivery dimension extends existing <code>compute_cicd.py</code> and <code>job_dora.py</code> with TestOps pipeline granularity</li>
+<li>[ ] Durability dimension includes coverage quality, test reliability, and release confidence signals via <code>quality.py</code> extension</li>
+<li>[ ] Well-being dimension extends <code>compute_wellbeing.py</code> with rerun burden and failed-build interruption rate</li>
+<li>[ ] Dynamics dimension adds team failure ownership and quality burden concentration to frontend quadrant zones</li>
+<li>[ ] All composite signals are documented with explicit input metrics and weights</li>
+<li>[ ] Frontend <code>quadrantZones.ts</code> updated to accept new TestOps-derived zone inputs</li>
+</ul>
+<h3 id="child-issues_11">Child Issues<a class="headerlink" href="#child-issues_11" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Extend Delivery dimension with TestOps pipeline metrics</strong></li>
+<li><strong>Add Durability signals from coverage and test reliability</strong></li>
+<li><strong>Extend Well-being dimension with CI burden metrics</strong></li>
+<li><strong>Add Dynamics zone inputs for team failure ownership and quality burden</strong></li>
+<li><strong>Document composite scoring methodology and weights</strong></li>
+</ol>
+<hr />
+<h1 id="epic-13">Epic 13<a class="headerlink" href="#epic-13" title="Permanent link">&para;</a></h1>
+<h2 id="title_13">Title<a class="headerlink" href="#title_13" title="Permanent link">&para;</a></h2>
+<p><strong>Benchmarking and Insights Pipeline</strong></p>
+<h3 id="objective_12">Objective<a class="headerlink" href="#objective_12" title="Permanent link">&para;</a></h3>
+<p>Enable teams to compare TestOps metrics against internal baselines and surface actionable insights from metric patterns.</p>
+<h3 id="acceptance-criteria_13">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria_13" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] Teams can compare current period vs prior period for all TestOps metrics</li>
+<li>[ ] Internal baseline computation exists (rolling averages, percentile bands)</li>
+<li>[ ] Maturity bands (stable / watch / degraded / critical) computable for pipeline health, test reliability, and coverage</li>
+<li>[ ] Insight generation pipeline surfaces top anomalies, regressions, and correlations</li>
+<li>[ ] Insights are structured (not freeform) with metric references and confidence</li>
+</ul>
+<h3 id="child-issues_12">Child Issues<a class="headerlink" href="#child-issues_12" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Implement period-over-period comparison for TestOps metrics</strong></li>
+<li><strong>Implement internal baseline computation (rolling averages, percentile bands)</strong></li>
+<li><strong>Define and implement maturity band classification</strong></li>
+<li><strong>Build insight generation pipeline for anomalies and regressions</strong></li>
+<li><strong>Add correlation insights (e.g., flake rate vs PR lead time, pipeline instability vs cycle time)</strong></li>
+</ol>
+<hr />
+<h1 id="recommended-agent-team-split">Recommended Agent Team Split<a class="headerlink" href="#recommended-agent-team-split" title="Permanent link">&para;</a></h1>
+<h2 id="team-a-foundations-contracts">Team A: Foundations + Contracts<a class="headerlink" href="#team-a-foundations-contracts" title="Permanent link">&para;</a></h2>
+<p>Own:
+- Epic 1
+- shared schemas
+- metric registry
+- interface boundaries</p>
+<h2 id="team-b-ingestion">Team B: Ingestion<a class="headerlink" href="#team-b-ingestion" title="Permanent link">&para;</a></h2>
+<p>Own:
+- Epic 2
+- Epic 3</p>
+<h2 id="team-c-metrics-risk-scoring">Team C: Metrics + Risk + Scoring<a class="headerlink" href="#team-c-metrics-risk-scoring" title="Permanent link">&para;</a></h2>
+<p>Own:
+- Epic 4
+- Epic 5
+- Epic 12</p>
+<h2 id="team-d-product-surfaces-benchmarking">Team D: Product Surfaces + Benchmarking<a class="headerlink" href="#team-d-product-surfaces-benchmarking" title="Permanent link">&para;</a></h2>
+<p>Own:
+- Epic 6
+- Epic 13
+- chart/view layer dependencies from Epic 8</p>
+<h2 id="team-e-ai-planning-rendering">Team E: AI Planning + Rendering<a class="headerlink" href="#team-e-ai-planning-rendering" title="Permanent link">&para;</a></h2>
+<p>Own:
+- Epic 7
+- Epic 8</p>
+<h2 id="team-f-persistence-scheduling-ops">Team F: Persistence + Scheduling + Ops<a class="headerlink" href="#team-f-persistence-scheduling-ops" title="Permanent link">&para;</a></h2>
+<p>Own:
+- Epic 9
+- Epic 11</p>
+<h2 id="team-g-guardrails-evaluation">Team G: Guardrails + Evaluation<a class="headerlink" href="#team-g-guardrails-evaluation" title="Permanent link">&para;</a></h2>
+<p>Own:
+- Epic 10
+- cross-cutting reviews into Epics 7, 8, and 9</p>
+<hr />
+<h1 id="sequencing-recommendation">Sequencing Recommendation<a class="headerlink" href="#sequencing-recommendation" title="Permanent link">&para;</a></h1>
+<h2 id="wave-1">Wave 1<a class="headerlink" href="#wave-1" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Epic 1</li>
+<li>start Epic 2</li>
+<li>start Epic 3</li>
+<li>start Epic 7 in parallel, but only against mocked contracts</li>
+</ul>
+<h2 id="wave-2">Wave 2<a class="headerlink" href="#wave-2" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Epic 4</li>
+<li>Epic 6 shell</li>
+<li>Epic 8 execution engine with stubbed metrics</li>
+<li>Epic 10 provenance framework</li>
+</ul>
+<h2 id="wave-3">Wave 3<a class="headerlink" href="#wave-3" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Epic 5</li>
+<li>Epic 12 (scoring integration)</li>
+<li>complete Epic 6</li>
+<li>complete Epic 8</li>
+<li>Epic 9 scheduling/persistence</li>
+</ul>
+<h2 id="wave-4">Wave 4<a class="headerlink" href="#wave-4" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Epic 13 (benchmarking + insights)</li>
+<li>Epic 11</li>
+<li>evaluation hardening</li>
+<li>rollout</li>
+</ul>
+<hr />
+<h1 id="priority-order">Priority Order<a class="headerlink" href="#priority-order" title="Permanent link">&para;</a></h1>
+<ol>
+<li>Phase 0: TestOps + Reports Foundations</li>
+<li>TestOps Ingestion: CI/CD Pipeline Events</li>
+<li>TestOps Ingestion: Test Execution and Coverage</li>
+<li>TestOps Metrics Engine</li>
+<li>AI Generative Reports: Prompt Parsing and Report Planning</li>
+<li>AI Generative Reports: Grounded Report Rendering</li>
+<li>TestOps Risk Models: Release Confidence and Quality Drag</li>
+<li>Scoring Model Integration: TestOps Signals into Platform Dimensions</li>
+<li>TestOps UX: Dashboards, Drill-down, and PR Surfaces</li>
+<li>Saved Reports and Scheduling</li>
+<li>Trust, Guardrails, and Evaluation</li>
+<li>Benchmarking and Insights Pipeline</li>
+<li>Documentation, Rollout, and Operational Readiness</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.instant", "navigation.sections", "navigation.tracking", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.525ec568.min.js"></script>
+      
+    
+  </body>
+</html>

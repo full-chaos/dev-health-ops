@@ -564,6 +564,14 @@ async def resolve_analytics(
                 source_alias = (
                     "work_unit_investments" if request.use_investment else table
                 )
+                # Qualify org_id only on the investment path, which JOINs other
+                # tables (repos/teams) that also carry org_id; the daily-table path
+                # is single-table, so an unqualified column is unambiguous.
+                org_filter = (
+                    f"{source_alias}.org_id = %(org_id)s"
+                    if request.use_investment
+                    else "org_id = %(org_id)s"
+                )
 
                 coverage_sql = f"""
                     {with_clause}
@@ -574,7 +582,7 @@ async def resolve_analytics(
                     FROM {base_table}
                     {joins}
                     WHERE {date_filter}
-                      AND {source_alias}.org_id = %(org_id)s
+                      AND {org_filter}
                 """
 
                 cov_params = {

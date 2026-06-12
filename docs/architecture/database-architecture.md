@@ -52,7 +52,7 @@ SQLite via `aiosqlite` remains allowed only for test fixtures and local-only eph
 |---------|---------|-------|
 | User management | PostgreSQL | Semantic layer |
 | Organization settings | PostgreSQL | Semantic layer |
-| Team configuration | PostgreSQL | Semantic layer |
+| Team mapping config (`team_mappings`) | PostgreSQL | Semantic layer (the `teams` entity itself is ClickHouse) |
 | Authentication | PostgreSQL | Semantic layer |
 
 ## Environment Variables
@@ -114,6 +114,7 @@ Stores time-series and event data optimized for:
 | `repo_metrics_daily` | Daily repository metrics |
 | `user_metrics_daily` | Daily per-user metrics |
 | `team_metrics_daily` | Daily team aggregates |
+| `teams` | Team entities (members; consumed by metrics & attribution) |
 | `work_item_metrics_daily` | Work item throughput metrics |
 
 ## CLI Command Routing
@@ -131,7 +132,7 @@ Commands automatically use the appropriate database:
 | `sync git` | ClickHouse | Git data ingestion |
 | `sync prs` | ClickHouse | PR data ingestion |
 | `sync work-items` | ClickHouse | Work item ingestion |
-| `sync teams` | PostgreSQL | Team config (semantic) |
+| `sync teams` | Both | Drift/mapping → `team_mappings` (Postgres); team entities → `teams` (ClickHouse) |
 | `metrics daily` | ClickHouse | Metrics computation |
 | `metrics dora` | ClickHouse | DORA metrics |
 | `api` | Both | Serves both layers |

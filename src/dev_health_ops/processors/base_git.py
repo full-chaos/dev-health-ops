@@ -138,6 +138,18 @@ class BaseGitProcessor:
         return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
 
+def resolve_incident_labels() -> list[str]:
+    """Issue labels that mark an incident, for the provider incident syncs.
+
+    ``INCIDENT_LABELS`` is a comma-separated list (default ``incident``).
+    Providers query one label at a time (GitHub's multi-label filter is
+    AND-semantics) and dedupe across labels.
+    """
+    raw = os.getenv("INCIDENT_LABELS", "incident")
+    labels = [token.strip() for token in raw.split(",") if token.strip()]
+    return labels or ["incident"]
+
+
 def resolve_commit_stats_limit(
     raw_commit_count: int,
     max_commits: int | None,

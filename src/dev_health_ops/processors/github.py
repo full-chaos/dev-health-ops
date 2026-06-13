@@ -30,6 +30,7 @@ from dev_health_ops.processors.base_git import (
     build_git_pull_request,
     check_backfill_needs,
     resolve_commit_stats_limit,
+    resolve_incident_labels,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -314,7 +315,34 @@ def _fetch_github_workflow_runs_sync(gh_repo, repo_id, max_runs, since):
     return runs
 
 
-def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
+def _resolve_github_deployment_pr(gh_repo, sha, gate):
+    """Resolve the merged PR for a deployed commit via /commits/{sha}/pulls.
+
+    Costs up to two gated API calls per deployment. Failure-soft: any
+    lookup error leaves the deployment without PR attribution rather than
+    failing the sync.
+    """
+    if not sha:
+        return None, None
+    try:
+        if gate is not None:
+            gate.wait_sync()
+        commit = gh_repo.get_commit(sha)
+        if gate is not None:
+            gate.wait_sync()
+        pulls = list(commit.get_pulls()[:10])
+    except Exception as exc:
+        logging.debug("Failed PR lookup for deployed commit %s: %s", sha, exc)
+        return None, None
+    merged = [pr for pr in pulls if getattr(pr, "merged_at", None) is not None]
+    chosen = merged[0] if merged else (pulls[0] if pulls else None)
+    if chosen is None:
+        return None, None
+    return getattr(chosen, "number", None), getattr(chosen, "merged_at", None)
+
+
+def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since, gate=None):
+    gate = BaseGitProcessor.ensure_gate(gate)
     deployments: list[Deployment] = []
     if not hasattr(gh_repo, "get_deployments"):
         return deployments
@@ -341,6 +369,9 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
             "github",
             releases=release_objects,
         )
+        pr_number, pr_merged_at = _resolve_github_deployment_pr(
+            gh_repo, getattr(dep, "sha", None), gate
+        )
         deployments.append(
             build_deployment(
                 repo_id=repo_id,
@@ -350,6 +381,8 @@ def _fetch_github_deployments_sync(gh_repo, repo_id, max_deployments, since):
                 started_at=created_at,
                 finished_at=None,
                 deployed_at=created_at,
+                merged_at=pr_merged_at,
+                pull_request_number=pr_number,
                 release_ref=enrichment.release_ref,
                 release_ref_confidence=enrichment.confidence,
             )
@@ -361,13 +394,30 @@ def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
     incidents: list[Incident] = []
     if not hasattr(gh_repo, "get_issues"):
         return incidents
-    try:
-        raw_issues = list(
-            gh_repo.get_issues(state="all", labels=["incident"])[:max_issues]
-        )
-    except Exception as exc:
-        logging.debug("Failed to fetch incident issues: %s", exc)
-        return incidents
+    labels = resolve_incident_labels()
+    raw_issues = []
+    seen_issue_ids: set = set()
+    for label in labels:
+        try:
+            label_issues = list(
+                gh_repo.get_issues(state="all", labels=[label])[:max_issues]
+            )
+        except Exception as exc:
+            logging.debug(
+                "Failed to fetch incident issues for label %r: %s", label, exc
+            )
+            continue
+        for issue in label_issues:
+            issue_id = getattr(issue, "id", None)
+            if issue_id in seen_issue_ids:
+                continue
+            seen_issue_ids.add(issue_id)
+            raw_issues.append(issue)
+    logging.info(
+        "Fetched %d incident issue(s) (labels searched: %s)",
+        len(raw_issues),
+        ", ".join(labels),
+    )
 
     for issue in raw_issues:
         created_at = getattr(issue, "created_at", None)

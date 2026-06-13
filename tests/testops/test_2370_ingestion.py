@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -277,7 +278,12 @@ async def test_ingestion_sink_passthroughs_delegate_to_store() -> None:
 
     store = FakeStore()
     sink = IngestionSink(store)
-    await sink.insert_test_suite_results([{"a": 1}])  # type: ignore[list-item]
-    await sink.insert_test_case_results([{"b": 2}])  # type: ignore[list-item]
-    await sink.insert_coverage_snapshots([{"c": 3}])  # type: ignore[list-item]
+    # Payloads are opaque to the passthrough; type as Any so the TypedDict
+    # element checks don't apply (we only assert delegation, not row shape).
+    suite_rows: list[Any] = [{"a": 1}]
+    case_rows: list[Any] = [{"b": 2}]
+    coverage_rows: list[Any] = [{"c": 3}]
+    await sink.insert_test_suite_results(suite_rows)
+    await sink.insert_test_case_results(case_rows)
+    await sink.insert_coverage_snapshots(coverage_rows)
     assert [name for name, _ in store.calls] == ["suite", "case", "coverage"]

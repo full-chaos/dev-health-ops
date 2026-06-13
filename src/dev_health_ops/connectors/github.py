@@ -871,6 +871,147 @@ class GitHubConnector(GitConnector):
         initial_delay=1.0,
         exceptions=(RateLimitException, APIException),
     )
+    def list_run_artifacts(
+        self,
+        owner: str,
+        repo: str,
+        run_id: int | str,
+        max_items: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List non-expired artifacts for a workflow run (CHAOS-2370).
+
+        GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts. Returns the
+        ``artifacts`` array (paginated via the Link header). Expired artifacts
+        are skipped because their download endpoint returns 410.
+        """
+        base_url = (
+            f"{self._rest_base_url()}/repos/{owner}/{repo}/actions/runs/"
+            f"{run_id}/artifacts"
+        )
+        headers = {
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github+json",
+        }
+        artifacts: list[dict[str, Any]] = []
+        url: str | None = base_url
+        params: dict[str, Any] | None = {"per_page": 100}
+
+        while url:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            params = None
+
+            if response.status_code == 403:
+                if self._is_github_rate_limit_403(response):
+                    retry_after = response.headers.get("Retry-After")
+                    raise RateLimitException(
+                        f"GitHub rate limit (403) listing artifacts: {response.text}",
+                        retry_after_seconds=float(retry_after) if retry_after else None,
+                    )
+                return artifacts
+            if response.status_code == 404:
+                return artifacts
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                raise RateLimitException(
+                    f"GitHub rate limit listing artifacts: {response.text}",
+                    retry_after_seconds=float(retry_after) if retry_after else None,
+                )
+            if response.status_code >= 400:
+                raise APIException(
+                    f"GitHub artifacts list error: "
+                    f"{response.status_code} {response.text}"
+                )
+
+            payload = response.json()
+            page = payload.get("artifacts", []) if isinstance(payload, dict) else []
+            for artifact in page:
+                if artifact.get("expired"):
+                    continue
+                artifacts.append(artifact)
+                if max_items is not None and len(artifacts) >= max_items:
+                    return artifacts[:max_items]
+
+            url = self._parse_next_link(response.headers.get("Link"))
+
+        return artifacts
+
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(RateLimitException, APIException),
+    )
+    def download_artifact_zip(
+        self,
+        owner: str,
+        repo: str,
+        artifact_id: int | str,
+        max_bytes: int = 100 * 1024 * 1024,
+    ) -> bytes:
+        """Download an Actions artifact ZIP (CHAOS-2370).
+
+        The ``/zip`` endpoint responds 302 with a short-lived pre-signed blob
+        URL. We must NOT forward the GitHub ``Authorization`` header on the
+        redirect — the signed URL carries its own credentials and some storage
+        backends reject the extra header. Returns ``b""`` for expired/removed
+        artifacts (404/410). Streams with a hard byte cap to bound memory.
+        """
+        url = (
+            f"{self._rest_base_url()}/repos/{owner}/{repo}/actions/artifacts/"
+            f"{artifact_id}/zip"
+        )
+        headers = {
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github+json",
+        }
+        response = requests.get(
+            url, headers=headers, timeout=60, allow_redirects=False, stream=True
+        )
+
+        if response.status_code in (404, 410):
+            return b""
+        if response.status_code == 403 and self._is_github_rate_limit_403(response):
+            retry_after = response.headers.get("Retry-After")
+            raise RateLimitException(
+                f"GitHub rate limit downloading artifact {artifact_id}",
+                retry_after_seconds=float(retry_after) if retry_after else None,
+            )
+        if response.status_code in (301, 302, 307, 308):
+            location = response.headers.get("Location")
+            if not location:
+                return b""
+            # Pre-signed URL — deliberately unauthenticated.
+            response = requests.get(location, timeout=120, stream=True)
+
+        if response.status_code in (404, 410):
+            return b""
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            raise RateLimitException(
+                f"GitHub rate limit downloading artifact {artifact_id}",
+                retry_after_seconds=float(retry_after) if retry_after else None,
+            )
+        if response.status_code >= 400:
+            raise APIException(
+                f"GitHub artifact download error: {response.status_code}"
+            )
+
+        buffer = bytearray()
+        for chunk in response.iter_content(chunk_size=65536):
+            if not chunk:
+                continue
+            buffer.extend(chunk)
+            if len(buffer) > max_bytes:
+                logger.warning(
+                    "Artifact %s exceeds %d byte cap; skipping", artifact_id, max_bytes
+                )
+                return b""
+        return bytes(buffer)
+
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(RateLimitException, APIException),
+    )
     def get_dependabot_alerts(
         self,
         owner: str,

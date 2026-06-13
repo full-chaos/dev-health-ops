@@ -4,9 +4,29 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree as ET
+from xml.etree import ElementTree as ET  # types only — parsing uses defusedxml
+
+from defusedxml.ElementTree import fromstring as _defused_fromstring
 
 CANONICAL_TEST_STATUSES = {"passed", "failed", "skipped", "error", "quarantined"}
+
+# Untrusted test reports come from external CI artifacts (GitHub Actions /
+# GitLab job artifacts). Parse them with defusedxml (blocks XXE, external
+# entity, and entity-expansion "billion laughs" attacks) and cap the document
+# size so a single pathological report cannot exhaust memory (CHAOS-2370).
+_MAX_XML_BYTES = 64 * 1024 * 1024  # 64 MiB per report
+
+
+def _safe_fromstring(text: str) -> ET.Element:
+    """Parse XML from an untrusted source with entity/DTD attacks disabled."""
+    encoded_len = len(text.encode("utf-8", errors="ignore"))
+    if encoded_len > _MAX_XML_BYTES:
+        raise ValueError(
+            f"XML report too large: {encoded_len} bytes exceeds "
+            f"{_MAX_XML_BYTES} byte limit"
+        )
+    # defusedxml defaults: forbid_entities=True, forbid_external=True.
+    return _defused_fromstring(text, forbid_dtd=True)
 
 
 @dataclass(frozen=True)
@@ -135,7 +155,7 @@ def _infer_framework(suite: ET.Element, cases: list[ParsedTestCase]) -> str | No
 
 
 def parse_junit_xml(source: str | bytes | Path) -> list[ParsedTestSuite]:
-    root = ET.fromstring(_read_text(source))
+    root = _safe_fromstring(_read_text(source))
     suites: list[ParsedTestSuite] = []
 
     candidate_suites: list[ET.Element] = []

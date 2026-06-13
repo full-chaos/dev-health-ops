@@ -15,8 +15,14 @@ def _hash_identifier(*parts: str | None) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def build_snapshot_id(run_id: str, report_format: str | None) -> str:
-    return _hash_identifier(run_id, report_format)
+def build_snapshot_id(
+    run_id: str, report_format: str | None, discriminator: str | None = None
+) -> str:
+    # A run can upload several coverage files of the SAME format (e.g. one per
+    # package). Including a per-file discriminator keeps their snapshot IDs
+    # distinct so they don't collapse to one row under the ReplacingMergeTree
+    # dedup key (org_id, repo_id, run_id, snapshot_id) (CHAOS-2370).
+    return _hash_identifier(run_id, report_format, discriminator)
 
 
 def _coverage_pct(covered: int | None, total: int | None) -> float | None:
@@ -51,6 +57,7 @@ async def process_coverage_report(
     team_id: str | None = None,
     org_id: str = "",
     service_path_prefixes: Mapping[str, str] | None = None,
+    report_path: str | None = None,
 ) -> CoverageSnapshotRow:
     report = parse_coverage_report(source, report_format=report_format)
     lines_total = report.lines_total
@@ -61,7 +68,7 @@ async def process_coverage_report(
     return CoverageSnapshotRow(
         repo_id=repo_id,
         run_id=run_id,
-        snapshot_id=build_snapshot_id(run_id, report.report_format),
+        snapshot_id=build_snapshot_id(run_id, report.report_format, report_path),
         report_format=report.report_format,
         lines_total=lines_total,
         lines_covered=lines_covered,

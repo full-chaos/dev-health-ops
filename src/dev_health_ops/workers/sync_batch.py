@@ -607,6 +607,7 @@ def _run_sync_for_repo(
                     sync_cicd=merged_flags.get("sync_cicd", False),
                     sync_deployments=merged_flags.get("sync_deployments", False),
                     sync_incidents=merged_flags.get("sync_incidents", False),
+                    sync_tests=merged_flags.get("sync_tests", False),
                 )
 
             run_async(run_with_store(db_url, db_type, _github_handler, org_id=org_id))
@@ -643,6 +644,7 @@ def _run_sync_for_repo(
                     sync_cicd=merged_flags.get("sync_cicd", False),
                     sync_deployments=merged_flags.get("sync_deployments", False),
                     sync_incidents=merged_flags.get("sync_incidents", False),
+                    sync_tests=merged_flags.get("sync_tests", False),
                 )
 
             run_async(run_with_store(db_url, db_type, _gitlab_handler, org_id=org_id))

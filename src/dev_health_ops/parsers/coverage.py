@@ -3,7 +3,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree as ET
+from xml.etree import ElementTree as ET  # types only — parsing uses defusedxml
+
+from defusedxml.ElementTree import fromstring as _defused_fromstring
+
+# Coverage XML (cobertura/clover) is downloaded from untrusted CI artifacts;
+# parse with defusedxml and cap document size to block XXE / entity-expansion
+# bombs and memory exhaustion (CHAOS-2370).
+_MAX_XML_BYTES = 64 * 1024 * 1024  # 64 MiB per report
+
+
+def _safe_fromstring(text: str) -> ET.Element:
+    encoded_len = len(text.encode("utf-8", errors="ignore"))
+    if encoded_len > _MAX_XML_BYTES:
+        raise ValueError(
+            f"Coverage XML too large: {encoded_len} bytes exceeds "
+            f"{_MAX_XML_BYTES} byte limit"
+        )
+    return _defused_fromstring(text, forbid_dtd=True)
 
 
 @dataclass(frozen=True)
@@ -147,7 +164,7 @@ def parse_lcov_report(source: str | bytes | Path) -> CoverageReport:
 
 
 def parse_cobertura_xml(source: str | bytes | Path) -> CoverageReport:
-    root = ET.fromstring(_read_text(source))
+    root = _safe_fromstring(_read_text(source))
     files: dict[str, CoverageFileRecord] = {}
 
     for class_element in root.findall(".//class"):

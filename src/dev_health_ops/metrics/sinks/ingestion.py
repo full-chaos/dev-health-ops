@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
+from dev_health_ops.metrics.testops_schemas import (
+    CoverageSnapshotRow,
+    JobRunRow,
+    PipelineRunExtendedRow,
+    TestCaseResultRow,
+    TestSuiteResultRow,
+)
 from dev_health_ops.models.git import (
     CiPipelineRun,
     Deployment,
@@ -57,6 +63,17 @@ class IngestionSink:
 
     async def insert_testops_job_runs(self, jobs: list[JobRunRow]) -> None:
         await self._store.insert_testops_job_runs(jobs)
+
+    async def insert_test_suite_results(self, suites: list[TestSuiteResultRow]) -> None:
+        await self._store.insert_test_suite_results(suites)
+
+    async def insert_test_case_results(self, cases: list[TestCaseResultRow]) -> None:
+        await self._store.insert_test_case_results(cases)
+
+    async def insert_coverage_snapshots(
+        self, snapshots: list[CoverageSnapshotRow]
+    ) -> None:
+        await self._store.insert_coverage_snapshots(snapshots)
 
     async def insert_deployments(self, deployments: list[Deployment]) -> None:
         await self._store.insert_deployments(deployments)

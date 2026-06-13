@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import zipfile
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
@@ -37,6 +38,12 @@ from dev_health_ops.processors.fetch_utils import (
 )
 from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.processors.storage_protocol import GitSyncStore
+from dev_health_ops.processors.testops_ingest import (
+    MAX_ARTIFACTS_PER_RUN,
+    MAX_RUNS_PER_SYNC,
+    ingest_report_members,
+)
+from dev_health_ops.processors.testops_tests import process_gitlab_test_report
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
@@ -927,6 +934,224 @@ async def _backfill_gitlab_missing_data(
                         await blame_collector.maybe_flush()
 
 
+def _is_report_name(name: str) -> bool:
+    """ZIP member filter: JUnit/coverage report files we know how to parse."""
+    lowered = name.lower()
+    return lowered.endswith(".xml") or lowered.endswith(".info")
+
+
+def _fetch_gitlab_test_reports_sync(
+    connector: Any,
+    gl_project: Any,
+    project_id: int,
+    since: datetime | None,
+    default_branch: str | None,
+    max_pipelines: int,
+) -> tuple[
+    list[tuple[str, dict[str, Any], datetime | None, datetime | None]],
+    list[tuple[str, list[tuple[str, bytes]]]],
+]:
+    """Blocking: collect native test reports + coverage artifact members.
+
+    Returns ``(test_reports, coverage_members)`` where ``test_reports`` is
+    ``[(run_id, test_report_json, started_at, finished_at), ...]`` (GitLab's
+    parsed JUnit JSON + the pipeline timestamps used to date the suites) and
+    ``coverage_members`` is ``[(run_id, [(filename, bytes), ...]), ...]`` from
+    job artifact ZIPs. ``run_id`` is ``str(pipeline.id)`` so rows join to the
+    pipeline. Bounded to the default branch and ``max_pipelines`` pipelines.
+    """
+    from dev_health_ops.connectors.utils.safe_archive import iter_zip_members
+
+    test_reports: list[
+        tuple[str, dict[str, Any], datetime | None, datetime | None]
+    ] = []
+    coverage_members: list[tuple[str, list[tuple[str, bytes]]]] = []
+    since_aware = since
+    if since_aware is not None and since_aware.tzinfo is None:
+        since_aware = since_aware.replace(tzinfo=timezone.utc)
+
+    # Filter by update time SERVER-SIDE. We must NOT early-`break` on created_at:
+    # the list is ordered by updated_at, and a recently-updated pipeline can be
+    # old by created_at, so breaking would silently skip valid in-window
+    # pipelines (Codex review). The max_pipelines cap bounds the scan instead.
+    list_params: dict[str, Any] = {
+        "per_page": 100,
+        "order_by": "updated_at",
+        "sort": "desc",
+    }
+    if since_aware is not None:
+        list_params["updated_after"] = since_aware.isoformat()
+    try:
+        if max_pipelines > 100:
+            raw_pipelines = gl_project.pipelines.list(**list_params, as_list=False)
+        else:
+            raw_pipelines = gl_project.pipelines.list(**list_params, get_all=False)
+    except Exception as exc:
+        logging.warning(
+            "Could not list pipelines for GitLab project %s: %s", project_id, exc
+        )
+        return test_reports, coverage_members
+
+    count = 0
+    for pipeline in raw_pipelines:
+        if count >= max_pipelines:
+            break
+        ref = getattr(pipeline, "ref", None)
+        if default_branch and ref and ref != default_branch:
+            continue
+        pipeline_id = getattr(pipeline, "id", None)
+        if pipeline_id is None:
+            continue
+        count += 1
+        run_id = str(pipeline_id)
+        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
+        started_at = (
+            safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
+        )
+        finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
+
+        # Native parsed test report (pass/fail/duration) — preferred over XML.
+        try:
+            report = connector.rest_client.get_pipeline_test_report(
+                project_id, pipeline_id
+            )
+            if report and report.get("test_suites"):
+                test_reports.append((run_id, report, started_at, finished_at))
+        except Exception as exc:
+            logging.debug("test_report failed for pipeline %s: %s", pipeline_id, exc)
+
+        # Coverage from job artifacts (best-effort, bounded).
+        try:
+            jobs = connector.rest_client.get_list(
+                f"projects/{project_id}/pipelines/{pipeline_id}/jobs",
+                params={"per_page": 100},
+            )
+        except Exception:
+            jobs = []
+        members: list[tuple[str, bytes]] = []
+        artifact_jobs = 0
+        for job in jobs:
+            if artifact_jobs >= MAX_ARTIFACTS_PER_RUN:
+                break
+            if not (job.get("artifacts_file") or job.get("artifacts")):
+                continue
+            job_id = job.get("id")
+            if job_id is None:
+                continue
+            artifact_jobs += 1
+            try:
+                data = connector.rest_client.download_job_artifacts(project_id, job_id)
+            except Exception as exc:
+                logging.debug("artifact download failed for job %s: %s", job_id, exc)
+                continue
+            if not data:
+                continue
+            try:
+                members.extend(iter_zip_members(data, name_filter=_is_report_name))
+            except zipfile.BadZipFile:
+                continue
+        if members:
+            coverage_members.append((run_id, members))
+
+    return test_reports, coverage_members
+
+
+async def _sync_gitlab_test_reports(
+    *,
+    connector: Any,
+    gl_project: Any,
+    project_id: int,
+    token: str,
+    repo_id: Any,
+    org_id: str,
+    ingestion_sink: IngestionSink,
+    loop: asyncio.AbstractEventLoop,
+    since: datetime | None,
+) -> None:
+    """Ingest TestOps data for one GitLab project (CHAOS-2370).
+
+    (1) Extended pipeline + job rows via the async adapter (closes the
+    ci_job_runs gap). (2) Test suites/cases from GitLab's native test_report
+    JSON. (3) Coverage from job artifacts (test cases from artifacts are
+    discarded — the native report is authoritative — so they aren't
+    double-counted). Each stage is independently fault-tolerant.
+    """
+    from dev_health_ops.processors.testops_pipeline import TestOpsPipelineProcessor
+    from dev_health_ops.providers.gitlab.testops_pipeline import GitLabCIAdapter
+
+    # (1) Extended pipelines + jobs. Explicit token (Codex review item G).
+    try:
+        adapter = GitLabCIAdapter(base_url=connector.rest_client.base_url, token=token)
+        processor = TestOpsPipelineProcessor(ingestion_sink)
+        async with adapter:
+            result = await processor.fetch_and_store(
+                adapter,
+                since_date=since,
+                project_id=project_id,
+                repo_id=repo_id,
+                org_id=org_id,
+            )
+        logging.info(
+            "TestOps GitLab project %s: %d pipelines, %d jobs",
+            project_id,
+            result.pipeline_runs,
+            result.job_runs,
+        )
+    except Exception as exc:
+        logging.warning(
+            "TestOps pipeline/job ingestion failed for GitLab project %s: %s",
+            project_id,
+            exc,
+        )
+
+    default_branch = getattr(gl_project, "default_branch", None)
+    test_reports, coverage_members = await loop.run_in_executor(
+        None,
+        _fetch_gitlab_test_reports_sync,
+        connector,
+        gl_project,
+        project_id,
+        since,
+        default_branch,
+        MAX_RUNS_PER_SYNC,
+    )
+
+    suite_rows: list[Any] = []
+    case_rows: list[Any] = []
+    coverage_rows: list[Any] = []
+    for run_id, report, started_at, finished_at in test_reports:
+        suites, cases = await process_gitlab_test_report(
+            repo_id=repo_id,
+            run_id=run_id,
+            report=report,
+            org_id=org_id,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        suite_rows.extend(suites)
+        case_rows.extend(cases)
+    for run_id, members in coverage_members:
+        # Keep only coverage rows; suites/cases come from the native report.
+        _, _, coverage = await ingest_report_members(
+            members, repo_id=repo_id, run_id=run_id, org_id=org_id
+        )
+        coverage_rows.extend(coverage)
+
+    if suite_rows:
+        await ingestion_sink.insert_test_suite_results(suite_rows)
+    if case_rows:
+        await ingestion_sink.insert_test_case_results(case_rows)
+    if coverage_rows:
+        await ingestion_sink.insert_coverage_snapshots(coverage_rows)
+    logging.info(
+        "TestOps GitLab project %s: %d suites, %d cases, %d coverage",
+        project_id,
+        len(suite_rows),
+        len(case_rows),
+        len(coverage_rows),
+    )
+
+
 async def process_gitlab_project(
     store: GitSyncStore | Any,
     project_id: int,
@@ -941,6 +1166,7 @@ async def process_gitlab_project(
     sync_deployments: bool = True,
     sync_incidents: bool = True,
     sync_security: bool = True,
+    sync_tests: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
 ) -> None:
@@ -1077,6 +1303,19 @@ async def process_gitlab_project(
                 await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
                 logging.info(f"Stored {len(pipeline_runs)} pipeline runs from GitLab")
 
+        if sync_tests:
+            await _sync_gitlab_test_reports(
+                connector=connector,
+                gl_project=gl_project,
+                project_id=project_id,
+                token=token,
+                repo_id=db_repo.id,
+                org_id=getattr(store, "org_id", "") or "",
+                ingestion_sink=ingestion_sink,
+                loop=loop,
+                since=since,
+            )
+
         if sync_deployments:
             logging.info("Fetching deployments from GitLab...")
             deployments = await loop.run_in_executor(
@@ -1197,6 +1436,7 @@ async def process_gitlab_projects_batch(
     sync_deployments: bool = True,
     sync_incidents: bool = True,
     sync_security: bool = True,
+    sync_tests: bool = False,
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
@@ -1360,6 +1600,30 @@ async def process_gitlab_projects_batch(
             except Exception as e:
                 logging.warning(
                     "Failed to fetch CI/CD runs for GitLab project %s: %s",
+                    project_info.full_name,
+                    e,
+                )
+
+        if sync_tests:
+            try:
+                if gl_project is None:
+                    gl_project = await loop.run_in_executor(
+                        None, connector.gitlab.projects.get, project_info.id
+                    )
+                await _sync_gitlab_test_reports(
+                    connector=connector,
+                    gl_project=gl_project,
+                    project_id=project_info.id,
+                    token=token,
+                    repo_id=db_repo.id,
+                    org_id=getattr(store, "org_id", "") or "",
+                    ingestion_sink=ingestion_sink,
+                    loop=loop,
+                    since=since,
+                )
+            except Exception as e:
+                logging.warning(
+                    "Failed to sync test reports for GitLab project %s: %s",
                     project_info.full_name,
                     e,
                 )

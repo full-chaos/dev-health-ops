@@ -295,14 +295,19 @@ def _extract_ai_workflow_for_day(
             )
         return valid
 
+    # Event time falls back to last_synced (non-nullable) so in-flight
+    # deployments with no timestamps yet still land in a day bucket instead
+    # of silently never matching any window. FINAL: deployments/incidents
+    # are ReplacingMergeTree and may hold pre-merge duplicate rows during
+    # active sync.
     wf_deployment_rows = primary_sink.query_dicts(
         "SELECT repo_id, deployment_id, pull_request_number,"
         " started_at, finished_at, deployed_at, last_synced"
-        " FROM deployments"
+        " FROM deployments FINAL"
         " WHERE org_id = {org_id:String}"
-        "   AND coalesce(deployed_at, finished_at, started_at)"
+        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
         "       >= {start:DateTime64(3, 'UTC')}"
-        "   AND coalesce(deployed_at, finished_at, started_at)"
+        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
         "       < {end:DateTime64(3, 'UTC')}"
         f"{wf_repo_filter}",
         wf_params,
@@ -313,7 +318,7 @@ def _extract_ai_workflow_for_day(
 
     wf_incident_rows = primary_sink.query_dicts(
         "SELECT repo_id, incident_id, started_at, last_synced"
-        " FROM incidents"
+        " FROM incidents FINAL"
         " WHERE org_id = {org_id:String}"
         "   AND started_at >= {start:DateTime64(3, 'UTC')}"
         "   AND started_at < {end:DateTime64(3, 'UTC')}"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 from dev_health_ops.metrics.testops_schemas import TestCaseResultRow, TestSuiteResultRow
@@ -159,12 +160,21 @@ def _build_rows_from_parsed(
     team_id: str | None = None,
     org_id: str = "",
     service_path_prefixes: Mapping[str, str] | None = None,
+    fallback_started_at: datetime | None = None,
+    fallback_finished_at: datetime | None = None,
 ) -> tuple[list[TestSuiteResultRow], list[TestCaseResultRow]]:
     """Build insert-ready suite/case rows from parsed suites.
 
     Shared by the JUnit-XML path (``process_test_report``) and the GitLab-JSON
     path (``process_gitlab_test_report``) so both emit identical row shapes and
     coherence guarantees.
+
+    ``fallback_started_at`` / ``fallback_finished_at`` (typically the CI run's
+    timestamps) are used when a suite carries no timestamps of its own. The
+    daily loader windows suites by ``coalesce(started_at, finished_at)``, so a
+    suite with null timestamps (e.g. every GitLab ``test_report`` suite, or a
+    JUnit file without a ``timestamp`` attribute) would otherwise be invisible
+    to the rollup (CHAOS-2370).
     """
     suite_rows: list[TestSuiteResultRow] = []
     case_rows: list[TestCaseResultRow] = []
@@ -191,8 +201,8 @@ def _build_rows_from_parsed(
                 quarantined_count=suite.quarantined_count,
                 retried_count=0,
                 duration_seconds=suite.duration_seconds,
-                started_at=suite.started_at,
-                finished_at=suite.finished_at,
+                started_at=suite.started_at or fallback_started_at,
+                finished_at=suite.finished_at or fallback_finished_at,
                 team_id=team_id,
                 service_id=service_id,
                 org_id=org_id,
@@ -232,8 +242,14 @@ async def process_test_report(
     team_id: str | None = None,
     org_id: str = "",
     service_path_prefixes: Mapping[str, str] | None = None,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
 ) -> tuple[list[TestSuiteResultRow], list[TestCaseResultRow]]:
-    """Parse a JUnit XML report (from a CI artifact) into insert-ready rows."""
+    """Parse a JUnit XML report (from a CI artifact) into insert-ready rows.
+
+    ``started_at`` / ``finished_at`` are the CI run's timestamps, used to date
+    suites that carry no ``timestamp`` of their own (see _build_rows_from_parsed).
+    """
     parsed_suites = parse_junit_xml(source)
     return _build_rows_from_parsed(
         parsed_suites,
@@ -244,6 +260,8 @@ async def process_test_report(
         team_id=team_id,
         org_id=org_id,
         service_path_prefixes=service_path_prefixes,
+        fallback_started_at=started_at,
+        fallback_finished_at=finished_at,
     )
 
 
@@ -256,12 +274,18 @@ async def process_gitlab_test_report(
     team_id: str | None = None,
     org_id: str = "",
     service_path_prefixes: Mapping[str, str] | None = None,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
 ) -> tuple[list[TestSuiteResultRow], list[TestCaseResultRow]]:
     """Map GitLab's native pipeline ``test_report`` JSON into insert-ready rows.
 
     Unlike ``process_test_report`` (JUnit XML), this consumes the parsed JSON
     GitLab returns from ``GET /projects/:id/pipelines/:id/test_report`` — no XML
     parsing, so no artifact download is needed for GitLab pass/fail/duration.
+
+    GitLab's test_report carries no per-suite timestamps, so ``started_at`` /
+    ``finished_at`` (the pipeline's timestamps) are REQUIRED for the suites to
+    fall inside the daily rollup's window (CHAOS-2370).
     """
     parsed_suites = _parsed_suites_from_gitlab_report(report)
     return _build_rows_from_parsed(
@@ -273,4 +297,6 @@ async def process_gitlab_test_report(
         team_id=team_id,
         org_id=org_id,
         service_path_prefixes=service_path_prefixes,
+        fallback_started_at=started_at,
+        fallback_finished_at=finished_at,
     )

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
+from datetime import datetime
 
 from dev_health_ops.metrics.testops_schemas import (
     CoverageSnapshotRow,
@@ -88,14 +89,17 @@ async def ingest_report_members(
     run_id: str,
     org_id: str,
     team_id: str | None = None,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
 ) -> tuple[
     list[TestSuiteResultRow], list[TestCaseResultRow], list[CoverageSnapshotRow]
 ]:
     """Parse extracted artifact members into insert-ready rows.
 
     ``run_id`` MUST match the pipeline run's id so suite/case/coverage rows join
-    to the pipeline. A single malformed report is skipped (logged) rather than
-    aborting the rest.
+    to the pipeline. ``started_at`` / ``finished_at`` (the CI run's timestamps)
+    date suites whose JUnit XML lacks a ``timestamp`` attribute. A single
+    malformed report is skipped (logged) rather than aborting the rest.
     """
     suite_rows: list[TestSuiteResultRow] = []
     case_rows: list[TestCaseResultRow] = []
@@ -126,6 +130,8 @@ async def ingest_report_members(
                     source=text,
                     team_id=team_id,
                     org_id=org_id,
+                    started_at=started_at,
+                    finished_at=finished_at,
                 )
                 suite_rows.extend(suites)
                 case_rows.extend(cases)
@@ -136,6 +142,7 @@ async def ingest_report_members(
                     source=text,
                     team_id=team_id,
                     org_id=org_id,
+                    report_path=filename,
                 )
                 if _coverage_is_coherent(coverage):
                     coverage_rows.append(coverage)

@@ -948,30 +948,44 @@ def _fetch_gitlab_test_reports_sync(
     default_branch: str | None,
     max_pipelines: int,
 ) -> tuple[
-    list[tuple[str, dict[str, Any]]],
+    list[tuple[str, dict[str, Any], datetime | None, datetime | None]],
     list[tuple[str, list[tuple[str, bytes]]]],
 ]:
     """Blocking: collect native test reports + coverage artifact members.
 
     Returns ``(test_reports, coverage_members)`` where ``test_reports`` is
-    ``[(run_id, test_report_json), ...]`` (GitLab's parsed JUnit JSON) and
+    ``[(run_id, test_report_json, started_at, finished_at), ...]`` (GitLab's
+    parsed JUnit JSON + the pipeline timestamps used to date the suites) and
     ``coverage_members`` is ``[(run_id, [(filename, bytes), ...]), ...]`` from
     job artifact ZIPs. ``run_id`` is ``str(pipeline.id)`` so rows join to the
-    pipeline. Bounded to the default branch and the most recent
-    ``max_pipelines`` pipelines in the window (Codex review item D).
+    pipeline. Bounded to the default branch and ``max_pipelines`` pipelines.
     """
     from dev_health_ops.connectors.utils.safe_archive import iter_zip_members
 
-    test_reports: list[tuple[str, dict[str, Any]]] = []
+    test_reports: list[
+        tuple[str, dict[str, Any], datetime | None, datetime | None]
+    ] = []
     coverage_members: list[tuple[str, list[tuple[str, bytes]]]] = []
     since_aware = since
     if since_aware is not None and since_aware.tzinfo is None:
         since_aware = since_aware.replace(tzinfo=timezone.utc)
 
+    # Filter by update time SERVER-SIDE. We must NOT early-`break` on created_at:
+    # the list is ordered by updated_at, and a recently-updated pipeline can be
+    # old by created_at, so breaking would silently skip valid in-window
+    # pipelines (Codex review). The max_pipelines cap bounds the scan instead.
+    list_params: dict[str, Any] = {
+        "per_page": 100,
+        "order_by": "updated_at",
+        "sort": "desc",
+    }
+    if since_aware is not None:
+        list_params["updated_after"] = since_aware.isoformat()
     try:
-        raw_pipelines = gl_project.pipelines.list(
-            per_page=100, order_by="updated_at", sort="desc", get_all=False
-        )
+        if max_pipelines > 100:
+            raw_pipelines = gl_project.pipelines.list(**list_params, as_list=False)
+        else:
+            raw_pipelines = gl_project.pipelines.list(**list_params, get_all=False)
     except Exception as exc:
         logging.warning(
             "Could not list pipelines for GitLab project %s: %s", project_id, exc
@@ -985,18 +999,16 @@ def _fetch_gitlab_test_reports_sync(
         ref = getattr(pipeline, "ref", None)
         if default_branch and ref and ref != default_branch:
             continue
-        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
-        if (
-            since_aware is not None
-            and created_at is not None
-            and created_at.astimezone(timezone.utc) < since_aware
-        ):
-            break
         pipeline_id = getattr(pipeline, "id", None)
         if pipeline_id is None:
             continue
         count += 1
         run_id = str(pipeline_id)
+        created_at = safe_parse_datetime(getattr(pipeline, "created_at", None))
+        started_at = (
+            safe_parse_datetime(getattr(pipeline, "started_at", None)) or created_at
+        )
+        finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
 
         # Native parsed test report (pass/fail/duration) — preferred over XML.
         try:
@@ -1004,7 +1016,7 @@ def _fetch_gitlab_test_reports_sync(
                 project_id, pipeline_id
             )
             if report and report.get("test_suites"):
-                test_reports.append((run_id, report))
+                test_reports.append((run_id, report, started_at, finished_at))
         except Exception as exc:
             logging.debug("test_report failed for pipeline %s: %s", pipeline_id, exc)
 
@@ -1107,9 +1119,14 @@ async def _sync_gitlab_test_reports(
     suite_rows: list[Any] = []
     case_rows: list[Any] = []
     coverage_rows: list[Any] = []
-    for run_id, report in test_reports:
+    for run_id, report, started_at, finished_at in test_reports:
         suites, cases = await process_gitlab_test_report(
-            repo_id=repo_id, run_id=run_id, report=report, org_id=org_id
+            repo_id=repo_id,
+            run_id=run_id,
+            report=report,
+            org_id=org_id,
+            started_at=started_at,
+            finished_at=finished_at,
         )
         suite_rows.extend(suites)
         case_rows.extend(cases)

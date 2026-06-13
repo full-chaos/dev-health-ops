@@ -1028,6 +1028,12 @@ def _is_report_name(name: str) -> bool:
     return lowered.endswith(".xml") or lowered.endswith(".info")
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
 def _fetch_github_test_artifacts_sync(
     connector: Any,
     gh_repo: Any,
@@ -1036,24 +1042,33 @@ def _fetch_github_test_artifacts_sync(
     since: datetime | None,
     default_branch: str | None,
     max_runs: int,
-) -> list[tuple[str, list[tuple[str, bytes]]]]:
+) -> list[tuple[str, list[tuple[str, bytes]], datetime | None, datetime | None]]:
     """Blocking: download + extract JUnit/coverage report files per workflow run.
 
-    Returns ``[(run_id, [(filename, content_bytes), ...]), ...]``. Bounds work
-    by scanning only the default branch and the most recent ``max_runs`` runs in
-    the window (Codex review item D). ``run_id`` is ``str(run.id)`` so the parsed
-    rows join to the pipeline rows the adapter writes.
+    Returns ``[(run_id, members, started_at, finished_at), ...]``. Branch + date
+    filtering is pushed SERVER-SIDE (``get_workflow_runs(branch=, created=)``) so
+    we never paginate deep history of off-branch runs (Codex review item D), and
+    a flat ``max_runs`` cap bounds the scan. ``run_id`` is ``str(run.id)`` and the
+    run timestamps date the suites (which otherwise lack timestamps).
     """
     # Lazy import to avoid a connectors/providers import cycle at module load.
     from dev_health_ops.connectors.utils.safe_archive import iter_zip_members
 
-    results: list[tuple[str, list[tuple[str, bytes]]]] = []
-    since_aware = since
-    if since_aware is not None and since_aware.tzinfo is None:
-        since_aware = since_aware.replace(tzinfo=timezone.utc)
+    results: list[
+        tuple[str, list[tuple[str, bytes]], datetime | None, datetime | None]
+    ] = []
+    since_aware = _as_utc(since)
+
+    list_kwargs: dict[str, Any] = {}
+    if default_branch:
+        list_kwargs["branch"] = default_branch
+    if since_aware is not None:
+        # GitHub's `created` filter is date-granular; the server returns only
+        # runs created on/after this date, so no client-side history walk.
+        list_kwargs["created"] = f">={since_aware.date().isoformat()}"
 
     try:
-        runs = gh_repo.get_workflow_runs()
+        runs = gh_repo.get_workflow_runs(**list_kwargs)
     except Exception as exc:
         logging.warning(
             "Could not list workflow runs for %s/%s: %s", owner, repo_name, exc
@@ -1064,26 +1079,14 @@ def _fetch_github_test_artifacts_sync(
     for run in runs:
         if scanned >= max_runs:
             break
-        head_branch = getattr(run, "head_branch", None)
-        if default_branch and head_branch and head_branch != default_branch:
-            continue
-        created = getattr(run, "created_at", None) or getattr(
-            run, "run_started_at", None
-        )
-        if since_aware is not None and created is not None:
-            created_aware = (
-                created.replace(tzinfo=timezone.utc)
-                if created.tzinfo is None
-                else created
-            )
-            # Workflow runs are returned newest-first; once we pass the window
-            # boundary every subsequent run is older, so stop.
-            if created_aware < since_aware:
-                break
+        scanned += 1
         run_id = getattr(run, "id", None)
         if run_id is None:
             continue
-        scanned += 1
+        run_started = _as_utc(
+            getattr(run, "run_started_at", None) or getattr(run, "created_at", None)
+        )
+        run_finished = _as_utc(getattr(run, "updated_at", None))
         try:
             artifacts = connector.list_run_artifacts(
                 owner, repo_name, run_id, max_items=MAX_ARTIFACTS_PER_RUN
@@ -1109,7 +1112,7 @@ def _fetch_github_test_artifacts_sync(
                 logging.debug("Artifact %s is not a valid zip", artifact_id)
                 continue
         if members:
-            results.append((str(run_id), members))
+            results.append((str(run_id), members, run_started, run_finished))
     return results
 
 
@@ -1186,9 +1189,14 @@ async def _sync_github_test_reports(
     suite_rows: list[Any] = []
     case_rows: list[Any] = []
     coverage_rows: list[Any] = []
-    for run_id_str, members in raw:
+    for run_id_str, members, run_started, run_finished in raw:
         suites, cases, coverage = await ingest_report_members(
-            members, repo_id=repo_id, run_id=run_id_str, org_id=org_id
+            members,
+            repo_id=repo_id,
+            run_id=run_id_str,
+            org_id=org_id,
+            started_at=run_started,
+            finished_at=run_finished,
         )
         suite_rows.extend(suites)
         case_rows.extend(cases)

@@ -162,6 +162,32 @@ async def test_gitlab_test_report_maps_to_coherent_rows() -> None:
     assert all(c["run_id"] == "999" for c in cases)
 
 
+@pytest.mark.asyncio
+async def test_gitlab_suites_carry_pipeline_timestamps() -> None:
+    """GitLab suites have no timestamps of their own; without the pipeline
+    fallback they'd be filtered out of the daily rollup (coalesce(started_at,
+    finished_at) window). Regression for the CHAOS-2370 review HIGH-1 finding."""
+    from datetime import datetime, timezone
+
+    started = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+    finished = datetime(2026, 6, 1, 10, 5, tzinfo=timezone.utc)
+    report = {
+        "test_suites": [
+            {"name": "s", "test_cases": [{"name": "a", "status": "success"}]}
+        ]
+    }
+    suites, _ = await process_gitlab_test_report(
+        repo_id=uuid4(),
+        run_id="7",
+        report=report,
+        org_id="o",
+        started_at=started,
+        finished_at=finished,
+    )
+    assert suites[0]["started_at"] == started
+    assert suites[0]["finished_at"] == finished
+
+
 # --------------------------------------------------------------------------- #
 # Classification + coverage coherence                                         #
 # --------------------------------------------------------------------------- #

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.utils.logging import sanitize_for_log
@@ -150,7 +150,7 @@ class RetentionService:
         return True
 
     async def execute_policy(
-        self, org_id: uuid.UUID, policy_id: uuid.UUID
+        self, org_id: uuid.UUID, policy_id: uuid.UUID, *, dry_run: bool = True
     ) -> tuple[int, str | None]:
         policy: Any | None = await self.get_policy(org_id, policy_id)
         if not policy:
@@ -163,12 +163,15 @@ class RetentionService:
         retention_days = int(policy.retention_days)
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
-        deleted_count = 0
+        count = 0
         error_message = None
 
         try:
             if resource_type == RetentionResourceType.AUDIT_LOGS.value:
-                deleted_count = await self._delete_audit_logs(org_id, cutoff_date)
+                if dry_run:
+                    count = await self._count_audit_logs(org_id, cutoff_date)
+                else:
+                    count = await self._delete_audit_logs(org_id, cutoff_date)
             else:
                 error_message = (
                     f"Cleanup not implemented for resource type: {resource_type}"
@@ -176,15 +179,17 @@ class RetentionService:
                 logger.warning(error_message)
                 return 0, error_message
 
-            policy.last_run_at = datetime.now(timezone.utc)
-            policy.last_run_deleted_count = deleted_count
-            policy.next_run_at = datetime.now(timezone.utc) + timedelta(days=1)
-            await self.session.flush()
+            if not dry_run:
+                policy.last_run_at = datetime.now(timezone.utc)
+                policy.last_run_deleted_count = count
+                policy.next_run_at = datetime.now(timezone.utc) + timedelta(days=1)
+                await self.session.flush()
 
             logger.info(
-                "Retention policy executed: %s, deleted %d records older than %s",
+                "Retention policy %s: %s %d records older than %s",
                 policy_id,
-                deleted_count,
+                "would delete" if dry_run else "deleted",
+                count,
                 cutoff_date.isoformat(),
             )
 
@@ -192,7 +197,7 @@ class RetentionService:
             error_message = str(e)
             logger.exception("Error executing retention policy %s: %s", policy_id, e)
 
-        return deleted_count, error_message
+        return count, error_message
 
     async def _delete_audit_logs(self, org_id: uuid.UUID, cutoff_date: datetime) -> int:
         stmt = delete(AuditLog).where(
@@ -203,6 +208,20 @@ class RetentionService:
         )
         result = await self.session.execute(stmt)
         return int(getattr(result, "rowcount", 0) or 0)
+
+    async def _count_audit_logs(self, org_id: uuid.UUID, cutoff_date: datetime) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(AuditLog)
+            .where(
+                and_(
+                    AuditLog.org_id == org_id,
+                    AuditLog.created_at < cutoff_date,
+                )
+            )
+        )
+        result = await self.session.execute(stmt)
+        return int(result.scalar() or 0)
 
     async def get_policies_due_for_execution(
         self, limit: int = 100

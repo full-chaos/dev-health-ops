@@ -34,7 +34,7 @@ class TestLicenseManagerCommunityTier:
         assert has_feature("sso", log_denial=False) is False
         assert has_feature("audit_log", log_denial=False) is False
         assert has_feature("ip_allowlist", log_denial=False) is False
-        assert has_feature("retention_policies", log_denial=False) is False
+        assert has_feature("custom_retention", log_denial=False) is False
 
 
 class TestCommunityEndpointsNotGated:

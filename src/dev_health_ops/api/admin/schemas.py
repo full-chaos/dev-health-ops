@@ -750,6 +750,10 @@ class RetentionExecuteResponse(BaseModel):
     error: str | None = None
 
 
+class RetentionExecuteRequest(BaseModel):
+    dry_run: bool = True
+
+
 class PlatformStatsResponse(BaseModel):
     total_organizations: int
     active_organizations: int

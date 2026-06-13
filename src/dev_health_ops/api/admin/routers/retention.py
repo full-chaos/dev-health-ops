@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
 from dev_health_ops.api.admin.schemas import (
+    RetentionExecuteRequest,
     RetentionExecuteResponse,
     RetentionPolicyCreate,
     RetentionPolicyListResponse,
@@ -45,7 +46,7 @@ def _retention_policy_response(policy: object) -> RetentionPolicyResponse:
 
 
 @router.get("/retention-policies", response_model=RetentionPolicyListResponse)
-@require_feature("retention_policies", required_tier="enterprise")
+@require_feature("custom_retention", required_tier="enterprise")
 async def list_retention_policies(
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
@@ -69,7 +70,7 @@ async def list_retention_policies(
 
 
 @router.get("/retention-policies/resource-types")
-@require_feature("retention_policies", required_tier="enterprise")
+@require_feature("custom_retention", required_tier="enterprise")
 async def list_retention_resource_types() -> list[str]:
     return RetentionService.get_available_resource_types()
 
@@ -77,7 +78,7 @@ async def list_retention_resource_types() -> list[str]:
 @router.post(
     "/retention-policies", response_model=RetentionPolicyResponse, status_code=201
 )
-@require_feature("retention_policies", required_tier="enterprise")
+@require_feature("custom_retention", required_tier="enterprise")
 async def create_retention_policy(
     payload: RetentionPolicyCreate,
     session: AsyncSession = Depends(get_session),
@@ -99,7 +100,7 @@ async def create_retention_policy(
 
 
 @router.get("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
-@require_feature("retention_policies", required_tier="enterprise")
+@require_feature("custom_retention", required_tier="enterprise")
 async def get_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),
@@ -116,7 +117,7 @@ async def get_retention_policy(
 
 
 @router.patch("/retention-policies/{policy_id}", response_model=RetentionPolicyResponse)
-@require_feature("retention_policies", required_tier="enterprise")
+@require_feature("custom_retention", required_tier="enterprise")
 async def update_retention_policy(
     policy_id: str,
     payload: RetentionPolicyUpdate,
@@ -140,7 +141,7 @@ async def update_retention_policy(
 
 
 @router.delete("/retention-policies/{policy_id}")
-@require_feature("retention_policies", required_tier="enterprise")
+@require_feature("custom_retention", required_tier="enterprise")
 async def delete_retention_policy(
     policy_id: str,
     session: AsyncSession = Depends(get_session),
@@ -159,16 +160,19 @@ async def delete_retention_policy(
 @router.post(
     "/retention-policies/{policy_id}/execute", response_model=RetentionExecuteResponse
 )
-@require_feature("retention_policies", required_tier="enterprise")
+@require_feature("custom_retention", required_tier="enterprise")
 async def execute_retention_policy(
     policy_id: str,
+    payload: RetentionExecuteRequest | None = None,
     session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> RetentionExecuteResponse:
+    dry_run = payload.dry_run if payload is not None else True
     svc = RetentionService(session)
     deleted_count, error = await svc.execute_policy(
         org_id=uuid.UUID(org_id),
         policy_id=uuid.UUID(policy_id),
+        dry_run=dry_run,
     )
     return RetentionExecuteResponse(
         deleted_count=deleted_count,

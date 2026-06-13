@@ -29,6 +29,7 @@ from dev_health_ops.processors.base_git import (
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
+    resolve_commit_stats_limit,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -195,8 +196,14 @@ def _fetch_github_commit_stats_sync(
     repo_id,
     max_stats,
     since: datetime | None = None,
+    gate=None,
 ):
-    """Sync helper to fetch detailed commit stats (files)."""
+    """Sync helper to fetch detailed commit stats (files).
+
+    Accessing ``commit.files`` lazy-loads commit detail — one REST call per
+    commit — so each iteration waits on the rate-limit gate.
+    """
+    gate = BaseGitProcessor.ensure_gate(gate)
     stats_objects = []
     for commit in raw_commits[:max_stats]:
         if since is not None:
@@ -219,6 +226,8 @@ def _fetch_github_commit_stats_sync(
                 continue
 
         try:
+            if gate is not None:
+                gate.wait_sync()
             files = commit.files
             if files is None:
                 continue
@@ -1061,7 +1070,9 @@ async def process_github_repo(
 
                 # 3. Fetch Stats
                 logging.info("Fetching commit stats from GitHub...")
-                stats_limit = 50 if max_commits is None else min(max_commits, 50)
+                stats_limit = resolve_commit_stats_limit(
+                    len(raw_commits), max_commits, since
+                )
                 stats_objects = await loop.run_in_executor(
                     None,
                     _fetch_github_commit_stats_sync,
@@ -1069,6 +1080,7 @@ async def process_github_repo(
                     db_repo.id,
                     stats_limit,
                     since,
+                    BaseGitProcessor.make_default_gate(),
                 )
 
                 if stats_objects:

@@ -28,6 +28,7 @@ from dev_health_ops.processors.base_git import (
     build_deployment,
     build_git_pull_request,
     check_backfill_needs,
+    resolve_commit_stats_limit,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -164,12 +165,21 @@ def _fetch_gitlab_commits_sync(
     return commit_hashes, commit_objects
 
 
-def _fetch_gitlab_commit_stats_sync(gl_project, commit_hashes, repo_id, max_stats):
-    """Sync helper to fetch detailed commit stats from GitLab."""
+def _fetch_gitlab_commit_stats_sync(
+    gl_project, commit_hashes, repo_id, max_stats, gate=None
+):
+    """Sync helper to fetch detailed commit stats from GitLab.
+
+    Each commit detail is one REST call, so each iteration waits on the
+    rate-limit gate.
+    """
+    gate = BaseGitProcessor.ensure_gate(gate)
     stats_objects = []
 
     for commit_hash in commit_hashes[:max_stats]:
         try:
+            if gate is not None:
+                gate.wait_sync()
             detailed_commit = gl_project.commits.get(commit_hash)
             if hasattr(detailed_commit, "stats"):
                 stat = GitCommitStat(
@@ -970,7 +980,9 @@ async def process_gitlab_project(
 
             # 3. Fetch Stats
             logging.info("Fetching commit stats from GitLab...")
-            stats_limit = 50 if max_commits is None else min(max_commits, 50)
+            stats_limit = resolve_commit_stats_limit(
+                len(commit_hashes), max_commits, since
+            )
             stats_objects = await loop.run_in_executor(
                 None,
                 _fetch_gitlab_commit_stats_sync,

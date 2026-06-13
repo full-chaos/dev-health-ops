@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Coroutine
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -135,6 +136,31 @@ class BaseGitProcessor:
             The result of the coroutine.
         """
         return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+
+def resolve_commit_stats_limit(
+    raw_commit_count: int,
+    max_commits: int | None,
+    since: datetime | None,
+) -> int:
+    """How many commits to fetch per-file stats for.
+
+    Stats cost one extra API call per commit, so unbounded full-history
+    syncs stay conservatively capped at 50. Window-bounded syncs
+    (``since`` set) cover every commit in the window — the commit list is
+    already bounded by the sync window, and truncating it starves the
+    churn/hotspot/bus-factor daily metrics with partial days.
+
+    ``COMMIT_STATS_MAX_COMMITS`` (default 300) is the absolute ceiling:
+    each commit's stats cost one extra API call against the shared
+    provider rate budget (GitHub ~5000/hr), so the ceiling bounds how much
+    a single repo sync can consume.
+    """
+    hard_cap = int(os.getenv("COMMIT_STATS_MAX_COMMITS", "300"))
+    limit = raw_commit_count if since is not None else 50
+    if max_commits is not None:
+        limit = min(limit, max_commits)
+    return min(limit, hard_cap)
 
 
 class BackfillNeeds:

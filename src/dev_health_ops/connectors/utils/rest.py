@@ -185,6 +185,72 @@ class RESTClient:
         max_delay=60.0,
         exceptions=(RateLimitException, APIException),
     )
+    def get_binary(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        max_bytes: int = 100 * 1024 * 1024,
+    ) -> bytes:
+        """GET a binary response (e.g. a CI artifact ZIP) with a size cap.
+
+        Returns ``b""`` on 404 (artifacts commonly absent/expired) so callers
+        treat it as "no artifact". Streams with a hard byte cap to bound memory
+        on untrusted downloads (CHAOS-2370).
+        """
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        request_headers = {**self.headers, **(headers or {})}
+
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers=request_headers,
+                timeout=self.timeout,
+                stream=True,
+            )
+
+            if response.status_code == 401:
+                raise AuthenticationException("Authentication failed")
+            elif response.status_code == 403:
+                raise APIException(f"Forbidden: {response.text}")
+            elif response.status_code == 429:
+                raise RateLimitException(
+                    "API rate limit exceeded",
+                    retry_after_seconds=_parse_retry_after_seconds(response),
+                )
+            elif response.status_code == 404:
+                return b""
+            elif response.status_code != 200:
+                raise APIException(
+                    f"API error: {response.status_code} - {response.text}"
+                )
+
+            buffer = bytearray()
+            for chunk in response.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                buffer.extend(chunk)
+                if len(buffer) > max_bytes:
+                    logger.warning(
+                        "Binary response from %s exceeds %d byte cap; discarding",
+                        endpoint,
+                        max_bytes,
+                    )
+                    return b""
+            return bytes(buffer)
+
+        except requests.exceptions.Timeout as exc:
+            raise APIException("Request timeout") from exc
+        except requests.exceptions.RequestException as exc:
+            raise APIException(f"Request failed: {exc}") from exc
+
+    @retry_with_backoff(
+        max_retries=5,
+        initial_delay=1.0,
+        max_delay=60.0,
+        exceptions=(RateLimitException, APIException),
+    )
     def delete(
         self,
         endpoint: str,
@@ -263,6 +329,32 @@ class GitLabRESTClient(RESTClient):
         # Don't pass token to parent as we're using custom header
         super().__init__(
             base_url=base_url, token=None, timeout=timeout, headers=headers
+        )
+
+    def get_pipeline_test_report(
+        self, project_id: int | str, pipeline_id: int | str
+    ) -> dict[str, Any]:
+        """Fetch GitLab's native parsed JUnit test report for a pipeline.
+
+        GET /projects/{id}/pipelines/{pipeline_id}/test_report returns the
+        already-parsed test suites/cases as JSON, so no artifact download or XML
+        parsing is needed for GitLab pass/fail/duration metrics (CHAOS-2370).
+        Raises APIException on 404 (no report); callers handle best-effort.
+        """
+        return self.get(f"projects/{project_id}/pipelines/{pipeline_id}/test_report")
+
+    def download_job_artifacts(
+        self,
+        project_id: int | str,
+        job_id: int | str,
+        max_bytes: int = 100 * 1024 * 1024,
+    ) -> bytes:
+        """Download a job's artifacts ZIP (for coverage / fallback JUnit).
+
+        Returns ``b""`` when the job has no artifacts or they have expired.
+        """
+        return self.get_binary(
+            f"projects/{project_id}/jobs/{job_id}/artifacts", max_bytes=max_bytes
         )
 
     def get_file_blame(

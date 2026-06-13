@@ -39,6 +39,7 @@ def _sync_flags_for_target(target: str) -> dict:
         "sync_deployments": target == "deployments",
         "sync_incidents": target == "incidents",
         "sync_security": target == "security",
+        "sync_tests": target == "tests",
         "blame_only": target == "blame",
     }
 
@@ -218,6 +219,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
                 "sync_deployments": flags["sync_deployments"],
                 "sync_incidents": flags["sync_incidents"],
                 "sync_security": flags["sync_security"],
+                "sync_tests": flags["sync_tests"],
                 "blame_only": flags["blame_only"],
                 "backfill_missing": True,
                 "since": since,
@@ -244,6 +246,7 @@ async def sync_github_target(ns: argparse.Namespace, target: str) -> int:
             sync_deployments=flags["sync_deployments"],
             sync_incidents=flags["sync_incidents"],
             sync_security=flags["sync_security"],
+            sync_tests=flags["sync_tests"],
             since=since,
         )
 
@@ -282,6 +285,7 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
                 "sync_deployments": flags["sync_deployments"],
                 "sync_incidents": flags["sync_incidents"],
                 "sync_security": flags["sync_security"],
+                "sync_tests": flags["sync_tests"],
                 "blame_only": flags["blame_only"],
                 "backfill_missing": True,
                 "since": since,
@@ -308,6 +312,7 @@ async def sync_gitlab_target(ns: argparse.Namespace, target: str) -> int:
             sync_deployments=flags["sync_deployments"],
             sync_incidents=flags["sync_incidents"],
             sync_security=flags["sync_security"],
+            sync_tests=flags["sync_tests"],
             since=since,
         )
 
@@ -377,9 +382,11 @@ def run_sync_target(ns: argparse.Namespace) -> int:
         "deployments",
         "incidents",
         "security",
+        "tests",
     }:
         raise SystemExit(
-            "Sync target must be git, prs, blame, cicd, deployments, incidents, or security."
+            "Sync target must be git, prs, blame, cicd, deployments, incidents, "
+            "security, or tests."
         )
 
     if provider == "local":
@@ -450,6 +457,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "deployments": "Sync deployments.",
         "incidents": "Sync incidents.",
         "security": "Sync security and dependency alerts.",
+        "tests": "Sync CI test results and coverage (TestOps).",
     }
 
     for target, help_text in target_parsers.items():

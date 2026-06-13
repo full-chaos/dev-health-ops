@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import zipfile
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +43,11 @@ from dev_health_ops.processors.fetch_utils import (
 )
 from dev_health_ops.processors.release_ref import get_release_ref_enrichment
 from dev_health_ops.processors.storage_protocol import GitSyncStore
+from dev_health_ops.processors.testops_ingest import (
+    MAX_ARTIFACTS_PER_RUN,
+    MAX_RUNS_PER_SYNC,
+    ingest_report_members,
+)
 from dev_health_ops.providers.pr_state import normalize_pr_state
 from dev_health_ops.utils import (
     AGGREGATE_STATS_MARKER,
@@ -1016,6 +1022,194 @@ async def _backfill_github_missing_data(
             )
 
 
+def _is_report_name(name: str) -> bool:
+    """ZIP member filter: JUnit/coverage report files we know how to parse."""
+    lowered = name.lower()
+    return lowered.endswith(".xml") or lowered.endswith(".info")
+
+
+def _fetch_github_test_artifacts_sync(
+    connector: Any,
+    gh_repo: Any,
+    owner: str,
+    repo_name: str,
+    since: datetime | None,
+    default_branch: str | None,
+    max_runs: int,
+) -> list[tuple[str, list[tuple[str, bytes]]]]:
+    """Blocking: download + extract JUnit/coverage report files per workflow run.
+
+    Returns ``[(run_id, [(filename, content_bytes), ...]), ...]``. Bounds work
+    by scanning only the default branch and the most recent ``max_runs`` runs in
+    the window (Codex review item D). ``run_id`` is ``str(run.id)`` so the parsed
+    rows join to the pipeline rows the adapter writes.
+    """
+    # Lazy import to avoid a connectors/providers import cycle at module load.
+    from dev_health_ops.connectors.utils.safe_archive import iter_zip_members
+
+    results: list[tuple[str, list[tuple[str, bytes]]]] = []
+    since_aware = since
+    if since_aware is not None and since_aware.tzinfo is None:
+        since_aware = since_aware.replace(tzinfo=timezone.utc)
+
+    try:
+        runs = gh_repo.get_workflow_runs()
+    except Exception as exc:
+        logging.warning(
+            "Could not list workflow runs for %s/%s: %s", owner, repo_name, exc
+        )
+        return results
+
+    scanned = 0
+    for run in runs:
+        if scanned >= max_runs:
+            break
+        head_branch = getattr(run, "head_branch", None)
+        if default_branch and head_branch and head_branch != default_branch:
+            continue
+        created = getattr(run, "created_at", None) or getattr(
+            run, "run_started_at", None
+        )
+        if since_aware is not None and created is not None:
+            created_aware = (
+                created.replace(tzinfo=timezone.utc)
+                if created.tzinfo is None
+                else created
+            )
+            # Workflow runs are returned newest-first; once we pass the window
+            # boundary every subsequent run is older, so stop.
+            if created_aware < since_aware:
+                break
+        run_id = getattr(run, "id", None)
+        if run_id is None:
+            continue
+        scanned += 1
+        try:
+            artifacts = connector.list_run_artifacts(
+                owner, repo_name, run_id, max_items=MAX_ARTIFACTS_PER_RUN
+            )
+        except Exception as exc:
+            logging.debug("Artifact list failed for run %s: %s", run_id, exc)
+            continue
+        members: list[tuple[str, bytes]] = []
+        for artifact in artifacts:
+            artifact_id = artifact.get("id")
+            if artifact_id is None:
+                continue
+            try:
+                data = connector.download_artifact_zip(owner, repo_name, artifact_id)
+            except Exception as exc:
+                logging.debug("Artifact download failed for %s: %s", artifact_id, exc)
+                continue
+            if not data:
+                continue
+            try:
+                members.extend(iter_zip_members(data, name_filter=_is_report_name))
+            except zipfile.BadZipFile:
+                logging.debug("Artifact %s is not a valid zip", artifact_id)
+                continue
+        if members:
+            results.append((str(run_id), members))
+    return results
+
+
+async def _sync_github_test_reports(
+    *,
+    connector: Any,
+    gh_repo: Any,
+    owner: str,
+    repo_name: str,
+    repo_id: Any,
+    org_id: str,
+    ingestion_sink: IngestionSink,
+    loop: asyncio.AbstractEventLoop,
+    since: datetime | None,
+) -> None:
+    """Ingest TestOps data for one GitHub repo (CHAOS-2370).
+
+    (1) Extended pipeline + job rows via the async adapter (closes the
+    ci_job_runs gap and populates the extended ci_pipeline_runs columns).
+    (2) Test suites/cases + coverage parsed from Actions artifacts.
+    Each stage is independently fault-tolerant so one failure doesn't sink the
+    rest of the sync.
+    """
+    # Lazy imports to avoid a connectors/providers import cycle at module load.
+    from dev_health_ops.processors.testops_pipeline import TestOpsPipelineProcessor
+    from dev_health_ops.providers.github.testops_pipeline import GitHubActionsAdapter
+
+    # (1) Extended pipelines + jobs. Pass the connector's resolved token
+    # explicitly so the adapter never falls back to an ambient env token in a
+    # multi-tenant worker (Codex review item G).
+    try:
+        adapter = GitHubActionsAdapter(
+            base_url=connector._rest_base_url(), token=connector.token
+        )
+        processor = TestOpsPipelineProcessor(ingestion_sink)
+        async with adapter:
+            result = await processor.fetch_and_store(
+                adapter,
+                since_date=since,
+                owner=owner,
+                repo=repo_name,
+                repo_id=repo_id,
+                org_id=org_id,
+            )
+        logging.info(
+            "TestOps GitHub %s/%s: %d pipelines, %d jobs",
+            owner,
+            repo_name,
+            result.pipeline_runs,
+            result.job_runs,
+        )
+    except Exception as exc:
+        logging.warning(
+            "TestOps pipeline/job ingestion failed for %s/%s: %s",
+            owner,
+            repo_name,
+            exc,
+        )
+
+    # (2) JUnit + coverage from artifacts (best-effort; artifacts may be
+    # expired/absent — those repos legitimately show empty test metrics).
+    default_branch = getattr(gh_repo, "default_branch", None)
+    raw = await loop.run_in_executor(
+        None,
+        _fetch_github_test_artifacts_sync,
+        connector,
+        gh_repo,
+        owner,
+        repo_name,
+        since,
+        default_branch,
+        MAX_RUNS_PER_SYNC,
+    )
+    suite_rows: list[Any] = []
+    case_rows: list[Any] = []
+    coverage_rows: list[Any] = []
+    for run_id_str, members in raw:
+        suites, cases, coverage = await ingest_report_members(
+            members, repo_id=repo_id, run_id=run_id_str, org_id=org_id
+        )
+        suite_rows.extend(suites)
+        case_rows.extend(cases)
+        coverage_rows.extend(coverage)
+    if suite_rows:
+        await ingestion_sink.insert_test_suite_results(suite_rows)
+    if case_rows:
+        await ingestion_sink.insert_test_case_results(case_rows)
+    if coverage_rows:
+        await ingestion_sink.insert_coverage_snapshots(coverage_rows)
+    logging.info(
+        "TestOps GitHub %s/%s: %d suites, %d cases, %d coverage from %d runs",
+        owner,
+        repo_name,
+        len(suite_rows),
+        len(case_rows),
+        len(coverage_rows),
+        len(raw),
+    )
+
+
 async def process_github_repo(
     store: GitSyncStore | Any,
     owner: str,
@@ -1030,6 +1224,7 @@ async def process_github_repo(
     sync_deployments: bool = True,
     sync_incidents: bool = True,
     sync_security: bool = True,
+    sync_tests: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
 ) -> None:
@@ -1184,6 +1379,19 @@ async def process_github_repo(
                     await ingestion_sink.insert_ci_pipeline_runs(pipeline_runs)
                     logging.info("Stored %d workflow runs", len(pipeline_runs))
 
+            if sync_tests:
+                await _sync_github_test_reports(
+                    connector=connector,
+                    gh_repo=gh_repo,
+                    owner=owner,
+                    repo_name=repo_name,
+                    repo_id=db_repo.id,
+                    org_id=getattr(store, "org_id", "") or "",
+                    ingestion_sink=ingestion_sink,
+                    loop=loop,
+                    since=since,
+                )
+
             if sync_deployments:
                 logging.info("Fetching deployments from GitHub...")
                 deployments = await loop.run_in_executor(
@@ -1295,6 +1503,7 @@ async def process_github_repos_batch(
     sync_deployments: bool = True,
     sync_incidents: bool = True,
     sync_security: bool = True,
+    sync_tests: bool = False,
     blame_only: bool = False,
     backfill_missing: bool = True,
     since: datetime | None = None,
@@ -1467,6 +1676,29 @@ async def process_github_repos_batch(
             except Exception as e:
                 logging.warning(
                     "Failed to fetch CI/CD runs for GitHub repo %s: %s",
+                    repo_info.full_name,
+                    e,
+                )
+
+        if sync_tests:
+            try:
+                if gh_repo is None:
+                    gh_repo = connector.github.get_repo(repo_info.full_name)
+                batch_owner, _, batch_repo = repo_info.full_name.partition("/")
+                await _sync_github_test_reports(
+                    connector=connector,
+                    gh_repo=gh_repo,
+                    owner=batch_owner,
+                    repo_name=batch_repo,
+                    repo_id=db_repo.id,
+                    org_id=getattr(store, "org_id", "") or "",
+                    ingestion_sink=ingestion_sink,
+                    loop=loop,
+                    since=since,
+                )
+            except Exception as e:
+                logging.warning(
+                    "Failed to sync test reports for GitHub repo %s: %s",
                     repo_info.full_name,
                     e,
                 )

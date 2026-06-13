@@ -356,7 +356,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           team_id,
           service_id,
           org_id
-        FROM ci_pipeline_runs
+        FROM ci_pipeline_runs FINAL
         WHERE started_at >= {{start:DateTime}} AND started_at < {{end:DateTime}}
         {repo_filter}
         {org_filter}
@@ -375,8 +375,8 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           j.runner_type,
           j.retry_attempt,
           j.org_id
-        FROM ci_job_runs AS j
-        INNER JOIN ci_pipeline_runs AS p
+        FROM ci_job_runs AS j FINAL
+        INNER JOIN ci_pipeline_runs AS p FINAL
           ON (p.repo_id = j.repo_id) AND (p.run_id = j.run_id)
          AND (p.org_id = j.org_id)
         WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}
@@ -433,7 +433,7 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           team_id,
           service_id,
           org_id
-        FROM test_suite_results
+        FROM test_suite_results FINAL
         WHERE coalesce(started_at, finished_at) >= {{start:DateTime}}
           AND coalesce(started_at, finished_at) < {{end:DateTime}}
         {repo_filter}
@@ -455,8 +455,8 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           c.stack_trace,
           c.is_quarantined,
           c.org_id
-        FROM test_case_results AS c
-        INNER JOIN test_suite_results AS s
+        FROM test_case_results AS c FINAL
+        INNER JOIN test_suite_results AS s FINAL
           ON (s.repo_id = c.repo_id)
          AND (s.run_id = c.run_id)
          AND (s.suite_id = c.suite_id)
@@ -507,8 +507,8 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
           c.team_id,
           c.service_id,
           c.org_id
-        FROM coverage_snapshots AS c
-        INNER JOIN ci_pipeline_runs AS p
+        FROM coverage_snapshots AS c FINAL
+        INNER JOIN ci_pipeline_runs AS p FINAL
           ON (p.repo_id = c.repo_id) AND (p.run_id = c.run_id)
          AND (p.org_id = c.org_id)
         WHERE p.started_at >= {{start:DateTime}} AND p.started_at < {{end:DateTime}}

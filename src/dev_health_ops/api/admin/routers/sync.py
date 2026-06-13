@@ -124,7 +124,15 @@ def _backfill_job_response(job: object):
 # Canonical mapping of provider → supported sync targets.
 # Jira/Linear only support work-items; Git/CI/CD come from code hosts.
 PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
-    "github": ["git", "prs", "cicd", "deployments", "incidents", "work-items"],
+    "github": [
+        "git",
+        "prs",
+        "cicd",
+        "deployments",
+        "incidents",
+        "work-items",
+        "tests",
+    ],
     "gitlab": [
         "git",
         "prs",
@@ -133,6 +141,7 @@ PROVIDER_SYNC_TARGETS: dict[str, list[str]] = {
         "incidents",
         "work-items",
         "feature-flags",
+        "tests",
     ],
     "jira": ["work-items"],
     "linear": ["work-items"],

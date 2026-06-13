@@ -362,6 +362,32 @@ class GitLabRESTClient(RESTClient):
             params["sort"] = sort
         return self.get_list(endpoint, params=params)
 
+    def get_issues(
+        self,
+        project_id: int,
+        labels: str | None = None,
+        state: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        order_by: str | None = None,
+        sort: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List project issues; ``labels`` is GitLab's comma-separated filter."""
+        endpoint = f"projects/{project_id}/issues"
+        params: dict[str, Any] = {
+            "page": page,
+            "per_page": per_page,
+        }
+        if labels:
+            params["labels"] = labels
+        if state:
+            params["state"] = state
+        if order_by:
+            params["order_by"] = order_by
+        if sort:
+            params["sort"] = sort
+        return self.get_list(endpoint, params=params)
+
     def get_releases(
         self,
         project_id: int,

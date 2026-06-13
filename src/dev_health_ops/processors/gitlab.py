@@ -434,8 +434,11 @@ def _resolve_gitlab_deployment_mr(connector, project_id, sha):
     if not chosen:
         return None, None
     merged_at = safe_parse_datetime(chosen.get("merged_at") or "")
-    iid = chosen.get("iid")
-    return (int(iid) if iid is not None else None), merged_at
+    try:
+        iid = int(chosen.get("iid"))
+    except (TypeError, ValueError):
+        iid = None
+    return iid, merged_at
 
 
 def _fetch_gitlab_deployments_sync(

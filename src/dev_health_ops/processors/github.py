@@ -335,7 +335,14 @@ def _resolve_github_deployment_pr(gh_repo, sha, gate):
         logging.debug("Failed PR lookup for deployed commit %s: %s", sha, exc)
         return None, None
     merged = [pr for pr in pulls if getattr(pr, "merged_at", None) is not None]
-    chosen = merged[0] if merged else (pulls[0] if pulls else None)
+    # Prefer the PR that directly merged this commit: get_pulls() also
+    # returns PRs that merely contain the SHA (e.g. stacked merges).
+    direct = [pr for pr in merged if getattr(pr, "merge_commit_sha", None) == sha]
+    chosen = (
+        direct[0]
+        if direct
+        else (merged[0] if merged else (pulls[0] if pulls else None))
+    )
     if chosen is None:
         return None, None
     return getattr(chosen, "number", None), getattr(chosen, "merged_at", None)
@@ -408,6 +415,10 @@ def _fetch_github_incidents_sync(gh_repo, repo_id, max_issues, since):
             )
             continue
         for issue in label_issues:
+            # The GitHub issues API returns PRs alongside issues; a PR
+            # carrying an incident label is not an incident.
+            if getattr(issue, "pull_request", None) is not None:
+                continue
             issue_id = getattr(issue, "id", None)
             if issue_id in seen_issue_ids:
                 continue

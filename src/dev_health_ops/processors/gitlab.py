@@ -29,6 +29,7 @@ from dev_health_ops.processors.base_git import (
     build_git_pull_request,
     check_backfill_needs,
     resolve_commit_stats_limit,
+    resolve_incident_labels,
 )
 from dev_health_ops.processors.fetch_utils import (
     AsyncBatchCollector,
@@ -413,6 +414,33 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
     return pipelines
 
 
+def _resolve_gitlab_deployment_mr(connector, project_id, sha):
+    """Resolve the merged MR for a deployed commit via the commits API.
+
+    Failure-soft: any lookup error leaves the deployment without MR
+    attribution rather than failing the sync.
+    """
+    if not sha:
+        return None, None
+    try:
+        mrs = connector.rest_client.get_list(
+            f"projects/{project_id}/repository/commits/{sha}/merge_requests"
+        )
+    except Exception as exc:
+        logging.debug("Failed MR lookup for deployed commit %s: %s", sha, exc)
+        return None, None
+    merged = [mr for mr in mrs or [] if mr.get("state") == "merged"]
+    chosen = merged[0] if merged else (mrs[0] if mrs else None)
+    if not chosen:
+        return None, None
+    merged_at = safe_parse_datetime(chosen.get("merged_at") or "")
+    try:
+        iid = int(chosen.get("iid"))
+    except (TypeError, ValueError):
+        iid = None
+    return iid, merged_at
+
+
 def _fetch_gitlab_deployments_sync(
     connector, project_id, repo_id, max_deployments, since
 ):
@@ -466,6 +494,9 @@ def _fetch_gitlab_deployments_sync(
             releases=release_objects,
         )
 
+        mr_number, mr_merged_at = _resolve_gitlab_deployment_mr(
+            connector, project_id, dep.get("sha")
+        )
         deployments.append(
             build_deployment(
                 repo_id=repo_id,
@@ -477,6 +508,8 @@ def _fetch_gitlab_deployments_sync(
                 started_at=created_at,
                 finished_at=finished_at,
                 deployed_at=created_at,
+                merged_at=mr_merged_at,
+                pull_request_number=mr_number,
                 release_ref=enrichment.release_ref,
                 release_ref_confidence=enrichment.confidence,
             )
@@ -486,20 +519,36 @@ def _fetch_gitlab_deployments_sync(
 
 
 def _fetch_gitlab_incidents_sync(connector, project_id, repo_id, max_issues, since):
-    """Sync helper to fetch GitLab incidents (issues labeled 'incident')."""
+    """Sync helper to fetch GitLab incidents (configurable incident labels)."""
     incidents: list[Incident] = []
-    try:
-        raw_issues = connector.rest_client.get_issues(
-            project_id=project_id,
-            labels="incident",
-            per_page=min(max_issues, 100),
-            order_by="updated_at",
-            sort="desc",
-        )
-    except Exception as exc:
-        logging.debug("Failed to fetch incident issues: %s", exc)
-        return incidents
-
+    labels = resolve_incident_labels()
+    raw_issues: list = []
+    seen_issue_ids: set = set()
+    for label in labels:
+        try:
+            label_issues = connector.rest_client.get_issues(
+                project_id=project_id,
+                labels=label,
+                per_page=min(max_issues, 100),
+                order_by="updated_at",
+                sort="desc",
+            )
+        except Exception as exc:
+            logging.debug(
+                "Failed to fetch incident issues for label %r: %s", label, exc
+            )
+            continue
+        for issue in label_issues or []:
+            issue_id = issue.get("id")
+            if issue_id in seen_issue_ids:
+                continue
+            seen_issue_ids.add(issue_id)
+            raw_issues.append(issue)
+    logging.info(
+        "Fetched %d GitLab incident issue(s) (labels searched: %s)",
+        len(raw_issues),
+        ", ".join(labels),
+    )
     for issue in raw_issues[:max_issues]:
         created_at_str = issue.get("created_at")
         if not created_at_str:

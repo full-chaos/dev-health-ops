@@ -174,6 +174,148 @@ def list_users(ns: argparse.Namespace) -> int:
     return asyncio.run(_list_users_async(ns))
 
 
+async def _update_user_async(ns: argparse.Namespace) -> int:
+    from dev_health_ops.api.services.users import (
+        MembershipService,
+        OrganizationService,
+        UserService,
+    )
+    from dev_health_ops.models.users import MemberRole
+
+    has_profile_change = any(
+        value is not None
+        for value in (
+            ns.new_email,
+            ns.new_username,
+            ns.full_name,
+            ns.active,
+            ns.verified,
+            ns.superuser,
+        )
+    )
+    has_action = (
+        has_profile_change
+        or ns.password is not None
+        or ns.membership_org is not None
+        or ns.remove_from_org is not None
+    )
+    if not has_action:
+        print("Error: No updates specified. Provide at least one field to update.")
+        return 1
+    if ns.role is not None and ns.membership_org is None:
+        print("Error: --role requires --org.")
+        return 1
+
+    session = await _get_session(ns)
+    try:
+        user_svc = UserService(session)
+
+        user = None
+        if ns.id:
+            user = await user_svc.get_by_id(ns.id)
+        elif ns.email:
+            user = await user_svc.get_by_email(ns.email)
+        elif ns.username:
+            user = await user_svc.get_by_username(ns.username)
+        else:
+            print("Error: Identify the user with --id, --email, or --username.")
+            return 1
+
+        if not user:
+            print("Error: User not found.")
+            return 1
+
+        user_id = str(user.id)
+        changes: list[str] = []
+
+        if has_profile_change:
+            await user_svc.update(
+                user_id,
+                email=ns.new_email,
+                username=ns.new_username,
+                full_name=ns.full_name,
+                is_active=ns.active,
+                is_verified=ns.verified,
+                is_superuser=ns.superuser,
+            )
+            if ns.new_email is not None:
+                changes.append(f"email -> {ns.new_email.lower().strip()}")
+            if ns.new_username is not None:
+                changes.append(f"username -> {ns.new_username or '(cleared)'}")
+            if ns.full_name is not None:
+                changes.append("full_name updated")
+            if ns.active is not None:
+                changes.append(f"active -> {ns.active}")
+            if ns.verified is not None:
+                changes.append(f"verified -> {ns.verified}")
+            if ns.superuser is not None:
+                changes.append(f"superuser -> {ns.superuser}")
+
+        if ns.password is not None:
+            await user_svc.set_password(user_id, ns.password)
+            changes.append("password updated (existing sessions revoked)")
+
+        org_svc = OrganizationService(session)
+        membership_svc = MembershipService(session)
+
+        if ns.membership_org is not None:
+            org = await _resolve_org(org_svc, ns.membership_org)
+            if org is None:
+                print(f"Error: Organization '{ns.membership_org}' not found.")
+                await session.rollback()
+                return 1
+            org_id = str(org.id)
+            existing = await membership_svc.get_membership(org_id, user_id)
+            if existing is not None:
+                role = ns.role or str(existing.role)
+                await membership_svc.update_role(org_id, user_id, role)
+                changes.append(f"org '{org.slug}' role -> {role}")
+            else:
+                role = ns.role or MemberRole.MEMBER.value
+                await membership_svc.add_member(
+                    org_id=org_id, user_id=user_id, role=role
+                )
+                changes.append(f"added to org '{org.slug}' as {role}")
+
+        if ns.remove_from_org is not None:
+            org = await _resolve_org(org_svc, ns.remove_from_org)
+            if org is None:
+                print(f"Error: Organization '{ns.remove_from_org}' not found.")
+                await session.rollback()
+                return 1
+            removed = await membership_svc.remove_member(str(org.id), user_id)
+            if removed:
+                changes.append(f"removed from org '{org.slug}'")
+            else:
+                changes.append(f"not a member of org '{org.slug}' (no change)")
+
+        await session.commit()
+        print(f"Updated user: {user.email} (id: {user_id})")
+        for change in changes:
+            print(f"  {change}")
+        return 0
+    except ValueError as e:
+        await session.rollback()
+        print(f"Error: {e}")
+        return 1
+    finally:
+        await session.close()
+
+
+async def _resolve_org(org_svc, identifier: str):
+    org = await org_svc.get_by_slug(identifier)
+    if org is not None:
+        return org
+    try:
+        return await org_svc.get_by_id(identifier)
+    except ValueError:
+        return None
+
+
+def update_user(ns: argparse.Namespace) -> int:
+    return asyncio.run(_update_user_async(ns))
+
+
 async def _list_orgs_async(ns: argparse.Namespace) -> int:
     from dev_health_ops.api.services.users import OrganizationService
 
@@ -636,6 +778,67 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--include-inactive", action="store_true", help="Include inactive users."
     )
     users_list.set_defaults(func=list_users)
+
+    users_update = users_sub.add_parser("update", help="Update an existing user.")
+    users_update.add_argument("--id", help="User ID to update (identifier).")
+    users_update.add_argument(
+        "--email", help="Email of the user to update (identifier)."
+    )
+    users_update.add_argument(
+        "--username", help="Username of the user to update (identifier)."
+    )
+    users_update.add_argument(
+        "--new-email", dest="new_email", help="Set a new email address."
+    )
+    users_update.add_argument(
+        "--new-username",
+        dest="new_username",
+        help="Set a new username (pass an empty string to clear it).",
+    )
+    users_update.add_argument(
+        "--full-name", dest="full_name", help="Set the user's full name."
+    )
+    users_update.add_argument(
+        "--password",
+        help="Set a new password (min 8 chars; revokes existing sessions).",
+    )
+    users_update.add_argument(
+        "--verified",
+        dest="verified",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Set validated/verified status (--verified / --no-verified).",
+    )
+    users_update.add_argument(
+        "--superuser",
+        dest="superuser",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Set superuser (user type) status (--superuser / --no-superuser).",
+    )
+    users_update.add_argument(
+        "--active",
+        dest="active",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Set active status (--active / --no-active).",
+    )
+    users_update.add_argument(
+        "--org",
+        dest="membership_org",
+        help="Org slug or ID: add the user to this org, or update their role.",
+    )
+    users_update.add_argument(
+        "--role",
+        choices=["owner", "admin", "member", "viewer"],
+        help="Membership role to set with --org (default: member when adding).",
+    )
+    users_update.add_argument(
+        "--remove-from-org",
+        dest="remove_from_org",
+        help="Org slug or ID: remove the user's membership from this org.",
+    )
+    users_update.set_defaults(func=update_user)
 
     orgs_parser = admin_sub.add_parser("orgs", help="Organization management.")
     orgs_sub = orgs_parser.add_subparsers(dest="orgs_command", required=True)

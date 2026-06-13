@@ -1,10 +1,11 @@
-"""CHAOS-2187: daily-job AI workflow extraction wiring.
+"""CHAOS-2187 + CHAOS-2367: daily-job AI workflow extraction wiring.
 
 Covers ``job_daily._extract_ai_workflow_for_day`` — the helper that turns the
-day's PR/review rows into AI workflow runs and Work Graph edges. The three
-edge tables (``ai_workflow_issue_edges``, ``ai_workflow_artifact_edges``,
-``work_graph_pr_review_outcome_edges``) were previously never populated
-because the extractor had no production call site.
+day's PR/review/deployment/incident rows into AI workflow runs and Work
+Graph edges. These edge tables were previously never populated because the
+extractor had no production call site (CHAOS-2187 for issue/artifact/review
+edges; CHAOS-2367 for pr_deployment and deployment_incident edges, where the
+extractor existed but was called without deployments/incidents rows).
 """
 
 from __future__ import annotations
@@ -76,12 +77,41 @@ class _Sink:
                     "last_synced": START,
                 }
             ]
+        if "FROM deployments" in query:
+            return [
+                {
+                    # Native PR link: produces a confidence-1.0 edge.
+                    "repo_id": REPO_ID,
+                    "deployment_id": "deploy-1",
+                    "pull_request_number": 7,
+                    "started_at": START,
+                    "finished_at": START,
+                    "deployed_at": START,
+                    "last_synced": START,
+                }
+            ]
+        if "FROM incidents" in query:
+            return [
+                {
+                    "repo_id": REPO_ID,
+                    "incident_id": "inc-1",
+                    "started_at": START,
+                    "last_synced": START,
+                }
+            ]
         return []
 
 
-def test_extracts_runs_and_all_three_edge_kinds() -> None:
+def test_extracts_runs_and_all_edge_kinds() -> None:
     sink = _Sink()
-    runs, artifact_edges, issue_edges, review_edges = _extract_ai_workflow_for_day(
+    (
+        runs,
+        artifact_edges,
+        issue_edges,
+        review_edges,
+        pr_deploy_edges,
+        deploy_incident_edges,
+    ) = _extract_ai_workflow_for_day(
         primary_sink=sink,
         org_id=ORG_ID,
         start=START,
@@ -105,10 +135,23 @@ def test_extracts_runs_and_all_three_edge_kinds() -> None:
     assert review_edges[0].review_outcome_id == "rev_7_0"
     assert review_edges[0].outcome == "APPROVED"
 
+    assert len(pr_deploy_edges) == 1
+    assert pr_deploy_edges[0].pr_id == f"{REPO_ID}:7"
+    assert pr_deploy_edges[0].deployment_id == "deploy-1"
+    assert pr_deploy_edges[0].confidence == 1.0
+    assert pr_deploy_edges[0].source == "native"
+
+    assert len(deploy_incident_edges) == 1
+    assert deploy_incident_edges[0].deployment_id == "deploy-1"
+    assert deploy_incident_edges[0].incident_id == "inc-1"
+    # incidents rows carry no deployment_id, so the link is the same-day
+    # same-repo heuristic.
+    assert deploy_incident_edges[0].source == "heuristic"
+
 
 def test_non_uuid_org_skips_extraction_without_queries() -> None:
     sink = _Sink()
-    runs, artifact_edges, issue_edges, review_edges = _extract_ai_workflow_for_day(
+    result = _extract_ai_workflow_for_day(
         primary_sink=sink,
         org_id="not-a-uuid",
         start=START,
@@ -117,19 +160,21 @@ def test_non_uuid_org_skips_extraction_without_queries() -> None:
         repo_provider_by_id={},
     )
 
-    assert (runs, artifact_edges, issue_edges, review_edges) == ([], [], [], [])
+    assert result == ([], [], [], [], [], [])
     assert sink.queries == []
 
 
 def test_unknown_repo_provider_falls_back_to_unknown() -> None:
     sink = _Sink()
-    runs, _artifacts, _issues, _reviews = _extract_ai_workflow_for_day(
-        primary_sink=sink,
-        org_id=ORG_ID,
-        start=START,
-        end=END,
-        repo_id=REPO_ID,
-        repo_provider_by_id={},
+    runs, _artifacts, _issues, _reviews, _deploys, _incidents = (
+        _extract_ai_workflow_for_day(
+            primary_sink=sink,
+            org_id=ORG_ID,
+            start=START,
+            end=END,
+            repo_id=REPO_ID,
+            repo_provider_by_id={},
+        )
     )
 
     assert len(runs) == 1
@@ -172,9 +217,16 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
                 ]
             if "FROM git_pull_request_reviews" in query:
                 rows = rows + [{"repo_id": object(), "number": 3}]
+            if "FROM deployments" in query:
+                rows = rows + [
+                    {"repo_id": "not-a-uuid", "deployment_id": "d-bad"},
+                    {"repo_id": REPO_ID, "deployment_id": ""},
+                ]
+            if "FROM incidents" in query:
+                rows = rows + [{"repo_id": REPO_ID, "incident_id": None}]
             return rows
 
-    runs, artifacts, issues, reviews = _extract_ai_workflow_for_day(
+    runs, artifacts, issues, reviews, deploys, incidents = _extract_ai_workflow_for_day(
         primary_sink=_MalformedRowSink(),
         org_id=ORG_ID,
         start=START,
@@ -188,3 +240,5 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
     assert len(artifacts) == 1
     assert len(issues) == 1
     assert len(reviews) == 1
+    assert len(deploys) == 1
+    assert len(incidents) == 1

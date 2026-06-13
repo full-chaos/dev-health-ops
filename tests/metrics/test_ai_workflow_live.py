@@ -196,7 +196,14 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
     )
 
     def _run_once() -> None:
-        runs, artifacts, issues, reviews = _extract_ai_workflow_for_day(
+        (
+            runs,
+            artifacts,
+            issues,
+            reviews,
+            pr_deploys,
+            deploy_incidents,
+        ) = _extract_ai_workflow_for_day(
             primary_sink=sink,
             org_id=str(org),
             start=day_start,
@@ -209,6 +216,10 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
         sink.write_ai_workflow_artifact_edges(artifacts)
         sink.write_ai_workflow_issue_edges(issues)
         sink.write_work_graph_pr_review_outcome_edges(reviews)
+        if pr_deploys:
+            sink.write_work_graph_pr_deployment_edges(pr_deploys)
+        if deploy_incidents:
+            sink.write_work_graph_deployment_incident_edges(deploy_incidents)
 
     assert CLICKHOUSE_URI is not None  # skipif guard guarantees it
     client = await get_global_client(CLICKHOUSE_URI)

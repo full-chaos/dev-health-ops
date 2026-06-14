@@ -193,3 +193,39 @@ async def test_load_team_resolver_from_store_accepts_id_name_dicts():
     team_id, team_name = resolver.resolve("alice@example.com")
     assert team_id == "team-a"
     assert team_name == "Team Alpha"
+
+
+def test_cli_sync_teams_empty_exits_one(tmp_path):
+    """Test that sync_teams exits 1 when no teams are found and allow_empty is False."""
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "empty_teams.yaml"
+    config_file.write_text(yaml.dump({"teams": []}))
+
+    ns = MagicMock()
+    ns.provider = "config"
+    ns.path = str(config_file)
+    ns.allow_empty = False
+
+    result = _cmd_sync_teams(ns)
+    assert result == 1
+
+
+def test_cli_sync_teams_empty_allow_empty_exits_zero(tmp_path):
+    """Test that sync_teams exits 0 when no teams are found and allow_empty is True."""
+    import yaml
+
+    from dev_health_ops.providers.teams import sync_teams as _cmd_sync_teams
+
+    config_file = tmp_path / "empty_teams.yaml"
+    config_file.write_text(yaml.dump({"teams": []}))
+
+    ns = MagicMock()
+    ns.provider = "config"
+    ns.path = str(config_file)
+    ns.allow_empty = True
+
+    result = _cmd_sync_teams(ns)
+    assert result == 0

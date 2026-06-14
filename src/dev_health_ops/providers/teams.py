@@ -558,8 +558,14 @@ def sync_teams(ns: argparse.Namespace) -> int:
         return 1
 
     if not teams_data:
-        logging.warning("No teams found/generated.")
-        return 0
+        message = "No teams found/generated."
+        if getattr(ns, "allow_empty", False):
+            logging.warning(message)
+            return 0
+        logging.error(
+            "%s Pass --allow-empty to exit successfully on an empty sync.", message
+        )
+        return 1
 
     validate_sink(ns)
     db_uri = resolve_sink_uri(ns)
@@ -667,5 +673,10 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     teams.add_argument(
         "--auth",
         help="Provider token override (GitHub/GitLab). Falls back to env vars.",
+    )
+    teams.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Exit successfully when no teams are found/generated (default: exit 1).",
     )
     teams.set_defaults(func=sync_teams)

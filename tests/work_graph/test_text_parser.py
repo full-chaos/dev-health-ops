@@ -26,13 +26,22 @@ class TestExtractPRRefs:
     def test_gitlab_merge_request(self):
         assert extract_pr_refs("See merge request group/proj!45") == [45]
 
-    def test_plain_mention(self):
-        assert extract_pr_refs("Relates to #7") == [7]
+    def test_plain_hash_mention_is_not_a_pr_ref(self):
+        """A bare '#N' is an issue reference, not a PR/MR -- must be ignored."""
+        assert extract_pr_refs("Relates to #7") == []
+        assert extract_pr_refs("Fixes #7") == []
+        assert extract_pr_refs("Closes issue #500, unrelated to any PR") == []
+
+    def test_bare_bang_mention_is_not_a_pr_ref(self):
+        """A bare '!N' without merge-request context must be ignored."""
+        assert extract_pr_refs("yikes! 5 things broke") == []
+        assert extract_pr_refs("!45 standalone") == []
 
     def test_dedupes_in_first_seen_order(self):
+        # Only PR/MR-specific forms count: "Merge pull request #9" and "(#9)"
+        # both reference PR 9; the trailing bare "#3" is an issue ref and dropped.
         assert extract_pr_refs("Merge pull request #9\nfollow-up to (#9) and #3") == [
             9,
-            3,
         ]
 
     def test_empty(self):

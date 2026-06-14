@@ -54,29 +54,37 @@ GITHUB_PLAIN_REF_PATTERN = re.compile(r"(?<!\w)#(\d+)\b")
 # GitLab uses same patterns but also supports cross-project refs like "group/project#123"
 GITLAB_CROSS_PROJECT_PATTERN = re.compile(r"([\w\-\.]+/[\w\-\.]+)#(\d+)")
 
-# Pull-request references embedded in commit messages by GitHub/GitLab.
-# - Merge commits:  "Merge pull request #123 from ..." / "See merge request grp/proj!45"
-# - Squash commits: "Some change (#123)"
-# - Plain mentions: "#123"
+# Pull-request references embedded in commit messages by GitHub/GitLab when a
+# PR/MR is merged or squashed. These are deliberately PR/MR-specific forms only:
+# a bare "#123" or "!45" is NOT accepted because it overwhelmingly denotes an
+# ordinary issue reference (e.g. "Fixes #7"), not a PR/MR, and treating it as a
+# PR->commit link corrupts the work graph with false high-confidence edges.
+# - Merge commits:  "Merge pull request #123 from ..." (GitHub)
+#                   "See merge request grp/proj!45"     (GitLab)
+# - Squash commits: "Some change (#123)"                (GitHub squash-and-merge)
 GITHUB_MERGE_PR_PATTERN = re.compile(r"merge\s+pull\s+request\s+#(\d+)", re.IGNORECASE)
 GITLAB_MERGE_MR_PATTERN = re.compile(
     r"(?:merge\s+request|see\s+merge\s+request)\b[^!\n]*!(\d+)", re.IGNORECASE
 )
 SQUASH_PR_PATTERN = re.compile(r"\(#(\d+)\)")
-BANG_REF_PATTERN = re.compile(r"(?<![\w/])!(\d+)\b")
 
 
 def extract_pr_refs(text: str) -> list[int]:
     """
     Extract pull/merge-request numbers referenced in a commit message.
 
-    Recognizes the native conventions GitHub and GitLab embed in commit
-    messages when a PR/MR is merged or squashed:
+    Only the native, PR/MR-specific conventions that GitHub and GitLab embed in
+    commit messages when a PR/MR is merged or squashed are recognized:
 
     - "Merge pull request #123 from ..."   (GitHub merge commit)
     - "See merge request group/proj!45"    (GitLab merge commit)
-    - "Implement feature (#123)"            (GitHub/GitLab squash commit)
-    - "#123" / "!45"                        (plain mention)
+    - "Implement feature (#123)"            (GitHub squash-and-merge commit)
+
+    Bare ``#123``/``!45`` mentions are intentionally **not** treated as PR/MR
+    evidence: in commit messages they almost always denote an ordinary issue
+    reference (e.g. "Fixes #7" or "Closes #500"), and promoting them into
+    PR->commit links would persist false high-confidence edges into the work
+    graph and downstream file/AI-impact metrics.
 
     Args:
         text: Commit message to search.
@@ -100,8 +108,6 @@ def extract_pr_refs(text: str) -> list[int]:
         GITHUB_MERGE_PR_PATTERN,
         GITLAB_MERGE_MR_PATTERN,
         SQUASH_PR_PATTERN,
-        GITHUB_PLAIN_REF_PATTERN,
-        BANG_REF_PATTERN,
     ):
         for match in pattern.finditer(text):
             _add(match.group(1))

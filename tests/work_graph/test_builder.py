@@ -380,6 +380,39 @@ class TestDerivePRCommitLinks:
         assert count == 0
         fake_sink.write_work_graph_pr_commit.assert_not_called()
 
+    def test_plain_issue_ref_colliding_with_pr_number_is_not_linked(self):
+        """A plain issue mention (``Fixes #N``) must NOT be linked to PR #N.
+
+        Regression guard for the false-positive corruption flagged in review:
+        an ordinary issue reference whose number happens to equal a real PR
+        number in the same repo must never become a persisted PR->commit edge.
+        """
+        repo_id = uuid.uuid4()
+        # PR #7 exists in this repo...
+        pr_rows = [{"repo_id": repo_id, "number": 7}]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "fff666",
+                # ...but this commit merely *closes issue* #7; it is unrelated
+                # to PR #7 and must not be promoted into a PR->commit link.
+                "message": "Fixes #7 in the parser",
+                "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 0
+        fake_sink.write_work_graph_pr_commit.assert_not_called()
+
     def test_build_invokes_derivation_before_fast_path(self):
         """build() must derive PR->commit links so the fast path is non-empty."""
         repo_id = uuid.uuid4()

@@ -732,6 +732,14 @@ def _fetch_gitlab_blame_sync(gl_project, connector, project_id, repo_id, limit=5
 CONTENT_FETCH_MAX_BYTES = 1_000_000
 CONTENT_FETCH_MAX_FILES = 2_000
 
+# Cap on per-file blame fetches during onboarding backfill (parity with the
+# GitHub processor). Blame costs one REST call per file; without a cap a large
+# project would turn a normal sync into thousands of calls (rate-limit
+# failures / timeouts). The repo-level has_any_git_blame gate makes this a
+# bounded one-time cost on first onboarding; full coverage remains available
+# via the dedicated blame sync target (CHAOS-2376).
+BLAME_BACKFILL_MAX_FILES = 500
+
 
 async def _fetch_scannable_contents(
     connector: Any,
@@ -896,10 +904,14 @@ async def _backfill_gitlab_missing_data(
                     )
 
     if needs_blame and file_paths:
+        # Bound the blame crawl: one REST call per file, so cap the number of
+        # files we blame on a single sync to avoid rate-limit failures /
+        # timeouts on large projects (CHAOS-2376).
+        blame_paths = file_paths[:BLAME_BACKFILL_MAX_FILES]
         async with AsyncBatchCollector(
             ingestion_sink.insert_blame_data
         ) as blame_collector:
-            for path in file_paths:
+            for path in blame_paths:
                 try:
                     blame_items = connector.rest_client.get_file_blame(
                         project.id,
@@ -1387,9 +1399,11 @@ async def process_gitlab_project(
         # complexity, hotspots, ownership-risk) can run without a local
         # checkout. Gated on sync_git so non-git targets (prs, cicd, ...)
         # stay lean. Blame is included so the /complexity Ownership-risk tab
-        # is populated on normal onboarding; the backfill is incremental
-        # (only files lacking blame), so the per-file REST cost is paid once
-        # (CHAOS-2376).
+        # is populated on normal onboarding. The has_any_git_blame gate is
+        # repo-level, so blame is fetched once per project on first onboarding
+        # (skipped once any blame exists) and capped at BLAME_BACKFILL_MAX_FILES
+        # files per sync so a large project cannot turn onboarding into an
+        # unbounded REST crawl (CHAOS-2376).
         if backfill_missing and sync_git:
             try:
                 await _backfill_gitlab_missing_data(
@@ -1708,9 +1722,10 @@ async def process_gitlab_projects_batch(
         if backfill_missing and sync_git:
             try:
                 # Blame is included so the /complexity Ownership-risk tab is
-                # populated on normal onboarding; the backfill is incremental
-                # (only files lacking blame), so the per-file cost is paid
-                # once (CHAOS-2376).
+                # populated on normal onboarding. The has_any_git_blame gate is
+                # repo-level (fetched once per project on first onboarding) and
+                # the per-sync crawl is capped at BLAME_BACKFILL_MAX_FILES files
+                # so a large project cannot exhaust API quota (CHAOS-2376).
                 await _backfill_gitlab_missing_data(
                     store=store,
                     ingestion_sink=ingestion_sink,

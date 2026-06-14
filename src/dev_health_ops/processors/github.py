@@ -793,6 +793,14 @@ def _split_full_name(full_name: str) -> tuple[str, str]:
 CONTENT_FETCH_MAX_BYTES = 1_000_000
 CONTENT_FETCH_MAX_FILES = 2_000
 
+# Cap on per-file blame fetches during onboarding backfill. Blame costs one
+# GraphQL call per file; without a cap a large repo would turn a normal sync
+# into thousands of calls (quota exhaustion / timeouts). The repo-level
+# has_any_git_blame gate means this is a bounded one-time cost on first
+# onboarding; full coverage remains available via the dedicated blame sync
+# target (CHAOS-2376).
+BLAME_BACKFILL_MAX_FILES = 500
+
 
 async def _fetch_scannable_contents(
     connector: GitHubConnector,
@@ -968,17 +976,23 @@ async def _backfill_github_missing_data(
             )
 
     if needs_blame and file_paths:
+        # Bound the blame crawl: one GraphQL call per file, so cap the number
+        # of files we blame on a single sync to avoid quota exhaustion /
+        # timeouts on large repos (CHAOS-2376).
+        blame_paths = file_paths[:BLAME_BACKFILL_MAX_FILES]
         processed_files = 0
         try:
             logging.info(
-                "Backfilling blame for %d files in %s...",
+                "Backfilling blame for %d of %d files in %s (cap %d)...",
+                len(blame_paths),
                 len(file_paths),
                 repo_full_name,
+                BLAME_BACKFILL_MAX_FILES,
             )
             async with AsyncBatchCollector(
                 ingestion_sink.insert_blame_data
             ) as blame_collector:
-                for path in file_paths:
+                for path in blame_paths:
                     try:
                         blame = connector.get_file_blame(
                             owner=owner,
@@ -1458,9 +1472,12 @@ async def process_github_repo(
             # (e.g. complexity, hotspots, ownership-risk) can run without a
             # local checkout. Gated on sync_git so non-git targets (prs,
             # cicd, ...) stay lean. Blame is included so the /complexity
-            # Ownership-risk tab is populated on normal onboarding; the
-            # backfill is incremental (only fetches blame for files that
-            # lack it) so the per-file GraphQL cost is paid once (CHAOS-2376).
+            # Ownership-risk tab is populated on normal onboarding. The
+            # has_any_git_blame gate is repo-level, so blame is fetched once
+            # per repo on first onboarding (skipped once any blame exists) and
+            # capped at BLAME_BACKFILL_MAX_FILES files per sync so a large repo
+            # cannot turn onboarding into an unbounded GraphQL crawl
+            # (CHAOS-2376).
             if backfill_missing and sync_git:
                 try:
                     await _backfill_github_missing_data(
@@ -1795,9 +1812,10 @@ async def process_github_repos_batch(
         if backfill_missing and sync_git:
             try:
                 # Blame is included so the /complexity Ownership-risk tab is
-                # populated on normal onboarding; the backfill is incremental
-                # (only files lacking blame), so the per-file cost is paid
-                # once (CHAOS-2376).
+                # populated on normal onboarding. The has_any_git_blame gate is
+                # repo-level (fetched once per repo on first onboarding) and the
+                # per-sync crawl is capped at BLAME_BACKFILL_MAX_FILES files so
+                # a large repo cannot exhaust API quota (CHAOS-2376).
                 await _backfill_github_missing_data(
                     store=store,
                     ingestion_sink=ingestion_sink,

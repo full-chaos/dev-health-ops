@@ -531,6 +531,80 @@ def _load_complexity_map_for_repo(
     return complexity_map
 
 
+def _load_blame_map_for_repo(
+    *,
+    primary_sink: Any,
+    repo_id: uuid.UUID,
+) -> dict[str, float]:
+    """Load per-file ownership concentration for ``repo_id`` from ``git_blame``.
+
+    Concentration is the share of currently-blamed lines attributed to the
+    single largest contributor for each file (a max-share / dominant-owner
+    metric in ``[0, 1]``). This surfaces the Ownership/blame dimension of the
+    risk hotspot (CHAOS-2376): a value near ``1.0`` means one author owns
+    almost all lines (bus-factor risk), near ``0`` means broad ownership.
+
+    The aggregation is pushed server-side. ``git_blame`` is
+    ``ReplacingMergeTree(last_synced)`` keyed by ``(repo_id, path, line_no)``,
+    so a per-line ``argMax(author, last_synced)`` collapses re-synced lines to
+    their latest author before the per-file share is computed. Returns an empty
+    map (callers treat concentration as ``NULL``) on any query failure so a
+    missing/unmigrated table never aborts the daily job. ``git_blame`` has no
+    ``org_id`` column; the read is scoped by ``repo_id`` (repos are
+    org-partitioned upstream).
+    """
+    query = """
+        SELECT
+            path,
+            max(author_lines) / sum(author_lines) AS concentration
+        FROM
+        (
+            SELECT
+                path,
+                author,
+                count() AS author_lines
+            FROM
+            (
+                SELECT
+                    path,
+                    line_no,
+                    argMax(
+                        coalesce(author_email, author_name, ''),
+                        last_synced
+                    ) AS author
+                FROM git_blame
+                WHERE repo_id = {repo_id:UUID}
+                GROUP BY path, line_no
+            )
+            WHERE author != ''
+            GROUP BY path, author
+        )
+        GROUP BY path
+    """
+    params: dict[str, Any] = {"repo_id": str(repo_id)}
+
+    try:
+        rows = primary_sink.query_dicts(query, params)
+    except Exception as exc:
+        logger.warning(
+            "Blame map load failed for repo_id=%s: %s",
+            repo_id,
+            exc,
+        )
+        return {}
+
+    blame_map: dict[str, float] = {}
+    for row in rows:
+        path = row.get("path")
+        if not path:
+            continue
+        concentration = row.get("concentration")
+        if concentration is None:
+            continue
+        blame_map[path] = float(concentration)
+    return blame_map
+
+
 async def run_daily_metrics_job(
     *,
     db_url: str | None = None,
@@ -734,11 +808,19 @@ async def run_daily_metrics_job(
                 repo_id=r_id,
                 day=d,
             )
+            # Ownership concentration per file from git_blame (backfilled on
+            # onboarding) feeds blame_concentration so the /complexity
+            # Ownership-risk dimension is non-NULL for real orgs (CHAOS-2376).
+            blame_map = _load_blame_map_for_repo(
+                primary_sink=primary_sink,
+                repo_id=r_id,
+            )
             file_hotspots = compute_file_risk_hotspots(
                 repo_id=r_id,
                 day=d,
                 window_stats=h_commit_rows,
                 complexity_map=complexity_map,
+                blame_map=blame_map,
                 computed_at=computed_at,
             )
             all_file_hotspots.extend(file_hotspots)

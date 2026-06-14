@@ -146,6 +146,30 @@ def test_graphql_secondary_abuse_403_raises_rate_limit_with_wait(monkeypatch):
     assert GitHubGraphQLClient.GRAPHQL_ENDPOINT in str(exc_info.value)
 
 
+def test_graphql_body_only_secondary_403_is_retryable_without_retry_after(monkeypatch):
+    # GitHub-documented case: a secondary/abuse 403 whose body carries the
+    # wording but with NO Retry-After header and NO x-ratelimit-remaining:0.
+    # The body-wording fallback (mirroring the REST path) must classify it as a
+    # RETRYABLE RateLimitException, not a non-retryable AuthenticationException,
+    # so the file-contents/blame hot path backs off and retries.
+    response = _FakeResponse(
+        status_code=403,
+        headers={"X-GitHub-Request-Id": "REQ:11"},
+        text="You have exceeded a secondary rate limit. Please wait a few minutes.",
+    )
+    _patch_post(monkeypatch, response)
+
+    client = GitHubGraphQLClient("token")
+    with pytest.raises(ExcRateLimitException) as exc_info:
+        client.query("query { viewer { login } }")
+
+    # Retryable rate-limit error (not AuthenticationException) with a sane
+    # default wait since no Retry-After header was present.
+    assert not isinstance(exc_info.value, AuthenticationException)
+    assert exc_info.value.retry_after_seconds == pytest.approx(60.0)
+    assert GitHubGraphQLClient.GRAPHQL_ENDPOINT in str(exc_info.value)
+
+
 def test_graphql_primary_rate_limit_403_names_endpoint_and_headers(monkeypatch):
     response = _FakeResponse(
         status_code=403,

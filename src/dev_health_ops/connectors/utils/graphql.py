@@ -151,13 +151,27 @@ class GitHubGraphQLClient:
                         f"{self.GRAPHQL_ENDPOINT} (headers={diag})",
                         retry_after_seconds=_github_reset_delay_seconds(response),
                     )
-                # (b) secondary/abuse limit: Retry-After present -> backoff.
+                # (b) secondary/abuse limit: Retry-After present, OR the body
+                # carries GitHub's documented secondary/abuse wording even with
+                # no Retry-After header (a DOCUMENTED case). Mirrors the REST
+                # path's ``_is_github_rate_limit_403`` body-wording fallback so
+                # both transports back off + retry instead of raising a
+                # non-retryable auth error on the file-contents/blame hot path.
                 retry_after = diag.get("retry-after")
-                if retry_after is not None:
-                    try:
-                        retry_after_seconds: float | None = float(retry_after)
-                    except ValueError:
-                        retry_after_seconds = None
+                body = response.text.lower()
+                body_indicates_rate_limit = (
+                    "rate limit" in body or "abuse" in body or "secondary" in body
+                )
+                if retry_after is not None or body_indicates_rate_limit:
+                    if retry_after is not None:
+                        try:
+                            retry_after_seconds: float | None = float(retry_after)
+                        except ValueError:
+                            retry_after_seconds = None
+                    else:
+                        # Body-only secondary/abuse 403 with no Retry-After:
+                        # back off a sane default before the decorator retries.
+                        retry_after_seconds = 60.0
                     raise RateLimitException(
                         f"GitHub secondary/abuse rate limit on POST "
                         f"{self.GRAPHQL_ENDPOINT} (headers={diag})",

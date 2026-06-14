@@ -1,5 +1,6 @@
 from dev_health_ops.workers.metrics_tasks import (
     dispatch_daily_metrics_partitioned,
+    dispatch_release_impact,
     dispatch_scheduled_metrics,
     run_complexity_job,
     run_daily_metrics,
@@ -64,6 +65,7 @@ __all__ = [
     "_run_sync_for_repo",
     "dispatch_batch_sync",
     "dispatch_daily_metrics_partitioned",
+    "dispatch_release_impact",
     "dispatch_scheduled_metrics",
     "dispatch_scheduled_reports",
     "dispatch_scheduled_syncs",

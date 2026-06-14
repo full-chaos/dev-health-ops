@@ -7,6 +7,7 @@ from datetime import date
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
+from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,20 @@ def run_release_impact_job(
         org_id or "all",
     )
 
+    if org_id:
+        from dev_health_ops.db import get_postgres_session_sync
+
+        with get_postgres_session_sync() as session:
+            if not organization_exists_sync(session, org_id):
+                logger.info(
+                    "Skipping release-impact task for deleted org_id=%s", org_id
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "organization_not_found",
+                    "day": target_day.isoformat(),
+                }
+
     try:
         written = run_async(
             _run_release_impact_job(
@@ -223,3 +238,74 @@ def run_release_impact_job(
     except Exception as exc:
         logger.exception("Release-impact metrics task failed: %s", exc)
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
+@celery_app.task(
+    bind=True,
+    queue="default",
+    name="dev_health_ops.workers.tasks.dispatch_release_impact",
+)
+def dispatch_release_impact(
+    self,
+    db_url: str | None = None,
+    day: str | None = None,
+    backfill_days: int = 1,
+    recomputation_window_days: int = 7,
+) -> dict:
+    """Fan out ``run_release_impact_job`` per active organization.
+
+    ``compute_release_impact_daily`` filters telemetry with
+    ``WHERE org_id = {org_id:String}``, so a single global run with a blank
+    ``org_id`` would match zero rows for every real (UUID-scoped) tenant and
+    leave ``release_impact_daily`` empty (CHAOS-2381). This dispatcher
+    enumerates active organizations and dispatches one per-org compute, the
+    same fan-out shape used by the other scheduled metrics dispatchers.
+
+    Args:
+        db_url: ClickHouse connection string (defaults to CLICKHOUSE_URI env)
+        day: Target day as ISO string (defaults to today, resolved per task)
+        backfill_days: Number of days to backfill
+        recomputation_window_days: Days to recompute per run (late-data window)
+
+    Returns:
+        dict with the list of dispatched org_ids and a skipped count
+    """
+    from sqlalchemy import select
+
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.models.users import Organization
+
+    dispatched: list[str] = []
+    skipped = 0
+
+    try:
+        with get_postgres_session_sync() as session:
+            org_ids = [
+                str(row[0])
+                for row in session.execute(
+                    select(Organization.id).where(Organization.is_active.is_(True))
+                ).all()
+            ]
+    except Exception:
+        logger.exception("dispatch_release_impact failed to enumerate orgs")
+        return {"dispatched": [], "skipped": 0}
+
+    for org_id in org_ids:
+        run_release_impact_job.apply_async(
+            kwargs={
+                "db_url": db_url,
+                "day": day,
+                "backfill_days": backfill_days,
+                "recomputation_window_days": recomputation_window_days,
+                "org_id": org_id,
+            },
+            queue="metrics",
+        )
+        dispatched.append(org_id)
+
+    logger.info(
+        "Release-impact dispatch: dispatched=%d skipped=%d",
+        len(dispatched),
+        skipped,
+    )
+    return {"dispatched": dispatched, "skipped": skipped}

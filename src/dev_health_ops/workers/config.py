@@ -82,12 +82,14 @@ beat_schedule = {
     },
     # Release-impact daily compute (CHAOS-2381): materializes
     # release_impact_daily from telemetry_signal_bucket + deployments, read by
-    # the /feature-flags release-reliability cards. Runs after run-daily-metrics
-    # so the deployments it joins against are already materialized.
+    # the /feature-flags release-reliability cards. The dispatcher fans out one
+    # per-org compute — the compute is org-scoped, so a single blank-org run
+    # would match zero rows for real (UUID-scoped) tenants. Runs after
+    # run-daily-metrics so the deployments it joins against are materialized.
     "run-release-impact-daily": {
-        "task": "dev_health_ops.workers.tasks.run_release_impact_job",
+        "task": "dev_health_ops.workers.tasks.dispatch_release_impact",
         "schedule": crontab(hour=1, minute=30),
-        "options": {"queue": "metrics"},
+        "options": {"queue": "default"},
     },
     "sync-team-drift": {
         "task": "dev_health_ops.workers.tasks.sync_team_drift",

@@ -6,6 +6,10 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
+from dev_health_ops.models.ai_attribution import (
+    AIAttributionRecord,
+    AIAttributionSignal,
+)
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -14,6 +18,14 @@ from dev_health_ops.models.work_items import (
     WorkItemReopenEvent,
     WorkItemStatusCategory,
     WorkItemStatusTransition,
+)
+from dev_health_ops.providers._ai_detection import (
+    AuthorInfo,
+    detect_from_author,
+    detect_from_branch_name,
+    detect_from_commit_trailers,
+    detect_from_pr_body,
+    detect_from_pr_labels,
 )
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.normalize_common import (
@@ -753,15 +765,6 @@ def build_epic_id_for_issue(
 # ---------------------------------------------------------------------------
 # AI attribution detection — wired into the GitLab normalize path
 # ---------------------------------------------------------------------------
-from dev_health_ops.providers._ai_detection import (  # noqa: E402
-    AIAttributionSignal,
-    AuthorInfo,
-    detect_from_author,
-    detect_from_branch_name,
-    detect_from_commit_trailers,
-    detect_from_pr_body,
-    detect_from_pr_labels,
-)
 
 
 def detect_mr_attributions(
@@ -842,3 +845,61 @@ def detect_mr_attributions(
             signals.append(body_signal)
 
     return signals
+
+
+def gitlab_mr_ai_attributions(
+    *,
+    mr: object,
+    project_full_path: str,
+    org_id: UUID,
+    repo_id: UUID | None,
+) -> list[AIAttributionRecord]:
+    """Promote a GitLab MR's AI attribution signals to persisted records.
+
+    This is the single mapping from a merge request to
+    :class:`AIAttributionRecord` so that BOTH ingestion paths — the live
+    ``metrics.work_items.fetch_gitlab_work_items`` sync entrypoint and
+    :class:`GitLabProvider` — emit byte-identical records into
+    ``ai_governance_coverage_daily`` via ``write_ai_attribution``.
+
+    ``subject_id`` and ``observed_at`` are derived from the SAME canonical
+    formula used by :func:`gitlab_mr_to_work_item` (``gitlab:{path}!{iid}`` and
+    the MR's ``created_at``) so attribution rows join cleanly to MR work items.
+    ``observed_at`` is a real provider timestamp — never a fabricated
+    ingest-time value — falling back to the MR ``updated_at`` and only then to
+    ``now()`` when the provider omits both.
+
+    Args:
+        mr: GitLab merge request object (REST attribute object or dict).
+        project_full_path: Project path used to build the canonical subject id.
+        org_id: Owning organization (tenant scope) — required; records are
+            never written with a blank tenant.
+        repo_id: Repository UUID for this project (may be ``None``).
+
+    Returns:
+        List of :class:`AIAttributionRecord` (may be empty).
+    """
+    signals = detect_mr_attributions(mr=mr)
+    if not signals:
+        return []
+
+    iid = int(_get(mr, "iid") or 0)
+    subject_id = f"gitlab:{project_full_path}!{iid}"  # ! for MRs
+    observed_at = (
+        _to_utc(_parse_iso(_get(mr, "created_at")))
+        or _to_utc(_parse_iso(_get(mr, "updated_at")))
+        or datetime.now(timezone.utc)
+    )
+
+    return [
+        AIAttributionRecord.from_signal(
+            sig,
+            org_id=org_id,
+            provider="gitlab",
+            subject_type="pull_request",
+            subject_id=subject_id,
+            repo_id=repo_id,
+            observed_at=observed_at,
+        )
+        for sig in signals
+    ]

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime
 
 from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.models.work_items import (
@@ -85,12 +85,12 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
         from dev_health_ops.providers.gitlab.normalize import (
             build_epic_id_for_issue,
             detect_gitlab_reopen_events,
-            detect_mr_attributions,
             enrich_work_item_with_priority,
             extract_gitlab_dependencies,
             gitlab_epic_to_work_item,
             gitlab_issue_to_work_item,
             gitlab_milestone_to_sprint,
+            gitlab_mr_ai_attributions,
             gitlab_mr_to_work_item,
             gitlab_note_to_interaction_event,
         )
@@ -370,35 +370,24 @@ class GitLabProvider(ProviderWithClient[GitLabWorkClient]):
                         )
                     )
 
-                    # Detect AI attribution signals for this MR.
-                    # Each signal is converted to a full AIAttributionRecord
-                    # so the SAME downstream write path as GitHub persists them.
-                    mr_signals = detect_mr_attributions(mr=mr)
-                    if mr_signals:
-                        if ctx.org_id is None:
-                            raise ValueError(
-                                "GitLab AI attribution requires ctx.org_id"
-                            )
-                        # wi.created_at is already normalized to UTC by
-                        # gitlab_mr_to_work_item.
-                        _observed = wi.created_at or datetime.now(timezone.utc)
-                        for _sig in mr_signals:
-                            ai_attributions.append(
-                                AIAttributionRecord.from_signal(
-                                    _sig,
-                                    org_id=ctx.org_id,
-                                    provider="gitlab",
-                                    subject_type="pull_request",
-                                    subject_id=wi.work_item_id,
-                                    repo_id=ctx.repo_id,
-                                    observed_at=_observed,
-                                )
-                            )
-                        logger.debug(
-                            "GitLab: detected %d AI attribution signal(s) for %s",
-                            len(mr_signals),
-                            wi.work_item_id,
+                    # Detect AI attribution signals for this MR and promote
+                    # them to records via the shared normalize helper, so this
+                    # provider path and the live fetch_gitlab_work_items sync
+                    # path emit byte-identical records to write_ai_attribution.
+                    if ctx.org_id is not None:
+                        mr_records = gitlab_mr_ai_attributions(
+                            mr=mr,
+                            project_full_path=project_path,
+                            org_id=ctx.org_id,
+                            repo_id=ctx.repo_id,
                         )
+                        if mr_records:
+                            ai_attributions.extend(mr_records)
+                            logger.debug(
+                                "GitLab: detected %d AI attribution signal(s) for %s",
+                                len(mr_records),
+                                wi.work_item_id,
+                            )
 
                     # Get notes for interactions
                     if fetch_notes:

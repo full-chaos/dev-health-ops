@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
@@ -197,6 +198,20 @@ def _compute_recommendations_for_org(
         # Persist the state we DID compute before surfacing the failure, so the
         # teams that evaluated cleanly get fresh tombstones this run.
         if records:
+            # CHAOS-2398: stamp every record with the actual wall-clock write
+            # time. The engine derives both window_end AND computed_at from
+            # ``now``, but on the as_of path ``now`` == as_of_day + 1 — a
+            # constant across re-runs of the same finalized day. Two runs would
+            # then write rows with an identical computed_at, and neither the
+            # read-side two-stage ``argMax(fired, computed_at)`` nor the
+            # ``ReplacingMergeTree(computed_at)`` version could deterministically
+            # pick the latest, so a recovered signal might not clear. A single
+            # monotonic write timestamp per run (later runs strictly newer) makes
+            # the most recent write always win, while window_end stays a pure
+            # function of as_of. True retries rewrite identical content under a
+            # newer stamp — idempotent in effect, deterministic in winner.
+            write_ts = datetime.now(timezone.utc)
+            records = [replace(record, computed_at=write_ts) for record in records]
             sink.write_recommendations(records)
 
         logger.info(

@@ -253,6 +253,164 @@ class TestHeuristicMatching:
         assert count == 0
 
 
+class TestDerivePRCommitLinks:
+    """Tests for live PR->commit derivation from commit messages.
+
+    These prove the seam that wires ``work_graph_pr_commit`` onto the live path:
+    the builder must parse already-synced ``git_commits`` for PR refs and persist
+    ``WorkGraphPRCommit`` rows via ``sink.write_work_graph_pr_commit`` -- previously
+    only fixtures wrote that table, so real orgs saw no commits under PRs.
+    """
+
+    def _build_sink(self, pr_rows, commit_rows):
+        fake_sink = MagicMock()
+        fake_sink.backend_type = "clickhouse"
+
+        def mock_query(query, params):
+            if "git_pull_requests" in query:
+                return pr_rows
+            if "git_commits" in query:
+                return commit_rows
+            return []
+
+        fake_sink.query_dicts.side_effect = mock_query
+        fake_sink.write_work_graph_pr_commit = MagicMock()
+        return fake_sink
+
+    def test_derives_links_from_merge_and_squash_commits(self):
+        """Merge/squash commit messages referencing known PRs yield links."""
+        repo_id = uuid.uuid4()
+        base_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+        pr_rows = [
+            {"repo_id": repo_id, "number": 42},
+            {"repo_id": repo_id, "number": 7},
+        ]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "aaa111",
+                "message": "Merge pull request #42 from feature/x",
+                "author_when": base_time,
+            },
+            {
+                "repo_id": repo_id,
+                "hash": "bbb222",
+                "message": "Add retry logic (#7)",
+                "author_when": base_time,
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 2
+        records = fake_sink.write_work_graph_pr_commit.call_args[0][0]
+        assert len(records) == 2
+        by_commit = {r.commit_hash: r for r in records}
+        # Correct columns + org scoping on the produced records.
+        assert by_commit["aaa111"].pr_number == 42
+        assert by_commit["aaa111"].repo_id == repo_id
+        assert by_commit["bbb222"].pr_number == 7
+        for record in records:
+            assert record.provenance == "explicit_text"
+            assert record.confidence == 0.9
+            assert record.evidence == "commit_message_pr_ref"
+            assert record.org_id == ""
+
+    def test_org_id_scoped_onto_records(self):
+        """The configured org_id is stamped onto every derived record."""
+        repo_id = uuid.uuid4()
+        pr_rows = [{"repo_id": repo_id, "number": 99}]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "ccc333",
+                "message": "Fix flake (#99)",
+                "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(
+            dsn="clickhouse://localhost:9000/default", org_id="org-abc"
+        )
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 1
+        record = fake_sink.write_work_graph_pr_commit.call_args[0][0][0]
+        assert record.org_id == "org-abc"
+        assert record.commit_hash == "ccc333"
+        assert record.pr_number == 99
+
+    def test_ignores_refs_to_unknown_prs(self):
+        """A '#N' that is not a real PR number must not produce a link."""
+        repo_id = uuid.uuid4()
+        pr_rows = [{"repo_id": repo_id, "number": 5}]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "ddd444",
+                # #500 is not a known PR; should be ignored entirely.
+                "message": "Closes issue #500, unrelated to any PR",
+                "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            count = builder._derive_pr_commit_links()
+            builder.close()
+
+        assert count == 0
+        fake_sink.write_work_graph_pr_commit.assert_not_called()
+
+    def test_build_invokes_derivation_before_fast_path(self):
+        """build() must derive PR->commit links so the fast path is non-empty."""
+        repo_id = uuid.uuid4()
+        pr_rows = [{"repo_id": repo_id, "number": 3}]
+        commit_rows = [
+            {
+                "repo_id": repo_id,
+                "hash": "eee555",
+                "message": "Ship it (#3)",
+                "author_when": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+        fake_sink = self._build_sink(pr_rows, commit_rows)
+        fake_sink.write_work_graph_edges = MagicMock()
+        fake_sink.write_work_graph_issue_pr = MagicMock()
+
+        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
+        with patch(
+            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
+        ):
+            builder = WorkGraphBuilder(config)
+            builder.build()
+            builder.close()
+
+        # The seam: build() persisted PR->commit links via the sink.
+        fake_sink.write_work_graph_pr_commit.assert_called_once()
+        records = fake_sink.write_work_graph_pr_commit.call_args[0][0]
+        assert records[0].pr_number == 3
+        assert records[0].commit_hash == "eee555"
+
+
 class TestWorkGraphBuilderIntegration:
     """Integration tests for WorkGraphBuilder.
 

@@ -54,6 +54,60 @@ GITHUB_PLAIN_REF_PATTERN = re.compile(r"(?<!\w)#(\d+)\b")
 # GitLab uses same patterns but also supports cross-project refs like "group/project#123"
 GITLAB_CROSS_PROJECT_PATTERN = re.compile(r"([\w\-\.]+/[\w\-\.]+)#(\d+)")
 
+# Pull-request references embedded in commit messages by GitHub/GitLab.
+# - Merge commits:  "Merge pull request #123 from ..." / "See merge request grp/proj!45"
+# - Squash commits: "Some change (#123)"
+# - Plain mentions: "#123"
+GITHUB_MERGE_PR_PATTERN = re.compile(r"merge\s+pull\s+request\s+#(\d+)", re.IGNORECASE)
+GITLAB_MERGE_MR_PATTERN = re.compile(
+    r"(?:merge\s+request|see\s+merge\s+request)\b[^!\n]*!(\d+)", re.IGNORECASE
+)
+SQUASH_PR_PATTERN = re.compile(r"\(#(\d+)\)")
+BANG_REF_PATTERN = re.compile(r"(?<![\w/])!(\d+)\b")
+
+
+def extract_pr_refs(text: str) -> list[int]:
+    """
+    Extract pull/merge-request numbers referenced in a commit message.
+
+    Recognizes the native conventions GitHub and GitLab embed in commit
+    messages when a PR/MR is merged or squashed:
+
+    - "Merge pull request #123 from ..."   (GitHub merge commit)
+    - "See merge request group/proj!45"    (GitLab merge commit)
+    - "Implement feature (#123)"            (GitHub/GitLab squash commit)
+    - "#123" / "!45"                        (plain mention)
+
+    Args:
+        text: Commit message to search.
+
+    Returns:
+        De-duplicated list of referenced PR/MR numbers, in first-seen order.
+    """
+    if not text:
+        return []
+
+    seen: set[int] = set()
+    ordered: list[int] = []
+
+    def _add(value: str) -> None:
+        number = int(value)
+        if number not in seen:
+            seen.add(number)
+            ordered.append(number)
+
+    for pattern in (
+        GITHUB_MERGE_PR_PATTERN,
+        GITLAB_MERGE_MR_PATTERN,
+        SQUASH_PR_PATTERN,
+        GITHUB_PLAIN_REF_PATTERN,
+        BANG_REF_PATTERN,
+    ):
+        for match in pattern.finditer(text):
+            _add(match.group(1))
+
+    return ordered
+
 
 def extract_jira_keys(text: str) -> list[ParsedIssueRef]:
     """

@@ -10,7 +10,34 @@ from dev_health_ops.work_graph.extractors.text_parser import (
     extract_github_issue_refs,
     extract_gitlab_issue_refs,
     extract_jira_keys,
+    extract_pr_refs,
 )
+
+
+class TestExtractPRRefs:
+    """Tests for PR/MR number extraction from commit messages."""
+
+    def test_github_merge_commit(self):
+        assert extract_pr_refs("Merge pull request #123 from feat/x") == [123]
+
+    def test_squash_commit(self):
+        assert extract_pr_refs("Add retry logic (#42)") == [42]
+
+    def test_gitlab_merge_request(self):
+        assert extract_pr_refs("See merge request group/proj!45") == [45]
+
+    def test_plain_mention(self):
+        assert extract_pr_refs("Relates to #7") == [7]
+
+    def test_dedupes_in_first_seen_order(self):
+        assert extract_pr_refs("Merge pull request #9\nfollow-up to (#9) and #3") == [
+            9,
+            3,
+        ]
+
+    def test_empty(self):
+        assert extract_pr_refs("") == []
+        assert extract_pr_refs("no refs here") == []
 
 
 class TestExtractJiraKeys:

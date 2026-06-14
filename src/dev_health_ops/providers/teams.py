@@ -571,7 +571,7 @@ def sync_teams(ns: argparse.Namespace) -> int:
     db_uri = resolve_sink_uri(ns)
     db_type = detect_db_type(db_uri)
 
-    async def _handler(store):
+    async def _handler(store) -> int:
         # Ensure table exists (for SQL stores)
         if hasattr(store, "ensure_tables"):
             await store.ensure_tables()
@@ -583,16 +583,58 @@ def sync_teams(ns: argparse.Namespace) -> int:
                 len(ops_links),
             )
         logging.info(f"Synced {len(teams_data)} teams to DB.")
+        persisted_count = await _count_persisted_teams(store, teams_data)
+        logging.info("Verified %d teams persisted to primary store.", persisted_count)
+        return persisted_count
 
-    asyncio.run(
+    persisted_count = asyncio.run(
         run_with_store(db_uri, db_type, _handler, org_id=getattr(ns, "org", None))
     )
 
-    _bridge_teams_to_postgres(teams_data, ns)
+    org_id = getattr(ns, "org", None)
+    postgres_bridge_count: int | None = None
+    if org_id is not None:
+        try:
+            postgres_bridge_count = _bridge_teams_to_postgres(teams_data, ns)
+        except Exception as e:  # noqa: BLE001 - bridge failures must affect exit code
+            logging.error("Failed to bridge teams to PostgreSQL: %s", e)
+            postgres_bridge_count = 0
+
+    required_counts = [persisted_count]
+    if postgres_bridge_count is not None:
+        required_counts.append(postgres_bridge_count)
+
+    if any(count <= 0 for count in required_counts):
+        message = (
+            "No teams were persisted to all required stores "
+            f"(primary={persisted_count}, postgres_bridge={postgres_bridge_count})."
+        )
+        if getattr(ns, "allow_empty", False):
+            logging.warning(message)
+            return 0
+        logging.error(
+            "%s Pass --allow-empty to exit successfully on an empty sync.", message
+        )
+        return 1
+
     return 0
 
 
-def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> None:
+async def _count_persisted_teams(store: Any, teams_data: list) -> int:
+    expected_ids = {
+        str(getattr(team, "id", "") or "").strip() for team in teams_data
+    } - {""}
+    if not expected_ids or not hasattr(store, "get_all_teams"):
+        return 0
+
+    persisted = await store.get_all_teams()
+    persisted_ids = {
+        str(getattr(team, "id", "") or "").strip() for team in persisted
+    } - {""}
+    return len(expected_ids & persisted_ids)
+
+
+def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> int | None:
     """Upsert Team records into PostgreSQL TeamMapping table for multi-tenant bridge."""
     import logging
 
@@ -603,7 +645,13 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> None:
 
     org_id = getattr(ns, "org", None)
     if org_id is None:
-        return
+        return None
+
+    expected_ids = {
+        str(getattr(team, "id", "") or "").strip() for team in teams_data
+    } - {""}
+    if not expected_ids:
+        return 0
 
     try:
         with get_postgres_session_sync() as session:
@@ -633,13 +681,24 @@ def _bridge_teams_to_postgres(teams_data: list, ns: argparse.Namespace) -> None:
                             is_active=True,
                         )
                     )
+            session.flush()
+            persisted_ids = set(
+                session.execute(
+                    select(TeamMapping.team_id).where(
+                        TeamMapping.org_id == org_id,
+                        TeamMapping.team_id.in_(expected_ids),
+                    )
+                ).scalars()
+            )
             logging.info(
                 "Bridged %d teams to PostgreSQL TeamMapping (org=%s).",
-                len(teams_data),
+                len(persisted_ids),
                 org_id,
             )
+            return len(persisted_ids)
     except Exception as e:
-        logging.warning("Failed to bridge teams to PostgreSQL (non-fatal): %s", e)
+        logging.error("Failed to bridge teams to PostgreSQL: %s", e)
+        return 0
 
 
 def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:

@@ -22,7 +22,11 @@ from dev_health_ops.connectors.base import (
 from dev_health_ops.connectors.exceptions import (
     APIException,
     AuthenticationException,
+    ConnectorException,
     NotFoundException,
+)
+from dev_health_ops.connectors.exceptions import (
+    RateLimitException as ExceptionsRateLimitException,
 )
 from dev_health_ops.connectors.models import (
     Author,
@@ -141,6 +145,25 @@ class GitHubConnector(GitConnector):
         :param e: Exception from GitHub API.
         :raises: Appropriate connector exception.
         """
+        # Already-classified connector exceptions (raised by the GraphQL client
+        # in ``GitHubGraphQLClient.query``) must keep their retry semantics.
+        # Re-wrapping them in the generic ``else`` branch below converts a
+        # deliberately NON-retryable permission/SSO ``AuthenticationException``
+        # into a retryable ``APIException`` ("Unexpected error"), so the outer
+        # ``@retry_with_backoff`` decorator spins five times on an unfixable
+        # permission error with the root cause hidden. Pass these through.
+        #
+        # NB: the retry decorators on the wrappers use
+        # ``connectors.base.RateLimitException`` (imported as
+        # ``RateLimitException`` here), which is a DISTINCT class from
+        # ``connectors.exceptions.RateLimitException`` raised by the GraphQL
+        # client. Normalise the latter to the former so a rate-limit 403 stays
+        # RETRYABLE (it is the ``exceptions=`` tuple member the decorator
+        # catches), while preserving the ``retry_after_seconds`` wait.
+        if isinstance(e, ExceptionsRateLimitException):
+            raise RateLimitException(str(e), retry_after_seconds=e.retry_after_seconds)
+        if isinstance(e, ConnectorException):
+            raise e
         if isinstance(e, RateLimitExceededException):
             record_github_api_request(endpoint="unknown", status_code="429")
             raise RateLimitException(

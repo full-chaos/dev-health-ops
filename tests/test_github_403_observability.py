@@ -279,6 +279,106 @@ def test_pygithub_primary_rate_limit_403_raises_rate_limit(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# _handle_github_exception — already-classified connector exceptions pass
+# through UNCHANGED (the permission/SSO 403 -> retry-spin regression).
+# --------------------------------------------------------------------------
+
+
+def test_handle_github_exception_passes_through_authentication_exception():
+    # A non-retryable AuthenticationException (raised by the GraphQL client for
+    # a permission/SSO 403) must NOT be re-wrapped into a retryable APIException.
+    auth_exc = AuthenticationException("GitHub 403 (permission/SSO): ...")
+    with GitHubConnector(token="t") as connector:
+        with pytest.raises(AuthenticationException) as exc_info:
+            connector._handle_github_exception(auth_exc)
+
+    # Same object, unchanged type — not reclassified to APIException.
+    assert exc_info.value is auth_exc
+    assert not isinstance(exc_info.value, APIException)
+
+
+def test_handle_github_exception_normalises_graphql_rate_limit_to_retryable():
+    # A GraphQL-originated exceptions.RateLimitException is normalised to the
+    # base.RateLimitException the wrapper retry decorator catches (preserving the
+    # wait), NOT collapsed into the generic APIException ("Unexpected error")
+    # branch. This keeps a rate-limit 403 RETRYABLE on the file-content/blame
+    # hot path while a permission/SSO 403 stays non-retryable.
+    rl_exc = ExcRateLimitException(
+        "secondary/abuse rate limit", retry_after_seconds=42.0
+    )
+    with GitHubConnector(token="t") as connector:
+        with pytest.raises(RateLimitException) as exc_info:
+            connector._handle_github_exception(rl_exc)
+
+    assert exc_info.value.retry_after_seconds == pytest.approx(42.0)
+    assert "secondary/abuse rate limit" in str(exc_info.value)
+
+
+# --------------------------------------------------------------------------
+# File-content / blame wrappers — a permission/SSO 403 from the GraphQL layer
+# must NOT be retried 5x nor reclassified to APIException by the outer
+# @retry_with_backoff(exceptions=(RateLimitException, APIException)) decorator.
+# --------------------------------------------------------------------------
+
+
+def test_get_file_contents_permission_403_not_retried(monkeypatch):
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
+    )
+    auth_exc = AuthenticationException(
+        "GitHub 403 (permission/SSO) on POST https://api.github.com/graphql: ..."
+    )
+    with GitHubConnector(token="t") as connector:
+        connector.graphql.get_blob_texts = MagicMock(side_effect=auth_exc)
+        with pytest.raises(AuthenticationException) as exc_info:
+            connector.get_file_contents("o", "r", ["a.py"])
+
+    # Exactly ONE GraphQL call: the decorator did not spin on a non-retryable
+    # permission failure, and the error was not reclassified to APIException.
+    assert connector.graphql.get_blob_texts.call_count == 1
+    assert not isinstance(exc_info.value, APIException)
+    assert "permission" in str(exc_info.value) or "SSO" in str(exc_info.value)
+
+
+def test_get_file_blame_permission_403_not_retried(monkeypatch):
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
+    )
+    auth_exc = AuthenticationException(
+        "GitHub 403 (permission/SSO) on POST https://api.github.com/graphql: ..."
+    )
+    with GitHubConnector(token="t") as connector:
+        connector.graphql.get_blame = MagicMock(side_effect=auth_exc)
+        with pytest.raises(AuthenticationException) as exc_info:
+            connector.get_file_blame("o", "r", "a.py")
+
+    assert connector.graphql.get_blame.call_count == 1
+    assert not isinstance(exc_info.value, APIException)
+
+
+def test_get_file_contents_rate_limit_403_is_still_retried(monkeypatch):
+    # A rate-limit 403 surfaces from the GraphQL client as
+    # ``exceptions.RateLimitException``, a DISTINCT class from the
+    # ``base.RateLimitException`` the wrapper's retry decorator catches.
+    # ``_handle_github_exception`` normalises it to ``base.RateLimitException``
+    # (preserving the wait) so it STILL retries — a permission 403 must not be
+    # made retryable, but a rate-limit 403 must remain so.
+    monkeypatch.setattr(
+        "dev_health_ops.connectors.utils.retry.time.sleep", lambda *_: None
+    )
+    rl_exc = ExcRateLimitException("rate limit 403", retry_after_seconds=0.0)
+    with GitHubConnector(token="t") as connector:
+        connector.graphql.get_blob_texts = MagicMock(side_effect=rl_exc)
+        with pytest.raises(RateLimitException) as exc_info:
+            connector.get_file_contents("o", "r", ["a.py"])
+
+    # max_retries=3 on get_file_contents -> exhausts all 3 attempts.
+    assert connector.graphql.get_blob_texts.call_count == 3
+    # Normalised to the retryable base RateLimitException, wait preserved.
+    assert exc_info.value.retry_after_seconds == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
 # retry_with_backoff — operation name is now in the log line
 # --------------------------------------------------------------------------
 

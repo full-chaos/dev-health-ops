@@ -249,15 +249,19 @@ def resolve_sink_uri(ns) -> str:
 
 
 def _validate_sink_uri(uri: str, ns) -> None:
-    from dev_health_ops.metrics.sinks.factory import detect_backend
-
     try:
-        detect_backend(uri)
+        validate_sink_uri_scheme(uri)
     except ValueError as exc:
         parser = getattr(ns, "_leaf_parser", None)
         if parser is not None:
             parser.error(str(exc))
         raise
+
+
+def validate_sink_uri_scheme(uri: str) -> None:
+    from dev_health_ops.metrics.sinks.factory import detect_backend
+
+    detect_backend(uri)
 
 
 _postgres_sync_engine: Engine | None = None

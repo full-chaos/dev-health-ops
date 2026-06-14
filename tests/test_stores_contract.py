@@ -22,11 +22,16 @@ class TestBackendDetection:
 
     def test_clickhouse_detection(self):
         assert detect_backend("clickhouse://localhost:8123") == SinkBackend.CLICKHOUSE
+        assert (
+            detect_backend("clickhouse://localhost:8443/default?secure=true")
+            == SinkBackend.CLICKHOUSE
+        )
         assert detect_backend("clickhouse+http://localhost") == SinkBackend.CLICKHOUSE
         assert (
             detect_backend("clickhouse+https://localhost:8123")
             == SinkBackend.CLICKHOUSE
         )
+        assert detect_backend("clickhouse+native://localhost") == SinkBackend.CLICKHOUSE
 
     def test_removed_backends_raise_value_error(self):
         """Backends removed in CHAOS-641 should raise ValueError."""
@@ -60,6 +65,16 @@ class TestSinkFactory:
     def test_rejects_sqlite_sink(self):
         with pytest.raises(ValueError, match="Only ClickHouse is supported"):
             create_sink("sqlite:///./test_sinks.db")
+
+    def test_clickhouse_sink_rejects_invalid_scheme_before_client_creation(self):
+        from unittest.mock import MagicMock
+
+        from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
+
+        with pytest.raises(
+            ValueError, match="Unknown or unsupported sink scheme 'sqlite'"
+        ):
+            ClickHouseMetricsSink("sqlite:///./test_sinks.db", client=MagicMock())
 
     def test_requires_dsn_or_env_var(self, monkeypatch):
         # Clear all env vars that create_sink() checks

@@ -437,6 +437,10 @@ def _clickhouse_present(ns: argparse.Namespace) -> bool:
     return bool(getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI"))
 
 
+def _clickhouse_value(ns: argparse.Namespace) -> str | None:
+    return getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI")
+
+
 def _postgres_present(ns: argparse.Namespace) -> bool:
     return bool(
         getattr(ns, "db", None)
@@ -452,6 +456,10 @@ def _org_present(ns: argparse.Namespace) -> bool:
 
 def _sink_db_present(ns: argparse.Namespace) -> bool:
     return bool(getattr(ns, "db", None) or os.getenv("CLICKHOUSE_URI"))
+
+
+def _sink_db_value(ns: argparse.Namespace) -> str | None:
+    return getattr(ns, "db", None) or os.getenv("CLICKHOUSE_URI")
 
 
 _REQUIREMENT_PRESENCE = {
@@ -477,10 +485,20 @@ def run_preflight_checks(
 ) -> None:
     """Fast-fail with a usage error if the chosen command's inputs are missing."""
     missing = missing_requirements(ns)
-    if not missing:
-        return
     leaf = getattr(ns, "_leaf_parser", None) or root_parser
-    leaf.error("missing required input(s):\n  - " + "\n  - ".join(missing))
+    if missing:
+        leaf.error("missing required input(s):\n  - " + "\n  - ".join(missing))
+
+    requires = getattr(ns, "_requires", None) or frozenset()
+    from dev_health_ops.db import validate_sink_uri_scheme
+
+    try:
+        if _REQ_CLICKHOUSE in requires and (uri := _clickhouse_value(ns)):
+            validate_sink_uri_scheme(uri)
+        if _REQ_SINK_DB in requires and (uri := _sink_db_value(ns)):
+            validate_sink_uri_scheme(uri)
+    except ValueError as exc:
+        leaf.error(str(exc))
 
 
 def _attach_preflight_metadata(parser: argparse.ArgumentParser) -> None:

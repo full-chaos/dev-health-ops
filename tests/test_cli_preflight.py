@@ -138,6 +138,45 @@ def test_sync_rejects_unsupported_analytics_scheme_cleanly() -> None:
     assert "Only ClickHouse is supported" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        (
+            "recommendations",
+            "compute",
+            "--team",
+            "t1",
+            "--analytics-db",
+            "sqlite:///x.db",
+        ),
+        ("investment", "materialize", "--db", "sqlite:///x.db"),
+    ],
+)
+def test_clickhouse_commands_reject_unsupported_analytics_scheme_cleanly(
+    args: tuple[str, ...],
+) -> None:
+    result = _run_cli(*args)
+
+    assert result.returncode == 2, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "Unknown or unsupported sink scheme 'sqlite'" in result.stderr
+    assert "Only ClickHouse is supported" in result.stderr
+
+
+def test_recommendations_compute_accepts_clickhouse_scheme_preflight() -> None:
+    result = _run_cli(
+        "recommendations",
+        "compute",
+        "--team",
+        "t1",
+        "--analytics-db",
+        "clickhouse://ch:ch@localhost:9/default",
+    )
+
+    assert "missing required input" not in result.stderr
+    assert "Unknown or unsupported sink scheme" not in result.stderr
+
+
 def test_help_lists_requirements_in_epilog() -> None:
     result = _run_cli("metrics", "compounding-risk", "--help")
 

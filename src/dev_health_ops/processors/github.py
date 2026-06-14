@@ -1455,10 +1455,12 @@ async def process_github_repo(
                 )
 
             # 6. Backfill file records + contents so DB-based metrics
-            # (e.g. complexity) can run without a local checkout. Gated on
-            # sync_git so non-git targets (prs, cicd, ...) stay lean. Blame
-            # is excluded here: it costs one GraphQL call per file and has
-            # its own dedicated sync target.
+            # (e.g. complexity, hotspots, ownership-risk) can run without a
+            # local checkout. Gated on sync_git so non-git targets (prs,
+            # cicd, ...) stay lean. Blame is included so the /complexity
+            # Ownership-risk tab is populated on normal onboarding; the
+            # backfill is incremental (only fetches blame for files that
+            # lack it) so the per-file GraphQL cost is paid once (CHAOS-2376).
             if backfill_missing and sync_git:
                 try:
                     await _backfill_github_missing_data(
@@ -1469,7 +1471,7 @@ async def process_github_repo(
                         repo_full_name=repo_info.full_name,
                         default_branch=repo_info.default_branch,
                         max_commits=max_commits,
-                        include_blame=False,
+                        include_blame=True,
                         include_commit_stats=False,
                     )
                 except Exception as e:
@@ -1792,6 +1794,10 @@ async def process_github_repos_batch(
 
         if backfill_missing and sync_git:
             try:
+                # Blame is included so the /complexity Ownership-risk tab is
+                # populated on normal onboarding; the backfill is incremental
+                # (only files lacking blame), so the per-file cost is paid
+                # once (CHAOS-2376).
                 await _backfill_github_missing_data(
                     store=store,
                     ingestion_sink=ingestion_sink,
@@ -1800,7 +1806,7 @@ async def process_github_repos_batch(
                     repo_full_name=repo_info.full_name,
                     default_branch=repo_info.default_branch,
                     max_commits=max_commits_per_repo,
-                    include_blame=False,
+                    include_blame=True,
                     include_commit_stats=False,
                 )
             except Exception as e:

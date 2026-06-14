@@ -1384,10 +1384,12 @@ async def process_gitlab_project(
                 logging.info(f"Stored {len(blame_batch)} blame records from GitLab")
 
         # 6. Backfill file records + contents so DB-based metrics (e.g.
-        # complexity) can run without a local checkout. Gated on sync_git
-        # so non-git targets (prs, cicd, ...) stay lean. Blame is excluded
-        # here: it costs one REST call per file and has its own dedicated
-        # sync target.
+        # complexity, hotspots, ownership-risk) can run without a local
+        # checkout. Gated on sync_git so non-git targets (prs, cicd, ...)
+        # stay lean. Blame is included so the /complexity Ownership-risk tab
+        # is populated on normal onboarding; the backfill is incremental
+        # (only files lacking blame), so the per-file REST cost is paid once
+        # (CHAOS-2376).
         if backfill_missing and sync_git:
             try:
                 await _backfill_gitlab_missing_data(
@@ -1398,7 +1400,7 @@ async def process_gitlab_project(
                     project_full_name=full_name,
                     default_branch=db_repo.settings.get("default_branch", "main"),
                     max_commits=max_commits,
-                    include_blame=False,
+                    include_blame=True,
                     include_commit_stats=False,
                 )
             except Exception as e:
@@ -1705,6 +1707,10 @@ async def process_gitlab_projects_batch(
 
         if backfill_missing and sync_git:
             try:
+                # Blame is included so the /complexity Ownership-risk tab is
+                # populated on normal onboarding; the backfill is incremental
+                # (only files lacking blame), so the per-file cost is paid
+                # once (CHAOS-2376).
                 await _backfill_gitlab_missing_data(
                     store=store,
                     ingestion_sink=ingestion_sink,
@@ -1713,7 +1719,7 @@ async def process_gitlab_projects_batch(
                     project_full_name=project_info.full_name,
                     default_branch=project_info.default_branch,
                     max_commits=max_commits_per_project,
-                    include_blame=False,
+                    include_blame=True,
                     include_commit_stats=False,
                 )
             except Exception as e:

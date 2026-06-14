@@ -242,6 +242,7 @@ def run_release_impact_job(
 
 @celery_app.task(
     bind=True,
+    max_retries=3,
     queue="default",
     name="dev_health_ops.workers.tasks.dispatch_release_impact",
 )
@@ -286,9 +287,16 @@ def dispatch_release_impact(
                     select(Organization.id).where(Organization.is_active.is_(True))
                 ).all()
             ]
-    except Exception:
+    except Exception as exc:
+        # A transient Postgres/enumeration failure (DB outage, migration skew,
+        # permissions) at the once-daily scheduled run must NOT report success
+        # while computing zero orgs — that leaves every tenant with stale,
+        # flat-zero release-reliability cards for ~24h with no failure signal
+        # to page on (CHAOS-2381). Re-raise via Celery's retry machinery so the
+        # task is retried for transient errors and ultimately surfaces as a
+        # FAILED task (not a silent empty success) once retries are exhausted.
         logger.exception("dispatch_release_impact failed to enumerate orgs")
-        return {"dispatched": [], "skipped": 0}
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
     for org_id in org_ids:
         run_release_impact_job.apply_async(

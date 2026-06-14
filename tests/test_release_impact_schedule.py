@@ -128,6 +128,48 @@ class TestReleaseImpactDispatcherFansOutPerOrg:
             assert call.kwargs["kwargs"]["day"] == "2026-06-13"
         assert set(result["dispatched"]) == {org_a, org_b}
 
+    def test_dispatcher_raises_on_enumeration_failure(self) -> None:
+        """A transient Postgres failure must NOT report an empty success.
+
+        Codex no-ship (round 2): swallowing the enumeration error and returning
+        ``{"dispatched": [], "skipped": 0}`` makes Celery beat treat the run as
+        successful while computing zero orgs — every tenant gets stale,
+        flat-zero release-reliability cards for ~24h with no failure to page on.
+        The dispatcher must surface the failure via Celery's retry machinery
+        (which re-raises here) so transient errors are retried and a hard
+        failure is signalled once retries are exhausted.
+        """
+        import celery.exceptions
+
+        from dev_health_ops.workers import metrics_extra
+
+        cm = MagicMock()
+        cm.__enter__.side_effect = RuntimeError("postgres unavailable")
+
+        with (
+            patch(
+                "dev_health_ops.db.get_postgres_session_sync",
+                return_value=cm,
+            ),
+            patch.object(
+                metrics_extra.run_release_impact_job, "apply_async"
+            ) as mock_apply,
+        ):
+            # bound .retry() re-raises (Retry for transient, or the original
+            # exc once max_retries is exhausted) — never a normal return.
+            raised: Exception | None = None
+            try:
+                metrics_extra.dispatch_release_impact.run()
+            except (celery.exceptions.Retry, RuntimeError) as exc:
+                raised = exc
+
+        assert raised is not None, (
+            "dispatcher must raise (retry/failure) on enumeration failure, "
+            "not silently return an empty success"
+        )
+        # Nothing was dispatched, and the task did NOT return an empty success.
+        mock_apply.assert_not_called()
+
     def test_dispatcher_no_active_orgs_dispatches_nothing(self) -> None:
         from dev_health_ops.workers import metrics_extra
 

@@ -80,9 +80,13 @@ beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
         "options": {"queue": "default"},
     },
-    # Runs after run-daily-metrics so recommendations evaluate against the
-    # freshly-computed daily signals (CHAOS-2373). Without this the live path
-    # for recommendations_daily never fires for real orgs.
+    # Daily safety net for recommendations_daily (CHAOS-2373). The primary
+    # trigger is completion-gated: run_daily_metrics_finalize_task chains
+    # run_recommendations_job once each (org, day) finalize completes. This beat
+    # entry is a backstop in case a finalize callback was lost; the task itself
+    # skips any org whose daily_finalize checkpoint is still in flight, so it
+    # never reads partial metric tables. Scheduled at 02:00, after the 01:00
+    # run-daily-metrics dispatch.
     "run-recommendations": {
         "task": "dev_health_ops.workers.tasks.run_recommendations_job",
         "schedule": crontab(hour=2, minute=0),

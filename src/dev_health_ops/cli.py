@@ -125,10 +125,7 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.recommendations import registry as recommendations_registry
     from dev_health_ops.recommendations.engine import RuleEngine
-    from dev_health_ops.recommendations.loader import (
-        ClickHouseMetricsLoader,
-        recommendation_to_record,
-    )
+    from dev_health_ops.recommendations.loader import ClickHouseMetricsLoader
 
     analytics_db = getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI", "")
     if not analytics_db:
@@ -157,33 +154,33 @@ def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
     engine = RuleEngine(registry=recommendations_registry, loader=loader, now=now)
 
     try:
-        recommendations = engine.evaluate_all(
-            team_id=team_id, window=window, org_id=org_id
-        )
+        # Full state: fired recommendations AND explicit fired=False tombstones
+        # so a recovered signal is cleared, not left lingering (CHAOS-2373).
+        records = engine.evaluate_state(team_id=team_id, window=window, org_id=org_id)
     except Exception as exc:
         logging.getLogger(__name__).error(
             "Recommendations evaluation failed for team=%r: %s", team_id, exc
         )
         return 1
 
-    sink.write_recommendations(
-        [recommendation_to_record(rec) for rec in recommendations]
-    )
+    sink.write_recommendations(records)
     sink.close()
 
+    fired = [r for r in records if r.fired]
     log = logging.getLogger(__name__)
     log.info(
-        "recommendations compute: team=%r window=%s fired=%d",
+        "recommendations compute: team=%r window=%s fired=%d rows=%d",
         team_id,
         window,
-        len(recommendations),
+        len(fired),
+        len(records),
     )
     if getattr(ns, "output_json", False):
         import sys
         from dataclasses import asdict
 
         print(
-            json.dumps([asdict(r) for r in recommendations], default=str),
+            json.dumps([asdict(r) for r in fired], default=str),
             file=sys.stdout,
         )
     return 0

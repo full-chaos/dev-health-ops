@@ -1,13 +1,64 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.task_utils import _get_db_url
 
 logger = logging.getLogger(__name__)
+
+# Checkpoint metric_type written by run_daily_metrics_finalize_task once all
+# daily-metrics batches for an (org, day) have completed. Recommendations gate
+# on this so a premature beat run never evaluates against partial metric tables.
+_FINALIZE_METRIC_TYPE = "daily_finalize"
+
+
+def _daily_metrics_ready(org_id: str, day: Any) -> bool:
+    """Return False only when daily metrics for ``org_id``/``day`` are *in flight*.
+
+    The race the gate guards against: the partitioned daily-metrics chord
+    (``dispatch_daily_metrics_partitioned``) dispatches batch tasks
+    asynchronously and writes a ``daily_finalize`` checkpoint only once every
+    batch has finished. If recommendations evaluate while that finalize is still
+    RUNNING/FAILED, they read partial metric tables and persist misleading rows
+    for today (CHAOS-2373).
+
+    Semantics:
+
+    * A ``daily_finalize`` checkpoint exists for today but is **not COMPLETED**
+      → metrics are demonstrably mid-flight → **skip** (return ``False``).
+    * No checkpoint, or a COMPLETED checkpoint → **proceed**. (Absence means the
+      chord path is not driving this org today; we have no positive evidence of
+      partial data, and the daily run self-corrects via tombstones.)
+    * The ``"default"`` sentinel and any read error → **proceed** (fail open;
+      a checkpoint glitch must never permanently wedge the pipeline).
+    """
+    from dev_health_ops.db import get_postgres_session_sync
+    from dev_health_ops.metrics.checkpoints import get_checkpoint
+    from dev_health_ops.models.checkpoints import CheckpointStatus
+
+    if org_id == "default":
+        return True
+
+    checkpoint_day = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    try:
+        with get_postgres_session_sync() as session:
+            checkpoint = get_checkpoint(
+                session, org_id, None, _FINALIZE_METRIC_TYPE, checkpoint_day
+            )
+            if checkpoint is None:
+                return True
+            return checkpoint.status == CheckpointStatus.COMPLETED
+    except Exception:
+        logger.exception(
+            "Failed to read daily_finalize checkpoint for org=%s day=%s; "
+            "treating as ready",
+            org_id,
+            day,
+        )
+        return True
 
 
 def _discover_active_org_ids() -> list[str]:
@@ -63,18 +114,27 @@ def _compute_recommendations_for_org(
     now: datetime,
     team_id: str | None = None,
 ) -> int:
-    """Run the RuleEngine for every team in ``org_id`` and persist results.
+    """Run the RuleEngine for every team in ``org_id`` and persist full state.
 
-    Returns the number of fired recommendations written.
+    Persists the *complete* rule state per team (fired recommendations **and**
+    explicit ``fired=False`` tombstones for rules that no longer fire) so a
+    recovered signal is cleared instead of lingering (CHAOS-2373).
+
+    Returns the number of *fired* recommendations written (tombstones excluded).
     """
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
     from dev_health_ops.recommendations import registry as recommendations_registry
     from dev_health_ops.recommendations.engine import RuleEngine
-    from dev_health_ops.recommendations.loader import (
-        ClickHouseMetricsLoader,
-        recommendation_to_record,
-    )
+    from dev_health_ops.recommendations.loader import ClickHouseMetricsLoader
     from dev_health_ops.recommendations.snapshot import RecommendationRecord
+
+    if not _daily_metrics_ready(org_id, now.date()):
+        logger.info(
+            "Daily metrics not finalized for org=%s day=%s; skipping recommendations",
+            org_id,
+            now.date(),
+        )
+        return 0
 
     sink = ClickHouseMetricsSink(dsn=db_url)
     try:
@@ -87,9 +147,10 @@ def _compute_recommendations_for_org(
         engine = RuleEngine(registry=recommendations_registry, loader=loader, now=now)
 
         records: list[RecommendationRecord] = []
+        fired_count = 0
         for tid in team_ids:
             try:
-                recommendations = engine.evaluate_all(
+                team_records = engine.evaluate_state(
                     team_id=tid, window=window, org_id=org_id
                 )
             except Exception:
@@ -99,19 +160,21 @@ def _compute_recommendations_for_org(
                     tid,
                 )
                 continue
-            records.extend(recommendation_to_record(rec) for rec in recommendations)
+            records.extend(team_records)
+            fired_count += sum(1 for r in team_records if r.fired)
 
         if records:
             sink.write_recommendations(records)
 
         logger.info(
-            "recommendations job: org=%s teams=%d fired=%d window=%dd",
+            "recommendations job: org=%s teams=%d fired=%d rows=%d window=%dd",
             org_id,
             len(team_ids),
+            fired_count,
             len(records),
             window,
         )
-        return len(records)
+        return fired_count
     finally:
         sink.close()
 
@@ -128,6 +191,7 @@ def run_recommendations_job(
     db_url: str | None = None,
     window: int = 14,
     team_id: str | None = None,
+    as_of: str | None = None,
 ) -> dict:
     """Compute rule-based recommendations for every active org + team.
 
@@ -144,12 +208,26 @@ def run_recommendations_job(
         window: Evaluation window in days (default 14).
         team_id: Restrict to a single team. When ``None``, discover all teams
             with recent activity for each org from ClickHouse.
+        as_of: ISO date (``YYYY-MM-DD``) of the finalized metrics partition the
+            run should evaluate against. The finalize callback passes the exact
+            ``day`` it finalized so the readiness gate, ``window_end`` and the
+            written tombstones all key on that partition rather than wall-clock
+            ``today`` — correct across UTC-midnight finalizes and backfills.
+            When ``None`` (beat backstop), today (UTC) is used.
 
     Returns:
         dict with job status and per-org fired counts.
     """
     db_url = db_url or _get_db_url()
-    now = datetime.now(timezone.utc)
+    if as_of:
+        # Anchor evaluation to the finalized partition's end-of-day so the
+        # engine derives window_end == as_of (RuleEngine uses now.date()).
+        as_of_day = date.fromisoformat(as_of)
+        now = datetime(
+            as_of_day.year, as_of_day.month, as_of_day.day, tzinfo=timezone.utc
+        )
+    else:
+        now = datetime.now(timezone.utc)
 
     org_ids = [org_id] if org_id else _discover_active_org_ids()
 

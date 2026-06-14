@@ -40,7 +40,7 @@ async def test_fetch_deployment_scopes_on_deployments_org_id(monkeypatch):
     assert "repos.org_id" not in query
     # Deterministic latest-version read from the ReplacingMergeTree.
     assert "ORDER BY last_synced DESC" in query
-    assert captured["params"] == {  # type: ignore[comparison-overlap]
+    assert captured["params"] == {
         "repo_id": "r1",
         "deployment_id": "d1",
         "org_id": "org-A",
@@ -64,7 +64,7 @@ async def test_fetch_pull_request_scopes_on_git_pull_requests_org_id(monkeypatch
     assert "org_id = %(org_id)s" in query
     assert "INNER JOIN repos" not in query
     assert "repos.org_id" not in query
-    assert captured["params"] == {"repo_id": "r1", "number": 7, "org_id": "org-A"}  # type: ignore[comparison-overlap]
+    assert captured["params"] == {"repo_id": "r1", "number": 7, "org_id": "org-A"}
 
 
 @pytest.mark.asyncio
@@ -85,4 +85,4 @@ async def test_fetch_pull_request_reviews_scopes_on_org_id(monkeypatch):
     assert "org_id = %(org_id)s" in query
     assert "INNER JOIN repos" not in query
     assert "repos.org_id" not in query
-    assert captured["params"] == {"repo_id": "r1", "number": 7, "org_id": "org-A"}  # type: ignore[comparison-overlap]
+    assert captured["params"] == {"repo_id": "r1", "number": 7, "org_id": "org-A"}

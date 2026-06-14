@@ -499,7 +499,7 @@ class _OrgScopedDeploymentsFakeClient:
     def query(self, query: str, parameters: dict):
         params = parameters or {}
         q = " ".join(query.split())
-        org_id = params.get("org_id")
+        org_id = str(params.get("org_id") or "")
 
         if "FROM deployments" in q:
             self.deployments_queries.append((q, params))

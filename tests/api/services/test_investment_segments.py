@@ -68,12 +68,15 @@ async def test_build_segment_investment_threads_org_id_to_downstream():
 
     # resolve_repo_filter_ids(sink, filters, org_id=...)
     resolve_stub.assert_awaited_once()
+    assert resolve_stub.await_args is not None
     assert resolve_stub.await_args.kwargs["org_id"] == "org-xyz"
 
     # fetch_work_unit_investments(sink, ..., org_id=...)
     investments_stub.assert_awaited_once()
+    assert investments_stub.await_args is not None
     assert investments_stub.await_args.kwargs["org_id"] == "org-xyz"
 
     # fetch_work_unit_investment_quotes(sink, unit_runs=..., org_id=...)
     quotes_stub.assert_awaited_once()
+    assert quotes_stub.await_args is not None
     assert quotes_stub.await_args.kwargs["org_id"] == "org-xyz"

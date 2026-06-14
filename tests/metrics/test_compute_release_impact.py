@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -170,3 +171,133 @@ def test_compute_day_missing_deploy_timestamp():
     assert rec.time_to_first_user_issue_after_release is None
     assert rec.concurrent_deploy_count == 0
     assert rec.missing_required_fields_count == 4
+
+
+# ---------------------------------------------------------------------------
+# Cross-tenant isolation (CHAOS-2381)
+#
+# Two orgs each have a deployment for the SAME release_ref + environment but a
+# DIFFERENT repo_id. The ``deployments`` raw table has no ``org_id`` column, so
+# the only thing that keeps orgA's compute from reading orgB's deployment is the
+# ``repo_id IN (SELECT id FROM repos WHERE org_id = ...)`` predicate. This fake
+# models the real two-org dataset: every ``deployments`` read is resolved
+# THROUGH the repos sub-select, so if the production query dropped the predicate
+# (or passed the wrong org_id) it would surface orgB's repo_id / inflate the
+# release-count denominator and the assertions below would fail.
+# ---------------------------------------------------------------------------
+
+_ORG_A = "orgA"
+_ORG_B = "orgB"
+_SHARED_RELEASE = "v1.0.0"
+_SHARED_ENV = "production"
+
+
+class _TwoOrgFakeClient:
+    """Fake ClickHouse client that enforces repo->org scoping on deployments."""
+
+    def __init__(self, repo_a, repo_b):
+        # repos table: repo_id -> org_id
+        self._repo_org = {str(repo_a): _ORG_A, str(repo_b): _ORG_B}
+        self._repo_a = repo_a
+        self._repo_b = repo_b
+        # Both orgs deployed the SAME release_ref+environment.
+        self._deploy_ts = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
+        self.deployments_queries: list[tuple[str, dict]] = []
+
+    def _scoped_repo_ids(self, params: dict) -> set[str]:
+        """Resolve `repo_id IN (SELECT id FROM repos WHERE org_id = :org_id)`."""
+        org_id = params.get("org_id")
+        return {rid for rid, org in self._repo_org.items() if org == org_id}
+
+    def query(self, query: str, parameters: dict):
+        params = parameters or {}
+        q = " ".join(query.split())
+
+        if "FROM deployments" in q:
+            self.deployments_queries.append((q, params))
+            scoped = self._scoped_repo_ids(params)
+            # release-count denominator
+            if "count(DISTINCT release_ref)" in q and "AS cnt" in q:
+                cnt = 1 if scoped else 0
+                return FakeQueryResult(["cnt"], [[cnt]])
+            # repo_id lookup
+            if q.strip().startswith("SELECT repo_id FROM deployments") or (
+                "SELECT repo_id" in q and "FROM deployments" in q
+            ):
+                repo_rows: list[list[Any]] = [[rid] for rid in scoped]
+                return FakeQueryResult(["repo_id"], repo_rows[:1])
+            # deploy timestamp
+            if "AS deploy_ts" in q:
+                ts_rows: list[list[Any]] = [[self._deploy_ts]] if scoped else []
+                return FakeQueryResult(["deploy_ts"], ts_rows)
+            # concurrent deploy count
+            return FakeQueryResult(["cnt"], [[0]])
+
+        # telemetry_signal_bucket: distinct release/env pairs for the day
+        if "SELECT DISTINCT release_ref, environment" in q:
+            return FakeQueryResult(
+                ["release_ref", "environment"],
+                [[_SHARED_RELEASE, _SHARED_ENV]],
+            )
+        # telemetry signal rate windows
+        if "total_signals" in q and "total_sessions" in q:
+            return FakeQueryResult(["total_signals", "total_sessions"], [[5, 400]])
+        # first friction spike
+        if "first_friction_ts" in q:
+            return FakeQueryResult(["first_friction_ts"], [])
+        # data completeness
+        if "bucket_hours" in q:
+            return FakeQueryResult(["bucket_hours"], [[24]])
+
+        return FakeQueryResult([], [])
+
+
+def test_compute_day_isolates_orgs_sharing_release_ref():
+    repo_a = uuid4()
+    repo_b = uuid4()
+    client = _TwoOrgFakeClient(repo_a, repo_b)
+
+    records = _compute_day(
+        client, _ORG_A, date(2026, 3, 15), datetime.now(tz=timezone.utc)
+    )
+
+    assert len(records) == 1
+    rec = records[0]
+
+    # orgA must read ONLY its own deployment's repo_id, never orgB's.
+    assert rec.repo_id == repo_a
+    assert rec.repo_id != repo_b
+    assert rec.org_id == _ORG_A
+
+    # Coverage denominator excludes orgB's deployment: 1 covered / 1 total = 1.0
+    # (if orgB leaked into _count_total_releases the denominator would be 2 and
+    # coverage_ratio would drop to 0.5).
+    assert rec.coverage_ratio == pytest.approx(1.0)
+
+    # EVERY deployments read must carry the repo->org scoping predicate and the
+    # correct org_id param (orgA, never orgB).
+    assert client.deployments_queries, "expected at least one deployments read"
+    scoping_predicate = (
+        "repo_id IN (SELECT id FROM repos WHERE org_id = {org_id:String})"
+    )
+    for q, params in client.deployments_queries:
+        assert scoping_predicate in q
+        assert params.get("org_id") == _ORG_A
+        assert params.get("org_id") != _ORG_B
+
+
+def test_get_repo_id_for_release_is_org_scoped():
+    """Direct check: the repo_id lookup never returns another org's repo."""
+    from dev_health_ops.metrics.release_impact import _get_repo_id_for_release
+
+    repo_a = uuid4()
+    repo_b = uuid4()
+    client = _TwoOrgFakeClient(repo_a, repo_b)
+
+    # orgA's compute resolves orgA's repo only.
+    got_a = _get_repo_id_for_release(client, _ORG_A, _SHARED_RELEASE, _SHARED_ENV)
+    assert got_a == repo_a
+
+    # orgB's compute resolves orgB's repo only — same release_ref+env, no bleed.
+    got_b = _get_repo_id_for_release(client, _ORG_B, _SHARED_RELEASE, _SHARED_ENV)
+    assert got_b == repo_b

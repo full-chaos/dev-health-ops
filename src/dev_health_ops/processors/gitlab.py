@@ -406,6 +406,9 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
 
         finished_at = safe_parse_datetime(getattr(pipeline, "finished_at", None))
 
+        # GitLab pipelines expose no clean automatic-retry counter, so default
+        # to 0. (A new pipeline is created per retry rather than a run_attempt
+        # being incremented, unlike GitHub Actions.)
         pipelines.append(
             build_ci_pipeline_run(
                 repo_id=repo_id,
@@ -414,6 +417,7 @@ def _fetch_gitlab_pipelines_sync(gl_project, repo_id, max_pipelines, since):
                 queued_at=created_at,
                 started_at=started_at,
                 finished_at=finished_at,
+                retry_count=0,
             )
         )
         count += 1

@@ -301,3 +301,138 @@ def test_get_repo_id_for_release_is_org_scoped():
     # orgB's compute resolves orgB's repo only — same release_ref+env, no bleed.
     got_b = _get_repo_id_for_release(client, _ORG_B, _SHARED_RELEASE, _SHARED_ENV)
     assert got_b == repo_b
+
+
+# ---------------------------------------------------------------------------
+# Release-level telemetry isolation (CHAOS-2381 round 4)
+#
+# Two releases share the SAME org AND the SAME environment (production) with
+# overlapping baseline/post windows but VERY different telemetry. The metric
+# is per-release, so each release's friction/error rate, completeness, and
+# time-to-first-issue must come from ONLY its own ``release_ref`` telemetry.
+#
+# Before this fix the per-release telemetry queries scoped only by
+# org_id + environment + signal_type + time window (NOT release_ref), so both
+# releases received the same org/environment BLENDED aggregate — false deltas
+# and confidence on the /feature-flags cards. This fake keys every
+# telemetry_signal_bucket read on ``release_ref``; if the production query
+# dropped that predicate it would read both releases' buckets and the two
+# releases' rates would collapse to an identical value, failing the assertions.
+# ---------------------------------------------------------------------------
+
+_REL_HEALTHY = "v2.0.0-healthy"  # low friction / low error
+_REL_REGRESSED = "v2.1.0-regressed"  # high friction / high error
+_ISO_ENV = "production"
+
+
+class _TwoReleaseFakeClient:
+    """Fake ClickHouse client that enforces release_ref scoping on telemetry."""
+
+    def __init__(self, repo_id):
+        self._repo_id = repo_id
+        self._deploy_ts = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
+        # Per-release telemetry. session_count is identical; only signal_count
+        # differs so a leaked blend would produce a detectably-wrong rate.
+        # Healthy: 1 friction-signal / 1000 sessions. Regressed: 500 / 1000.
+        self._telemetry = {
+            _REL_HEALTHY: {"friction": (1, 1000), "error": (1, 1000)},
+            _REL_REGRESSED: {"friction": (500, 1000), "error": (400, 1000)},
+        }
+        # Records whether any telemetry read omitted the release_ref predicate.
+        self.telemetry_reads_without_release_ref: list[str] = []
+
+    def query(self, query: str, parameters: dict):
+        params = parameters or {}
+        q = " ".join(query.split())
+
+        if "FROM deployments" in q:
+            # Deployment metadata is identical for both releases (same repo).
+            if "count(DISTINCT release_ref)" in q and "AS cnt" in q:
+                return FakeQueryResult(["cnt"], [[2]])
+            if "SELECT repo_id" in q:
+                return FakeQueryResult(["repo_id"], [[str(self._repo_id)]])
+            if "AS deploy_ts" in q:
+                return FakeQueryResult(["deploy_ts"], [[self._deploy_ts]])
+            # concurrent deploy count
+            return FakeQueryResult(["cnt"], [[0]])
+
+        # distinct release/env pairs for the day: BOTH releases share prod.
+        if "SELECT DISTINCT release_ref, environment" in q:
+            return FakeQueryResult(
+                ["release_ref", "environment"],
+                [[_REL_HEALTHY, _ISO_ENV], [_REL_REGRESSED, _ISO_ENV]],
+            )
+
+        # Every per-release telemetry read MUST carry the release_ref predicate.
+        release_ref = str(params.get("release_ref") or "")
+        if "FROM telemetry_signal_bucket" in q:
+            if "release_ref = {release_ref:String}" not in q or not release_ref:
+                self.telemetry_reads_without_release_ref.append(q)
+
+        # telemetry signal rate windows
+        if "total_signals" in q and "total_sessions" in q:
+            tele = self._telemetry.get(release_ref, {})
+            if "LIKE {signal_pattern:String}" in q:
+                pattern = params.get("signal_pattern", "")
+                key = "friction" if "friction" in pattern else "error"
+                signals, sessions = tele.get(key, (0, 0))
+                return FakeQueryResult(
+                    ["total_signals", "total_sessions"], [[signals, sessions]]
+                )
+            return FakeQueryResult(["total_signals", "total_sessions"], [[0, 0]])
+
+        # first friction spike (per-release)
+        if "first_friction_ts" in q:
+            # Only the regressed release produces an early friction spike.
+            if release_ref == _REL_REGRESSED:
+                return FakeQueryResult(
+                    ["first_friction_ts"], [[self._deploy_ts + timedelta(hours=1)]]
+                )
+            return FakeQueryResult(["first_friction_ts"], [])
+
+        # data completeness (per-release)
+        if "bucket_hours" in q:
+            hours = 24 if release_ref == _REL_HEALTHY else 12
+            return FakeQueryResult(["bucket_hours"], [[hours]])
+
+        return FakeQueryResult([], [])
+
+
+def test_two_releases_same_env_get_isolated_telemetry():
+    repo_id = uuid4()
+    client = _TwoReleaseFakeClient(repo_id)
+
+    records = _compute_day(
+        client, "org1", date(2026, 3, 15), datetime.now(tz=timezone.utc)
+    )
+
+    assert len(records) == 2
+    by_ref = {r.release_ref: r for r in records}
+    healthy = by_ref[_REL_HEALTHY]
+    regressed = by_ref[_REL_REGRESSED]
+
+    # 1) Every telemetry read was release-scoped — no env-wide blend leaked in.
+    assert not client.telemetry_reads_without_release_ref, (
+        "per-release telemetry query missing release_ref predicate: "
+        f"{client.telemetry_reads_without_release_ref}"
+    )
+
+    # 2) Post-deploy rates reflect ONLY each release's own telemetry.
+    #    healthy = 1/1000 = 0.001 ; regressed = 500/1000 = 0.5 (friction).
+    assert healthy.release_post_friction_rate == pytest.approx(0.001)
+    assert regressed.release_post_friction_rate == pytest.approx(0.5)
+    #    error: healthy 1/1000 = 0.001 ; regressed 400/1000 = 0.4.
+    assert healthy.release_post_error_rate == pytest.approx(0.001)
+    assert regressed.release_post_error_rate == pytest.approx(0.4)
+
+    # 3) The two releases must NOT share an identical aggregate (the leak smell).
+    assert healthy.release_post_friction_rate != regressed.release_post_friction_rate
+    assert healthy.release_post_error_rate != regressed.release_post_error_rate
+
+    # 4) Per-release time-to-first-issue: only the regressed release spiked.
+    assert healthy.time_to_first_user_issue_after_release is None
+    assert regressed.time_to_first_user_issue_after_release == pytest.approx(1.0)
+
+    # 5) Per-release completeness differs (24h vs 12h of buckets).
+    assert healthy.data_completeness == pytest.approx(1.0)
+    assert regressed.data_completeness == pytest.approx(0.5)

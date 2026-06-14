@@ -207,6 +207,14 @@ def _signal_rate(
     """Compute signal_count / session_count rate in a time window.
 
     Returns (rate, total_sessions).
+
+    Filters on ``release_ref`` so the rate reflects ONLY this release's
+    telemetry. ``release_ref`` + ``environment`` is not 1:1 — two releases
+    can share ``production`` with overlapping baseline/post windows — so
+    without this predicate every co-resident release would receive the same
+    org/environment aggregate friction/error rate, producing false
+    release-impact deltas and confidence scores (CHAOS-2381). The PRD join
+    contract is ``release_ref`` + environment + time window.
     """
     query = """
         SELECT
@@ -214,6 +222,7 @@ def _signal_rate(
             sum(session_count) AS total_sessions
         FROM telemetry_signal_bucket
         WHERE org_id = {org_id:String}
+          AND release_ref = {release_ref:String}
           AND environment = {environment:String}
           AND signal_type LIKE {signal_pattern:String}
           AND bucket_start >= {window_start:DateTime64(3)}
@@ -224,6 +233,7 @@ def _signal_rate(
         query,
         {
             "org_id": org_id,
+            "release_ref": release_ref,
             "environment": environment,
             "signal_pattern": signal_pattern,
             "window_start": window_start,
@@ -291,15 +301,23 @@ def _compute_delta(
 def _time_to_first_friction_spike(
     client: Any,
     org_id: str,
+    release_ref: str,
     environment: str,
     deploy_ts: datetime,
 ) -> float | None:
-    """Hours from deploy to first friction signal spike (within 72h)."""
+    """Hours from deploy to first friction signal spike (within 72h).
+
+    Filters on ``release_ref`` so ``time_to_first_user_issue_after_release``
+    measures THIS release's first friction, not any unrelated release that
+    happens to share the same ``environment`` in the post-deploy window
+    (CHAOS-2381).
+    """
     spike_end = deploy_ts + timedelta(hours=_SPIKE_DETECTION_HOURS)
     query = """
         SELECT min(bucket_start) AS first_friction_ts
         FROM telemetry_signal_bucket
         WHERE org_id = {org_id:String}
+          AND release_ref = {release_ref:String}
           AND environment = {environment:String}
           AND signal_type LIKE 'friction.%'
           AND bucket_start >= {deploy_ts:DateTime64(3)}
@@ -311,6 +329,7 @@ def _time_to_first_friction_spike(
         query,
         {
             "org_id": org_id,
+            "release_ref": release_ref,
             "environment": environment,
             "deploy_ts": deploy_ts,
             "spike_end": spike_end,
@@ -383,18 +402,29 @@ def _data_completeness(
     """Compute data completeness: 1.0 if all expected hourly buckets present.
 
     Expects 24 hourly buckets per day. Scaled proportionally.
+
+    Filters on ``release_ref`` so the completeness score reflects THIS
+    release's telemetry coverage rather than the whole environment's
+    (CHAOS-2381); otherwise a busy co-resident release would mask this
+    release's missing buckets.
     """
     query = """
         SELECT count(DISTINCT toStartOfHour(bucket_start)) AS bucket_hours
         FROM telemetry_signal_bucket
         WHERE org_id = {org_id:String}
+          AND release_ref = {release_ref:String}
           AND environment = {environment:String}
           AND toDate(bucket_start) = {day:Date}
     """
     rows = _query_dicts(
         client,
         query,
-        {"org_id": org_id, "environment": environment, "day": str(day)},
+        {
+            "org_id": org_id,
+            "release_ref": release_ref,
+            "environment": environment,
+            "day": str(day),
+        },
     )
     if not rows:
         return 0.0
@@ -485,7 +515,9 @@ def _compute_release_env(
 
     total_sessions = friction_sessions + error_sessions
     time_to_first_issue = (
-        _time_to_first_friction_spike(client, org_id, environment, deploy_ts)
+        _time_to_first_friction_spike(
+            client, org_id, release_ref, environment, deploy_ts
+        )
         if deploy_ts is not None
         else None
     )

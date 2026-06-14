@@ -862,12 +862,21 @@ def gitlab_mr_ai_attributions(
     :class:`GitLabProvider` — emit byte-identical records into
     ``ai_governance_coverage_daily`` via ``write_ai_attribution``.
 
-    ``subject_id`` and ``observed_at`` are derived from the SAME canonical
-    formula used by :func:`gitlab_mr_to_work_item` (``gitlab:{path}!{iid}`` and
-    the MR's ``created_at``) so attribution rows join cleanly to MR work items.
+    ``subject_id`` is the bare MR ``iid`` as a string (``str(iid)``) — the
+    SAME shape the governance/impact read paths join against, where
+    ``ai_attribution.subject_id = toString(git_pull_requests.number)`` and the
+    GitLab processor stores ``git_pull_requests.number = int(mr.iid)`` (see
+    :mod:`dev_health_ops.processors.gitlab` and
+    :mod:`dev_health_ops.audit.ai_governance.loaders`). A prefixed work-item id
+    such as ``gitlab:{path}!{iid}`` would NEVER match that join, leaving
+    ``human_reviewed`` NULL for every GitLab AI MR and fabricating
+    high-severity "missing review" governance violations (CHAOS-2379 round-2).
+    The synthetic fixtures use the same ``str(pr.number)`` contract.
+
     ``observed_at`` is a real provider timestamp — never a fabricated
-    ingest-time value — falling back to the MR ``updated_at`` and only then to
-    ``now()`` when the provider omits both.
+    ingest-time value — derived from the MR's ``created_at``, falling back to
+    the MR ``updated_at`` and only then to ``now()`` when the provider omits
+    both.
 
     Args:
         mr: GitLab merge request object (REST attribute object or dict).
@@ -884,7 +893,12 @@ def gitlab_mr_ai_attributions(
         return []
 
     iid = int(_get(mr, "iid") or 0)
-    subject_id = f"gitlab:{project_full_path}!{iid}"  # ! for MRs
+    # Governance/impact loaders join `ai_attribution.subject_id =
+    # toString(git_pull_requests.number)`, and the GitLab processor stores
+    # `git_pull_requests.number = int(mr.iid)`. The subject id MUST therefore be
+    # the bare iid string — a prefixed `gitlab:{path}!{iid}` work-item id would
+    # never join and would fabricate "missing review" policy failures.
+    subject_id = str(iid)
     observed_at = (
         _to_utc(_parse_iso(_get(mr, "created_at")))
         or _to_utc(_parse_iso(_get(mr, "updated_at")))

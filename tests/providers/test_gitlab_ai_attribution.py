@@ -132,8 +132,11 @@ def test_gitlab_mr_ai_attributions_uses_canonical_subject_and_real_timestamp() -
 
     assert records
     rec = records[0]
-    # Subject id matches the canonical gitlab_mr_to_work_item formula ("!" for MRs).
-    assert rec.subject_id == "gitlab:group/widget!42"
+    # Subject id is the bare MR iid string so it joins the governance/impact
+    # read paths (`subject_id = toString(git_pull_requests.number)`), which is
+    # exactly `int(mr.iid)` for GitLab. A prefixed `gitlab:group/widget!42`
+    # would never match and would fabricate "missing review" policy failures.
+    assert rec.subject_id == "42"
     assert rec.org_id == org_id
     assert rec.repo_id == repo_id
     assert rec.provider == "gitlab"
@@ -150,6 +153,50 @@ def test_gitlab_mr_ai_attributions_empty_for_non_ai_mr() -> None:
         repo_id=None,
     )
     assert records == []
+
+
+def test_gitlab_attribution_subject_id_joins_git_pull_requests_number() -> None:
+    """End-to-end JOIN contract (CHAOS-2379 round-2).
+
+    The governance loader (``audit.ai_governance.loaders``) and the impact
+    loader (``metrics.loaders.ai_impact``) resolve ``human_reviewed`` /
+    coverage by joining ``ai_attribution.subject_id = toString(pr.number)``.
+    The GitLab processor stores ``git_pull_requests.number = int(mr["iid"])``.
+    This test reproduces BOTH sides from the SAME merge request and asserts the
+    join equality holds, proving the attribution rows actually match their MR
+    metadata instead of leaving ``human_reviewed`` NULL and fabricating
+    high-severity "missing review" policy violations.
+    """
+    org_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    raw_mr: dict[str, Any] = {
+        "iid": 42,
+        "labels": ["ai-assisted"],
+        "author": {"username": "human-author", "name": "human-author"},
+        "description": "normal MR",
+        "source_branch": "feature/human-work",
+        "created_at": "2026-04-17T09:30:00+00:00",
+        "updated_at": "2026-04-17T09:30:00+00:00",
+    }
+
+    # Producer side — exactly what processors.gitlab writes to
+    # git_pull_requests.number for this MR.
+    pr_number = int(raw_mr.get("iid") or 0)
+
+    records = gitlab_mr_ai_attributions(
+        mr=raw_mr,
+        project_full_path="group/widget",
+        org_id=org_id,
+        repo_id=repo_id,
+    )
+
+    assert records
+    # The loader join is `a.subject_id = toString(pr.number)` scoped by repo_id.
+    for rec in records:
+        assert rec.subject_id == str(pr_number)
+        assert rec.repo_id == repo_id  # join is also scoped on a.repo_id = pr.repo_id
+    # Negative guard: the prefixed work-item id shape would NOT join.
+    assert all(rec.subject_id != "gitlab:group/widget!42" for rec in records)
 
 
 # ---------------------------------------------------------------------------
@@ -342,14 +389,10 @@ def test_gitlab_work_items_sync_writes_ai_attribution_with_org_id(
         "bot_author",
         "commit_trailer",
     }
-    # Subject ids use the canonical MR formula.
-    assert any(
-        row.subject_id == "gitlab:group/widget!11" for row in sink.ai_attributions
-    )
+    # Subject ids are the bare MR iid string (joins git_pull_requests.number).
+    assert any(row.subject_id == "11" for row in sink.ai_attributions)
     # The non-AI MR (#14) produced no attribution row.
-    assert not any(
-        row.subject_id == "gitlab:group/widget!14" for row in sink.ai_attributions
-    )
+    assert not any(row.subject_id == "14" for row in sink.ai_attributions)
 
 
 def test_gitlab_work_items_sync_skips_attribution_when_org_blank(

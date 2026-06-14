@@ -7,7 +7,7 @@ from .github_app import (
     GitHubAppTokenProvider,
     create_github_app_jwt,
 )
-from .graphql import GitHubGraphQLClient
+from .graphql import GitHubGraphQLClient, safe_github_headers
 from .pagination import AsyncPaginationHandler, PaginationHandler
 from .patterns import match_name_pattern, match_project_pattern, match_repo_pattern
 from .rate_limit_queue import (
@@ -22,6 +22,7 @@ from .token_pool import TokenPool, create_token_pool
 
 __all__ = [
     "GitHubGraphQLClient",
+    "safe_github_headers",
     "GitHubAppAuthError",
     "GitHubAppTokenProvider",
     "create_github_app_jwt",

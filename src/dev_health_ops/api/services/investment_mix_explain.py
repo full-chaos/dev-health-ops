@@ -65,8 +65,18 @@ def _determine_confidence_level(
     return "low"
 
 
-def _compute_cache_key(filters: Any, theme: str | None, subcategory: str | None) -> str:
-    """Compute a deterministic cache key from filter context."""
+def _compute_cache_key(
+    filters: Any, theme: str | None, subcategory: str | None, org_id: str = ""
+) -> str:
+    """Compute a deterministic cache key from filter context.
+
+    ``org_id`` is part of the key so two tenants with identical
+    filters/theme/subcategory never collide on the same SHA256 and read each
+    other's cached LLM explanation (CHAOS-2393). The read side
+    (``ClickHouseMetricsSink.read_investment_explanation``) additionally filters
+    by ``org_id`` so the tenant boundary holds even if the truncated hash ever
+    collided.
+    """
     # Serialize filters to JSON for hashing
     if hasattr(filters, "model_dump"):
         filter_data = filters.model_dump(mode="json")
@@ -79,6 +89,7 @@ def _compute_cache_key(filters: Any, theme: str | None, subcategory: str | None)
         "filters": filter_data,
         "theme": theme,
         "subcategory": subcategory,
+        "org_id": org_id,
     }
     key_json = json.dumps(key_parts, sort_keys=True, default=str)
     return hashlib.sha256(key_json.encode()).hexdigest()[:32]
@@ -127,13 +138,13 @@ async def explain_investment_mix(
             status="llm_unavailable",
         )
 
-    cache_key = _compute_cache_key(filters, theme, subcategory)
+    cache_key = _compute_cache_key(filters, theme, subcategory, org_id)
 
     if not force_refresh and llm_provider != "mock":
         try:
             ch_sink = ClickHouseMetricsSink(db_url)
             try:
-                cached = ch_sink.read_investment_explanation(cache_key)
+                cached = ch_sink.read_investment_explanation(cache_key, org_id)
                 if cached:
                     logger.info("Cache hit for explanation cache_key=%s", cache_key[:8])
                     cached_data = json.loads(cached.explanation_json)
@@ -405,6 +416,7 @@ async def explain_investment_mix(
                     llm_provider=llm_provider,
                     llm_model=llm_model,
                     computed_at=datetime.now(timezone.utc),
+                    org_id=org_id,
                 )
                 ch_sink.write_investment_explanation(record)
                 logger.info("Cached explanation cache_key=%s", cache_key[:8])

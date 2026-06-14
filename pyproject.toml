@@ -26,7 +26,12 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0.49",
   "clickhouse-connect>=0.15.1",
   "numpy>=2.4.4",
-  "fastapi>=0.136.1",
+  # Cap < 0.137: fastapi 0.137.0 changed include_router to leave _IncludedRouter
+  # entries (no `.path`) in app.routes, which prometheus-fastapi-instrumentator
+  # (incl. the latest 8.0.0) crashes on in _get_route_name. Raise the cap once a
+  # prometheus-fastapi-instrumentator release handles _IncludedRouter. The >=
+  # floor stays for the starlette >=1.0.1 security fix (CHAOS-1772).
+  "fastapi>=0.136.1,<0.137",
   "slowapi>=0.1.9",
   "httpx>=0.28.1",
   "psycopg2-binary>=2.9.12",

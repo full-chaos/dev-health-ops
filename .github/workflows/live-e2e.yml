@@ -100,6 +100,9 @@ jobs:
           LIVE_E2E_FIXTURE_SEED: "20260219"
           LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
           ENVIRONMENT: test
+          # No OTLP collector in CI; OTEL on floods logs with localhost:4317
+          # export retries. We don't assert OTEL stats in CI.
+          OTEL_ENABLED: "false"
         run: |
           chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh
           ./ci/run_tests.sh live-e2e

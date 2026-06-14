@@ -17,7 +17,6 @@ from dev_health_ops.workers.async_runner import run_async
 from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.org_guard import organization_exists_sync
 from dev_health_ops.workers.task_utils import (
-    _DORA_TARGETS,
     _GIT_TARGETS,
     _WORK_ITEM_TARGETS,
     _as_dict,
@@ -34,6 +33,14 @@ from dev_health_ops.workers.task_utils import (
     _normalize_sync_targets,
     _resolve_env_credentials,
 )
+
+# DORA (deployment frequency, lead time, change-failure-rate, MTTR) is computed
+# from synced deployments/CI/incidents in ClickHouse. These targets can be
+# scheduled independently of git/prs (e.g. a deployments-only sync config), so a
+# post-sync DORA recompute must fire on any of them, not only on git (CHAOS-2399
+# — without this a deployments-only sync lagged DORA up to a day until the daily
+# beat). Defined here next to its sole consumer (_dispatch_post_sync_tasks).
+_DORA_TARGETS = {"deployments", "cicd", "incidents"}
 
 logger = logging.getLogger(__name__)
 

@@ -22,9 +22,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-# Import connectors first to defuse the providers._base <-> connectors circular
-# import that otherwise ERRORs isolated collection (mirrors CHAOS-2370).
-import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.sync_runtime import _dispatch_post_sync_tasks
 
 _DORA_TASK = "dev_health_ops.workers.tasks.run_dora_metrics"

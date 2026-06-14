@@ -159,6 +159,93 @@ def test_run_dora_metrics_job_filters_to_requested_metrics(monkeypatch):
     assert {row.metric_name for row in sink.written} == {"deployment_frequency"}
 
 
+class _CapturingClickHouseSink(_FakeClickHouseSink):
+    """Records every query + params so repo scoping can be asserted."""
+
+    def __init__(self, deployments=None, incidents=None):
+        super().__init__(deployments=deployments, incidents=incidents)
+        self.queries: list[tuple[str, dict]] = []
+
+    def query_dicts(self, query, parameters):
+        self.queries.append((query, dict(parameters)))
+        return super().query_dicts(query, parameters)
+
+
+def test_run_dora_metrics_job_repo_name_scopes_both_queries(monkeypatch):
+    """CHAOS-2382 round-2: a ``repo_name``-only run must constrain BOTH the
+    deployment and incident ClickHouse queries via an org-scoped ``repos``
+    subquery. Regression for the no-ship where ``--repo-name`` was accepted but
+    silently dropped, letting a scoped run write DORA rows for every repo."""
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    sink = _CapturingClickHouseSink(deployments=[], incidents=[])
+    monkeypatch.setattr(job_dora, "ClickHouseMetricsSink", lambda db_url: sink)
+
+    org_id = "a78c1a6a-0000-0000-0000-000000000000"
+    job_dora.run_dora_metrics_job(
+        db_url="clickhouse://localhost:8123/default",
+        day=date(2025, 1, 1),
+        backfill_days=1,
+        repo_name="owner/repo",
+        org_id=org_id,
+    )
+
+    dep_q = next((q, p) for q, p in sink.queries if "FROM deployments" in q)
+    inc_q = next((q, p) for q, p in sink.queries if "FROM incidents" in q)
+    for query, params in (dep_q, inc_q):
+        # The repo-name subquery filter must be present and org-scoped so a
+        # cross-tenant name collision cannot leak another org's repo.
+        assert "repo_id IN (" in query
+        assert "FROM repos" in query
+        assert "repo = {repo_name:String}" in query
+        assert "org_id = {org_id:String}" in query
+        assert params["repo_name"] == "owner/repo"
+        assert params["org_id"] == org_id
+
+
+def test_run_dora_metrics_job_repo_id_takes_precedence(monkeypatch):
+    """When both repo_id and repo_name are passed, repo_id wins (direct filter)
+    and no unscoped repos subquery is emitted."""
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    sink = _CapturingClickHouseSink(deployments=[], incidents=[])
+    monkeypatch.setattr(job_dora, "ClickHouseMetricsSink", lambda db_url: sink)
+
+    repo_id = uuid.uuid4()
+    job_dora.run_dora_metrics_job(
+        db_url="clickhouse://localhost:8123/default",
+        day=date(2025, 1, 1),
+        backfill_days=1,
+        repo_id=repo_id,
+        repo_name="owner/repo",
+        org_id="test-org",
+    )
+
+    for query, params in sink.queries:
+        assert "repo_id = {repo_id:UUID}" in query
+        assert "FROM repos" not in query
+        assert params["repo_id"] == str(repo_id)
+        assert "repo_name" not in params
+
+
+def test_run_dora_metrics_job_no_repo_scope_omits_filter(monkeypatch):
+    """An unscoped (org-wide) run must not emit any repo filter clause."""
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    sink = _CapturingClickHouseSink(deployments=[], incidents=[])
+    monkeypatch.setattr(job_dora, "ClickHouseMetricsSink", lambda db_url: sink)
+
+    job_dora.run_dora_metrics_job(
+        db_url="clickhouse://localhost:8123/default",
+        day=date(2025, 1, 1),
+        backfill_days=1,
+        org_id="test-org",
+    )
+
+    for query, params in sink.queries:
+        assert "repo_id =" not in query
+        assert "FROM repos" not in query
+        assert "repo_id" not in params
+        assert "repo_name" not in params
+
+
 def test_compute_dora_metrics_daily_seconds_units():
     """Lead time and MTTR are emitted in seconds (GitLab-API parity)."""
     repo_id = uuid.uuid4()

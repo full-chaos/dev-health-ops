@@ -51,6 +51,35 @@ def _utc_day_window(day: date) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
+def _repo_filter(
+    params: dict[str, Any],
+    *,
+    org_id: str,
+    repo_id: uuid.UUID | None,
+    repo_name: str | None,
+) -> str:
+    """Build the repo-scoping clause and mutate *params* in place.
+
+    Mirrors the ClickHouseDataLoader pattern: a ``repo_id`` filters directly,
+    while a ``repo_name`` resolves to repo UUIDs via an org-scoped ``repos``
+    subquery. The subquery is org-scoped so a name collision across tenants
+    cannot pull in another org's repo. ``repo_id`` takes precedence when both
+    are supplied.
+    """
+    if repo_id is not None:
+        params["repo_id"] = str(repo_id)
+        return " AND repo_id = {repo_id:UUID}"
+    if repo_name is not None:
+        params["repo_name"] = repo_name
+        return (
+            " AND repo_id IN ("
+            "SELECT id FROM repos"
+            " WHERE repo = {repo_name:String}"
+            " AND org_id = {org_id:String})"
+        )
+    return ""
+
+
 def _load_deployments(
     primary_sink: Any,
     *,
@@ -58,6 +87,7 @@ def _load_deployments(
     start: datetime,
     end: datetime,
     repo_id: uuid.UUID | None,
+    repo_name: str | None = None,
 ) -> list[DeploymentRow]:
     """Read deployments active in the day window from ClickHouse.
 
@@ -66,10 +96,9 @@ def _load_deployments(
     last_synced for in-flight rows).
     """
     params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
-    repo_filter = ""
-    if repo_id is not None:
-        params["repo_id"] = str(repo_id)
-        repo_filter = " AND repo_id = {repo_id:UUID}"
+    repo_filter = _repo_filter(
+        params, org_id=org_id, repo_id=repo_id, repo_name=repo_name
+    )
 
     rows = primary_sink.query_dicts(
         "SELECT repo_id, deployment_id, status, environment,"
@@ -94,13 +123,13 @@ def _load_incidents(
     start: datetime,
     end: datetime,
     repo_id: uuid.UUID | None,
+    repo_name: str | None = None,
 ) -> list[IncidentRow]:
     """Read incidents resolved in the day window from ClickHouse."""
     params: dict[str, Any] = {"org_id": org_id, "start": start, "end": end}
-    repo_filter = ""
-    if repo_id is not None:
-        params["repo_id"] = str(repo_id)
-        repo_filter = " AND repo_id = {repo_id:UUID}"
+    repo_filter = _repo_filter(
+        params, org_id=org_id, repo_id=repo_id, repo_name=repo_name
+    )
 
     rows = primary_sink.query_dicts(
         "SELECT repo_id, incident_id, status, started_at, resolved_at"
@@ -190,6 +219,7 @@ def run_dora_metrics_job(
                 start=start,
                 end=end,
                 repo_id=repo_id,
+                repo_name=repo_name,
             )
             incidents = _load_incidents(
                 primary_sink,
@@ -197,6 +227,7 @@ def run_dora_metrics_job(
                 start=start,
                 end=end,
                 repo_id=repo_id,
+                repo_name=repo_name,
             )
 
             # org_id is auto-injected by the sink from its bound context

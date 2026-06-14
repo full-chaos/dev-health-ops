@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from dev_health_ops.connectors.exceptions import APIException, AuthenticationException
+from dev_health_ops.exceptions import APIException, AuthenticationException
 from dev_health_ops.metrics.testops_schemas import JobRunRow, PipelineRunExtendedRow
 
 

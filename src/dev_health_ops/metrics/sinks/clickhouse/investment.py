@@ -172,13 +172,19 @@ class InvestmentMixin(_ClickHouseSinkBase):
         )
 
     def read_investment_explanation(
-        self, cache_key: str
+        self, cache_key: str, org_id: str = ""
     ) -> InvestmentExplanationRecord | None:
         """
-        Read a cached investment explanation by cache_key.
+        Read a cached investment explanation by cache_key, scoped to ``org_id``.
 
         Uses FINAL to ensure we get the latest version from ReplacingMergeTree.
         Returns None if no cached explanation exists.
+
+        The ``org_id`` predicate is required for tenant isolation: the cache_key
+        is a 32-char SHA256 prefix and two tenants with identical
+        filters/theme/subcategory would otherwise collide and read each other's
+        cached LLM explanation (CHAOS-2393). The cache_key itself also includes
+        org_id (see ``_compute_cache_key``); filtering here is defence in depth.
         """
         result = self.client.query(
             """
@@ -187,12 +193,13 @@ class InvestmentMixin(_ClickHouseSinkBase):
                 explanation_json,
                 llm_provider,
                 llm_model,
-                computed_at
+                computed_at,
+                org_id
             FROM investment_explanations FINAL
-            WHERE cache_key = {cache_key:String}
+            WHERE cache_key = {cache_key:String} AND org_id = {org_id:String}
             LIMIT 1
             """,
-            parameters={"cache_key": cache_key},
+            parameters={"cache_key": cache_key, "org_id": org_id},
         )
         rows = result.result_rows or []
         if not rows:
@@ -206,4 +213,5 @@ class InvestmentMixin(_ClickHouseSinkBase):
             computed_at=row[4]
             if isinstance(row[4], datetime)
             else datetime.now(timezone.utc),
+            org_id=str(row[5]) if row[5] else "",
         )

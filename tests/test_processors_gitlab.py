@@ -80,6 +80,13 @@ async def test_process_gitlab_project_sync_flags(monkeypatch):
         patch(
             "dev_health_ops.processors.gitlab._fetch_gitlab_blame_sync", return_value=[]
         ),
+        # Backfill paginates the GitLab repo tree; on a Mock store that never
+        # yields an empty page it would loop forever. This test exercises the
+        # sync-flag dispatch, not backfill, so stub it out (hermetic + fast).
+        patch(
+            "dev_health_ops.processors.gitlab._backfill_gitlab_missing_data",
+            new_callable=AsyncMock,
+        ),
     ):
         # Call the function with all sync flags enabled
         await process_gitlab_project(
@@ -139,6 +146,11 @@ async def test_process_gitlab_project_no_sync_flags(monkeypatch):
         patch(
             "dev_health_ops.processors.gitlab._fetch_gitlab_incidents_sync"
         ) as mock_fetch_incidents,
+        # Stub backfill (repo-tree pagination) so a Mock store can't loop forever.
+        patch(
+            "dev_health_ops.processors.gitlab._backfill_gitlab_missing_data",
+            new_callable=AsyncMock,
+        ),
     ):
         # Call with flags False
         await process_gitlab_project(

@@ -77,6 +77,7 @@ async def build_segment_investment(
     theme: str | None,
     subcategory: str | None,
     limit: int = 500,
+    org_id: str = "",
 ) -> WorkUnitInvestment | None:
     start_day, end_day, _, _ = time_window(filters)
     start_ts = datetime.combine(start_day, time.min, tzinfo=timezone.utc)
@@ -84,13 +85,14 @@ async def build_segment_investment(
 
     async with clickhouse_client(db_url) as sink:
         require_clickhouse_backend(sink)
-        repo_ids = await resolve_repo_filter_ids(sink, filters)
+        repo_ids = await resolve_repo_filter_ids(sink, filters, org_id=org_id)
         rows = await fetch_work_unit_investments(
             sink,
             start_ts=start_ts,
             end_ts=end_ts,
             repo_ids=repo_ids or None,
             limit=max(1, int(limit)),
+            org_id=org_id,
         )
 
         if not rows:
@@ -172,7 +174,9 @@ async def build_segment_investment(
             for _, unit_id, run_id in contributions[:5]
             if unit_id and run_id
         ]
-        quote_rows = await fetch_work_unit_investment_quotes(sink, unit_runs=unit_runs)
+        quote_rows = await fetch_work_unit_investment_quotes(
+            sink, unit_runs=unit_runs, org_id=org_id
+        )
 
     textual_evidence: list[dict[str, object]] = []
     for quote in quote_rows or []:
